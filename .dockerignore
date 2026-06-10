@@ -1,0 +1,21 @@
+# Only copy what the container needs into the image.
+# Everything else is host-only tooling.
+
+# IDE / project metadata
+.idea/
+.git/
+.gitignore
+
+# Host-only scripts (PowerShell doesn't run in the Linux container)
+*.ps1
+*.psm1
+
+# Documentation (not needed at runtime)
+README.md
+
+# Docker / build metadata
+Dockerfile
+.dockerignore
+
+# Local run wrapper
+run-local.ps1

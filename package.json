@@ -1,0 +1,10 @@
+{
+  "name": "pr-review-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ADO PR review bot: Pi reviews read-only, poster creates threads via @azure-devops/mcp",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}
