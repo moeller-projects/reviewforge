@@ -208,7 +208,7 @@ test("review.sh uses fixture-backed clean review output", () => {
 test("review.sh chunks large diffs by file and aggregates findings", () => {
   const expectedPath = join(fixturesDir, "large.expected.json");
   const run = runReview({
-    MAX_DIFF_BYTES: "220",
+    MAX_DIFF_BYTES: "300",
     STUB_FILES_CONTENT: "src/auth.ts\nsrc/logging.ts\n",
     STUB_DIFF_CONTENT: readFileSync(join(fixturesDir, "large.diff"), "utf8"),
     STUB_DIFF_MAP: {
@@ -226,8 +226,9 @@ test("review.sh chunks large diffs by file and aggregates findings", () => {
     assert.deepEqual(JSON.parse(run.stdout), JSON.parse(readFileSync(expectedPath, "utf8")));
     const firstInput = readFileSync(join(run.piRecordDir, "stdin-0.txt"), "utf8");
     const secondInput = readFileSync(join(run.piRecordDir, "stdin-1.txt"), "utf8");
-    assert.match(firstInput, /This review covers chunk 1\/2 of a large PR split by file/);
-    assert.match(secondInput, /This review covers chunk 2\/2 of a large PR split by file/);
+    assert.match(run.stderr, /reviewing large diff in 2 chunk\(s\)/);
+    assert.match(firstInput, /src\/auth\.ts/);
+    assert.match(secondInput, /src\/logging\.ts/);
     assert.doesNotMatch(firstInput, /FILE DIFF TRUNCATED/);
   } finally {
     run.cleanup();

@@ -206,13 +206,13 @@ cat "$files_path"
 printf '\n'
 
 if [ -n "$chunk_label" ]; then
-printf '---\n\n'
+printf '%s\n\n' '---'
 printf 'LARGE DIFF CHUNK\n'
 printf 'This review covers %s of a large PR split by file to preserve context. Review ONLY the files listed in this chunk. Do NOT infer missing implementation, missing work-item coverage, or other findings from files that are not present in this chunk.\n\n' "$chunk_label"
 fi
 
 if [ -n "$WI_CONTEXT" ] && [ "$WI_CONTEXT" != "[]" ]; then
-printf '---\n\n'
+printf '%s\n\n' '---'
 printf 'LINKED WORK ITEMS\n'
 printf "The following work items are linked to this PR. Verify that the changes fulfill each work item's description and acceptance criteria. If a requirement is not addressed by the diff, create a finding with severity at least \"major\", file=null, line=null.\n\n"
 printf '%s\n' "$(printf '%s' "$WI_CONTEXT" | jq -r '.[] | "Work Item #\(.id) [\(.type)] \(.title) (State: \(.state))\n  Description: \(.description)\n  Acceptance Criteria: \(.acceptanceCriteria)"')"
@@ -226,7 +226,7 @@ fi
 fi
 
 if [ -n "$THREAD_CONTEXT" ] && [ "$THREAD_CONTEXT" != "[]" ]; then
-printf '---\n\n'
+printf '%s\n\n' '---'
 printf 'EXISTING PR COMMENTS\n'
 printf 'The following comments already exist on this PR. Do NOT create a finding that covers the same issue already raised in these comments. If an existing comment discusses an issue, consider it already addressed by the review process.\n\n'
 printf '%s\n' "$(printf '%s' "$THREAD_CONTEXT" | jq -r '.[] | "[\(.author)] \(if .filePath then "\(.filePath):\(.line)" else "(general)" end): \(.firstComment[0:300])"')"
