@@ -70,7 +70,11 @@ if [ -n "\${STUB_PI_STDIN:-}" ]; then
 else
   cat >/dev/null
 fi
-printf '%s' "\${STUB_PI_OUTPUT:-{\\"summary\\":\\"stub\\",\\"findings\\":[]}}"
+if [ -n "\${STUB_PI_OUTPUT+x}" ]; then
+  printf '%s' "\${STUB_PI_OUTPUT}"
+else
+  printf '%s' '{"summary":"stub","findings":[]}'
+fi
 exit "\${STUB_PI_RC:-0}"
 `);
 

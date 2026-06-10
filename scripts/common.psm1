@@ -17,11 +17,11 @@ function Fail {
 
 <#
 .SYNOPSIS
-    Detect the container runtime (podman or docker).
+    Detect the container runtime (docker or podman).
 #>
 function Get-ContainerRuntime {
-    if (Get-Command podman -ErrorAction SilentlyContinue) { return "podman" }
     if (Get-Command docker -ErrorAction SilentlyContinue) { return "docker" }
+    if (Get-Command podman -ErrorAction SilentlyContinue) { return "podman" }
     Fail "Neither podman nor docker found on PATH."
 }
 

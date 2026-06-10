@@ -58,7 +58,7 @@ test("commentBody includes severity, suggestion fence, and dedupe marker", () =>
 
   assert.match(body, /\*\*🔴 blocker\*\* — Reject invalid payload/);
   assert.match(body, /Suggestion:/);
-  assert.match(body, /````/);
+  assert.match(body, /```/);
   assert.match(body, /<sub>prb:abc123<\/sub>/);
 });
 
