@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const reviewScript = join(repoRoot, "scripts", "review.sh");
+const fixturesDir = join(repoRoot, "test", "fixtures", "review");
 
 function writeExecutable(path, content) {
   writeFileSync(path, content, { mode: 0o755 });
@@ -43,12 +44,29 @@ case "$cmd" in
     esac
     ;;
   diff)
+    target_file=""
+    prev=""
+    for arg in "$@"; do
+      if [ "$prev" = "--" ]; then
+        target_file="$arg"
+        break
+      fi
+      prev="$arg"
+    done
     for arg in "$@"; do
       if [ "$arg" = "--name-only" ]; then
         printf '%s' "\${STUB_FILES_CONTENT:-}"
         exit 0
       fi
     done
+    if [ -n "$target_file" ] && [ -n "\${STUB_DIFF_MAP_PATH:-}" ]; then
+      node -e '
+        const fs = require("node:fs");
+        const map = JSON.parse(fs.readFileSync(process.env.STUB_DIFF_MAP_PATH, "utf8"));
+        process.stdout.write(map[process.argv[1]] ?? "");
+      ' "$target_file"
+      exit 0
+    fi
     printf '%s' "\${STUB_DIFF_CONTENT:-}"
     ;;
   *)
@@ -66,12 +84,29 @@ exec "$@"
 
   writeExecutable(join(fakeBin, "pi"), `#!/usr/bin/env bash
 set -euo pipefail
-if [ -n "\${STUB_PI_STDIN:-}" ]; then
-  cat >"\${STUB_PI_STDIN}"
+stdin_target="\${STUB_PI_STDIN:-}"
+index=0
+if [ -n "\${STUB_PI_RECORD_DIR:-}" ]; then
+  mkdir -p "\${STUB_PI_RECORD_DIR}"
+  count_file="\${STUB_PI_RECORD_DIR}/count"
+  if [ -f "$count_file" ]; then
+    index="$(cat "$count_file")"
+  fi
+  stdin_target="\${STUB_PI_RECORD_DIR}/stdin-\${index}.txt"
+  printf '%s' "$((index + 1))" > "$count_file"
+fi
+if [ -n "$stdin_target" ]; then
+  cat >"$stdin_target"
 else
   cat >/dev/null
 fi
-if [ -n "\${STUB_PI_OUTPUT+x}" ]; then
+if [ -n "\${STUB_PI_OUTPUTS_PATH:-}" ]; then
+  node -e '
+    const fs = require("node:fs");
+    const outputs = JSON.parse(fs.readFileSync(process.env.STUB_PI_OUTPUTS_PATH, "utf8"));
+    process.stdout.write(outputs[Number(process.argv[1])] ?? outputs.at(-1) ?? "");
+  ' "$index"
+elif [ -n "\${STUB_PI_OUTPUT+x}" ]; then
   printf '%s' "\${STUB_PI_OUTPUT}"
 else
   printf '%s' '{"summary":"stub","findings":[]}'
@@ -86,6 +121,17 @@ function runReview(overrides = {}) {
   const root = mkdtempSync(join(tmpdir(), "review-test-"));
   const fakeBin = createFakeBin(root);
   const piInputPath = join(root, "pi.stdin");
+  const diffMapPath = join(root, "diff-map.json");
+  const piOutputsPath = join(root, "pi-outputs.json");
+  const piRecordDir = join(root, "pi-records");
+
+  if (overrides.STUB_DIFF_MAP) {
+    writeFileSync(diffMapPath, JSON.stringify(overrides.STUB_DIFF_MAP), "utf8");
+  }
+
+  if (overrides.STUB_PI_OUTPUTS) {
+    writeFileSync(piOutputsPath, JSON.stringify(overrides.STUB_PI_OUTPUTS), "utf8");
+  }
 
   const env = {
     ...process.env,
@@ -107,6 +153,8 @@ function runReview(overrides = {}) {
     STUB_FILES_CONTENT: "src/example.ts\n",
     STUB_DIFF_CONTENT: "diff --git a/src/example.ts b/src/example.ts\n+const value = 1;\n",
     STUB_PI_OUTPUT: '{"summary":"stub","findings":[]}',
+    ...(overrides.STUB_DIFF_MAP ? { STUB_DIFF_MAP_PATH: diffMapPath } : {}),
+    ...(overrides.STUB_PI_OUTPUTS ? { STUB_PI_OUTPUTS_PATH: piOutputsPath, STUB_PI_RECORD_DIR: piRecordDir } : {}),
     ...overrides,
   };
 
@@ -120,6 +168,7 @@ function runReview(overrides = {}) {
     ...result,
     root,
     piInputPath,
+    piRecordDir,
     cleanup() {
       rmSync(root, { recursive: true, force: true });
     },
@@ -141,18 +190,45 @@ test("review.sh short-circuits empty diffs without invoking pi", () => {
   }
 });
 
-test("review.sh truncates large diffs before invoking pi", () => {
+test("review.sh uses fixture-backed clean review output", () => {
+  const expectedPath = join(fixturesDir, "clean.expected.json");
   const run = runReview({
-    MAX_DIFF_BYTES: "40",
-    STUB_DIFF_CONTENT: "diff --git a/src/example.ts b/src/example.ts\n+const value = 12345;\n+const other = 67890;\n",
-    STUB_PI_OUTPUT: '{"summary":"truncated diff reviewed","findings":[]}',
+    STUB_DIFF_CONTENT: readFileSync(join(fixturesDir, "clean.diff"), "utf8"),
+    STUB_PI_OUTPUT: readFileSync(expectedPath, "utf8"),
   });
 
   try {
     assert.equal(run.status, 0, run.stderr);
-    assert.equal(run.stdout.trim(), '{"summary":"truncated diff reviewed","findings":[]}');
-    const piInput = readFileSync(run.piInputPath, "utf8");
-    assert.match(piInput, /\[DIFF TRUNCATED: original size \d+ bytes, cap 40 bytes\]/);
+    assert.deepEqual(JSON.parse(run.stdout), JSON.parse(readFileSync(expectedPath, "utf8")));
+  } finally {
+    run.cleanup();
+  }
+});
+
+test("review.sh chunks large diffs by file and aggregates findings", () => {
+  const expectedPath = join(fixturesDir, "large.expected.json");
+  const run = runReview({
+    MAX_DIFF_BYTES: "220",
+    STUB_FILES_CONTENT: "src/auth.ts\nsrc/logging.ts\n",
+    STUB_DIFF_CONTENT: readFileSync(join(fixturesDir, "large.diff"), "utf8"),
+    STUB_DIFF_MAP: {
+      "src/auth.ts": "diff --git a/src/auth.ts b/src/auth.ts\nindex 1111111..2222222 100644\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -8,3 +8,7 @@ export function authorize(req) {\n-  return req.user;\n+  if (!req.user) {\n+    return null;\n+  }\n+  return req.user;\n }\n",
+      "src/logging.ts": "diff --git a/src/logging.ts b/src/logging.ts\nindex 3333333..4444444 100644\n--- a/src/logging.ts\n+++ b/src/logging.ts\n@@ -10,3 +10,4 @@ export function logRequest(req) {\n-  logger.info(\"request\");\n+  logger.info(\"request\", {\n+    authorization: req.headers.authorization\n+  });\n }\n",
+    },
+    STUB_PI_OUTPUTS: [
+      '{"summary":"Auth chunk is safe.","findings":[]}',
+      '{"summary":"Logging chunk exposes credentials in logs.","findings":[{"file":"src/logging.ts","line":12,"severity":"major","title":"Do not log authorization headers","message":"The new structured log payload includes the raw Authorization header. That leaks credentials into application logs and violates the clean-code standard.","suggestion":"Remove the authorization field from the log payload or replace it with a fixed boolean/redacted marker."}]}',
+    ],
+  });
+
+  try {
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(JSON.parse(run.stdout), JSON.parse(readFileSync(expectedPath, "utf8")));
+    const firstInput = readFileSync(join(run.piRecordDir, "stdin-0.txt"), "utf8");
+    const secondInput = readFileSync(join(run.piRecordDir, "stdin-1.txt"), "utf8");
+    assert.match(firstInput, /This review covers chunk 1\/2 of a large PR split by file/);
+    assert.match(secondInput, /This review covers chunk 2\/2 of a large PR split by file/);
+    assert.doesNotMatch(firstInput, /FILE DIFF TRUNCATED/);
   } finally {
     run.cleanup();
   }

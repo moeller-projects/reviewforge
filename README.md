@@ -152,7 +152,7 @@ that exercise `scripts/review.sh` with stubbed git/Pi tooling.
 | `PI_MODEL` | no | `openai/gpt-5.5` | Model pattern Pi understands (e.g. `openai/gpt-5.4-mini`) |
 | `REVIEW_PROMPT_PATH` | no | baked-in | Custom reviewer prompt (mount to override) |
 | `REVIEW_STANDARDS_PATH` | no | baked-in | Custom standards (mount to override) |
-| `MAX_DIFF_BYTES` | no | `200000` | Diff truncation cap (context guard) |
+| `MAX_DIFF_BYTES` | no | `200000` | Per-review chunk cap; large PRs are split by file and only oversized single-file diffs are truncated |
 | `PI_TIMEOUT_SECS` | no | `600` | Max seconds the Pi reviewer may run (prevents hangs) |
 | `FAIL_ON` | no | `none` | Fail the check at/above `nit\|minor\|major\|blocker` |
 | `VOTE_WAITING_ON` | no | `major` | Vote “waiting for author” at/above `nit\|minor\|major\|blocker`, or `none` |
@@ -189,5 +189,6 @@ keep the JSON output contract intact (see `prompts/review-system.md`).
   container boundary + read-only Pi tools + a token that can only comment. If you
   want in-container tool gating too, drop in your Pi permission config — verify the
   fork's schema first.
-- **Truncation on huge diffs.** Past `MAX_DIFF_BYTES` the diff is cut; the summary
-  says so. Consider per-file review for very large PRs.
+- **Very large single-file diffs still truncate.** Large PRs are split into
+  file-based chunks up to `MAX_DIFF_BYTES`, but one oversized file diff is still
+  truncated and called out in the summary.
