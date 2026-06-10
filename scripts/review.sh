@@ -326,7 +326,7 @@ printf '\n'
 if [ -n "$WI_CONTEXT" ] && [ "$WI_CONTEXT" != "[]" ]; then
 printf '---\n\n'
 printf 'LINKED WORK ITEMS\n'
-printf 'The following work items are linked to this PR. Verify that the changes fulfill each work item\'s description and acceptance criteria. If a requirement is not addressed by the diff, create a finding with severity at least "major", file=null, line=null.\n\n'
+printf "The following work items are linked to this PR. Verify that the changes fulfill each work item's description and acceptance criteria. If a requirement is not addressed by the diff, create a finding with severity at least \"major\", file=null, line=null.\n\n"
 printf '%s\n' "$(printf '%s' "$WI_CONTEXT" | jq -r '.[] | "Work Item #\(.id) [\(.type)] \(.title) (State: \(.state))\n  Description: \(.description)\n  Acceptance Criteria: \(.acceptanceCriteria)"')"
 printf '\n'
 

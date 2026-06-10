@@ -10,10 +10,10 @@
     Docker/Podman image tag. Default: pr-review-bot:latest.
 
 .PARAMETER PiVersion
-    Pin the @earendil-works/pi-coding-agent version. Default: latest.
+    Pin the @earendil-works/pi-coding-agent version. Default: 0.79.1.
 
 .PARAMETER AdoMcpVersion
-    Pin the @azure-devops/mcp version. Default: latest.
+    Pin the @azure-devops/mcp version. Default: 2.7.0.
 
 .EXAMPLE
     ./scripts/build.ps1
@@ -22,8 +22,8 @@
 [CmdletBinding()]
 param(
     [string] $Image         = "pr-review-bot:latest",
-    [string] $PiVersion     = "latest",
-    [string] $AdoMcpVersion = "latest"
+    [string] $PiVersion     = "0.79.1",
+    [string] $AdoMcpVersion = "2.7.0"
 )
 
 Set-StrictMode -Version Latest

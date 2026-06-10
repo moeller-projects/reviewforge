@@ -31,7 +31,7 @@ param(
     [int]    $PrId,
     [string] $SourceBranch,
     [string] $TargetBranch,
-    [string] $Language     = "German",
+    [string] $Language     = "English",
     [ValidateSet("none","nit","minor","major","blocker")]
     [string] $FailOn       = "none",
     [ValidateSet("none","nit","minor","major","blocker")]
@@ -44,8 +44,8 @@ param(
 
     # --- Build params ---
     [switch] $SkipBuild,
-    [string] $PiVersion     = "latest",
-    [string] $AdoMcpVersion = "latest"
+    [string] $PiVersion     = "0.79.1",
+    [string] $AdoMcpVersion = "2.7.0"
 )
 
 Set-StrictMode -Version Latest
