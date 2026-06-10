@@ -31,6 +31,7 @@ on reviews without rebuilding:
 | --- | --- |
 | `scripts/build.ps1` | Build the container image |
 | `scripts/run.ps1` | Run the reviewer against a PR |
+| `scripts/run-open-prs.ps1` | Review every active PR assigned to you except ones where your vote is “waiting for author” |
 | `run-local.ps1` | Convenience: build + run in one call |
 
 ### Quick start — just pass the PR URL
@@ -51,6 +52,9 @@ the URL and resolves source/target branches automatically via the ADO REST API.
 
 # German comments, cheaper model
 ./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -Language German -PiModel openai/gpt-5.4-mini
+
+# Review all active PRs where you are a reviewer and not waiting for author
+./scripts/run-open-prs.ps1 -Org contoso -Project Payments -RepoId payments-api
 ```
 
 ### Legacy invocation (individual params)
@@ -61,6 +65,24 @@ auto-resolved from the ADO REST API unless you override them:
 ```powershell
 ./scripts/run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
 ```
+
+### Batch mode: review all open PRs assigned to you
+
+Use `scripts/run-open-prs.ps1` when you want Windows/PowerShell to scan a repo
+for active PRs where **you** are a reviewer, skip PRs where your reviewer vote
+is already **waiting for author** (`-5`), and then launch one containerized
+review run per remaining PR.
+
+```powershell
+# Review every matching PR
+./scripts/run-open-prs.ps1 -Org contoso -Project Payments -RepoId payments-api
+
+# Cap the batch size and avoid posting while iterating
+./scripts/run-open-prs.ps1 -Org contoso -Project Payments -RepoId payments-api -MaxPullRequests 5 -DryRun
+```
+
+The script reuses the same auth flow as `scripts/run.ps1`: pass `-AdoToken` or
+sign in with `az login`, and provide `$env:OPENAI_API_KEY` (or `-OpenAiApiKey`).
 
 ### All-in-one: `run-local.ps1`
 

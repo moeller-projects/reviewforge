@@ -74,6 +74,108 @@ function Get-AdoToken {
 
 <#
 .SYNOPSIS
+    Invoke an Azure DevOps REST GET request with bearer auth.
+#>
+function Invoke-AdoGet {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$Token,
+        [string]$Context = "Azure DevOps API"
+    )
+
+    try {
+        return Invoke-RestMethod -Uri $Uri -Headers @{ Authorization = ('Bearer ' + $Token) } -ErrorAction Stop
+    } catch {
+        Fail "Failed calling ${Context}: $_"
+    }
+}
+
+<#
+.SYNOPSIS
+    Resolve the current Azure DevOps user for the supplied org/token.
+#>
+function Get-AdoCurrentUser {
+    param(
+        [Parameter(Mandatory)][string]$Org,
+        [Parameter(Mandatory)][string]$Token
+    )
+
+    Write-Step "Resolving current Azure DevOps user..."
+    $apiUrl = "https://dev.azure.com/$Org/_apis/connectionData?connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1"
+    $data = Invoke-AdoGet -Uri $apiUrl -Token $Token -Context "Azure DevOps connection data"
+    $user = $data.authenticatedUser
+
+    if (-not $user -or -not $user.id) {
+        Fail "ADO connection data did not return an authenticated user id."
+    }
+
+    $displayName = @($user.providerDisplayName, $user.customDisplayName, $user.displayName, $user.id) |
+        Where-Object { $_ } |
+        Select-Object -First 1
+
+    return [pscustomobject]@{
+        Id          = $user.id
+        UniqueName  = $user.uniqueName
+        DisplayName = $displayName
+    }
+}
+
+<#
+.SYNOPSIS
+    List all active pull requests for a repository.
+#>
+function Get-ActivePullRequests {
+    param(
+        [Parameter(Mandatory)][string]$Org,
+        [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$RepoId,
+        [Parameter(Mandatory)][string]$Token
+    )
+
+    $top = 100
+    $skip = 0
+    $allPullRequests = @()
+
+    do {
+        $apiUrl = "https://dev.azure.com/$Org/$Project/_apis/git/repositories/$RepoId/pullrequests?searchCriteria.status=active&`$top=$top&`$skip=$skip&api-version=7.0"
+        $response = Invoke-AdoGet -Uri $apiUrl -Token $Token -Context "Azure DevOps pull request list"
+        $page = @($response.value)
+        $allPullRequests += $page
+        $skip += $page.Count
+    } while ($page.Count -eq $top)
+
+    return $allPullRequests
+}
+
+<#
+.SYNOPSIS
+    Find a reviewer entry for the current user on a pull request.
+#>
+function Find-PrReviewer {
+    param(
+        [Parameter(Mandatory)]$PullRequest,
+        [Parameter(Mandatory)][string]$ReviewerId,
+        [string]$ReviewerUniqueName
+    )
+
+    $reviewers = @($PullRequest.reviewers)
+    if (-not $reviewers) { return $null }
+
+    $reviewer = $reviewers | Where-Object { $_.id -eq $ReviewerId } | Select-Object -First 1
+    if ($reviewer) { return $reviewer }
+
+    if ($ReviewerUniqueName) {
+        $normalizedName = $ReviewerUniqueName.ToLowerInvariant()
+        return $reviewers |
+            Where-Object { $_.uniqueName -and $_.uniqueName.ToLowerInvariant() -eq $normalizedName } |
+            Select-Object -First 1
+    }
+
+    return $null
+}
+
+<#
+.SYNOPSIS
     Resolve source and target branches from the ADO REST API.
 #>
 function Resolve-PrBranches {
@@ -157,4 +259,4 @@ function Write-EnvFile {
     return $envFile
 }
 
-Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Resolve-PrBranches, Normalize-BranchName, Write-EnvFile
+Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Invoke-AdoGet, Get-AdoCurrentUser, Get-ActivePullRequests, Find-PrReviewer, Resolve-PrBranches, Normalize-BranchName, Write-EnvFile
