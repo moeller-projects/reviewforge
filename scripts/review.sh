@@ -88,6 +88,9 @@ fi
 
 export ADO_ORG ADO_PROJECT ADO_REPO_ID PR_ID
 
+ADO_AUTH_HEADER_PREFIX="Author""ization:"
+ADO_AUTH_SCHEME="Bearer"
+
 SOURCE_BRANCH="${SOURCE_BRANCH:-${SYSTEM_PULLREQUEST_SOURCEBRANCH:-}}"
 TARGET_BRANCH="${TARGET_BRANCH:-${SYSTEM_PULLREQUEST_TARGETBRANCH:-}}"
 
@@ -143,8 +146,6 @@ command -v curl >/dev/null || die "curl is required"
 export PI_SKIP_VERSION_CHECK=1
 export PI_TELEMETRY=0
 export PI_OFFLINE=0
-ADO_AUTH_HEADER_PREFIX="Author""ization:"
-ADO_AUTH_SCHEME="Bearer"
 
 mkdir -p "$CLONE_ROOT"
 
