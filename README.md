@@ -100,7 +100,7 @@ that exercise `scripts/review.sh` with stubbed git/Pi tooling.
    ./scripts/build.ps1
    ```
 2. **Pipeline definition** — create the pipeline from
-   `/home/runner/work/auto-pr-reviewer/auto-pr-reviewer/moeller-projects/auto-pr-reviewer/azure-pipelines-pr-review.yml`.
+   `azure-pipelines-pr-review.yml`.
 3. **Pipeline variables** — set `ADO_ORG` (org short name) and `REVIEW_LANGUAGE`,
    and add a **secret** variable `OPENAI_API_KEY` (Pi's model provider key).
    Optional variables in the YAML include `FAIL_ON`, `VOTE_WAITING_ON`,

@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = "/home/runner/work/auto-pr-reviewer/auto-pr-reviewer/moeller-projects/auto-pr-reviewer";
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const reviewScript = join(repoRoot, "scripts", "review.sh");
 
 function writeExecutable(path, content) {
