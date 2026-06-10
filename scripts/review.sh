@@ -120,6 +120,7 @@ REVIEW_PROMPT_PATH="${REVIEW_PROMPT_PATH:-/app/prompts/review-system.md}"
 REVIEW_STANDARDS_PATH="${REVIEW_STANDARDS_PATH:-/app/standards/clean-code.md}"
 PI_MODEL="${PI_MODEL:-openai/gpt-5.5}"
 MAX_DIFF_BYTES="${MAX_DIFF_BYTES:-200000}"
+CHUNK_TRIGGER_DIFF_BYTES="${CHUNK_TRIGGER_DIFF_BYTES:-$MAX_DIFF_BYTES}"
 PI_TIMEOUT_SECS="${PI_TIMEOUT_SECS:-600}"
 DRY_RUN="${DRY_RUN:-0}"
 INCLUDE_WORK_ITEMS="${INCLUDE_WORK_ITEMS:-1}"
@@ -127,6 +128,7 @@ INCLUDE_EXISTING_COMMENTS="${INCLUDE_EXISTING_COMMENTS:-1}"
 VOTE_WAITING_ON="${VOTE_WAITING_ON:-major}"
 
 require_uint MAX_DIFF_BYTES "$MAX_DIFF_BYTES"
+require_uint CHUNK_TRIGGER_DIFF_BYTES "$CHUNK_TRIGGER_DIFF_BYTES"
 require_uint PI_TIMEOUT_SECS "$PI_TIMEOUT_SECS"
 
 [ -r "$REVIEW_PROMPT_PATH" ] || die "review prompt not readable: $REVIEW_PROMPT_PATH"
@@ -412,10 +414,10 @@ printf '{"summary":"No changes to review.","findings":[]}\n' > "$RAW_OUT"
 else
 build_system_prompt
 
-if [ "$DIFF_BYTES" -le "$MAX_DIFF_BYTES" ]; then
+if [ "$DIFF_BYTES" -le "$CHUNK_TRIGGER_DIFF_BYTES" ]; then
   run_pi_review "$DIFF_FILE" "$FILES_FILE" "$RAW_OUT" "" 0
 else
-  log "diff exceeds cap; splitting review into file-based chunks"
+  log "diff exceeds chunk trigger; splitting review into file-based chunks"
   CHUNK_MANIFEST="$CHUNK_DIR/manifest.tsv"
   CURRENT_CHUNK_DIFF="$CHUNK_DIR/current.diff"
   CURRENT_CHUNK_FILES="$CHUNK_DIR/current.files"

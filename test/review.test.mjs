@@ -234,3 +234,28 @@ test("review.sh chunks large diffs by file and aggregates findings", () => {
     run.cleanup();
   }
 });
+
+test("review.sh keeps larger diffs in one pass until chunk trigger is exceeded", () => {
+  const run = runReview({
+    MAX_DIFF_BYTES: "300",
+    CHUNK_TRIGGER_DIFF_BYTES: "1000",
+    STUB_FILES_CONTENT: "src/auth.ts\nsrc/logging.ts\n",
+    STUB_DIFF_CONTENT: readFileSync(join(fixturesDir, "large.diff"), "utf8"),
+    STUB_PI_OUTPUTS: ['{"summary":"Full diff reviewed together.","findings":[]}'],
+  });
+
+  try {
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(JSON.parse(run.stdout), {
+      summary: "Full diff reviewed together.",
+      findings: [],
+    });
+    const input = readFileSync(join(run.piRecordDir, "stdin-0.txt"), "utf8");
+    assert.match(input, /src\/auth\.ts/);
+    assert.match(input, /src\/logging\.ts/);
+    assert.doesNotMatch(run.stderr, /reviewing large diff in/);
+    assert.throws(() => readFileSync(join(run.piRecordDir, "stdin-1.txt"), "utf8"), /ENOENT/);
+  } finally {
+    run.cleanup();
+  }
+});
