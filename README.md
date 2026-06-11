@@ -31,6 +31,7 @@ on reviews without rebuilding:
 | --- | --- |
 | `scripts/build.ps1` | Build the container image |
 | `scripts/run.ps1` | Run the reviewer against a PR |
+| `scripts/run-open-prs.ps1` | Review every active PR assigned to you except ones where your vote is “waiting for author” |
 | `run-local.ps1` | Convenience: build + run in one call |
 
 ### Quick start — just pass the PR URL
@@ -51,6 +52,9 @@ the URL and resolves source/target branches automatically via the ADO REST API.
 
 # German comments, cheaper model
 ./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -Language German -PiModel openai/gpt-5.4-mini
+
+# Review all active PRs where you are a reviewer and not waiting for author (all projects)
+./scripts/run-open-prs.ps1 -Org contoso
 ```
 
 ### Legacy invocation (individual params)
@@ -61,6 +65,27 @@ auto-resolved from the ADO REST API unless you override them:
 ```powershell
 ./scripts/run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
 ```
+
+### Batch mode: review all open PRs assigned to you
+
+Use `scripts/run-open-prs.ps1` when you want Windows/PowerShell to scan all repos
+visible to your token (optionally scoped by `-Project`) for active PRs where **you** are a reviewer, skip PRs where your reviewer vote
+is already **waiting for author** (`-5`), and then launch one containerized
+review run per remaining PR.
+
+```powershell
+# Review every matching PR in one project
+./scripts/run-open-prs.ps1 -Org contoso -Project Payments
+
+# Review every matching PR across all visible projects/repos
+./scripts/run-open-prs.ps1 -Org contoso
+
+# Cap the batch size and avoid posting while iterating
+./scripts/run-open-prs.ps1 -Org contoso -MaxPullRequests 5 -DryRun
+```
+
+The script reuses the same auth flow as `scripts/run.ps1`: pass `-AdoToken` or
+sign in with `az login`, and provide `$env:OPENAI_API_KEY` (or `-OpenAiApiKey`).
 
 ### All-in-one: `run-local.ps1`
 
@@ -80,6 +105,15 @@ Prereqs: Docker Desktop and a model key in `$env:OPENAI_API_KEY`, plus either
 token for the in-container clone, but it skips posting and just prints the
 findings JSON.
 
+### Run tests
+
+```bash
+npm test
+```
+
+This runs the Node unit tests for `scripts/post-findings.mjs` plus smoke tests
+that exercise `scripts/review.sh` with stubbed git/Pi tooling.
+
 > The reviewer's fetch happens inside the container, so the host does not need to
 > pre-fetch the PR branches. When using `-PrUrl`, the source and target branches
 > are resolved from the ADO REST API — no need to specify them manually.
@@ -90,14 +124,17 @@ findings JSON.
    ```powershell
    ./scripts/build.ps1
    ```
-2. **Pipeline variables** — create the pipeline from `azure-pipelines-pr-review.yml`,
-   set `ADO_ORG` (org short name) and `REVIEW_LANGUAGE`, and add a **secret** variable
-   `OPENAI_API_KEY` (Pi's model provider key).
-3. **Grant the build identity permission to comment.** Project Settings →
+2. **Pipeline definition** — create the pipeline from
+   `azure-pipelines-pr-review.yml`.
+3. **Pipeline variables** — set `ADO_ORG` (org short name) and `REVIEW_LANGUAGE`,
+   and add a **secret** variable `OPENAI_API_KEY` (Pi's model provider key).
+   Optional variables in the YAML include `FAIL_ON`, `VOTE_WAITING_ON`,
+   `DRY_RUN`, `PI_VERSION`, and `ADO_MCP_VERSION`.
+4. **Grant the build identity permission to comment.** Project Settings →
    Repositories → your repo → Security → select **`<Project> Build Service (<org>)`**
    → set **Contribute to pull requests = Allow**. Without this, `System.AccessToken`
    can read but every comment call fails.
-4. **Wire the PR trigger as a branch policy** (Azure Repos Git does not use YAML
+5. **Wire the PR trigger as a branch policy** (Azure Repos Git does not use YAML
    `pr:`): Project Settings → Repositories → your repo → Policies → select the
    target branch (e.g. `main`) → **Build Validation → +** → pick this pipeline →
    trigger Automatic, optionally not blocking. The policy runs the pipeline on every
@@ -118,9 +155,21 @@ findings JSON.
 | `PI_MODEL` | no | `openai/gpt-5.5` | Model pattern Pi understands (e.g. `openai/gpt-5.4-mini`) |
 | `REVIEW_PROMPT_PATH` | no | baked-in | Custom reviewer prompt (mount to override) |
 | `REVIEW_STANDARDS_PATH` | no | baked-in | Custom standards (mount to override) |
-| `MAX_DIFF_BYTES` | no | `200000` | Diff truncation cap (context guard) |
+| `MAX_DIFF_BYTES` | no | `200000` | Per-chunk diff cap after chunking starts; only oversized single-file diffs are truncated |
+| `CHUNK_TRIGGER_DIFF_BYTES` | no | `MAX_DIFF_BYTES` | Total diff-size threshold for switching from one rich-context review to file-based chunking |
 | `PI_TIMEOUT_SECS` | no | `600` | Max seconds the Pi reviewer may run (prevents hangs) |
 | `FAIL_ON` | no | `none` | Fail the check at/above `nit\|minor\|major\|blocker` |
+| `VOTE_WAITING_ON` | no | `major` | Vote “waiting for author” at/above `nit\|minor\|major\|blocker`, or `none` |
+
+## Version pinning
+
+The default build inputs are pinned for reproducibility:
+
+- Pi coding agent: `0.79.1`
+- Azure DevOps MCP: `2.7.0`
+- MCP SDK dependency: `1.29.0`
+
+Override the image tool versions explicitly with `./scripts/build.ps1 -PiVersion ... -AdoMcpVersion ...` when you want to upgrade them deliberately.
 
 ## Custom prompt / standards
 
@@ -144,5 +193,7 @@ keep the JSON output contract intact (see `prompts/review-system.md`).
   container boundary + read-only Pi tools + a token that can only comment. If you
   want in-container tool gating too, drop in your Pi permission config — verify the
   fork's schema first.
-- **Truncation on huge diffs.** Past `MAX_DIFF_BYTES` the diff is cut; the summary
-  says so. Consider per-file review for very large PRs.
+- **Very large single-file diffs still truncate.** Once a PR exceeds
+  `CHUNK_TRIGGER_DIFF_BYTES`, it is split into file-based chunks up to
+  `MAX_DIFF_BYTES`, but one oversized file diff is still truncated and called
+  out in the summary.

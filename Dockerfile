@@ -4,8 +4,8 @@
 FROM node:24-bookworm-slim
 
 # Pin tool versions for reproducible reviews. Bump deliberately.
-ARG PI_VERSION=latest
-ARG ADO_MCP_VERSION=latest
+ARG PI_VERSION=0.79.1
+ARG ADO_MCP_VERSION=2.7.0
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bash ca-certificates curl git jq ripgrep \

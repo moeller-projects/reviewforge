@@ -1,0 +1,55 @@
+trigger: none
+pr: none
+
+variables:
+  IMAGE_NAME: pr-review-bot:$(Build.BuildId)
+  REVIEW_LANGUAGE: English
+  PI_MODEL: openai/gpt-5.5
+  PI_VERSION: 0.79.1
+  ADO_MCP_VERSION: 2.7.0
+  FAIL_ON: none
+  VOTE_WAITING_ON: major
+  DRY_RUN: "false"
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+
+  - task: PowerShell@2
+    displayName: Build reviewer image
+    inputs:
+      filePath: $(Build.SourcesDirectory)/scripts/build.ps1
+      pwsh: true
+      arguments: >
+        -Image "$(IMAGE_NAME)"
+        -PiVersion "$(PI_VERSION)"
+        -AdoMcpVersion "$(ADO_MCP_VERSION)"
+
+  - task: PowerShell@2
+    displayName: Review pull request
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      OPENAI_API_KEY: $(OPENAI_API_KEY)
+    inputs:
+      targetType: inline
+      pwsh: true
+      script: |
+        $dryRun = "$(DRY_RUN)" -eq "true"
+        & "$(Build.SourcesDirectory)/scripts/run.ps1" `
+          -Org "$(ADO_ORG)" `
+          -Project "$(System.TeamProject)" `
+          -RepoId "$(Build.Repository.Name)" `
+          -PrId "$(System.PullRequest.PullRequestId)" `
+          -SourceBranch "$(System.PullRequest.SourceBranch)" `
+          -TargetBranch "$(System.PullRequest.TargetBranch)" `
+          -Language "$(REVIEW_LANGUAGE)" `
+          -FailOn "$(FAIL_ON)" `
+          -VoteWaitingOn "$(VOTE_WAITING_ON)" `
+          -AdoToken "$(System.AccessToken)" `
+          -OpenAiApiKey "$(OPENAI_API_KEY)" `
+          -PiModel "$(PI_MODEL)" `
+          -Image "$(IMAGE_NAME)" `
+          -DryRun:$dryRun

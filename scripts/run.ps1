@@ -102,6 +102,8 @@ $ErrorActionPreference = "Stop"
 
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
 
+$runLabel = $null
+
 # --- Prerequisites ------------------------------------------------------------
 if (-not $OpenAiApiKey) {
     Fail 'No model key. Set $env:OPENAI_API_KEY or pass -OpenAiApiKey.'
@@ -115,7 +117,6 @@ $Token = Get-AdoToken $AdoToken
 # When individual params are given, resolve on the host and pass them explicitly.
 if ($PrUrl -and -not $SourceBranch -and -not $TargetBranch) {
     # Simplified path: container handles URL parsing + branch resolution
-    Write-Step "Running reviewer with PR_URL (container resolves identity) [runtime: $Runtime]"
     $envFile = Write-EnvFile @{
         PrUrl         = $PrUrl
         Language      = $Language
@@ -126,6 +127,7 @@ if ($PrUrl -and -not $SourceBranch -and -not $TargetBranch) {
         OpenAiApiKey  = $OpenAiApiKey
         DryRun        = $DryRun
     }
+    $runLabel = "Running reviewer with PR_URL (container resolves identity){0} [runtime: {1}]" -f $(if($DryRun){" [dry run]"}else{""}), $Runtime
 } else {
     # Legacy path: resolve on host, pass individual vars
     if ($PrUrl) {
@@ -146,7 +148,6 @@ if ($PrUrl -and -not $SourceBranch -and -not $TargetBranch) {
     $Source = Normalize-BranchName $branches.SourceBranch
     $Target = Normalize-BranchName $branches.TargetBranch
 
-    Write-Step ("Running reviewer on PR #{0} ({1} -> {2}){3} [runtime: {4}]" -f $PrId,$Source,$Target, $(if($DryRun){" [dry run]"}else{""}), $Runtime)
     $envFile = Write-EnvFile @{
         Org           = $Org
         Project       = $Project
@@ -162,11 +163,12 @@ if ($PrUrl -and -not $SourceBranch -and -not $TargetBranch) {
         OpenAiApiKey  = $OpenAiApiKey
         DryRun        = $DryRun
     }
+    $runLabel = "Running reviewer on PR #{0} ({1} -> {2}){3} [runtime: {4}]" -f $PrId,$Source,$Target, $(if($DryRun){" [dry run]"}else{""}), $Runtime
 }
 
 $dockerArgs = @("run","--rm","--env-file",$envFile,$Image)
 
-Write-Step ("Running reviewer on PR #{0} ({1} -> {2}){3} [runtime: {4}]" -f $PrId,$Source,$Target, $(if($DryRun){" [dry run]"}else{""}), $Runtime)
+Write-Step $runLabel
 try {
     & $Runtime @dockerArgs
     $rc = $LASTEXITCODE

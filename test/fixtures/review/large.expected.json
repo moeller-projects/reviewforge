@@ -1,0 +1,13 @@
+{
+  "summary": "Reviewed 2 changed file(s) across 2 diff chunk(s). Auth chunk is safe. Logging chunk exposes credentials in logs.",
+  "findings": [
+    {
+      "file": "src/logging.ts",
+      "line": 12,
+      "severity": "major",
+      "title": "Do not log authorization headers",
+      "message": "The new structured log payload includes the raw Authorization header. That leaks credentials into application logs and violates the clean-code standard.",
+      "suggestion": "Remove the authorization field from the log payload or replace it with a fixed boolean/redacted marker."
+    }
+  ]
+}

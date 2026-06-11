@@ -76,6 +76,20 @@ export function keyOf(f) {
     .slice(0, 12);
 }
 
+export function worstSeverityRank(findings) {
+  return findings.reduce((max, f) => Math.max(max, SEV_RANK[f.severity] ?? 0), 0);
+}
+
+export function shouldVoteWaiting(findings, threshold) {
+  if (threshold === "none") return false;
+  return worstSeverityRank(findings) >= (SEV_RANK[threshold] ?? Number.POSITIVE_INFINITY);
+}
+
+export function shouldFailOnFindings(findings, threshold) {
+  if (threshold === "none") return false;
+  return worstSeverityRank(findings) >= (SEV_RANK[threshold] ?? Number.POSITIVE_INFINITY);
+}
+
 function fencedCode(text) {
   const runs = String(text).match(/`+/g) ?? [];
   const longestRun = runs.reduce((max, run) => Math.max(max, run.length), 0);
@@ -227,10 +241,7 @@ export async function main() {
 
     // --- Vote "waiting for author" if threshold met and new findings were posted ---
     if (VOTE_WAITING_ON !== "none" && voteTool && created > 0) {
-      const worstNew = findings
-        .reduce((m, f) => Math.max(m, SEV_RANK[f.severity]), 0);
-
-      if (worstNew >= SEV_RANK[VOTE_WAITING_ON]) {
+      if (shouldVoteWaiting(findings, VOTE_WAITING_ON)) {
         try {
           await client.callTool({
             name: voteTool.name,
@@ -249,13 +260,9 @@ export async function main() {
 
     console.error(`[post] created ${created}, skipped ${skipped} already-present finding(s)`);
 
-    if (FAIL_ON !== "none") {
-      const worst = findings.reduce((m, f) => Math.max(m, SEV_RANK[f.severity]), 0);
-
-      if (worst >= SEV_RANK[FAIL_ON]) {
-        console.error(`[post] FAIL_ON=${FAIL_ON} threshold met; exiting 1`);
-        process.exitCode = 1;
-      }
+    if (shouldFailOnFindings(findings, FAIL_ON)) {
+      console.error(`[post] FAIL_ON=${FAIL_ON} threshold met; exiting 1`);
+      process.exitCode = 1;
     }
   } finally {
     if (connected) {
