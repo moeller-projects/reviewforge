@@ -101,7 +101,8 @@ function Get-AdoCurrentUser {
     )
 
     Write-Step "Resolving current Azure DevOps user..."
-    $apiUrl = "https://dev.azure.com/$Org/_apis/connectionData?connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1"
+    $encodedOrg = [System.Uri]::EscapeDataString($Org)
+    $apiUrl = "https://dev.azure.com/$encodedOrg/_apis/connectionData?connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1"
     $data = Invoke-AdoGet -Uri $apiUrl -Token $Token -Context "Azure DevOps connection data"
     $user = $data.authenticatedUser
 
@@ -137,7 +138,10 @@ function Get-ActivePullRequests {
     $allPullRequests = @()
 
     do {
-        $apiUrl = "https://dev.azure.com/$Org/$Project/_apis/git/repositories/$RepoId/pullrequests?searchCriteria.status=active&`$top=$top&`$skip=$skip&api-version=7.0"
+        $encodedOrg = [System.Uri]::EscapeDataString($Org)
+        $encodedProject = [System.Uri]::EscapeDataString($Project)
+        $encodedRepoId = [System.Uri]::EscapeDataString($RepoId)
+        $apiUrl = "https://dev.azure.com/$encodedOrg/$encodedProject/_apis/git/repositories/$encodedRepoId/pullrequests?searchCriteria.status=active&`$top=$top&`$skip=$skip&api-version=7.0"
         $response = Invoke-AdoGet -Uri $apiUrl -Token $Token -Context "Azure DevOps pull request list"
         $page = @($response.value)
         $allPullRequests += $page
