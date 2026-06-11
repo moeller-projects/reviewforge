@@ -12,10 +12,7 @@
     Azure DevOps organization short name (for example: contoso).
 
 .PARAMETER Project
-    Azure DevOps project name.
-
-.PARAMETER RepoId
-    Repository id or name.
+    Azure DevOps project name. Optional; when omitted, all visible projects are scanned.
 
 .PARAMETER AdoToken
     Access token for Azure DevOps. If omitted, the script gets one via Azure CLI.
@@ -46,16 +43,15 @@
     Review only; print findings JSON for each PR and do not post to Azure DevOps.
 
 .EXAMPLE
-    ./scripts/run-open-prs.ps1 -Org contoso -Project Payments -RepoId payments-api
+    ./scripts/run-open-prs.ps1 -Org contoso -Project Payments
 
 .EXAMPLE
-    ./scripts/run-open-prs.ps1 -Org contoso -Project Payments -RepoId payments-api -MaxPullRequests 5 -DryRun
+    ./scripts/run-open-prs.ps1 -Org contoso -MaxPullRequests 5 -DryRun
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $Org,
-    [Parameter(Mandatory)][string] $Project,
-    [Parameter(Mandatory)][string] $RepoId,
+    [string] $Project,
     [string] $AdoToken,
     [string] $OpenAiApiKey = $env:OPENAI_API_KEY,
     [string] $Language     = "English",
@@ -76,7 +72,23 @@ Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
 
 $Token = Get-AdoToken $AdoToken
 $CurrentUser = Get-AdoCurrentUser -Org $Org -Token $Token
-$AllPullRequests = @(Get-ActivePullRequests -Org $Org -Project $Project -RepoId $RepoId -Token $Token)
+$Repositories = @(Get-AdoRepositories -Org $Org -Project $Project -Token $Token)
+
+if (-not $Repositories) {
+    $scope = if ($Project) { "project '$Project'" } else { "organization '$Org'" }
+    Write-Step "No repositories found for $scope."
+    exit 0
+}
+
+$AllPullRequests = @(
+    foreach ($repository in $Repositories) {
+        $repositoryProject = $repository.project.name
+        $repositoryId = if ($repository.id) { $repository.id } else { $repository.name }
+        if (-not $repositoryProject -or -not $repositoryId) { continue }
+
+        @(Get-ActivePullRequests -Org $Org -Project $repositoryProject -RepoId $repositoryId -Token $Token)
+    }
+)
 
 $SelectedPullRequests = @(
     foreach ($pullRequest in $AllPullRequests) {
@@ -84,12 +96,25 @@ $SelectedPullRequests = @(
         if (-not $reviewer) { continue }
         if ($reviewer.vote -eq -5) { continue }
 
+        $pullRequestProject = @($pullRequest.repository.project.name, $pullRequest.project.name) |
+            Where-Object { $_ } |
+            Select-Object -First 1
+        $pullRequestRepoId = @($pullRequest.repository.id, $pullRequest.repository.name) |
+            Where-Object { $_ } |
+            Select-Object -First 1
+        $pullRequestRepoName = @($pullRequest.repository.name, $pullRequestRepoId) |
+            Where-Object { $_ } |
+            Select-Object -First 1
+
         [pscustomobject]@{
             PullRequest = $pullRequest
             Reviewer    = $reviewer
+            Project     = $pullRequestProject
+            RepoId      = $pullRequestRepoId
+            RepoName    = $pullRequestRepoName
         }
     }
-) | Sort-Object { $_.PullRequest.pullRequestId }
+) | Sort-Object Project, RepoName, { $_.PullRequest.pullRequestId }
 
 if ($MaxPullRequests -gt 0) {
     $SelectedPullRequests = @($SelectedPullRequests | Select-Object -First $MaxPullRequests)
@@ -112,13 +137,21 @@ $failedRuns = 0
 foreach ($entry in $SelectedPullRequests) {
     $pullRequest = $entry.PullRequest
     $prId = [int]$pullRequest.pullRequestId
+    $projectName = $entry.Project
+    $repoId = $entry.RepoId
+    $repoName = $entry.RepoName
+    if (-not $projectName -or -not $repoId) {
+        $failedRuns++
+        Write-Host "ERROR: PR #$prId is missing repository/project information; skipping" -ForegroundColor Red
+        continue
+    }
     $vote = [int]$entry.Reviewer.vote
-    Write-Step ("Running reviewer for PR #{0}: {1} [current vote: {2}]{3}" -f $prId, $pullRequest.title, $vote, $(if ($DryRun) { " [dry run]" } else { "" }))
+    Write-Step ("Running reviewer for PR #{0}: {1}/{2} - {3} [current vote: {4}]{5}" -f $prId, $projectName, $repoName, $pullRequest.title, $vote, $(if ($DryRun) { " [dry run]" } else { "" }))
 
     & $runScript `
         -Org $Org `
-        -Project $Project `
-        -RepoId $RepoId `
+        -Project $projectName `
+        -RepoId $repoId `
         -PrId $prId `
         -Language $Language `
         -FailOn $FailOn `

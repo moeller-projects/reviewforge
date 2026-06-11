@@ -123,6 +123,54 @@ function Get-AdoCurrentUser {
 
 <#
 .SYNOPSIS
+    List repositories visible to the current token.
+#>
+function Get-AdoRepositories {
+    param(
+        [Parameter(Mandatory)][string]$Org,
+        [string]$Project,
+        [Parameter(Mandatory)][string]$Token
+    )
+
+    $top = 100
+    $allRepositories = @()
+    $continuationToken = $null
+    $encodedOrg = [System.Uri]::EscapeDataString($Org)
+    $encodedProject = if ($Project) { [System.Uri]::EscapeDataString($Project) } else { $null }
+    $baseUrl = if ($encodedProject) {
+        "https://dev.azure.com/$encodedOrg/$encodedProject/_apis/git/repositories"
+    } else {
+        "https://dev.azure.com/$encodedOrg/_apis/git/repositories"
+    }
+
+    do {
+        $continuationQuery = if ($continuationToken) { "&continuationToken=$([System.Uri]::EscapeDataString($continuationToken))" } else { "" }
+        $apiUrl = "$baseUrl?`$top=$top$continuationQuery&api-version=7.0"
+        $responseHeaders = $null
+
+        try {
+            $response = Invoke-RestMethod `
+                -Uri $apiUrl `
+                -Headers @{ Authorization = ('Bearer ' + $Token) } `
+                -ResponseHeadersVariable responseHeaders `
+                -ErrorAction Stop
+        } catch {
+            $scope = if ($Project) { "project '$Project'" } else { "organization '$Org'" }
+            Fail "Failed calling Azure DevOps repository list for ${scope}: $_"
+        }
+
+        $page = @($response.value)
+        $allRepositories += $page
+
+        $continuationHeader = if ($responseHeaders) { $responseHeaders['x-ms-continuationtoken'] } else { $null }
+        $continuationToken = if ($continuationHeader) { @($continuationHeader)[0] } else { $null }
+    } while ($continuationToken)
+
+    return $allRepositories
+}
+
+<#
+.SYNOPSIS
     List all active pull requests for a repository.
 #>
 function Get-ActivePullRequests {
@@ -263,4 +311,4 @@ function Write-EnvFile {
     return $envFile
 }
 
-Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Invoke-AdoGet, Get-AdoCurrentUser, Get-ActivePullRequests, Find-PrReviewer, Resolve-PrBranches, Normalize-BranchName, Write-EnvFile
+Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Invoke-AdoGet, Get-AdoCurrentUser, Get-AdoRepositories, Get-ActivePullRequests, Find-PrReviewer, Resolve-PrBranches, Normalize-BranchName, Write-EnvFile
