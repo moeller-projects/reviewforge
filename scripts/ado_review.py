@@ -108,8 +108,11 @@ class AdoClient:
     def pr_path(self, pr_id: int, suffix: str = "") -> str:
         return f"/_apis/git/repositories/{enc(self.repo)}/pullRequests/{enc(pr_id)}{suffix}"
 
-    def get_pr(self, pr_id: int) -> dict[str, Any]:
-        return self.get(self.pr_path(pr_id))
+    def get_pr(self, pr_id: int, *, include_work_item_refs: bool = False) -> dict[str, Any]:
+        path = self.pr_path(pr_id)
+        if include_work_item_refs:
+            path += "?includeWorkItemRefs=true"
+        return self.get(path)
 
     def get_threads(self, pr_id: int) -> list[dict[str, Any]]:
         return self.get(self.pr_path(pr_id, "/threads")).get("value", [])
@@ -200,7 +203,7 @@ def command_fetch_context(args: argparse.Namespace) -> int:
     out = Path(args.out)
 
     log(f"fetching PR #{args.pr} context")
-    pr = client.get_pr(args.pr)
+    pr = client.get_pr(args.pr, include_work_item_refs=True)
     work_items, work_item_comments = fetch_work_items(client, pr)
     threads = [simplify_thread(t) for t in client.get_threads(args.pr)]
 
@@ -269,11 +272,15 @@ def validate_findings(doc: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         if confidence and confidence not in {"high", "medium", "low"}:
             fail(f"finding[{i}].confidence invalid: {f.get('confidence')}")
         evidence = f.get("evidence") if isinstance(f.get("evidence"), dict) else None
+        context_basis = str(f.get("context_basis") or "").strip() or None
+        if context_basis and context_basis not in {"diff-only", "surrounding-code-read", "full-module-review"}:
+            context_basis = None
         normalized = {
             "file": str(f.get("file")).lstrip("/") if isinstance(f.get("file"), str) and f.get("file") else None,
             "line": f.get("line") if isinstance(f.get("line"), int) and f.get("line") > 0 else None,
             "severity": sev,
             "title": str(f.get("title") or "Review finding").strip(),
+            "contextBasis": context_basis,
             "message": msg.strip(),
             "confidence": confidence or None,
             "suggestion": f.get("suggestion").strip() if isinstance(f.get("suggestion"), str) and f.get("suggestion").strip() else None,
@@ -318,6 +325,8 @@ def comment_body(f: dict[str, Any], key: str, max_chars: int) -> str:
     parts = [f"**{SEV_LABEL[f['severity']]}** — {f['title']}"]
     if f.get("confidence"):
         parts.append(f"Confidence: {f['confidence']}")
+    if f.get("contextBasis"):
+        parts.append(f"Context basis: {f['contextBasis']}")
     parts.extend(["", truncate(f["message"], 5000)])
 
     evidence = f.get("evidence") or {}
@@ -392,7 +401,8 @@ def command_post_findings(args: argparse.Namespace) -> int:
         for f in findings:
             if f["severity"] in require_context_for:
                 ctx_files = (f.get("evidence") or {}).get("contextFilesRead") or []
-                if not ctx_files:
+                ctx_basis = f.get("contextBasis")
+                if not ctx_files and ctx_basis != "surrounding-code-read" and ctx_basis != "full-module-review":
                     log(f"dropped finding '{f['title']}' ({f['severity']}): REQUIRE_CONTEXT_FOR={require_context_for_raw} but no context files read")
                     continue
             kept.append(f)

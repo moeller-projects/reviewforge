@@ -44,8 +44,7 @@ param(
 
     # --- Build params ---
     [switch] $SkipBuild,
-    [string] $PiVersion     = "0.79.1",
-    [string] $AdoMcpVersion = "2.7.0"
+    [string] $PiVersion     = "0.79.1"
 )
 
 Set-StrictMode -Version Latest
@@ -58,7 +57,6 @@ if (-not $SkipBuild) {
     $buildArgs = @{
         Image         = $Image
         PiVersion     = $PiVersion
-        AdoMcpVersion = $AdoMcpVersion
     }
     & (Join-Path $ScriptsDir 'build.ps1') @buildArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

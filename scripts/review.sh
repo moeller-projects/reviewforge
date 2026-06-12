@@ -55,6 +55,14 @@ and (.file == null or (.file | type == "string"))
 and (.line == null or (.line | type == "number"))
 and (.severity | IN("blocker", "major", "minor", "nit"))
 and (.title | type == "string")
+and ((has("context_basis") | not) or .context_basis == null or (.context_basis | IN("diff-only", "surrounding-code-read", "full-module-review")))
+and ((has("evidence") | not) or .evidence == null or (
+  .evidence | type == "object"
+  and (.changed_lines | type == "array")
+  and (.context_files_read | type == "array")
+  and (.why_new_in_this_pr | type == "string")
+  and (.why_not_intentional | type == "string")
+))
 and (.message | type == "string")
 and ((has("confidence") | not) or .confidence == null or (.confidence | IN("high", "medium", "low")))
 and ((has("suggestion") | not) or .suggestion == null or (.suggestion | type == "string"))
@@ -102,17 +110,26 @@ TARGET_BRANCH="${TARGET_BRANCH:-${SYSTEM_PULLREQUEST_TARGETBRANCH:-}}"
 if [ -z "$SOURCE_BRANCH" ] || [ -z "$TARGET_BRANCH" ]; then
   ADO_API_BASE_EARLY="https://dev.azure.com/$(urlencode "$ADO_ORG")/$(urlencode "$ADO_PROJECT")"
   log "auto-resolving branches from ADO REST API"
-  PR_API_DATA=$(curl -sS -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_AUTH_TOKEN}" \
+  PR_API_URL="${ADO_API_BASE_EARLY}/_apis/git/repositories/$(urlencode "$ADO_REPO_ID")/pullRequests/${PR_ID}"
+  log "  GET $PR_API_URL"
+  PR_API_DATA=$(curl -sS \
+    -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_AUTH_TOKEN}" \
     -H "Accept: application/json;api-version=7.1" \
-    "${ADO_API_BASE_EARLY}/_apis/git/repositories/$(urlencode "$ADO_REPO_ID")/pullRequests/${PR_ID}" 2>/dev/null || echo '{}')
+    "$PR_API_URL" 2>&1) || true
+  # Check for HTTP-level errors in the response
+  if printf '%s' "$PR_API_DATA" | jq -e '.message // empty' >/dev/null 2>&1; then
+    API_ERR=$(printf '%s' "$PR_API_DATA" | jq -r '.message // empty')
+    [ -z "$API_ERR" ] || log "  ADO API error: $API_ERR"
+  fi
+  log "  API response (truncated): $(printf '%s' "$PR_API_DATA" | head -c 300)"
   if [ -z "$SOURCE_BRANCH" ]; then
-    SOURCE_BRANCH=$(printf '%s' "$PR_API_DATA" | jq -r '.sourceRefName // empty')
-    [ -n "$SOURCE_BRANCH" ] || die "could not resolve source branch from API"
+    SOURCE_BRANCH=$(printf '%s' "$PR_API_DATA" | jq -r '.sourceRefName // empty' 2>/dev/null || true)
+    [ -n "$SOURCE_BRANCH" ] || die "could not resolve source branch from API (response logged above)"
     log "  source branch: $SOURCE_BRANCH (from API)"
   fi
   if [ -z "$TARGET_BRANCH" ]; then
-    TARGET_BRANCH=$(printf '%s' "$PR_API_DATA" | jq -r '.targetRefName // empty')
-    [ -n "$TARGET_BRANCH" ] || die "could not resolve target branch from API"
+    TARGET_BRANCH=$(printf '%s' "$PR_API_DATA" | jq -r '.targetRefName // empty' 2>/dev/null || true)
+    [ -n "$TARGET_BRANCH" ] || die "could not resolve target branch from API (response logged above)"
     log "  target branch: $TARGET_BRANCH (from API)"
   fi
 fi
@@ -339,10 +356,13 @@ local stage="$1"
 local prompt_path="$2"
 local diff_path="$3"
 local out_path="$4"
-local instruction_path
+local instruction_path stdin_path
 instruction_path="$(mktemp)"
-cleanup_paths+=("$instruction_path")
+stdin_path="$(mktemp)"
+cleanup_paths+=("$instruction_path" "$stdin_path")
 write_stage_instruction "$stage" "$instruction_path" "$diff_path"
+# Combine instruction + diff into a single stdin file to avoid ARG_MAX limits
+cat "$instruction_path" "$diff_path" > "$stdin_path"
 
 log "running Pi $stage stage (timeout: ${PI_TIMEOUT_SECS}s)"
 set +e
@@ -350,9 +370,9 @@ timeout "$PI_TIMEOUT_SECS" env -u ADO_AUTH_TOKEN -u ADO_MCP_AUTH_TOKEN pi \
   --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
   --tools read,grep \
   --model "$PI_MODEL" --thinking medium \
-  --system-prompt "$(cat "$prompt_path")" \
-  -p "$(cat "$instruction_path")" \
-  < "$diff_path" > "$out_path"
+  --append-system-prompt "$prompt_path" \
+  -p "Process the task described in the system prompt. The instruction and unified diff are provided on stdin." \
+  < "$stdin_path" > "$out_path"
 PI_RC=$?
 set -e
 
@@ -377,9 +397,9 @@ if ! jq -e '.' "$out_path" >/dev/null 2>&1; then
       --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
       --tools read,grep \
       --model "$PI_MODEL" --thinking medium \
-      --system-prompt "$(cat "$prompt_path")" \
+      --append-system-prompt "$prompt_path" \
       -p "Your previous response was not valid JSON. Return only the JSON object – no markdown fences, no prose." \
-      < "$diff_path" > "$repair_out"
+      < "$stdin_path" > "$repair_out"
     REPAIR_RC=$?
     set -e
     if [ "$REPAIR_RC" -ne 0 ] || [ ! -s "$repair_out" ]; then
@@ -463,11 +483,14 @@ local files_path="$2"
 local out_path="$3"
 local chunk_label="${4:-}"
 local truncated_flag="${5:-0}"
-local instruction_path
+local instruction_path stdin_path
 instruction_path="$(mktemp)"
-cleanup_paths+=("$instruction_path")
+stdin_path="$(mktemp)"
+cleanup_paths+=("$instruction_path" "$stdin_path")
 
 write_instruction "$files_path" "$instruction_path" "$chunk_label" "$truncated_flag"
+# Combine instruction + diff into a single stdin file to avoid ARG_MAX limits
+cat "$instruction_path" "$diff_path" > "$stdin_path"
 
 log "running Pi reviewer (timeout: ${PI_TIMEOUT_SECS}s)"
 set +e
@@ -475,9 +498,9 @@ timeout "$PI_TIMEOUT_SECS" env -u ADO_AUTH_TOKEN -u ADO_MCP_AUTH_TOKEN pi \
   --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
   --tools read,grep \
   --model "$PI_MODEL" --thinking medium \
-  --system-prompt "$(cat "$SYS_FILE")" \
-  -p "$(cat "$instruction_path")" \
-  < "$diff_path" > "$out_path"
+  --append-system-prompt "$SYS_FILE" \
+  -p "Process the task described in the system prompt. The instruction and unified diff are provided on stdin." \
+  < "$stdin_path" > "$out_path"
 PI_RC=$?
 set -e
 
@@ -487,6 +510,35 @@ fi
 log "pi exit code: $PI_RC"
 [ "$PI_RC" -eq 0 ] || die "pi exited $PI_RC"
 [ -s "$out_path" ] || die "pi produced no output"
+
+# Attempt to parse JSON; if invalid, strip fences and retry once with repair prompt.
+if ! jq -e '.' "$out_path" >/dev/null 2>&1; then
+  log "pi review output is not valid JSON – trying fence-strip"
+  strip_json_fences "$out_path"
+  if ! jq -e '.' "$out_path" >/dev/null 2>&1; then
+    log "fence-strip did not fix JSON – sending repair prompt to Pi"
+    local repair_out
+    repair_out="$(mktemp)"
+    cleanup_paths+=("$repair_out")
+    set +e
+    timeout "$PI_TIMEOUT_SECS" env -u ADO_AUTH_TOKEN -u ADO_MCP_AUTH_TOKEN pi \
+      --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
+      --tools read,grep \
+      --model "$PI_MODEL" --thinking medium \
+      --append-system-prompt "$SYS_FILE" \
+      -p "Your previous response was not valid JSON. Return only the JSON object – no markdown fences, no prose." \
+      < "$stdin_path" > "$repair_out"
+    REPAIR_RC=$?
+    set -e
+    if [ "$REPAIR_RC" -ne 0 ] || [ ! -s "$repair_out" ]; then
+      die "Pi review repair call failed (rc=$REPAIR_RC)"
+    fi
+    strip_json_fences "$repair_out"
+    jq -e '.' "$repair_out" >/dev/null 2>&1 || die "Pi review repair response is still invalid JSON"
+    cp "$repair_out" "$out_path"
+  fi
+fi
+
 validate_review_output "$out_path"
 }
 
@@ -540,6 +592,8 @@ BASE_COMMIT="$(git merge-base "$TARGET_REF" "$SOURCE_REF")"
 log "target $TARGET_BRANCH -> $TARGET_COMMIT"
 log "source $SOURCE_BRANCH -> $SOURCE_COMMIT"
 log "merge-base -> $BASE_COMMIT"
+
+run_logged "git checkout source" git checkout "$SOURCE_COMMIT"
 
 RANGE="${BASE_COMMIT}..${SOURCE_COMMIT}"
 

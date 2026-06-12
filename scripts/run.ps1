@@ -178,7 +178,12 @@ if (-not $ContainerName -and $PrId -gt 0) {
     $ContainerName = "pr-review-bot-pr-$PrId"
 }
 
-$dockerArgs = @("run", "--rm", "-d")
+$dockerArgs = @("run", "--rm", "--network", "host")
+if ($Runtime -eq "podman") {
+    # Podman on Windows/WSL2 does not forward DNS with the default network;
+    # bridge mode with explicit public DNS ensures dev.azure.com resolves.
+    $dockerArgs = @("run", "--rm", "--network", "bridge", "--dns", "8.8.8.8", "--dns", "1.1.1.1")
+}
 if ($ContainerName) {
     $dockerArgs += @("--name", $ContainerName)
 }
