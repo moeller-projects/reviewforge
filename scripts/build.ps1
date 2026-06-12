@@ -12,18 +12,14 @@
 .PARAMETER PiVersion
     Pin the @earendil-works/pi-coding-agent version. Default: 0.79.1.
 
-.PARAMETER AdoMcpVersion
-    Pin the @azure-devops/mcp version. Default: 2.7.0.
-
 .EXAMPLE
     ./scripts/build.ps1
     ./scripts/build.ps1 -Image pr-review-bot:v1.2
 #>
 [CmdletBinding()]
 param(
-    [string] $Image         = "pr-review-bot:latest",
-    [string] $PiVersion     = "0.79.1",
-    [string] $AdoMcpVersion = "2.7.0"
+    [string] $Image     = "pr-review-bot:latest",
+    [string] $PiVersion = "0.79.1"
 )
 
 Set-StrictMode -Version Latest
@@ -37,7 +33,6 @@ $ContextDir = $PSScriptRoot | Split-Path  # scripts/ -> project root
 Write-Step "Building image $Image from $ContextDir (runtime: $Runtime)"
 & $Runtime build `
     --build-arg "PI_VERSION=$PiVersion" `
-    --build-arg "ADO_MCP_VERSION=$AdoMcpVersion" `
     -t $Image $ContextDir
 
 if ($LASTEXITCODE -ne 0) { Fail "Build failed." }

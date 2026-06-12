@@ -128,6 +128,7 @@ REVIEW_INTENT_PROMPT_PATH="${REVIEW_INTENT_PROMPT_PATH:-/app/prompts/intent.md}"
 REVIEW_CONTEXT_PLAN_PROMPT_PATH="${REVIEW_CONTEXT_PLAN_PROMPT_PATH:-/app/prompts/context-plan.md}"
 REVIEW_CONTEXT_DIGEST_PROMPT_PATH="${REVIEW_CONTEXT_DIGEST_PROMPT_PATH:-/app/prompts/context-digest.md}"
 REVIEW_VERIFY_PROMPT_PATH="${REVIEW_VERIFY_PROMPT_PATH:-/app/prompts/verify-findings.md}"
+REVIEW_SEVERITY_PROMPT_PATH="${REVIEW_SEVERITY_PROMPT_PATH:-/app/prompts/severity.md}"
 REVIEW_STANDARDS_PATH="${REVIEW_STANDARDS_PATH:-/app/standards/clean-code.md}"
 PI_MODEL="${PI_MODEL:-openai/gpt-5.5}"
 MAX_DIFF_BYTES="${MAX_DIFF_BYTES:-200000}"
@@ -137,6 +138,11 @@ DRY_RUN="${DRY_RUN:-0}"
 INCLUDE_WORK_ITEMS="${INCLUDE_WORK_ITEMS:-1}"
 INCLUDE_EXISTING_COMMENTS="${INCLUDE_EXISTING_COMMENTS:-1}"
 VOTE_WAITING_ON="${VOTE_WAITING_ON:-major}"
+VERIFY_FINDINGS="${VERIFY_FINDINGS:-1}"
+FORCE_REVIEW="${FORCE_REVIEW:-0}"
+# Comma-separated list of target branch names that are eligible for review.
+# Empty means all branches are reviewed.
+REVIEW_TARGET_BRANCHES="${REVIEW_TARGET_BRANCHES:-}"
 
 require_uint MAX_DIFF_BYTES "$MAX_DIFF_BYTES"
 require_uint CHUNK_TRIGGER_DIFF_BYTES "$CHUNK_TRIGGER_DIFF_BYTES"
@@ -147,6 +153,7 @@ require_uint PI_TIMEOUT_SECS "$PI_TIMEOUT_SECS"
 [ -r "$REVIEW_CONTEXT_PLAN_PROMPT_PATH" ] || die "context plan prompt not readable: $REVIEW_CONTEXT_PLAN_PROMPT_PATH"
 [ -r "$REVIEW_CONTEXT_DIGEST_PROMPT_PATH" ] || die "context digest prompt not readable: $REVIEW_CONTEXT_DIGEST_PROMPT_PATH"
 [ -r "$REVIEW_VERIFY_PROMPT_PATH" ] || die "verification prompt not readable: $REVIEW_VERIFY_PROMPT_PATH"
+[ -r "$REVIEW_SEVERITY_PROMPT_PATH" ] || die "severity prompt not readable: $REVIEW_SEVERITY_PROMPT_PATH"
 [ -r "$REVIEW_STANDARDS_PATH" ] || die "review standards not readable: $REVIEW_STANDARDS_PATH"
 
 command -v git >/dev/null || die "git is required"
@@ -178,6 +185,7 @@ CONTEXT_PLAN_FILE="$ARTIFACT_DIR/context-plan.json"
 CONTEXT_DIGEST_FILE="$ARTIFACT_DIR/context-digest.json"
 CANDIDATE_FINDINGS_FILE="$ARTIFACT_DIR/candidate-findings.json"
 VERIFIED_FINDINGS_FILE="$ARTIFACT_DIR/verified-findings.json"
+SEVERITY_FINDINGS_FILE="$ARTIFACT_DIR/severity-findings.json"
 FINAL_FINDINGS_FILE="$ARTIFACT_DIR/final-findings.json"
 COLLECTED_CONTEXT_FILE="$ARTIFACT_DIR/collected-context.json"
 mkdir -p "$ARTIFACT_DIR"
@@ -292,10 +300,16 @@ case "$label" in
   "context digest")
     jq -e '(.relevant_context | type == "array") and (.possible_intentional_choices | type == "array") and (.context_gaps | type == "array")' "$path" >/dev/null || die "$label output does not match context-digest schema"
     ;;
-  "finding verification")
+  "finding verification"|"severity calibration"|"candidate findings"*)
     validate_review_output "$path"
     ;;
 esac
+}
+
+strip_json_fences() {
+# Remove markdown code fences that some models wrap around JSON output.
+sed '/^```/d' "$1" > "$1.stripped"
+mv "$1.stripped" "$1"
 }
 
 write_stage_instruction() {
@@ -315,6 +329,7 @@ if [ -s "$CONTEXT_PLAN_FILE" ]; then printf '\nContext collection plan:\n'; cat 
 if [ -s "$COLLECTED_CONTEXT_FILE" ]; then printf '\nRunner-collected context:\n'; cat "$COLLECTED_CONTEXT_FILE"; printf '\n'; fi
 if [ -s "$CONTEXT_DIGEST_FILE" ]; then printf '\nContext digest:\n'; cat "$CONTEXT_DIGEST_FILE"; printf '\n'; fi
 if [ -s "$CANDIDATE_FINDINGS_FILE" ]; then printf '\nCandidate findings:\n'; cat "$CANDIDATE_FINDINGS_FILE"; printf '\n'; fi
+if [ -s "$VERIFIED_FINDINGS_FILE" ]; then printf '\nVerified findings:\n'; cat "$VERIFIED_FINDINGS_FILE"; printf '\n'; fi
 printf '\nUnified diff follows on stdin.\n'
 } > "$out_path"
 }
@@ -331,7 +346,7 @@ write_stage_instruction "$stage" "$instruction_path" "$diff_path"
 
 log "running Pi $stage stage (timeout: ${PI_TIMEOUT_SECS}s)"
 set +e
-timeout "$PI_TIMEOUT_SECS" env -u ADO_MCP_AUTH_TOKEN pi \
+timeout "$PI_TIMEOUT_SECS" env -u ADO_AUTH_TOKEN -u ADO_MCP_AUTH_TOKEN pi \
   --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
   --tools read,grep \
   --model "$PI_MODEL" --thinking medium \
@@ -347,6 +362,35 @@ fi
 log "pi $stage exit code: $PI_RC"
 [ "$PI_RC" -eq 0 ] || die "pi $stage stage exited $PI_RC"
 [ -s "$out_path" ] || die "pi $stage stage produced no output"
+
+# Attempt to parse JSON; if invalid, strip fences and retry once with repair prompt.
+if ! jq -e '.' "$out_path" >/dev/null 2>&1; then
+  log "pi $stage output is not valid JSON – trying fence-strip"
+  strip_json_fences "$out_path"
+  if ! jq -e '.' "$out_path" >/dev/null 2>&1; then
+    log "fence-strip did not fix JSON – sending repair prompt to Pi"
+    local repair_out
+    repair_out="$(mktemp)"
+    cleanup_paths+=("$repair_out")
+    set +e
+    timeout "$PI_TIMEOUT_SECS" env -u ADO_AUTH_TOKEN -u ADO_MCP_AUTH_TOKEN pi \
+      --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
+      --tools read,grep \
+      --model "$PI_MODEL" --thinking medium \
+      --system-prompt "$(cat "$prompt_path")" \
+      -p "Your previous response was not valid JSON. Return only the JSON object – no markdown fences, no prose." \
+      < "$diff_path" > "$repair_out"
+    REPAIR_RC=$?
+    set -e
+    if [ "$REPAIR_RC" -ne 0 ] || [ ! -s "$repair_out" ]; then
+      die "Pi $stage repair call failed (rc=$REPAIR_RC)"
+    fi
+    strip_json_fences "$repair_out"
+    jq -e '.' "$repair_out" >/dev/null 2>&1 || die "Pi $stage repair response is still invalid JSON"
+    cp "$repair_out" "$out_path"
+  fi
+fi
+
 validate_json_output "$out_path" "$stage"
 }
 
@@ -427,7 +471,7 @@ write_instruction "$files_path" "$instruction_path" "$chunk_label" "$truncated_f
 
 log "running Pi reviewer (timeout: ${PI_TIMEOUT_SECS}s)"
 set +e
-timeout "$PI_TIMEOUT_SECS" env -u ADO_MCP_AUTH_TOKEN pi \
+timeout "$PI_TIMEOUT_SECS" env -u ADO_AUTH_TOKEN -u ADO_MCP_AUTH_TOKEN pi \
   --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
   --tools read,grep \
   --model "$PI_MODEL" --thinking medium \
@@ -451,7 +495,7 @@ cat > "$GIT_ASKPASS" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
 *Username*) printf '%s\n' "x-access-token" ;;
-*) printf '%s\n' "${ADO_MCP_AUTH_TOKEN}" ;;
+*) printf '%s\n' "${ADO_AUTH_TOKEN}" ;;
 esac
 EOF
 chmod 700 "$GIT_ASKPASS"
@@ -531,8 +575,77 @@ jq \
   }' "$METADATA_FILE" > "${METADATA_FILE}.tmp"
 mv "${METADATA_FILE}.tmp" "$METADATA_FILE"
 cp "$DIFF_FILE" "$ARTIFACT_DIR/diff.patch"
-cp "$FILES_FILE" "$ARTIFACT_DIR/changed-files.txt"
 
+# Generate commits.txt artifact
+git log --oneline "$RANGE" > "$ARTIFACT_DIR/commits.txt"
+
+# Generate changed-files.json artifact (replaces plain changed-files.txt)
+build_changed_files_json() {
+  local files_path="$1"
+  local out_path="$2"
+  node -e '
+    const fs = require("node:fs");
+    const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter(Boolean);
+    const EXT_LANG = {
+      ts:"TypeScript", tsx:"TypeScript", js:"JavaScript", jsx:"JavaScript",
+      mjs:"JavaScript", cjs:"JavaScript", py:"Python", rb:"Ruby",
+      go:"Go", java:"Java", cs:"C#", cpp:"C++", cc:"C++", c:"C", h:"C",
+      rs:"Rust", kt:"Kotlin", swift:"Swift", php:"PHP", sh:"Shell",
+      bash:"Shell", ps1:"PowerShell", psm1:"PowerShell", psd1:"PowerShell",
+      tf:"HCL", hcl:"HCL", json:"JSON", yaml:"YAML", yml:"YAML",
+      md:"Markdown", html:"HTML", css:"CSS", scss:"SCSS", sql:"SQL",
+    };
+    const TEST_FILE_RE = /(\.(test|spec)\.[^.]+$|_test\.[^.]+$|Test\.[^.]+$)/;
+    const TEST_PATH_RE = /(^|\/)(test|tests|__tests__|spec|specs)\//;
+    const entries = lines.map(f => {
+      const ext = f.split(".").pop().toLowerCase();
+      return {
+        file: f,
+        language: EXT_LANG[ext] ?? "Other",
+        isTest: TEST_FILE_RE.test(f) || TEST_PATH_RE.test(f),
+      };
+    });
+    fs.writeFileSync(process.argv[2], JSON.stringify(entries, null, 2) + "\n");
+  ' "$files_path" "$out_path"
+}
+build_changed_files_json "$FILES_FILE" "$ARTIFACT_DIR/changed-files.json"
+
+# Draft/status/branch guard — skip review unless FORCE_REVIEW=1
+if [ "${FORCE_REVIEW:-0}" != "1" ]; then
+  PR_IS_DRAFT=$(jq -r '.isDraft // false' "$METADATA_FILE")
+  PR_STATUS=$(jq -r '.status // "active"' "$METADATA_FILE")
+  PR_TARGET_REF=$(jq -r '.targetRefName // ""' "$METADATA_FILE")
+  PR_TARGET_SHORT="${PR_TARGET_REF#refs/heads/}"
+
+  if [ "$PR_IS_DRAFT" = "true" ]; then
+    log "PR #$PR_ID is a draft; skipping review. Set FORCE_REVIEW=1 to override."
+    printf '{"summary":"Skipped: PR is a draft.","findings":[]}\n'
+    exit 0
+  fi
+
+  if [ "$PR_STATUS" != "active" ]; then
+    log "PR #$PR_ID status is '$PR_STATUS' (not active); skipping review. Set FORCE_REVIEW=1 to override."
+    printf '{"summary":"Skipped: PR status is %s.","findings":[]}\n' "$PR_STATUS"
+    exit 0
+  fi
+
+  if [ -n "$REVIEW_TARGET_BRANCHES" ]; then
+    BRANCH_ALLOWED=0
+    IFS=',' read -ra ALLOWED_BRANCHES <<< "$REVIEW_TARGET_BRANCHES"
+    for allowed in "${ALLOWED_BRANCHES[@]}"; do
+      allowed="${allowed#refs/heads/}"
+      if [ "$PR_TARGET_SHORT" = "$allowed" ]; then
+        BRANCH_ALLOWED=1
+        break
+      fi
+    done
+    if [ "$BRANCH_ALLOWED" = "0" ]; then
+      log "PR #$PR_ID targets branch '$PR_TARGET_SHORT' which is not in REVIEW_TARGET_BRANCHES; skipping. Set FORCE_REVIEW=1 to override."
+      printf '{"summary":"Skipped: target branch %s is not in the review policy.","findings":[]}\n' "$PR_TARGET_SHORT"
+      exit 0
+    fi
+  fi
+fi
 WI_CONTEXT="[]"
 WI_COMMENTS_CONTEXT="[]"
 THREAD_CONTEXT="[]"
@@ -548,7 +661,7 @@ WI_COUNT=$(printf '%s' "$WI_CONTEXT" | jq 'length')
 log "loaded $WI_COUNT linked work item(s) and $THREAD_COUNT existing thread(s)"
 
 if [ "$DIFF_BYTES" -eq 0 ]; then
-printf '{"summary":"No changes to review.","review_basis":{"intent_understood":true,"files_read":[],"work_items_checked":[],"existing_comments_checked":true,"verification_passed":true},"findings":[]}\n' > "$RAW_OUT"
+printf '{"summary":"No changes to review.","findings":[]}\n' > "$RAW_OUT"
 else
 log "running production review preflight stages"
 run_pi_stage "intent reconstruction" "$REVIEW_INTENT_PROMPT_PATH" "$DIFF_FILE" "$INTENT_FILE"
@@ -661,9 +774,19 @@ else
 fi
 
 cp "$RAW_OUT" "$CANDIDATE_FINDINGS_FILE"
-log "running adversarial finding verification stage"
-run_pi_stage "finding verification" "$REVIEW_VERIFY_PROMPT_PATH" "$DIFF_FILE" "$VERIFIED_FINDINGS_FILE"
-cp "$VERIFIED_FINDINGS_FILE" "$RAW_OUT"
+
+if [ "${VERIFY_FINDINGS:-1}" != "0" ]; then
+  log "running adversarial finding verification stage"
+  run_pi_stage "finding verification" "$REVIEW_VERIFY_PROMPT_PATH" "$DIFF_FILE" "$VERIFIED_FINDINGS_FILE"
+  cp "$VERIFIED_FINDINGS_FILE" "$RAW_OUT"
+else
+  log "VERIFY_FINDINGS=0; skipping verification stage"
+  cp "$RAW_OUT" "$VERIFIED_FINDINGS_FILE"
+fi
+
+log "running severity calibration stage"
+run_pi_stage "severity calibration" "$REVIEW_SEVERITY_PROMPT_PATH" "$DIFF_FILE" "$SEVERITY_FINDINGS_FILE"
+cp "$SEVERITY_FINDINGS_FILE" "$RAW_OUT"
 fi
 
 cp "$RAW_OUT" "$FINAL_FINDINGS_FILE"
