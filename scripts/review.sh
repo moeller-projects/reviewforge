@@ -467,9 +467,11 @@ while IFS=$'\t' read -r query reason; do
   [ -n "$query" ] || continue
   if [ "$first" -eq 0 ]; then printf ','; fi
   first=0
-  local matches
-  matches="$(rg -n --fixed-strings --glob '!/.git/**' --glob '!node_modules/**' --glob '!artifacts/**' -- "$query" . 2>/dev/null | head -n "$max_search_matches" || true)"
-  jq -n --arg query "$query" --arg reason "$reason" --arg matches "$matches" '{query:$query, reason:$reason, matches:$matches}'
+  local matches_file
+  matches_file="$(mktemp)"
+  cleanup_paths+=("$matches_file")
+  rg -n --fixed-strings --glob '!/.git/**' --glob '!node_modules/**' --glob '!artifacts/**' -- "$query" . 2>/dev/null | head -n "$max_search_matches" > "$matches_file" || true
+  jq -n --arg query "$query" --arg reason "$reason" --rawfile matches "$matches_file" '{query:$query, reason:$reason, matches:$matches}'
 done < "$tmp_searches"
 printf ']}'
 } > "$tmp_context"

@@ -14,6 +14,7 @@ const fixturesDir = join(repoRoot, "test", "fixtures", "review");
 const STUB_INTENT = '{"pr_intent":"Stub PR intent","requirements":[],"changed_behaviors":[],"risk_areas":[],"files_requiring_context":[],"unclear_areas":[]}';
 const STUB_PLAN = '{"files_to_read":[],"symbols_to_trace":[],"tests_to_inspect":[],"searches_to_run":[]}';
 const STUB_DIGEST = '{"relevant_context":[],"project_conventions":[],"existing_tests":[],"possible_intentional_choices":[],"context_gaps":[]}';
+const STUB_PLAN_WITH_SEARCH = '{"files_to_read":[],"symbols_to_trace":[],"tests_to_inspect":[],"searches_to_run":[{"query":"needle","reason":"stress search output"}]}';
 
 function writeExecutable(path, content) {
   writeFileSync(path, content, { mode: 0o755 });
@@ -88,6 +89,19 @@ esac
 set -euo pipefail
 shift
 exec "$@"
+`);
+
+  writeExecutable(join(fakeBin, "rg"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ -n "\${STUB_RG_OUTPUT_PATH:-}" ] && [ -f "\${STUB_RG_OUTPUT_PATH}" ]; then
+  cat "\${STUB_RG_OUTPUT_PATH}"
+  exit 0
+fi
+if [ -n "\${STUB_RG_OUTPUT:-}" ]; then
+  printf '%s' "\${STUB_RG_OUTPUT}"
+  exit 0
+fi
+exit 1
 `);
 
   writeExecutable(join(fakeBin, "pi"), `#!/usr/bin/env bash
