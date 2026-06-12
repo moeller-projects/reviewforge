@@ -94,7 +94,7 @@ param(
     [ValidateSet("none","nit","minor","major","blocker")]
     [string] $VoteWaitingOn = "major",
     [string] $AdoToken,
-    [string] $OpenAiApiKey = [System.Environment]::GetEnvironmentVariable('OPENAI_API_KEY'),
+    [string] $OpenAiApiKey = $env:OPENAI_API_KEY,
     [string] $PiModel      = "openai/gpt-5.5",
     [string] $Image        = "pr-review-bot:latest",
     [string] $ContainerName,
@@ -119,7 +119,7 @@ if (-not $OpenAiApiKey) {
 
 $Runtime = Get-ContainerRuntime
 $Token = Get-AdoToken $AdoToken
-$ArtifactVolumeName = [System.Environment]::GetEnvironmentVariable('REVIEW_ARTIFACT_VOLUME_NAME')
+$ArtifactVolumeName = $env:REVIEW_ARTIFACT_VOLUME_NAME
 if (-not $ArtifactVolumeName) {
     $ArtifactVolumeName = 'pr-review-bot-artifacts'
 }
