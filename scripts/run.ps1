@@ -94,7 +94,7 @@ param(
     [ValidateSet("none","nit","minor","major","blocker")]
     [string] $VoteWaitingOn = "major",
     [string] $AdoToken,
-    [string] $OpenAiApiKey = $env:OPENAI_API_KEY,
+    [string] $OpenAiApiKey = [System.Environment]::GetEnvironmentVariable('OPENAI_API_KEY'),
     [string] $PiModel      = "openai/gpt-5.5",
     [string] $Image        = "pr-review-bot:latest",
     [string] $ContainerName,
@@ -119,6 +119,16 @@ if (-not $OpenAiApiKey) {
 
 $Runtime = Get-ContainerRuntime
 $Token = Get-AdoToken $AdoToken
+$ArtifactVolumeName = [System.Environment]::GetEnvironmentVariable('REVIEW_ARTIFACT_VOLUME_NAME')
+if (-not $ArtifactVolumeName) {
+    $ArtifactVolumeName = 'pr-review-bot-artifacts'
+}
+
+Write-Step "Ensuring artifact volume '$ArtifactVolumeName' exists"
+& $Runtime volume create $ArtifactVolumeName | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Fail "Failed to create or reuse artifact volume '$ArtifactVolumeName'."
+}
 
 # --- Build env file -----------------------------------------------------------
 # When -PrUrl is given, let the container resolve everything.
@@ -187,7 +197,7 @@ if ($Runtime -eq "podman") {
 if ($ContainerName) {
     $dockerArgs += @("--name", $ContainerName)
 }
-$dockerArgs += @("--env-file", $envFile, $Image)
+$dockerArgs += @("--volume", "$($ArtifactVolumeName):/workspace/artifacts", "--env-file", $envFile, $Image)
 
 Write-Step $runLabel
 try {

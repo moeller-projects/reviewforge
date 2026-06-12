@@ -150,6 +150,7 @@ REVIEW_STANDARDS_PATH="${REVIEW_STANDARDS_PATH:-/app/standards/clean-code.md}"
 PI_MODEL="${PI_MODEL:-openai/gpt-5.5}"
 MAX_DIFF_BYTES="${MAX_DIFF_BYTES:-200000}"
 CHUNK_TRIGGER_DIFF_BYTES="${CHUNK_TRIGGER_DIFF_BYTES:-$MAX_DIFF_BYTES}"
+DISABLE_CHUNK_REVIEW="${DISABLE_CHUNK_REVIEW:-0}"
 PI_TIMEOUT_SECS="${PI_TIMEOUT_SECS:-600}"
 DRY_RUN="${DRY_RUN:-0}"
 INCLUDE_WORK_ITEMS="${INCLUDE_WORK_ITEMS:-1}"
@@ -164,6 +165,13 @@ REVIEW_TARGET_BRANCHES="${REVIEW_TARGET_BRANCHES:-}"
 require_uint MAX_DIFF_BYTES "$MAX_DIFF_BYTES"
 require_uint CHUNK_TRIGGER_DIFF_BYTES "$CHUNK_TRIGGER_DIFF_BYTES"
 require_uint PI_TIMEOUT_SECS "$PI_TIMEOUT_SECS"
+
+is_true() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 [ -r "$REVIEW_PROMPT_PATH" ] || die "review prompt not readable: $REVIEW_PROMPT_PATH"
 [ -r "$REVIEW_INTENT_PROMPT_PATH" ] || die "intent prompt not readable: $REVIEW_INTENT_PROMPT_PATH"
@@ -727,7 +735,12 @@ run_pi_stage "context digest" "$REVIEW_CONTEXT_DIGEST_PROMPT_PATH" "$DIFF_FILE" 
 
 build_system_prompt
 
-if [ "$DIFF_BYTES" -le "$CHUNK_TRIGGER_DIFF_BYTES" ]; then
+if is_true "$DISABLE_CHUNK_REVIEW"; then
+  if [ "$DIFF_BYTES" -gt "$CHUNK_TRIGGER_DIFF_BYTES" ]; then
+    log "DISABLE_CHUNK_REVIEW is enabled; reviewing large diff in a single pass"
+  fi
+  run_pi_review "$DIFF_FILE" "$FILES_FILE" "$RAW_OUT" "" 0
+elif [ "$DIFF_BYTES" -le "$CHUNK_TRIGGER_DIFF_BYTES" ]; then
   run_pi_review "$DIFF_FILE" "$FILES_FILE" "$RAW_OUT" "" 0
 else
   log "diff exceeds chunk trigger; splitting review into file-based chunks"

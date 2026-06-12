@@ -36,8 +36,8 @@ param(
     [string] $FailOn       = "none",
     [ValidateSet("none","nit","minor","major","blocker")]
     [string] $VoteWaitingOn = "major",
-    [string] $AdoToken = $env:ADO_API_KEY,
-    [string] $OpenAiApiKey = $env:OPENAI_API_KEY,
+    [string] $AdoToken,
+    [string] $OpenAiApiKey,
     [string] $PiModel      = "openai/gpt-5.5",
     [string] $Image        = "pr-review-bot:latest",
     [switch] $DryRun,
@@ -49,6 +49,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not $AdoToken) { $AdoToken = [System.Environment]::GetEnvironmentVariable('ADO_API_KEY') }
+if (-not $OpenAiApiKey) { $OpenAiApiKey = [System.Environment]::GetEnvironmentVariable('OPENAI_API_KEY') }
 
 $ScriptsDir = Join-Path $PSScriptRoot 'scripts'
 

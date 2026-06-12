@@ -158,9 +158,12 @@ git/Pi tooling, plus the Python pytest suite for `scripts/ado_review.py`.
 | `REVIEW_STANDARDS_PATH` | no | baked-in | Custom standards (mount to override) |
 | `MAX_DIFF_BYTES` | no | `200000` | Per-chunk diff cap after chunking starts; only oversized single-file diffs are truncated |
 | `CHUNK_TRIGGER_DIFF_BYTES` | no | `MAX_DIFF_BYTES` | Total diff-size threshold for switching from one rich-context review to file-based chunking |
+| `DISABLE_CHUNK_REVIEW` | no | `0` | Set to `1`/`true` to keep large diffs in one pass instead of chunking |
 | `PI_TIMEOUT_SECS` | no | `600` | Max seconds the Pi reviewer may run (prevents hangs) |
 | `FAIL_ON` | no | `none` | Fail the check at/above `nit\|minor\|major\|blocker` |
 | `VOTE_WAITING_ON` | no | `major` | Vote “waiting for author” at/above `nit\|minor\|major\|blocker`, or `none` |
+
+Artifacts are persisted in the named Docker/Podman volume `pr-review-bot-artifacts` mounted at `/workspace/artifacts`; each run writes under `pr-<id>/`.
 
 ## Version pinning
 
@@ -195,4 +198,5 @@ keep the JSON output contract intact (see `prompts/review-system.md`).
 - **Very large single-file diffs still truncate.** Once a PR exceeds
   `CHUNK_TRIGGER_DIFF_BYTES`, it is split into file-based chunks up to
   `MAX_DIFF_BYTES`, but one oversized file diff is still truncated and called
-  out in the summary.
+  out in the summary. Set `DISABLE_CHUNK_REVIEW=1` to force a single-pass
+  review instead.

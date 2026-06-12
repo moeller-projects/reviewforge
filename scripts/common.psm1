@@ -327,6 +327,8 @@ function Write-EnvFile {
         "OPENAI_API_KEY=$($Vars.OpenAiApiKey)"
         "VOTE_WAITING_ON=$($Vars.VoteWaitingOn)"
         $(if ($Vars.DryRun) { "DRY_RUN=1" } else { $null })
+        $(if ($env:DISABLE_CHUNK_REVIEW) { "DISABLE_CHUNK_REVIEW=$env:DISABLE_CHUNK_REVIEW" } else { $null })
+        $(if ($env:CHUNK_TRIGGER_DIFF_BYTES) { "CHUNK_TRIGGER_DIFF_BYTES=$env:CHUNK_TRIGGER_DIFF_BYTES" } else { $null })
     ) | Where-Object { $_ }
 
     [System.IO.File]::WriteAllLines(

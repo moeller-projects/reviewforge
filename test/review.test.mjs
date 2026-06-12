@@ -323,3 +323,28 @@ test("review.sh keeps larger diffs in one pass until chunk trigger is exceeded",
     run.cleanup();
   }
 });
+
+test("review.sh can disable chunked review with DISABLE_CHUNK_REVIEW", () => {
+  const singlePassOutput = '{"summary":"Chunking disabled.","findings":[]}';
+  const run = runReview({
+    MAX_DIFF_BYTES: "300",
+    CHUNK_TRIGGER_DIFF_BYTES: "100",
+    DISABLE_CHUNK_REVIEW: "1",
+    STUB_FILES_CONTENT: "src/auth.ts\nsrc/logging.ts\n",
+    STUB_DIFF_CONTENT: readFileSync(join(fixturesDir, "large.diff"), "utf8"),
+    STUB_PI_OUTPUTS: [STUB_INTENT, STUB_PLAN, STUB_DIGEST, singlePassOutput, singlePassOutput, singlePassOutput],
+  });
+
+  try {
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(JSON.parse(run.stdout), { summary: "Chunking disabled.", findings: [] });
+    const reviewInput = readFileSync(join(run.piRecordDir, "stdin-3.txt"), "utf8");
+    assert.match(reviewInput, /src\/auth\.ts/);
+    assert.match(reviewInput, /src\/logging\.ts/);
+    assert.match(run.stderr, /DISABLE_CHUNK_REVIEW is enabled/);
+    assert.doesNotMatch(run.stderr, /split/i);
+    assert.throws(() => readFileSync(join(run.piRecordDir, "stdin-6.txt"), "utf8"), /ENOENT/);
+  } finally {
+    run.cleanup();
+  }
+});

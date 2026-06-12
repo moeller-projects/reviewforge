@@ -31,6 +31,8 @@ steps:
     env:
       SYSTEM_ACCESSTOKEN: $(System.AccessToken)
       OPENAI_API_KEY: $(OPENAI_API_KEY)
+      DISABLE_CHUNK_REVIEW: $(DISABLE_CHUNK_REVIEW)
+      CHUNK_TRIGGER_DIFF_BYTES: $(CHUNK_TRIGGER_DIFF_BYTES)
     inputs:
       targetType: inline
       pwsh: true
