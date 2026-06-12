@@ -1,10 +1,10 @@
 <!-- target path: pr-review-bot/README.md -->
-# PR review bot (Azure DevOps + Pi + azure-devops-mcp)
+# PR review bot (Azure DevOps + Pi)
 
 On PR creation, a container checks out the PR branch, computes the minimal diff
 against the target branch, reviews it against coding standards with the Pi coding
-agent (read-only), and posts findings as PR comment threads through the official
-`@azure-devops/mcp` server — in the language you configure.
+agent (read-only), and posts findings as PR comment threads through direct Azure
+DevOps REST calls — in the language you configure.
 
 ## Design (why it's split in two)
 
@@ -13,14 +13,14 @@ The model does **judgment**; a script does **side effects**.
 1. `scripts/review.sh` builds the merge-base diff (`git diff target...source`) and
    runs Pi with only read tools (`read,grep,find,ls`). Pi cannot write to the repo
    or the PR. Its final output is a strict JSON findings contract.
-2. `scripts/post-findings.mjs` validates that JSON, then creates one comment thread
-   per finding via the MCP tool `repo_create_pull_request_thread`. Every comment
-   carries a hidden marker, and existing threads are scanned first, so **re-running
-   the pipeline never double-posts**.
+2. `scripts/ado_review.py` validates that JSON, then creates one comment thread
+   per finding via the Azure DevOps REST API. Every comment carries a hidden
+   marker, and existing threads are scanned first, so **re-running the pipeline
+   never double-posts**.
 
-Pi has no built-in MCP, so letting the model post directly would mean an extra
-extension plus non-deterministic, non-idempotent side effects. The poster owns
-posting instead. The MCP server is still what creates the comments.
+Pi produces pure findings JSON; a dedicated Python helper owns all Azure DevOps
+interactions. This keeps the model side-effect-free and the posting path fully
+deterministic and idempotent.
 
 ## Run locally (Windows / PowerShell)
 
@@ -108,11 +108,12 @@ findings JSON.
 ### Run tests
 
 ```bash
-npm test
+npm test        # Node smoke tests for review.sh
+pytest tests/   # Python unit tests for ado_review.py
 ```
 
-This runs the Node unit tests for `scripts/post-findings.mjs` plus smoke tests
-that exercise `scripts/review.sh` with stubbed git/Pi tooling.
+This runs the Node smoke tests that exercise `scripts/review.sh` with stubbed
+git/Pi tooling, plus the Python pytest suite for `scripts/ado_review.py`.
 
 > The reviewer's fetch happens inside the container, so the host does not need to
 > pre-fetch the PR branches. When using `-PrUrl`, the source and target branches
@@ -129,7 +130,7 @@ that exercise `scripts/review.sh` with stubbed git/Pi tooling.
 3. **Pipeline variables** — set `ADO_ORG` (org short name) and `REVIEW_LANGUAGE`,
    and add a **secret** variable `OPENAI_API_KEY` (Pi's model provider key).
    Optional variables in the YAML include `FAIL_ON`, `VOTE_WAITING_ON`,
-   `DRY_RUN`, `PI_VERSION`, and `ADO_MCP_VERSION`.
+   `DRY_RUN`, and `PI_VERSION`.
 4. **Grant the build identity permission to comment.** Project Settings →
    Repositories → your repo → Security → select **`<Project> Build Service (<org>)`**
    → set **Contribute to pull requests = Allow**. Without this, `System.AccessToken`
@@ -149,7 +150,7 @@ that exercise `scripts/review.sh` with stubbed git/Pi tooling.
 | `ADO_REPO_ID` | yes | — | Repo id or name (`$(Build.Repository.Name)`) |
 | `PR_ID` | yes | — | PR id (`$(System.PullRequest.PullRequestId)`) |
 | `SOURCE_BRANCH` / `TARGET_BRANCH` | yes | — | PR branches (refs or short names) |
-| `ADO_MCP_AUTH_TOKEN` | yes | — | Bearer token; pass `$(System.AccessToken)` |
+| `ADO_AUTH_TOKEN` | yes | — | Bearer token; pass `$(System.AccessToken)` |
 | `OPENAI_API_KEY` | yes | — | Pi's model provider key |
 | `REVIEW_LANGUAGE` | no | `English` | Language for all comment text |
 | `PI_MODEL` | no | `openai/gpt-5.5` | Model pattern Pi understands (e.g. `openai/gpt-5.4-mini`) |
@@ -163,13 +164,11 @@ that exercise `scripts/review.sh` with stubbed git/Pi tooling.
 
 ## Version pinning
 
-The default build inputs are pinned for reproducibility:
+The default build input is pinned for reproducibility:
 
 - Pi coding agent: `0.79.1`
-- Azure DevOps MCP: `2.7.0`
-- MCP SDK dependency: `1.29.0`
 
-Override the image tool versions explicitly with `./scripts/build.ps1 -PiVersion ... -AdoMcpVersion ...` when you want to upgrade them deliberately.
+Override the Pi version explicitly with `./scripts/build.ps1 -PiVersion ...` when you want to upgrade it deliberately.
 
 ## Custom prompt / standards
 

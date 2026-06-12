@@ -324,7 +324,6 @@ function Write-EnvFile {
         "FAIL_ON=$($Vars.FailOn)"
         "PI_MODEL=$($Vars.PiModel)"
         "ADO_AUTH_TOKEN=$($Vars.Token)"
-        "ADO_MCP_AUTH_TOKEN=$($Vars.Token)"
         "OPENAI_API_KEY=$($Vars.OpenAiApiKey)"
         "VOTE_WAITING_ON=$($Vars.VoteWaitingOn)"
         $(if ($Vars.DryRun) { "DRY_RUN=1" } else { $null })

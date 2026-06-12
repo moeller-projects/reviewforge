@@ -6,7 +6,6 @@ variables:
   REVIEW_LANGUAGE: English
   PI_MODEL: openai/gpt-5.5
   PI_VERSION: 0.79.1
-  ADO_MCP_VERSION: 2.7.0
   FAIL_ON: none
   VOTE_WAITING_ON: major
   DRY_RUN: "false"
@@ -26,7 +25,6 @@ steps:
       arguments: >
         -Image "$(IMAGE_NAME)"
         -PiVersion "$(PI_VERSION)"
-        -AdoMcpVersion "$(ADO_MCP_VERSION)"
 
   - task: PowerShell@2
     displayName: Review pull request

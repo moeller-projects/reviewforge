@@ -646,6 +646,7 @@ if [ "${FORCE_REVIEW:-0}" != "1" ]; then
     fi
   fi
 fi
+WI_CONTEXT="[]"
 WI_COMMENTS_CONTEXT="[]"
 THREAD_CONTEXT="[]"
 if [ "$INCLUDE_WORK_ITEMS" = "1" ]; then
