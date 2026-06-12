@@ -236,7 +236,13 @@ def command_fetch_context(args: argparse.Namespace) -> int:
 
 
 def extract_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8").strip())
+    text = path.read_text(encoding="utf-8").strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Strip markdown code fences and retry
+        stripped = "\n".join(line for line in text.splitlines() if not line.startswith("```"))
+        return json.loads(stripped)
 
 
 def validate_findings(doc: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -361,10 +367,15 @@ def command_post_findings(args: argparse.Namespace) -> int:
     fail_on = os.getenv("FAIL_ON", "none").lower()
     drop_low = os.getenv("DROP_LOW_CONFIDENCE", "true").lower() != "false"
     max_comment_chars = int(os.getenv("MAX_COMMENT_CHARS", "12000"))
+    max_findings = int(os.getenv("MAX_FINDINGS", "20"))
+    require_context_for_raw = os.getenv("REQUIRE_CONTEXT_FOR", "").lower()
+    require_context_for = {s.strip() for s in require_context_for_raw.split(",") if s.strip()} if require_context_for_raw else set()
 
     for name, value in [("POST_MIN_SEVERITY", post_min), ("VOTE_WAITING_ON", vote_waiting_on), ("FAIL_ON", fail_on)]:
         if value != "none" and value not in SEV_RANK:
             fail(f"{name} must be one of: none, nit, minor, major, blocker")
+    if require_context_for - SEV_RANK.keys():
+        fail(f"REQUIRE_CONTEXT_FOR contains invalid severity(s): {require_context_for - SEV_RANK.keys()}")
 
     summary, findings = validate_findings(extract_json(Path(args.findings)))
     parsed_count = len(findings)
@@ -374,6 +385,24 @@ def command_post_findings(args: argparse.Namespace) -> int:
         if (post_min == "none" or SEV_RANK[f["severity"]] >= SEV_RANK[post_min])
         and not (drop_low and f.get("confidence") == "low")
     ]
+
+    # Apply REQUIRE_CONTEXT_FOR: drop findings whose severity requires context but have none
+    if require_context_for:
+        kept = []
+        for f in findings:
+            if f["severity"] in require_context_for:
+                ctx_files = (f.get("evidence") or {}).get("contextFilesRead") or []
+                if not ctx_files:
+                    log(f"dropped finding '{f['title']}' ({f['severity']}): REQUIRE_CONTEXT_FOR={require_context_for_raw} but no context files read")
+                    continue
+            kept.append(f)
+        findings = kept
+
+    # Apply MAX_FINDINGS cap: sort by severity descending and slice
+    if len(findings) > max_findings:
+        findings = sorted(findings, key=lambda f: SEV_RANK[f["severity"]], reverse=True)[:max_findings]
+        log(f"capped findings to MAX_FINDINGS={max_findings}")
+
     log(f"parsed {parsed_count} finding(s); {len(findings)} accepted for posting")
 
     pr = client.get_pr(args.pr)
