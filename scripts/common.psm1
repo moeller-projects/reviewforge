@@ -15,6 +15,23 @@ function Fail {
     exit 1
 }
 
+function Normalize-AdoSegment {
+    param(
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $normalized = $Value.Trim()
+    if (-not $normalized) { Fail "$Name is required." }
+    if ($normalized -match '://') {
+        Fail "$Name must be the short Azure DevOps name, not a URL: '$Value'"
+    }
+    if ($normalized -match '[\r\n]') {
+        Fail "$Name must not contain line breaks: '$Value'"
+    }
+    return $normalized.TrimEnd('/')
+}
+
 <#
 .SYNOPSIS
     Detect the container runtime (docker or podman).
@@ -101,6 +118,7 @@ function Get-AdoCurrentUser {
     )
 
     Write-Step "Resolving current Azure DevOps user..."
+    $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization'
     $encodedOrg = [System.Uri]::EscapeDataString($Org)
     $apiUrl = "https://dev.azure.com/$encodedOrg/_apis/connectionData?connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1"
     $data = Invoke-AdoGet -Uri $apiUrl -Token $Token -Context "Azure DevOps connection data"
@@ -135,8 +153,9 @@ function Get-AdoRepositories {
     $top = 100
     $allRepositories = @()
     $continuationToken = $null
+    $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization'
     $encodedOrg = [System.Uri]::EscapeDataString($Org)
-    $encodedProject = if ($Project) { [System.Uri]::EscapeDataString($Project) } else { $null }
+    $encodedProject = if ($Project) { [System.Uri]::EscapeDataString((Normalize-AdoSegment -Value $Project -Name 'ADO project')) } else { $null }
     $baseUrl = if ($encodedProject) {
         "https://dev.azure.com/$encodedOrg/$encodedProject/_apis/git/repositories"
     } else {
@@ -145,10 +164,11 @@ function Get-AdoRepositories {
 
     do {
         $continuationQuery = if ($continuationToken) { "&continuationToken=$([System.Uri]::EscapeDataString($continuationToken))" } else { "" }
-        $apiUrl = "$baseUrl?`$top=$top$continuationQuery&api-version=7.0"
+        $apiUrl = "{0}?`$top={1}{2}&api-version=7.0" -f $baseUrl, $top, $continuationQuery
         $responseHeaders = $null
 
         try {
+            [void][System.Uri]::new($apiUrl)
             $response = Invoke-RestMethod `
                 -Uri $apiUrl `
                 -Headers @{ Authorization = ('Bearer ' + $Token) } `
@@ -156,7 +176,7 @@ function Get-AdoRepositories {
                 -ErrorAction Stop
         } catch {
             $scope = if ($Project) { "project '$Project'" } else { "organization '$Org'" }
-            Fail "Failed calling Azure DevOps repository list for ${scope}: $_"
+            Fail "Failed calling Azure DevOps repository list for ${scope} at URI '$apiUrl': $_"
         }
 
         $page = @($response.value)
@@ -184,6 +204,9 @@ function Get-ActivePullRequests {
     $top = 100
     $skip = 0
     $allPullRequests = @()
+    $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization'
+    $Project = Normalize-AdoSegment -Value $Project -Name 'ADO project'
+    $RepoId = Normalize-AdoSegment -Value $RepoId -Name 'ADO repository'
 
     do {
         $encodedOrg = [System.Uri]::EscapeDataString($Org)
@@ -245,6 +268,9 @@ function Resolve-PrBranches {
     if ($SourceBranch -and $TargetBranch) { return @{ SourceBranch = $SourceBranch; TargetBranch = $TargetBranch } }
 
     Write-Step "Resolving PR branches from ADO REST API..."
+    $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization'
+    $Project = Normalize-AdoSegment -Value $Project -Name 'ADO project'
+    $RepoId = Normalize-AdoSegment -Value $RepoId -Name 'ADO repository'
     $apiUrl = "https://dev.azure.com/$Org/$Project/_apis/git/repositories/$RepoId/pullRequests/$PrId`?api-version=7.0"
 
     try {
@@ -297,6 +323,7 @@ function Write-EnvFile {
         "REVIEW_LANGUAGE=$($Vars.Language)"
         "FAIL_ON=$($Vars.FailOn)"
         "PI_MODEL=$($Vars.PiModel)"
+        "ADO_AUTH_TOKEN=$($Vars.Token)"
         "ADO_MCP_AUTH_TOKEN=$($Vars.Token)"
         "OPENAI_API_KEY=$($Vars.OpenAiApiKey)"
         "VOTE_WAITING_ON=$($Vars.VoteWaitingOn)"
@@ -311,4 +338,4 @@ function Write-EnvFile {
     return $envFile
 }
 
-Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Invoke-AdoGet, Get-AdoCurrentUser, Get-AdoRepositories, Get-ActivePullRequests, Find-PrReviewer, Resolve-PrBranches, Normalize-BranchName, Write-EnvFile
+Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Invoke-AdoGet, Get-AdoCurrentUser, Get-AdoRepositories, Get-ActivePullRequests, Find-PrReviewer, Resolve-PrBranches, Normalize-AdoSegment, Normalize-BranchName, Write-EnvFile

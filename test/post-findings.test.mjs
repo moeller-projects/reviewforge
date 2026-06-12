@@ -20,6 +20,7 @@ test("validate normalizes and sanitizes findings", () => {
         severity: "MAJOR",
         title: "  Title  ",
         message: "  Body  ",
+        confidence: "HIGH",
         suggestion: "  fix();  ",
       },
     ],
@@ -34,6 +35,7 @@ test("validate normalizes and sanitizes findings", () => {
         severity: "major",
         title: "Title",
         message: "Body",
+        confidence: "high",
         suggestion: "fix();",
       },
     ],
@@ -45,18 +47,20 @@ test("keyOf is stable for equivalent findings", () => {
   assert.equal(keyOf(finding), keyOf({ ...finding }));
 });
 
-test("commentBody includes severity, suggestion fence, and dedupe marker", () => {
+test("commentBody includes severity, confidence, suggestion fence, and dedupe marker", () => {
   const body = commentBody(
     {
       severity: "blocker",
       title: "Reject invalid payload",
       message: "Missing validation opens a trust boundary issue.",
+      confidence: "high",
       suggestion: "if (!payload.id) throw new Error(`missing id`);",
     },
     "abc123",
   );
 
   assert.match(body, /\*\*🔴 blocker\*\* — Reject invalid payload/);
+  assert.match(body, /Confidence: high/);
   assert.match(body, /Suggestion:/);
   assert.match(body, /```/);
   assert.match(body, /<sub>prb:abc123<\/sub>/);
@@ -78,4 +82,5 @@ test("severity helpers respect configured thresholds", () => {
 
 test("validate rejects malformed findings", () => {
   assert.throws(() => validate({ summary: "x", findings: [{ severity: "bad", message: "oops" }] }), /severity invalid/);
+  assert.throws(() => validate({ summary: "x", findings: [{ severity: "minor", message: "oops", confidence: "meh" }] }), /confidence invalid/);
 });

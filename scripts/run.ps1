@@ -60,6 +60,9 @@
 .PARAMETER Image
     Docker/Podman image tag. Default: pr-review-bot:latest.
 
+.PARAMETER ContainerName
+    Optional Docker/Podman container name. Defaults to pr-review-bot-pr-{PrId} when -PrId is provided.
+
 .PARAMETER DryRun
     Review only; print the findings JSON and do not post to the PR.
 
@@ -94,6 +97,7 @@ param(
     [string] $OpenAiApiKey = $env:OPENAI_API_KEY,
     [string] $PiModel      = "openai/gpt-5.5",
     [string] $Image        = "pr-review-bot:latest",
+    [string] $ContainerName,
     [switch] $DryRun
 )
 
@@ -101,6 +105,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
+
+if ($Org) { $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization' }
+if ($Project) { $Project = Normalize-AdoSegment -Value $Project -Name 'ADO project' }
+if ($RepoId) { $RepoId = Normalize-AdoSegment -Value $RepoId -Name 'ADO repository' }
 
 $runLabel = $null
 
@@ -166,7 +174,15 @@ if ($PrUrl -and -not $SourceBranch -and -not $TargetBranch) {
     $runLabel = "Running reviewer on PR #{0} ({1} -> {2}){3} [runtime: {4}]" -f $PrId,$Source,$Target, $(if($DryRun){" [dry run]"}else{""}), $Runtime
 }
 
-$dockerArgs = @("run","--rm","--env-file",$envFile,$Image)
+if (-not $ContainerName -and $PrId -gt 0) {
+    $ContainerName = "pr-review-bot-pr-$PrId"
+}
+
+$dockerArgs = @("run", "--rm", "-d")
+if ($ContainerName) {
+    $dockerArgs += @("--name", $ContainerName)
+}
+$dockerArgs += @("--env-file", $envFile, $Image)
 
 Write-Step $runLabel
 try {

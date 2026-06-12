@@ -101,8 +101,15 @@ Shape:
 "severity": "blocker",
 "title": "short imperative summary",
 "context_basis": "diff-only | surrounding-code-read | full-module-review",
+"evidence": {
+"changed_lines": [42],
+"context_files_read": ["src/path/to/related.ext"],
+"why_new_in_this_pr": "short explanation",
+"why_not_intentional": "short explanation"
+},
 "message": "the explanation (1-3 sentences)",
-"suggestion": "concrete fix or replacement snippet, or null if none"
+"suggestion": "concrete fix or replacement snippet, or null if none",
+"confidence": "high | medium | low"
 }
 ]
 }
@@ -125,8 +132,15 @@ Example — single finding:
 "severity": "blocker",
 "title": "Swallowed error prevents caller from detecting charge failure",
 "context_basis": "surrounding-code-read",
+"evidence": {
+"changed_lines": [87],
+"context_files_read": ["src/payments/charge.ts", "src/orders/checkout.ts"],
+"why_new_in_this_pr": "The PR introduces the catch path that converts upstream charge errors into undefined.",
+"why_not_intentional": "Existing callers treat undefined as a successful zero-amount charge, not as an error signal."
+},
 "message": "The catch block logs the error but returns undefined, so callers cannot distinguish a failed charge from a zero-amount one. This will cause silent data inconsistency in the order ledger.",
-"suggestion": "throw new ChargeError(err.message) inside the catch block, or return a Result type that propagates the failure explicitly."
+"suggestion": "throw new ChargeError(err.message) inside the catch block, or return a Result type that propagates the failure explicitly.",
+"confidence": "high"
 }
 ]
 }
@@ -140,8 +154,10 @@ Field rules:
 * "severity" must be exactly one of: blocker, major, minor, nit.
 * "title" must be short and actionable.
 * "context_basis" must be exactly one of: diff-only, surrounding-code-read, full-module-review. Use diff-only only when the issue is unambiguously self-contained in the changed lines.
+* "evidence" must explain why the issue is new in this PR and why it is not plausibly intentional. Include context files actually read. If you cannot fill this honestly, do not create the finding.
 * "message" must explain why the issue matters. 1–3 sentences maximum.
 * "suggestion" must be a concrete fix or replacement snippet. Set to null — never omit the field — if there is no safe concrete fix.
+* "confidence" should be one of: high, medium, low. Use it to express how likely the finding is a real issue.
 
 ---
 

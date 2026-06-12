@@ -34,7 +34,10 @@ done
 }
 trap cleanup EXIT
 
-: "${ADO_MCP_AUTH_TOKEN:?ADO_MCP_AUTH_TOKEN is required}"
+ADO_AUTH_TOKEN="${ADO_AUTH_TOKEN:-${ADO_MCP_AUTH_TOKEN:-}}"
+: "${ADO_AUTH_TOKEN:?ADO_AUTH_TOKEN or ADO_MCP_AUTH_TOKEN is required}"
+export ADO_AUTH_TOKEN
+export ADO_MCP_AUTH_TOKEN="${ADO_MCP_AUTH_TOKEN:-$ADO_AUTH_TOKEN}"
 
 urlencode() {
 node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$1"
@@ -53,6 +56,7 @@ and (.line == null or (.line | type == "number"))
 and (.severity | IN("blocker", "major", "minor", "nit"))
 and (.title | type == "string")
 and (.message | type == "string")
+and ((has("confidence") | not) or .confidence == null or (.confidence | IN("high", "medium", "low")))
 and ((has("suggestion") | not) or .suggestion == null or (.suggestion | type == "string"))
 )
 ' "$path" >/dev/null || {
@@ -98,7 +102,7 @@ TARGET_BRANCH="${TARGET_BRANCH:-${SYSTEM_PULLREQUEST_TARGETBRANCH:-}}"
 if [ -z "$SOURCE_BRANCH" ] || [ -z "$TARGET_BRANCH" ]; then
   ADO_API_BASE_EARLY="https://dev.azure.com/$(urlencode "$ADO_ORG")/$(urlencode "$ADO_PROJECT")"
   log "auto-resolving branches from ADO REST API"
-  PR_API_DATA=$(curl -sS -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_MCP_AUTH_TOKEN}" \
+  PR_API_DATA=$(curl -sS -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_AUTH_TOKEN}" \
     -H "Accept: application/json;api-version=7.1" \
     "${ADO_API_BASE_EARLY}/_apis/git/repositories/$(urlencode "$ADO_REPO_ID")/pullRequests/${PR_ID}" 2>/dev/null || echo '{}')
   if [ -z "$SOURCE_BRANCH" ]; then
@@ -120,6 +124,10 @@ WORKSPACE="${WORKSPACE:-/workspace}"
 CLONE_ROOT="${CLONE_ROOT:-$WORKSPACE}"
 REVIEW_LANGUAGE="${REVIEW_LANGUAGE:-English}"
 REVIEW_PROMPT_PATH="${REVIEW_PROMPT_PATH:-/app/prompts/review-system.md}"
+REVIEW_INTENT_PROMPT_PATH="${REVIEW_INTENT_PROMPT_PATH:-/app/prompts/intent.md}"
+REVIEW_CONTEXT_PLAN_PROMPT_PATH="${REVIEW_CONTEXT_PLAN_PROMPT_PATH:-/app/prompts/context-plan.md}"
+REVIEW_CONTEXT_DIGEST_PROMPT_PATH="${REVIEW_CONTEXT_DIGEST_PROMPT_PATH:-/app/prompts/context-digest.md}"
+REVIEW_VERIFY_PROMPT_PATH="${REVIEW_VERIFY_PROMPT_PATH:-/app/prompts/verify-findings.md}"
 REVIEW_STANDARDS_PATH="${REVIEW_STANDARDS_PATH:-/app/standards/clean-code.md}"
 PI_MODEL="${PI_MODEL:-openai/gpt-5.5}"
 MAX_DIFF_BYTES="${MAX_DIFF_BYTES:-200000}"
@@ -135,6 +143,10 @@ require_uint CHUNK_TRIGGER_DIFF_BYTES "$CHUNK_TRIGGER_DIFF_BYTES"
 require_uint PI_TIMEOUT_SECS "$PI_TIMEOUT_SECS"
 
 [ -r "$REVIEW_PROMPT_PATH" ] || die "review prompt not readable: $REVIEW_PROMPT_PATH"
+[ -r "$REVIEW_INTENT_PROMPT_PATH" ] || die "intent prompt not readable: $REVIEW_INTENT_PROMPT_PATH"
+[ -r "$REVIEW_CONTEXT_PLAN_PROMPT_PATH" ] || die "context plan prompt not readable: $REVIEW_CONTEXT_PLAN_PROMPT_PATH"
+[ -r "$REVIEW_CONTEXT_DIGEST_PROMPT_PATH" ] || die "context digest prompt not readable: $REVIEW_CONTEXT_DIGEST_PROMPT_PATH"
+[ -r "$REVIEW_VERIFY_PROMPT_PATH" ] || die "verification prompt not readable: $REVIEW_VERIFY_PROMPT_PATH"
 [ -r "$REVIEW_STANDARDS_PATH" ] || die "review standards not readable: $REVIEW_STANDARDS_PATH"
 
 command -v git >/dev/null || die "git is required"
@@ -159,6 +171,16 @@ WI_FILE="$(mktemp)"
 THREADS_FILE="$(mktemp)"
 WI_COMMENTS_FILE="$(mktemp)"
 CHUNK_DIR="$(mktemp -d)"
+ARTIFACT_DIR="${REVIEW_ARTIFACT_DIR:-$WORKSPACE/artifacts/pr-$PR_ID}"
+METADATA_FILE="$ARTIFACT_DIR/metadata.json"
+INTENT_FILE="$ARTIFACT_DIR/intent.json"
+CONTEXT_PLAN_FILE="$ARTIFACT_DIR/context-plan.json"
+CONTEXT_DIGEST_FILE="$ARTIFACT_DIR/context-digest.json"
+CANDIDATE_FINDINGS_FILE="$ARTIFACT_DIR/candidate-findings.json"
+VERIFIED_FINDINGS_FILE="$ARTIFACT_DIR/verified-findings.json"
+FINAL_FINDINGS_FILE="$ARTIFACT_DIR/final-findings.json"
+COLLECTED_CONTEXT_FILE="$ARTIFACT_DIR/collected-context.json"
+mkdir -p "$ARTIFACT_DIR"
 cleanup_paths+=("$REPO_DIR" "$AUTH_DIR" "$DIFF_FILE" "$FILES_FILE" "$RAW_OUT" "$SYS_FILE" "$WI_FILE" "$THREADS_FILE" "$WI_COMMENTS_FILE" "$CHUNK_DIR" "${DIFF_FILE}.cut")
 
 ADO_API_BASE="https://dev.azure.com/$(urlencode "$ADO_ORG")/$(urlencode "$ADO_PROJECT")"
@@ -166,14 +188,14 @@ REPO_URL="${ADO_API_BASE}/_git/$(urlencode "$ADO_REPO_ID")"
 
 ado_get() {
 local path="$1"
-curl -sS -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_MCP_AUTH_TOKEN}" \
+curl -sS -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_AUTH_TOKEN}" \
   -H "Accept: application/json;api-version=7.1" \
   "${ADO_API_BASE}${path}" 2>/dev/null || echo '{}'
 }
 
 ado_post_json() {
 local path="$1" body="$2"
-curl -sS -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_MCP_AUTH_TOKEN}" \
+curl -sS -H "${ADO_AUTH_HEADER_PREFIX} ${ADO_AUTH_SCHEME} ${ADO_AUTH_TOKEN}" \
   -H "Accept: application/json;api-version=7.1" \
   -H "Content-Type: application/json" \
   -d "$body" \
@@ -236,11 +258,159 @@ printf '%s\n' "$(printf '%s' "$THREAD_CONTEXT" | jq -r '.[] | "[\(.author)] \(if
 printf '\n'
 fi
 
+if [ -s "$INTENT_FILE" ]; then
+printf '%s\n\n' '---'
+printf 'PR INTENT RECONSTRUCTION\n'
+cat "$INTENT_FILE"
+printf '\n'
+fi
+
+if [ -s "$CONTEXT_DIGEST_FILE" ]; then
+printf '%s\n\n' '---'
+printf 'CONTEXT DIGEST\n'
+cat "$CONTEXT_DIGEST_FILE"
+printf '\nUse this digest as evidence. If a candidate issue is plausibly intentional according to this context, do not report it.\n'
+fi
+
 if [ "$truncated_flag" = "1" ]; then
 printf 'NOTE: The diff was truncated due to size. Review only what is present and mention truncation in the summary.\n'
 fi
 printf 'Return ONLY the JSON object defined in your instructions.\n'
 } > "$out_path"
+}
+
+validate_json_output() {
+local path="$1" label="$2"
+jq -e 'type == "object"' "$path" >/dev/null || die "$label output is not a JSON object"
+case "$label" in
+  "intent reconstruction")
+    jq -e '(.pr_intent | type == "string") and (.changed_behaviors | type == "array") and (.risk_areas | type == "array")' "$path" >/dev/null || die "$label output does not match intent schema"
+    ;;
+  "context planning")
+    jq -e '(.files_to_read | type == "array") and (.searches_to_run | type == "array") and (.tests_to_inspect | type == "array")' "$path" >/dev/null || die "$label output does not match context-plan schema"
+    ;;
+  "context digest")
+    jq -e '(.relevant_context | type == "array") and (.possible_intentional_choices | type == "array") and (.context_gaps | type == "array")' "$path" >/dev/null || die "$label output does not match context-digest schema"
+    ;;
+  "finding verification")
+    validate_review_output "$path"
+    ;;
+esac
+}
+
+write_stage_instruction() {
+local stage="$1"
+local out_path="$2"
+local diff_path="${3:-$DIFF_FILE}"
+{
+printf '%s stage for Azure DevOps PR #%s. Return only the JSON object requested by the system prompt.\n\n' "$stage" "$PR_ID"
+printf 'Repository/project metadata:\n'
+cat "$METADATA_FILE"
+printf '\n\nChanged files:\n'
+cat "$FILES_FILE"
+printf '\n\nLinked work items:\n%s\n' "${WI_CONTEXT:-[]}"
+printf '\nExisting PR comments:\n%s\n' "${THREAD_CONTEXT:-[]}"
+if [ -s "$INTENT_FILE" ]; then printf '\nIntent reconstruction:\n'; cat "$INTENT_FILE"; printf '\n'; fi
+if [ -s "$CONTEXT_PLAN_FILE" ]; then printf '\nContext collection plan:\n'; cat "$CONTEXT_PLAN_FILE"; printf '\n'; fi
+if [ -s "$COLLECTED_CONTEXT_FILE" ]; then printf '\nRunner-collected context:\n'; cat "$COLLECTED_CONTEXT_FILE"; printf '\n'; fi
+if [ -s "$CONTEXT_DIGEST_FILE" ]; then printf '\nContext digest:\n'; cat "$CONTEXT_DIGEST_FILE"; printf '\n'; fi
+if [ -s "$CANDIDATE_FINDINGS_FILE" ]; then printf '\nCandidate findings:\n'; cat "$CANDIDATE_FINDINGS_FILE"; printf '\n'; fi
+printf '\nUnified diff follows on stdin.\n'
+} > "$out_path"
+}
+
+run_pi_stage() {
+local stage="$1"
+local prompt_path="$2"
+local diff_path="$3"
+local out_path="$4"
+local instruction_path
+instruction_path="$(mktemp)"
+cleanup_paths+=("$instruction_path")
+write_stage_instruction "$stage" "$instruction_path" "$diff_path"
+
+log "running Pi $stage stage (timeout: ${PI_TIMEOUT_SECS}s)"
+set +e
+timeout "$PI_TIMEOUT_SECS" env -u ADO_MCP_AUTH_TOKEN pi \
+  --no-session --no-context-files --no-extensions --no-skills --no-prompt-templates \
+  --tools read,grep \
+  --model "$PI_MODEL" --thinking medium \
+  --system-prompt "$(cat "$prompt_path")" \
+  -p "$(cat "$instruction_path")" \
+  < "$diff_path" > "$out_path"
+PI_RC=$?
+set -e
+
+if [ "$PI_RC" -eq 124 ]; then
+  die "Pi $stage stage timed out after ${PI_TIMEOUT_SECS}s. Increase PI_TIMEOUT_SECS to allow more time."
+fi
+log "pi $stage exit code: $PI_RC"
+[ "$PI_RC" -eq 0 ] || die "pi $stage stage exited $PI_RC"
+[ -s "$out_path" ] || die "pi $stage stage produced no output"
+validate_json_output "$out_path" "$stage"
+}
+
+collect_context_from_plan() {
+log "collecting deterministic context from context plan"
+local max_file_lines="${CONTEXT_FILE_MAX_LINES:-260}"
+local max_search_matches="${CONTEXT_SEARCH_MAX_MATCHES:-40}"
+local tmp_context
+local tmp_files
+local tmp_searches
+local tmp_tests
+
+tmp_context="$(mktemp)"
+tmp_files="$(mktemp)"
+tmp_searches="$(mktemp)"
+tmp_tests="$(mktemp)"
+cleanup_paths+=("$tmp_context" "$tmp_files" "$tmp_searches" "$tmp_tests")
+
+jq -r '.files_to_read[]? | [.path, (.reason // "")] | @tsv' "$CONTEXT_PLAN_FILE" > "$tmp_files"
+jq -r '.searches_to_run[]? | [.query, (.reason // "")] | @tsv' "$CONTEXT_PLAN_FILE" > "$tmp_searches"
+jq -r '.tests_to_inspect[]? | tostring' "$CONTEXT_PLAN_FILE" > "$tmp_tests"
+
+{
+printf '{"files":['
+local first=1
+while IFS=$'\t' read -r path reason; do
+  [ -n "$path" ] || continue
+  case "$path" in /*|*..*) continue ;; esac
+  if [ -f "$path" ]; then
+    if [ "$first" -eq 0 ]; then printf ','; fi
+    first=0
+    jq -n \
+      --arg path "$path" \
+      --arg reason "$reason" \
+      --arg content "$(sed -n "1,${max_file_lines}p" "$path")" \
+      --arg truncated "$(if [ "$(wc -l < "$path" | tr -d '[:space:]')" -gt "$max_file_lines" ]; then printf true; else printf false; fi)" \
+      '{path:$path, reason:$reason, truncated:($truncated == "true"), content:$content}'
+  fi
+done < "$tmp_files"
+printf '],"tests":['
+first=1
+while IFS= read -r hint; do
+  [ -n "$hint" ] || continue
+  case "$hint" in /*|*..*) continue ;; esac
+  if [ -f "$hint" ]; then
+    if [ "$first" -eq 0 ]; then printf ','; fi
+    first=0
+    jq -n --arg path "$hint" --arg content "$(sed -n "1,${max_file_lines}p" "$hint")" '{path:$path, content:$content}'
+  fi
+done < "$tmp_tests"
+printf '],"searches":['
+first=1
+while IFS=$'\t' read -r query reason; do
+  [ -n "$query" ] || continue
+  if [ "$first" -eq 0 ]; then printf ','; fi
+  first=0
+  local matches
+  matches="$(rg -n --fixed-strings --glob '!/.git/**' --glob '!node_modules/**' --glob '!artifacts/**' -- "$query" . 2>/dev/null | head -n "$max_search_matches" || true)"
+  jq -n --arg query "$query" --arg reason "$reason" --arg matches "$matches" '{query:$query, reason:$reason, matches:$matches}'
+done < "$tmp_searches"
+printf ']}'
+} > "$tmp_context"
+
+jq '.' "$tmp_context" > "$COLLECTED_CONTEXT_FILE"
 }
 
 run_pi_review() {
@@ -340,79 +510,52 @@ log "diff size: ${DIFF_BYTES} bytes"
 
 TRUNCATED=0
 
-# --- Fetch linked work items -----------------------------------------------
-WI_CONTEXT=""
+log "fetching Azure DevOps PR context via Python helper"
+python3 /app/scripts/ado_review.py fetch-context \
+  --org "$ADO_ORG" \
+  --project "$ADO_PROJECT" \
+  --repo "$ADO_REPO_ID" \
+  --pr "$PR_ID" \
+  --out "$ARTIFACT_DIR"
+
+jq \
+  --arg baseCommit "$BASE_COMMIT" \
+  --arg sourceCommit "$SOURCE_COMMIT" \
+  --arg targetCommit "$TARGET_COMMIT" \
+  --rawfile files "$FILES_FILE" \
+  '. + {
+    baseCommit: $baseCommit,
+    sourceCommit: $sourceCommit,
+    targetCommit: $targetCommit,
+    changedFiles: ($files | split("\n") | map(select(length > 0)))
+  }' "$METADATA_FILE" > "${METADATA_FILE}.tmp"
+mv "${METADATA_FILE}.tmp" "$METADATA_FILE"
+cp "$DIFF_FILE" "$ARTIFACT_DIR/diff.patch"
+cp "$FILES_FILE" "$ARTIFACT_DIR/changed-files.txt"
+
+WI_CONTEXT="[]"
+WI_COMMENTS_CONTEXT="[]"
+THREAD_CONTEXT="[]"
 if [ "$INCLUDE_WORK_ITEMS" = "1" ]; then
-log "fetching linked work items for PR #$PR_ID"
-PR_DETAIL=$(ado_get "/_apis/git/repositories/$(urlencode "$ADO_REPO_ID")/pullRequests/${PR_ID}")
-WI_IDS=$(printf '%s' "$PR_DETAIL" | jq -r '[.workItemRefs[]? | .id | tonumber] // []')
-WI_COUNT=$(printf '%s' "$WI_IDS" | jq 'length')
-log "found $WI_COUNT linked work item(s)"
-
-if [ "$WI_COUNT" -gt 0 ]; then
-  WI_BATCH=$(ado_post_json \
-    "/_apis/wit/workitemsbatch" \
-    "{\"ids\":${WI_IDS},\"fields\":[\"System.Title\",\"System.Description\",\"Microsoft.VSTS.Common.AcceptanceCriteria\",\"System.WorkItemType\",\"System.State\"]}")
-  printf '%s' "$WI_BATCH" > "$WI_FILE"
-
-  WI_CONTEXT=$(jq -r '
-    [.value[]? | {
-      id: .id,
-      type: (.fields["System.WorkItemType"]?.value // "Unknown"),
-      title: (.fields["System.Title"]?.value // "(untitled)"),
-      state: (.fields["System.State"]?.value // ""),
-      description: (.fields["System.Description"]?.value // "(none)"),
-      acceptanceCriteria: (.fields["Microsoft.VSTS.Common.AcceptanceCriteria"]?.value // "(none)")
-    }] // []
-  ' "$WI_FILE")
-
-  WI_COMMENTS_CONTEXT="[]"
-  WI_ID_LIST=$(printf '%s' "$WI_CONTEXT" | jq -r '.[].id')
-  for wid in $WI_ID_LIST; do
-    log "fetching comments for work item #$wid"
-    WI_COMMENTS_RAW=$(ado_get "/_apis/wit/workItems/${wid}/comments")
-    WI_COMMENTS_ENTRIES=$(printf '%s' "$WI_COMMENTS_RAW" | jq -r '
-      [.comments[]? | {
-        id: .id,
-        author: (.author?.displayName // "unknown"),
-        text: (.text // "")
-      }] // []
-    ')
-    WI_COMMENTS_COUNT=$(printf '%s' "$WI_COMMENTS_ENTRIES" | jq 'length')
-    if [ "$WI_COMMENTS_COUNT" -gt 0 ]; then
-      WI_COMMENTS_CONTEXT=$(printf '%s' "$WI_COMMENTS_CONTEXT" | jq \
-        --arg wid "$wid" \
-        --argjson comments "$WI_COMMENTS_ENTRIES" \
-        '. + [{workItemId: ($wid | tonumber), comments: $comments}]')
-    fi
-  done
+  WI_CONTEXT=$(jq -c '.' "$ARTIFACT_DIR/work-items.json")
+  WI_COMMENTS_CONTEXT=$(jq -c '.' "$ARTIFACT_DIR/work-item-comments.json")
 fi
-fi
-
-# --- Fetch existing PR threads (for Pi context) -----------------------------
-THREAD_CONTEXT=""
 if [ "$INCLUDE_EXISTING_COMMENTS" = "1" ]; then
-log "fetching existing PR threads for PR #$PR_ID"
-THREADS_RAW=$(ado_get "/_apis/git/repositories/$(urlencode "$ADO_REPO_ID")/pullRequests/${PR_ID}/threads")
-printf '%s' "$THREADS_RAW" > "$THREADS_FILE"
-
-THREAD_CONTEXT=$(jq -r '
-  [.value[]? | select(.comments // [] | length > 0) | {
-    id: .id,
-    status: .status,
-    filePath: (.threadContext?.filePath // null),
-    line: (.threadContext?.rightFileStart?.line // null),
-    firstComment: (.comments[0].content // ""),
-    author: (.comments[0].author?.displayName // "unknown")
-  }] // []
-' "$THREADS_FILE")
-THREAD_COUNT=$(printf '%s' "$THREAD_CONTEXT" | jq 'length')
-log "found $THREAD_COUNT existing thread(s)"
+  THREAD_CONTEXT=$(jq -c '.' "$ARTIFACT_DIR/threads.json")
 fi
+THREAD_COUNT=$(printf '%s' "$THREAD_CONTEXT" | jq 'length')
+WI_COUNT=$(printf '%s' "$WI_CONTEXT" | jq 'length')
+log "loaded $WI_COUNT linked work item(s) and $THREAD_COUNT existing thread(s)"
 
 if [ "$DIFF_BYTES" -eq 0 ]; then
-printf '{"summary":"No changes to review.","findings":[]}\n' > "$RAW_OUT"
+printf '{"summary":"No changes to review.","review_basis":{"intent_understood":true,"files_read":[],"work_items_checked":[],"existing_comments_checked":true,"verification_passed":true},"findings":[]}\n' > "$RAW_OUT"
 else
+log "running production review preflight stages"
+run_pi_stage "intent reconstruction" "$REVIEW_INTENT_PROMPT_PATH" "$DIFF_FILE" "$INTENT_FILE"
+run_pi_stage "context planning" "$REVIEW_CONTEXT_PLAN_PROMPT_PATH" "$DIFF_FILE" "$CONTEXT_PLAN_FILE"
+collect_context_from_plan
+run_pi_stage "context digest" "$REVIEW_CONTEXT_DIGEST_PROMPT_PATH" "$DIFF_FILE" "$CONTEXT_DIGEST_FILE"
+
 build_system_prompt
 
 if [ "$DIFF_BYTES" -le "$CHUNK_TRIGGER_DIFF_BYTES" ]; then
@@ -516,8 +659,14 @@ else
     }
     ' "${CHUNK_OUTPUTS[@]}" > "$RAW_OUT"
 fi
+
+cp "$RAW_OUT" "$CANDIDATE_FINDINGS_FILE"
+log "running adversarial finding verification stage"
+run_pi_stage "finding verification" "$REVIEW_VERIFY_PROMPT_PATH" "$DIFF_FILE" "$VERIFIED_FINDINGS_FILE"
+cp "$VERIFIED_FINDINGS_FILE" "$RAW_OUT"
 fi
 
+cp "$RAW_OUT" "$FINAL_FINDINGS_FILE"
 validate_review_output "$RAW_OUT"
 
 if [ "$DRY_RUN" = "1" ]; then
@@ -526,5 +675,11 @@ cat "$RAW_OUT"
 exit 0
 fi
 
-log "posting findings to PR #$PR_ID"
-node /app/scripts/post-findings.mjs "$RAW_OUT"
+log "posting findings to PR #$PR_ID via Python ADO helper"
+python3 /app/scripts/ado_review.py post-findings \
+  --org "$ADO_ORG" \
+  --project "$ADO_PROJECT" \
+  --repo "$ADO_REPO_ID" \
+  --pr "$PR_ID" \
+  --findings "$RAW_OUT" \
+  --out "$ARTIFACT_DIR/posted-findings.json"
