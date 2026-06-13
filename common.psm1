@@ -304,6 +304,34 @@ function Normalize-BranchName {
 
 <#
 .SYNOPSIS
+    Load KEY=VALUE pairs from a .env file into the current process environment.
+#>
+function Import-DotEnv {
+    param(
+        [string]$Path
+    )
+
+    if (-not $Path) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { Fail "Env file not found: $Path" }
+
+    $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
+    foreach ($line in [System.IO.File]::ReadLines($resolvedPath)) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+        if ($trimmed -notmatch '^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') { continue }
+
+        $key = $Matches[1]
+        $value = $Matches[2].Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+
+        [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
+    }
+}
+
+<#
+.SYNOPSIS
     Write the env file for the container and return its path.
 #>
 function Write-EnvFile {
@@ -326,9 +354,13 @@ function Write-EnvFile {
         "ADO_AUTH_TOKEN=$($Vars.Token)"
         "OPENAI_API_KEY=$($Vars.OpenAiApiKey)"
         "VOTE_WAITING_ON=$($Vars.VoteWaitingOn)"
-        $(if ($Vars.DryRun) { "DRY_RUN=1" } else { $null })
+        $(if ($Vars.DryRun) { "DRY_RUN=1" } elseif ($env:DRY_RUN) { "DRY_RUN=$env:DRY_RUN" } else { $null })
         $(if ($env:DISABLE_CHUNK_REVIEW) { "DISABLE_CHUNK_REVIEW=$env:DISABLE_CHUNK_REVIEW" } else { $null })
+        $(if ($env:MAX_DIFF_BYTES) { "MAX_DIFF_BYTES=$env:MAX_DIFF_BYTES" } else { $null })
         $(if ($env:CHUNK_TRIGGER_DIFF_BYTES) { "CHUNK_TRIGGER_DIFF_BYTES=$env:CHUNK_TRIGGER_DIFF_BYTES" } else { $null })
+        $(if ($env:POST_MIN_SEVERITY) { "POST_MIN_SEVERITY=$env:POST_MIN_SEVERITY" } else { $null })
+        $(if ($env:REVIEW_RUN_ID) { "REVIEW_RUN_ID=$env:REVIEW_RUN_ID" } else { $null })
+        $(if ($env:REVIEW_ARTIFACT_ROOT) { "REVIEW_ARTIFACT_ROOT=$env:REVIEW_ARTIFACT_ROOT" } else { $null })
     ) | Where-Object { $_ }
 
     [System.IO.File]::WriteAllLines(
@@ -339,4 +371,4 @@ function Write-EnvFile {
     return $envFile
 }
 
-Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Invoke-AdoGet, Get-AdoCurrentUser, Get-AdoRepositories, Get-ActivePullRequests, Find-PrReviewer, Resolve-PrBranches, Normalize-AdoSegment, Normalize-BranchName, Write-EnvFile
+Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Resolve-PrUrl, Get-AdoToken, Invoke-AdoGet, Get-AdoCurrentUser, Get-AdoRepositories, Get-ActivePullRequests, Find-PrReviewer, Resolve-PrBranches, Normalize-AdoSegment, Normalize-BranchName, Import-DotEnv, Write-EnvFile

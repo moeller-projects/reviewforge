@@ -68,16 +68,16 @@
 
 .EXAMPLE
     # Simplest invocation — just the PR URL (container resolves everything):
-    ./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423"
+    ./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423"
 
     # Dry run to iterate on prompts without posting:
-    ./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
+    ./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
 
     # Individual params (branches still auto-resolved):
-    ./scripts/run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
+    ./run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
 
     # German review comments:
-    ./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -Language German
+    ./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -Language German
 #>
 [CmdletBinding()]
 param(
@@ -98,6 +98,7 @@ param(
     [string] $PiModel      = "openai/gpt-5.5",
     [string] $Image        = "pr-review-bot:latest",
     [string] $ContainerName,
+    [string] $EnvFile = ".env",
     [switch] $DryRun
 )
 
@@ -105,6 +106,26 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
+
+if ($EnvFile -and (Test-Path -LiteralPath $EnvFile)) { Import-DotEnv -Path $EnvFile }
+if (-not $PSBoundParameters.ContainsKey('PrUrl') -and $env:PR_URL) { $PrUrl = $env:PR_URL }
+if (-not $PSBoundParameters.ContainsKey('Org') -and $env:ADO_ORG) { $Org = $env:ADO_ORG }
+if (-not $PSBoundParameters.ContainsKey('Project') -and $env:ADO_PROJECT) { $Project = $env:ADO_PROJECT }
+if (-not $PSBoundParameters.ContainsKey('RepoId') -and $env:ADO_REPO_ID) { $RepoId = $env:ADO_REPO_ID }
+if (-not $PSBoundParameters.ContainsKey('PrId') -and $env:PR_ID) { $PrId = [int]$env:PR_ID }
+if (-not $PSBoundParameters.ContainsKey('SourceBranch') -and $env:SOURCE_BRANCH) { $SourceBranch = $env:SOURCE_BRANCH }
+if (-not $PSBoundParameters.ContainsKey('TargetBranch') -and $env:TARGET_BRANCH) { $TargetBranch = $env:TARGET_BRANCH }
+if (-not $PSBoundParameters.ContainsKey('Language') -and $env:REVIEW_LANGUAGE) { $Language = $env:REVIEW_LANGUAGE }
+if (-not $PSBoundParameters.ContainsKey('FailOn') -and $env:FAIL_ON) { $FailOn = $env:FAIL_ON }
+if (-not $PSBoundParameters.ContainsKey('VoteWaitingOn') -and $env:VOTE_WAITING_ON) { $VoteWaitingOn = $env:VOTE_WAITING_ON }
+if (-not $PSBoundParameters.ContainsKey('AdoToken') -and $env:ADO_API_KEY) { $AdoToken = $env:ADO_API_KEY }
+if (-not $PSBoundParameters.ContainsKey('AdoToken') -and $env:ADO_AUTH_TOKEN) { $AdoToken = $env:ADO_AUTH_TOKEN }
+if (-not $PSBoundParameters.ContainsKey('OpenAiApiKey') -and $env:OPENAI_API_KEY) { $OpenAiApiKey = $env:OPENAI_API_KEY }
+if (-not $PSBoundParameters.ContainsKey('PiModel') -and $env:PI_MODEL) { $PiModel = $env:PI_MODEL }
+if (-not $PSBoundParameters.ContainsKey('Image') -and $env:IMAGE_NAME) { $Image = $env:IMAGE_NAME }
+if (-not $PSBoundParameters.ContainsKey('Image') -and $env:IMAGE) { $Image = $env:IMAGE }
+if (-not $PSBoundParameters.ContainsKey('ContainerName') -and $env:CONTAINER_NAME) { $ContainerName = $env:CONTAINER_NAME }
+if (-not $PSBoundParameters.ContainsKey('DryRun') -and $env:DRY_RUN) { $DryRun = $env:DRY_RUN -in @('1','true','True','yes','on') }
 
 if ($Org) { $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization' }
 if ($Project) { $Project = Normalize-AdoSegment -Value $Project -Name 'ADO project' }

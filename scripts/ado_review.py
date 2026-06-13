@@ -271,19 +271,24 @@ def validate_findings(doc: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         confidence = str(f.get("confidence") or "").lower()
         if confidence and confidence not in {"high", "medium", "low"}:
             fail(f"finding[{i}].confidence invalid: {f.get('confidence')}")
-        evidence = f.get("evidence") if isinstance(f.get("evidence"), dict) else None
+        evidence = f.get("evidence")
+        evidence = evidence if isinstance(evidence, dict) else None
         context_basis = str(f.get("context_basis") or "").strip() or None
         if context_basis and context_basis not in {"diff-only", "surrounding-code-read", "full-module-review"}:
             context_basis = None
+        raw_file = f.get("file")
+        raw_line = f.get("line")
+        raw_title = f.get("title")
+        raw_suggestion = f.get("suggestion")
         normalized = {
-            "file": str(f.get("file")).lstrip("/") if isinstance(f.get("file"), str) and f.get("file") else None,
-            "line": f.get("line") if isinstance(f.get("line"), int) and f.get("line") > 0 else None,
+            "file": str(raw_file).lstrip("/") if isinstance(raw_file, str) and raw_file else None,
+            "line": raw_line if isinstance(raw_line, int) and raw_line > 0 else None,
             "severity": sev,
-            "title": str(f.get("title") or "Review finding").strip(),
+            "title": str(raw_title or "Review finding").strip(),
             "contextBasis": context_basis,
             "message": msg.strip(),
             "confidence": confidence or None,
-            "suggestion": f.get("suggestion").strip() if isinstance(f.get("suggestion"), str) and f.get("suggestion").strip() else None,
+            "suggestion": raw_suggestion.strip() if isinstance(raw_suggestion, str) and raw_suggestion.strip() else None,
         }
         if evidence:
             normalized["evidence"] = {

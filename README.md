@@ -10,9 +10,11 @@ DevOps REST calls — in the language you configure.
 
 The model does **judgment**; a script does **side effects**.
 
-1. `scripts/review.sh` builds the merge-base diff (`git diff target...source`) and
-   runs Pi with only read tools (`read,grep,find,ls`). Pi cannot write to the repo
-   or the PR. Its final output is a strict JSON findings contract.
+1. `scripts/main.py` is the container entrypoint. It loads config, then delegates
+   to the modular Python review pipeline under `scripts/pipeline/` and
+   `scripts/infrastructure/`. The pipeline builds the merge-base diff and runs Pi
+   with only read tools (`read,grep`). Pi cannot write to the repo or the PR.
+   Its final output is a strict JSON findings contract.
 2. `scripts/ado_review.py` validates that JSON, then creates one comment thread
    per finding via the Azure DevOps REST API. Every comment carries a hidden
    marker, and existing threads are scanned first, so **re-running the pipeline
@@ -29,9 +31,9 @@ on reviews without rebuilding:
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/build.ps1` | Build the container image |
-| `scripts/run.ps1` | Run the reviewer against a PR |
-| `scripts/run-open-prs.ps1` | Review every active PR assigned to you except ones where your vote is “waiting for author” |
+| `build.ps1` | Build the container image |
+| `run.ps1` | Run the reviewer against a PR |
+| `run-open-prs.ps1` | Review every active PR assigned to you except ones where your vote is “waiting for author” |
 | `run-local.ps1` | Convenience: build + run in one call |
 
 ### Quick start — just pass the PR URL
@@ -41,20 +43,44 @@ mandatory parameter. The script extracts org, project, repo, and PR id from
 the URL and resolves source/target branches automatically via the ADO REST API.
 
 ```powershell
+# Optional: copy defaults into a local config file
+Copy-Item .env.example .env
+# Edit .env, then build/run can read from it.
+
 # Build once
-./scripts/build.ps1
+./build.ps1
 
 # Review a PR — just the URL, branches auto-detected
-./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423"
+./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423"
 
 # Dry run: iterate on prompt/standards without posting to the PR
-./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
+./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
 
 # German comments, cheaper model
-./scripts/run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -Language German -PiModel openai/gpt-5.4-mini
+./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -Language German -PiModel openai/gpt-5.4-mini
 
 # Review all active PRs where you are a reviewer and not waiting for author (all projects)
-./scripts/run-open-prs.ps1 -Org contoso
+./run-open-prs.ps1 -Org contoso
+```
+
+### `.env` invocation
+
+Most settings can live in `.env`; explicit script parameters still win:
+
+```powershell
+./build.ps1
+./run.ps1
+
+# Or build + run:
+./run-local.ps1
+```
+
+Minimum useful `.env`:
+
+```dotenv
+PR_URL=https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423
+ADO_API_KEY=...
+OPENAI_API_KEY=...
 ```
 
 ### Legacy invocation (individual params)
@@ -63,28 +89,28 @@ If you prefer, you can still pass each parameter separately. Branches are
 auto-resolved from the ADO REST API unless you override them:
 
 ```powershell
-./scripts/run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
+./run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
 ```
 
 ### Batch mode: review all open PRs assigned to you
 
-Use `scripts/run-open-prs.ps1` when you want Windows/PowerShell to scan all repos
+Use `run-open-prs.ps1` when you want Windows/PowerShell to scan all repos
 visible to your token (optionally scoped by `-Project`) for active PRs where **you** are a reviewer, skip PRs where your reviewer vote
 is already **waiting for author** (`-5`), and then launch one containerized
 review run per remaining PR.
 
 ```powershell
 # Review every matching PR in one project
-./scripts/run-open-prs.ps1 -Org contoso -Project Payments
+./run-open-prs.ps1 -Org contoso -Project Payments
 
 # Review every matching PR across all visible projects/repos
-./scripts/run-open-prs.ps1 -Org contoso
+./run-open-prs.ps1 -Org contoso
 
 # Cap the batch size and avoid posting while iterating
-./scripts/run-open-prs.ps1 -Org contoso -MaxPullRequests 5 -DryRun
+./run-open-prs.ps1 -Org contoso -MaxPullRequests 5 -DryRun
 ```
 
-The script reuses the same auth flow as `scripts/run.ps1`: pass `-AdoToken` or
+The script reuses the same auth flow as `run.ps1`: pass `-AdoToken` or
 sign in with `az login`, and provide `$env:OPENAI_API_KEY` (or `-OpenAiApiKey`).
 
 ### All-in-one: `run-local.ps1`
@@ -108,12 +134,11 @@ findings JSON.
 ### Run tests
 
 ```bash
-npm test        # Node smoke tests for review.sh
-pytest tests/   # Python unit tests for ado_review.py
+pytest tests/   # Python unit tests for the review runner and ADO helper
 ```
 
-This runs the Node smoke tests that exercise `scripts/review.sh` with stubbed
-git/Pi tooling, plus the Python pytest suite for `scripts/ado_review.py`.
+The project no longer uses a repo-level Node package; the Docker image still
+installs the Pi CLI via npm globally.
 
 > The reviewer's fetch happens inside the container, so the host does not need to
 > pre-fetch the PR branches. When using `-PrUrl`, the source and target branches
@@ -123,7 +148,7 @@ git/Pi tooling, plus the Python pytest suite for `scripts/ado_review.py`.
 
 1. **Build the image** (auto-detects podman or docker):
    ```powershell
-   ./scripts/build.ps1
+   ./build.ps1
    ```
 2. **Pipeline definition** — create the pipeline from
    `azure-pipelines-pr-review.yml`.
@@ -163,7 +188,7 @@ git/Pi tooling, plus the Python pytest suite for `scripts/ado_review.py`.
 | `FAIL_ON` | no | `none` | Fail the check at/above `nit\|minor\|major\|blocker` |
 | `VOTE_WAITING_ON` | no | `major` | Vote “waiting for author” at/above `nit\|minor\|major\|blocker`, or `none` |
 
-Artifacts are persisted in the named Docker/Podman volume `pr-review-bot-artifacts` mounted at `/workspace/artifacts`; each run writes under `pr-<id>/`.
+Artifacts are persisted in the named Docker/Podman volume `pr-review-bot-artifacts` mounted at `/workspace/artifacts`. Each invocation writes to a run-scoped directory: `pr-<id>/runs/<run-id>/`, and `pr-<id>/latest.txt` points to the most recent run.
 
 ## Version pinning
 
@@ -171,7 +196,7 @@ The default build input is pinned for reproducibility:
 
 - Pi coding agent: `0.79.1`
 
-Override the Pi version explicitly with `./scripts/build.ps1 -PiVersion ...` when you want to upgrade it deliberately.
+Override the Pi version explicitly with `./build.ps1 -PiVersion ...` when you want to upgrade it deliberately.
 
 ## Custom prompt / standards
 

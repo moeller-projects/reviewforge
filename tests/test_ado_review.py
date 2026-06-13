@@ -711,3 +711,25 @@ class TestCli:
                 ]
             )
         assert rc == 0
+
+
+class TestAdditionalCoverage:
+    def test_token_missing_raises(self, monkeypatch):
+        monkeypatch.delenv('ADO_AUTH_TOKEN', raising=False)
+        monkeypatch.delenv('ADO_MCP_AUTH_TOKEN', raising=False)
+        with pytest.raises(SystemExit):
+            m.token()
+
+    def test_enc_quotes_values(self):
+        assert m.enc('a b') == 'a%20b'
+
+    def test_client_initializes_with_token_and_normalized_org(self, monkeypatch):
+        monkeypatch.setenv('ADO_AUTH_TOKEN', 'tok')
+        client = m.AdoClient('contoso', 'Proj', 'Repo')
+        assert client.org_url == 'https://dev.azure.com/contoso'
+        assert client.base.endswith('/Proj')
+
+    def test_fetch_work_items_without_refs_returns_empty(self):
+        client = MagicMock()
+        items, comments = m.fetch_work_items(client, {'workItemRefs': []})
+        assert items == [] and comments == []

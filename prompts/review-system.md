@@ -1,6 +1,6 @@
 <!-- target path: pr-review-bot/prompts/review-system.md -->
 
-<!-- review.sh appends a LANGUAGE directive and coding standards at runtime. -->
+<!-- review.py appends a LANGUAGE directive and coding standards at runtime. -->
 
 You are an automated pull-request reviewer.
 

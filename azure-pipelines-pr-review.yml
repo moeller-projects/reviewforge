@@ -20,7 +20,7 @@ steps:
   - task: PowerShell@2
     displayName: Build reviewer image
     inputs:
-      filePath: $(Build.SourcesDirectory)/scripts/build.ps1
+      filePath: $(Build.SourcesDirectory)/build.ps1
       pwsh: true
       arguments: >
         -Image "$(IMAGE_NAME)"
@@ -38,7 +38,7 @@ steps:
       pwsh: true
       script: |
         $dryRun = "$(DRY_RUN)" -eq "true"
-        & "$(Build.SourcesDirectory)/scripts/run.ps1" `
+        & "$(Build.SourcesDirectory)/run.ps1" `
           -Org "$(ADO_ORG)" `
           -Project "$(System.TeamProject)" `
           -RepoId "$(Build.Repository.Name)" `

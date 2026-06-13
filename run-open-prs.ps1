@@ -6,7 +6,7 @@
     Uses the Azure CLI azure-devops extension (`az repos pr list`) to discover
     active pull requests for a predefined project list and target branch list.
 
-    The script skips draft PRs and invokes scripts/run.ps1 once per matching pull request.
+    The script skips draft PRs and invokes run.ps1 once per matching pull request.
 
 .PARAMETER Organization
     Azure DevOps organization URL. Defaults to the static script value below.
@@ -19,8 +19,8 @@
     Target branch names to scan. Defaults to main, master, dev, develop.
 
 .PARAMETER AdoToken
-    Access token for Azure DevOps, passed to scripts/run.ps1. If omitted,
-    scripts/run.ps1/common.psm1 gets one via Azure CLI.
+    Access token for Azure DevOps, passed to run.ps1. If omitted,
+    run.ps1/common.psm1 gets one via Azure CLI.
 
 .PARAMETER OpenAiApiKey
     Model provider key for Pi. Defaults to $env:OPENAI_API_KEY.
@@ -48,10 +48,10 @@
     Review only; print findings JSON for each PR and do not post to Azure DevOps.
 
 .EXAMPLE
-    ./scripts/run-open-prs.ps1
+    ./run-open-prs.ps1
 
 .EXAMPLE
-    ./scripts/run-open-prs.ps1 -Organization https://dev.azure.com/contoso/ -Projects Laekker.Kitchen -TargetBranches main,develop -MaxPullRequests 5 -DryRun
+    ./run-open-prs.ps1 -Organization https://dev.azure.com/contoso/ -Projects Laekker.Kitchen -TargetBranches main,develop -MaxPullRequests 5 -DryRun
 #>
 [CmdletBinding()]
 param(
@@ -174,7 +174,7 @@ if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
 }
 
 if ($Organization -like '*CHANGE_ME*') {
-    Fail "Set the default -Organization value in scripts/run-open-prs.ps1 or pass -Organization https://dev.azure.com/{organization}/."
+    Fail "Set the default -Organization value in run-open-prs.ps1 or pass -Organization https://dev.azure.com/{organization}/."
 }
 
 if (-not $OpenAiApiKey) {

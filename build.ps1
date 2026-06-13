@@ -13,13 +13,14 @@
     Pin the @earendil-works/pi-coding-agent version. Default: 0.79.1.
 
 .EXAMPLE
-    ./scripts/build.ps1
-    ./scripts/build.ps1 -Image pr-review-bot:v1.2
+    ./build.ps1
+    ./build.ps1 -Image pr-review-bot:v1.2
 #>
 [CmdletBinding()]
 param(
-    [string] $Image     = "pr-review-bot:latest",
-    [string] $PiVersion = "0.79.1"
+    [string] $Image,
+    [string] $PiVersion,
+    [string] $EnvFile = ".env"
 )
 
 Set-StrictMode -Version Latest
@@ -27,8 +28,12 @@ $ErrorActionPreference = "Stop"
 
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
 
+if ($EnvFile -and (Test-Path -LiteralPath $EnvFile)) { Import-DotEnv -Path $EnvFile }
+if (-not $PSBoundParameters.ContainsKey('Image')) { $Image = $(if ($env:IMAGE_NAME) { $env:IMAGE_NAME } elseif ($env:IMAGE) { $env:IMAGE } else { "pr-review-bot:latest" }) }
+if (-not $PSBoundParameters.ContainsKey('PiVersion')) { $PiVersion = $(if ($env:PI_VERSION) { $env:PI_VERSION } else { "0.79.1" }) }
+
 $Runtime = Get-ContainerRuntime
-$ContextDir = $PSScriptRoot | Split-Path  # scripts/ -> project root
+$ContextDir = $PSScriptRoot
 
 Write-Step "Building image $Image from $ContextDir (runtime: $Runtime)"
 & $Runtime build `

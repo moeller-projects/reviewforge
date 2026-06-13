@@ -7,7 +7,7 @@ FROM node:24-bookworm-slim
 ARG PI_VERSION=0.79.1
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash ca-certificates curl git jq python3 ripgrep \
+ && apt-get install -y --no-install-recommends ca-certificates git python3 ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 # Global CLI: the Pi coding agent. Azure DevOps integration uses direct REST via Python.
@@ -15,18 +15,14 @@ RUN npm install -g --ignore-scripts \
       "@earendil-works/pi-coding-agent@${PI_VERSION}"
 
 WORKDIR /app
-# Keep Node dependencies available for legacy utilities/tests during migration.
-COPY package.json ./
-RUN npm install --omit=dev --ignore-scripts
-
 COPY scripts/ ./scripts/
 COPY prompts/ ./prompts/
 COPY standards/ ./standards/
-RUN chmod +x ./scripts/review.sh ./scripts/ado_review.py
+RUN chmod +x ./scripts/main.py ./scripts/review.py ./scripts/ado_review.py
 
-# The repo is bind-mounted here by the pipeline; review.sh diffs and reviews it.
+# The repo is cloned here by the Python runner; main.py orchestrates review.
 ENV WORKSPACE=/workspace
 ENV PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 WORKDIR /workspace
 
-ENTRYPOINT ["/app/scripts/review.sh"]
+ENTRYPOINT ["/app/scripts/main.py"]
