@@ -10,19 +10,117 @@ DevOps REST calls — in the language you configure.
 
 The model does **judgment**; a script does **side effects**.
 
-1. `scripts/main.py` is the container entrypoint. It loads config, then delegates
-   to the modular Python review pipeline under `scripts/pipeline/` and
-   `scripts/infrastructure/`. The pipeline builds the merge-base diff and runs Pi
-   with only read tools (`read,grep`). Pi cannot write to the repo or the PR.
-   Its final output is a strict JSON findings contract.
-2. `scripts/ado_review.py` validates that JSON, then creates one comment thread
-   per finding via the Azure DevOps REST API. Every comment carries a hidden
-   marker, and existing threads are scanned first, so **re-running the pipeline
-   never double-posts**.
+1. `scripts/main.py` is the container entrypoint. It is a thin shim that
+   delegates to the `auto_pr_reviewer` Python package under `src/`. The
+   package owns config loading, the explicit pipeline stages, the
+   idempotent ADO posting module, and the diff line mapper. The
+   `scripts/main.py` shim exists for backward compatibility with the
+   Dockerfile `ENTRYPOINT` and existing PowerShell wrappers.
+2. `scripts/ado_review.py` validates the review JSON, then creates one
+   comment thread per finding via the Azure DevOps REST API. Every comment
+   carries a hidden marker, and existing threads are scanned first, so
+   **re-running the pipeline never double-posts**. The same script is
+   invoked as a subprocess by the in-process pipeline (the
+   `auto_pr_reviewer.ado.client.call_helper` helper) so the posting path
+   stays out of the model call chain.
 
 Pi produces pure findings JSON; a dedicated Python helper owns all Azure DevOps
 interactions. This keeps the model side-effect-free and the posting path fully
 deterministic and idempotent.
+
+## Python package layout
+
+```
+src/
+  auto_pr_reviewer/
+    __init__.py
+    __main__.py        # python -m auto_pr_reviewer
+    cli.py             # argparse entrypoint: review / post / validate-config (open-prs unsupported)
+    config.py          # Config dataclass, env/.env/CLI layering, alias resolution
+    ado/
+      client.py        # AdoClient, parse_pr_url, resolve_branches, call_helper
+      posting.py       # dedupe_key, existing_bot_markers, should_post, classify_threads
+      diff_mapper.py   # DiffLineMapper, map_file_line_to_diff_position, AdoThreadContext
+      models.py        # PrIdentity, JsonObject
+    git/
+      ops.py           # RepoState, prepare_repo, cleanup
+      chunker.py       # DiffChunk, build_chunks
+    ai/                # Pi coding-agent integration (formerly "pi")
+      runner.py        # PiRunner, strip_json_fences
+      prompts.py       # system_prompt, stage_instruction, review_instruction
+    pipeline/
+      orchestrator.py  # run_full, run_review_only, run_post_only, RunOutcome
+      stage.py         # Stage, StageContext, StageResult, run_stages
+      schemas.py       # pydantic models for intent / plan / digest / findings
+      validation.py    # SEVERITIES, validate_stage, validate_review_doc
+      context.py       # legacy ReviewContext
+      stages/
+        fetch_pr_metadata.py
+        prepare_repository.py
+        build_artifacts.py
+        reconstruct_intent.py
+        plan_context.py
+        collect_context.py
+        context_digest.py
+        review_diff.py
+        verify_findings.py
+        calibrate_severity.py
+        post_to_ado.py
+    artifacts/
+      manager.py       # Artifacts, create(), ARTIFACT_NAMES contract
+      builder.py       # write_json, read_json, changed_files
+      summary.py       # RunSummary, StageRecord, finalize_run_summary
+scripts/
+  main.py              # thin entrypoint (delegates to auto_pr_reviewer.cli)
+  review.py            # compat shim
+  ado_review.py        # thin CLI for fetch-context / post-findings
+tests/                 # pytest suite
+prompts/               # reviewer prompt fragments
+standards/             # review standards
+pyproject.toml         # minimal packaging config
+```
+
+The Docker image copies both `src/` and `scripts/` and sets
+`PYTHONPATH=/app/src`. The `scripts/main.py` shim works as the container
+`ENTRYPOINT` and matches the previous interface 1:1, so existing
+PowerShell wrappers and the Azure pipeline definition need no changes.
+
+## CLI
+
+The Python CLI is the primary entry point. All four subcommands share a
+common flag set (`--org`, `--project`, `--repo`, `--pr`, `--pr-url`,
+`--ado-token`, etc.) and respect the same precedence: **CLI flag >
+environment variable > ``.env``**.
+
+```bash
+# Generate findings and post them (the default combined flow).
+python scripts/main.py review --pr 12345
+
+# Generate findings only (no posting). Writes final-findings.json to --output.
+python scripts/main.py review --pr 12345 --no-post --output artifacts/pr-12345/review.json
+
+# Post a previously generated review.
+python scripts/main.py post --pr 12345 --input artifacts/pr-12345/review.json
+
+# Validate the configuration for a given command and exit.
+python scripts/main.py validate-config
+python scripts/main.py validate-config --pr 12345
+
+# List active PRs awaiting your review. The Python CLI does not support
+# this — the architecture runs one container per pull request. Use the
+# PowerShell entrypoint instead:
+#   ./run-open-prs.ps1 [-Organization <url>] [-Projects <names>] ...
+# Calling `open-prs` from the Python CLI fails fast with a pointer to
+# the PowerShell script.
+
+# Get help on any subcommand.
+python scripts/main.py review --help
+```
+
+The container still works the same way: ``ENTRYPOINT
+["/app/scripts/main.py"]``. Pass the same CLI shape as arguments to
+``run.ps1`` or invoke ``python scripts/main.py review`` from inside
+the container.
 
 ## Run locally (Windows / PowerShell)
 
@@ -133,8 +231,21 @@ findings JSON.
 
 ### Run tests
 
+The test suite enforces a 95% minimum coverage threshold on the
+`auto_pr_reviewer` package.
+
 ```bash
-pytest tests/   # Python unit tests for the review runner and ADO helper
+# Locally (no coverage gate):
+pytest tests/
+
+# Locally with the coverage gate:
+pytest tests/ --cov=auto_pr_reviewer --cov-fail-under=95
+
+# In Docker via the PowerShell helper (default gate = 95%):
+./test.ps1
+./test.ps1 -NoBuild                # reuse existing image
+./test.ps1 -CoverageMin 80         # override the gate locally
+./test.ps1 -CoverageMin 0          # disable the gate entirely
 ```
 
 The project no longer uses a repo-level Node package; the Docker image still
@@ -207,6 +318,108 @@ Mount your own and point the env at them:
 ```
 The standards file is appended to the reviewer prompt verbatim. The prompt must
 keep the JSON output contract intact (see `prompts/review-system.md`).
+
+## Artifacts
+
+Every run writes its output to ``artifacts/pr-<PR_ID>/runs/<RUN_ID>/``.
+The set of files is a stable contract; see
+:data:`auto_pr_reviewer.artifacts.ARTIFACT_NAMES`.
+
+| File                          | Meaning                                                    |
+|-------------------------------|------------------------------------------------------------|
+| ``metadata.json``             | Resolved PR title/status/branches                          |
+| ``diff.patch``                | Unified diff for the merge-base range                      |
+| ``changed-files.json``        | Per-file language + ``isTest`` classification               |
+| ``commits.txt``               | ``git log --oneline`` for the PR range                     |
+| ``intent.json``               | Reconstructed PR intent (pydantic-validated)               |
+| ``context-plan.json``         | Pi's plan for what to read / search                        |
+| ``collected-context.json``    | Files/tests/search hits collected deterministically        |
+| ``context-digest.json``       | Pi's digest of the collected context                       |
+| ``candidate-findings.json``   | First-pass findings before verification                    |
+| ``verified-findings.json``    | Findings after adversarial verification                    |
+| ``severity-findings.json``    | Findings after severity calibration                        |
+| ``final-findings.json``       | The doc posted (or printed) to ADO                         |
+| ``posted-comments.json``      | Counts of created/skipped/duplicate comments and vote info |
+| ``run-summary.json``          | High-level diagnostics (per-stage timing, exit code, etc.) |
+| ``review-system.combined.md`` | Concatenated system prompt fed to Pi                      |
+
+Use ``--review-artifact-dir`` (or the env var ``REVIEW_ARTIFACT_DIR``) to
+override the per-run directory, or ``--review-run-id`` for deterministic
+output paths. ``pr-<PR_ID>/latest.txt`` always points to the most recent
+run for that PR.
+
+## Pipeline stages
+
+The pipeline is composed of explicit :class:`Stage` instances in
+:data:`auto_pr_reviewer.pipeline.stages.DEFAULT_PIPELINE`:
+
+1. ``FetchPrMetadataStage`` — call the ADO helper to populate
+   ``metadata.json``, ``work-items.json``, ``work-item-comments.json``,
+   ``threads.json``.
+2. ``PrepareRepositoryStage`` — shallow-clone the PR branches and write
+   ``diff.patch``, ``changed-files.json``, ``commits.txt``.
+3. ``BuildArtifactsStage`` — write the combined system prompt.
+4. ``ReconstructIntentStage`` — ask Pi for ``intent.json`` (validated as
+   :class:`auto_pr_reviewer.pipeline.schemas.Intent`).
+5. ``PlanContextStage`` — ask Pi for ``context-plan.json`` (validated as
+   :class:`ContextPlan`).
+6. ``CollectContextStage`` — read files / tests / searches from the
+   ``context-plan.json``; write ``collected-context.json``.
+7. ``ContextDigestStage`` — ask Pi to digest the collected context.
+8. ``ReviewDiffStage`` — produce ``candidate-findings.json``. Splits the
+   diff into file-based chunks when it exceeds
+   ``CHUNK_TRIGGER_DIFF_BYTES``.
+9. ``VerifyFindingsStage`` — ask Pi to adversarially verify the
+   candidate findings; emit ``verified-findings.json``.
+10. ``CalibrateSeverityStage`` — ask Pi to recalibrate severities;
+    emit ``severity-findings.json`` and ``final-findings.json``.
+11. ``PostToAdoStage`` — post the final findings. No-op when
+    ``DRY_RUN=1``; otherwise calls the legacy helper. Writes
+    ``posted-comments.json``.
+
+The :class:`Stage` interface (``run(ctx) -> StageResult``) makes every
+stage individually testable; the runner stops on the first failure and
+records timings, status, and high-level counts in ``run-summary.json``.
+
+## Idempotent posting
+
+Posting decisions live in :mod:`auto_pr_reviewer.ado.posting`:
+
+* :func:`dedupe_key` returns a stable 12-char hex key for a finding,
+  derived from its file, line, severity, title, and message. Confidence
+  and suggestion are intentionally excluded so reruns with minor model
+  variation do not change the key.
+* :func:`existing_bot_markers` scans the PR's threads and returns the
+  set of bot markers already present.
+* :func:`should_post` returns ``True`` iff a finding's key is not in
+  the existing set.
+* :func:`classify_threads` partitions threads into bot-authored and
+  human-authored; the reviewer never touches human comments.
+* :func:`attach_marker` returns the key and the full ``prb:<key>``
+  marker that the poster appends to the comment body.
+
+``posted-comments.json`` records the outcome (``created``, ``skipped``,
+``skipped_reasons``, ``votedWaitingForAuthor``) for every run.
+
+## Diff line mapping
+
+Mapping a finding to an inline ADO thread is handled by
+:mod:`auto_pr_reviewer.ado.diff_mapper`. The public entrypoint is
+:func:`map_file_line_to_diff_position`:
+
+```python
+ctx = map_file_line_to_diff_position("src/app.py", 42, diff_text=diff)
+if ctx is None:
+    ctx = map_file_to_fallback("src/app.py", diff_text=diff)  # file-level
+# ctx.to_thread_context() -> ADO-shaped dict
+```
+
+The mapper supports added lines, context (modified) lines, renamed
+files, multiple hunks per file, and files with no trailing newline. If
+the line is not in any hunk, it returns ``None`` so the caller can
+fall back to a file-level or summary comment. A pre-built
+:class:`DiffLineMapper` can be reused across many calls for the same
+diff.
 
 ## Known limitations (name them, don't paper over them)
 

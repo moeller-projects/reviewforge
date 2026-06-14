@@ -3,14 +3,15 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/scripts
+    PYTHONPATH=/app/src
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir pytest pytest-cov
+RUN pip install --no-cache-dir pytest pytest-cov pydantic
 
+COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY tests/ ./tests/
 COPY pytest.ini ./pytest.ini
 
-CMD ["python", "-m", "pytest", "--cov=scripts", "--cov-report=term-missing"]
+CMD ["python", "-m", "pytest", "--cov=auto_pr_reviewer", "--cov-report=term-missing"]

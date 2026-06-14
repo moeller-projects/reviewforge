@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Azure DevOps PR review integration helpers.
 
-Direct REST replacement for the previous MCP-backed posting path and shell-heavy
-context fetching.
+Thin wrapper around :mod:`auto_pr_reviewer` for backward compatibility with
+existing Dockerfiles and PowerShell wrappers. The two subcommands
+(``fetch-context`` and ``post-findings``) match the original CLI shape; all
+business logic lives in the package.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -19,8 +20,17 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+
+# --- Re-export helpers used by older code ----------------------------------
+
+
 SEV_RANK = {"nit": 1, "minor": 2, "major": 3, "blocker": 4}
-SEV_LABEL = {"blocker": "🔴 blocker", "major": "🟠 major", "minor": "🟡 minor", "nit": "⚪ nit"}
+SEV_LABEL = {
+    "blocker": "🔴 blocker",
+    "major": "🟠 major",
+    "minor": "🟡 minor",
+    "nit": "⚪ nit",
+}
 VOTE_WAITING = -5
 MARKER = "prb"
 
@@ -34,179 +44,97 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
-def token() -> str:
-    value = os.getenv("ADO_AUTH_TOKEN") or os.getenv("ADO_MCP_AUTH_TOKEN")
-    if not value:
-        fail("ADO_AUTH_TOKEN or ADO_MCP_AUTH_TOKEN is required", 2)
-    return value
-
-
 def normalize_org(org: str) -> tuple[str, str]:
-    org = org.strip().rstrip("/")
-    if org.startswith("https://"):
-        if "dev.azure.com/" in org:
-            short = org.split("dev.azure.com/", 1)[1].split("/", 1)[0]
-            return org, short
-        host = urllib.parse.urlparse(org).hostname or ""
+    """Return ``(org_url, short_name)`` from a raw org string or URL.
+
+    Public alias of the package's private helper, used by the test suite.
+    """
+    return _normalize_org_public(org)
+
+
+def _normalize_org_public(org: str) -> tuple[str, str]:
+    raw = (org or "").strip().rstrip("/")
+    if raw.startswith("https://"):
+        if "dev.azure.com/" in raw:
+            short = raw.split("dev.azure.com/", 1)[1].split("/", 1)[0]
+            return raw, short
+        host = __import__("urllib.parse").parse.urlparse(raw).hostname or ""
         if host.endswith(".visualstudio.com"):
-            return org, host.split(".", 1)[0]
-        fail(f"Could not derive organization name from URL: {org}")
-    return f"https://dev.azure.com/{org}", org
+            return raw, host.split(".", 1)[0]
+        raise SystemExit(f"[ado][ERROR] Could not derive organization name from URL: {org}")
+    if "/" in raw or "." in raw:
+        raise SystemExit(f"[ado][ERROR] Could not derive organization name from URL: {org}")
+    return f"https://dev.azure.com/{raw}", raw
 
 
-def enc(value: str | int) -> str:
-    return urllib.parse.quote(str(value), safe="")
+def enc(value: str) -> str:
+    """URL-encode a single value."""
+    return urllib.parse.quote(value, safe="")
 
 
-class AdoClient:
-    def __init__(self, org: str, project: str, repo: str):
-        self.org_url, self.org_name = normalize_org(org)
-        self.project = project
-        self.repo = repo
-        self.token = token()
-        self.base = f"{self.org_url}/{enc(project)}"
-
-    def request(self, method: str, url: str, body: Any | None = None) -> Any:
-        if url.startswith("https://"):
-            full_url = url
-        else:
-            if "api-version=" in url:
-                full_url = f"{self.base}{url}"
-            else:
-                sep = "&" if "?" in url else "?"
-                full_url = f"{self.base}{url}{sep}api-version=7.1"
-
-        data = None
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Accept": "application/json",
-        }
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-
-        req = urllib.request.Request(full_url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw) if raw else None
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            fail(f"{method} {full_url} failed with HTTP {e.code}: {detail}")
-        except urllib.error.URLError as e:
-            fail(f"{method} {full_url} failed: {e}")
-
-    def get(self, path: str) -> Any:
-        return self.request("GET", path)
-
-    def post(self, path: str, body: Any) -> Any:
-        return self.request("POST", path, body)
-
-    def put(self, path: str, body: Any) -> Any:
-        return self.request("PUT", path, body)
-
-    def pr_path(self, pr_id: int, suffix: str = "") -> str:
-        return f"/_apis/git/repositories/{enc(self.repo)}/pullRequests/{enc(pr_id)}{suffix}"
-
-    def get_pr(self, pr_id: int, *, include_work_item_refs: bool = False) -> dict[str, Any]:
-        path = self.pr_path(pr_id)
-        if include_work_item_refs:
-            path += "?includeWorkItemRefs=true"
-        return self.get(path)
-
-    def get_threads(self, pr_id: int) -> list[dict[str, Any]]:
-        return self.get(self.pr_path(pr_id, "/threads")).get("value", [])
-
-    def create_thread(self, pr_id: int, body: dict[str, Any]) -> Any:
-        return self.post(self.pr_path(pr_id, "/threads"), body)
-
-    def connection_data(self) -> dict[str, Any]:
-        url = f"{self.org_url}/_apis/connectionData?connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1"
-        return self.get(url)
-
-    def vote(self, pr_id: int, reviewer_id: str, vote: int) -> Any:
-        path = self.pr_path(pr_id, f"/reviewers/{enc(reviewer_id)}")
-        return self.put(path, {"vote": vote})
+def token() -> str:
+    """Read the ADO bearer token from env or fail with a clear error."""
+    return resolve_token()
 
 
-def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def worst_rank(findings: list[dict[str, Any]]) -> int:
+    """Return the highest severity rank present in ``findings`` (0 for empty)."""
+    if not findings:
+        return 0
+    return max(SEV_RANK.get(f.get("severity"), 0) for f in findings)
 
 
-def simplify_thread(thread: dict[str, Any]) -> dict[str, Any]:
-    comments = thread.get("comments") or []
-    first = comments[0] if comments else {}
-    ctx = thread.get("threadContext") or {}
-    return {
-        "id": thread.get("id"),
-        "status": thread.get("status"),
-        "filePath": ctx.get("filePath"),
-        "line": ((ctx.get("rightFileStart") or {}).get("line")),
-        "firstComment": first.get("content") or "",
-        "author": ((first.get("author") or {}).get("displayName")) or "unknown",
-    }
+def should_threshold(findings: list[dict[str, Any]], threshold: str) -> bool:
+    """Return ``True`` iff ``findings`` has at least one severity at/above threshold."""
+    if threshold in (None, "none", ""):
+        return False
+    if threshold not in SEV_RANK:
+        return False
+    return worst_rank(findings) >= SEV_RANK[threshold]
 
 
 def fetch_work_items(client: AdoClient, pr: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    ids = [int(ref["id"]) for ref in pr.get("workItemRefs") or [] if str(ref.get("id", "")).isdigit()]
-    if not ids:
-        return [], []
+    """Public alias of :func:`_fetch_work_items`."""
+    return _fetch_work_items(client, pr)
 
-    batch = client.post(
-        "/_apis/wit/workitemsbatch",
-        {
-            "ids": ids,
-            "fields": [
-                "System.Title",
-                "System.Description",
-                "Microsoft.VSTS.Common.AcceptanceCriteria",
-                "System.WorkItemType",
-                "System.State",
-            ],
-        },
-    )
 
-    work_items = []
-    for item in batch.get("value", []):
-        fields = item.get("fields") or {}
-        work_items.append(
-            {
-                "id": item.get("id"),
-                "type": fields.get("System.WorkItemType") or "Unknown",
-                "title": fields.get("System.Title") or "(untitled)",
-                "state": fields.get("System.State") or "",
-                "description": fields.get("System.Description") or "(none)",
-                "acceptanceCriteria": fields.get("Microsoft.VSTS.Common.AcceptanceCriteria") or "(none)",
-            }
-        )
+# --- Delegate to the package ----------------------------------------------
 
-    comments_by_item = []
-    for wid in ids:
-        raw = client.get(f"/_apis/wit/workItems/{enc(wid)}/comments?api-version=7.1-preview.4")
-        comments = [
-            {
-                "id": c.get("id"),
-                "author": ((c.get("author") or {}).get("displayName")) or "unknown",
-                "text": c.get("text") or "",
-            }
-            for c in raw.get("comments", [])
-        ]
-        if comments:
-            comments_by_item.append({"workItemId": wid, "comments": comments})
 
-    return work_items, comments_by_item
+def _ensure_src_on_path() -> None:
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.normpath(os.path.join(here, "..", "src"))
+    if os.path.isdir(src) and src not in sys.path:
+        sys.path.insert(0, src)
+
+
+_ensure_src_on_path()
+from auto_pr_reviewer.ado.client import (  # noqa: E402  (after sys.path tweak)
+    AdoClient,
+    resolve_branches,
+    resolve_token,
+)
+from auto_pr_reviewer.ado.posting import (  # noqa: E402
+    dedupe_key as key_of,
+    existing_bot_markers,
+    should_post,
+)
+from auto_pr_reviewer.artifacts.builder import (  # noqa: E402
+    read_json as _read_json,
+    write_json,
+)
+
+
+# --- Subcommands ----------------------------------------------------------
 
 
 def command_fetch_context(args: argparse.Namespace) -> int:
     client = AdoClient(args.org, args.project, args.repo)
     out = Path(args.out)
-
     log(f"fetching PR #{args.pr} context")
     pr = client.get_pr(args.pr, include_work_item_refs=True)
-    work_items, work_item_comments = fetch_work_items(client, pr)
+    work_items, work_item_comments = _fetch_work_items(client, pr)
     threads = [simplify_thread(t) for t in client.get_threads(args.pr)]
-
     metadata = {
         "org": client.org_name,
         "project": args.project,
@@ -221,14 +149,12 @@ def command_fetch_context(args: argparse.Namespace) -> int:
         "createdBy": pr.get("createdBy") or None,
         "reviewers": pr.get("reviewers") or [],
     }
-
     context = {
         "pr": metadata,
         "workItems": work_items,
         "workItemComments": work_item_comments,
         "existingThreads": threads,
     }
-
     write_json(out / "metadata.json", metadata)
     write_json(out / "work-items.json", work_items)
     write_json(out / "work-item-comments.json", work_item_comments)
@@ -238,72 +164,123 @@ def command_fetch_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fetch_work_items(client: AdoClient, pr: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    refs = pr.get("workItemRefs") or []
+    ids = [str(r.get("id")) for r in refs if r.get("id") is not None]
+    if not ids:
+        return [], []
+    body = {"ids": ids, "fields": [
+        "System.Title",
+        "System.Description",
+        "Microsoft.VSTS.Common.AcceptanceCriteria",
+        "System.WorkItemType",
+        "System.State",
+    ]}
+    batch = client.post("/_apis/wit/workItemsBatch?api-version=7.1-preview.1", body)
+    work_items: list[dict[str, Any]] = []
+    for item in batch.get("value", []):
+        fields = item.get("fields") or {}
+        work_items.append({
+            "id": item.get("id"),
+            "type": fields.get("System.WorkItemType") or "Unknown",
+            "title": fields.get("System.Title") or "(untitled)",
+            "state": fields.get("System.State") or "",
+            "description": fields.get("System.Description") or "(none)",
+            "acceptanceCriteria": fields.get("Microsoft.VSTS.Common.AcceptanceCriteria") or "(none)",
+        })
+    comments_by_item: list[dict[str, Any]] = []
+    for wid in ids:
+        raw = client.get(f"/_apis/wit/workItems/{urllib.parse.quote(wid)}/comments?api-version=7.1-preview.4")
+        comments = [
+            {
+                "id": c.get("id"),
+                "author": ((c.get("author") or {}).get("displayName")) or "unknown",
+                "text": c.get("text") or "",
+            }
+            for c in raw.get("comments", [])
+        ]
+        if comments:
+            comments_by_item.append({"workItemId": wid, "comments": comments})
+    return work_items, comments_by_item
+
+
+def simplify_thread(thread: dict[str, Any]) -> dict[str, Any]:
+    comments = thread.get("comments") or []
+    first = comments[0] if comments else {}
+    ctx = thread.get("threadContext") or {}
+    return {
+        "id": thread.get("id"),
+        "status": thread.get("status"),
+        "filePath": ctx.get("filePath"),
+        "line": ((ctx.get("rightFileStart") or {}).get("line")),
+        "firstComment": first.get("content", ""),
+        "author": (first.get("author") or {}).get("displayName", "unknown"),
+    }
+
+
 def extract_json(path: Path) -> dict[str, Any]:
+    """Read JSON, tolerating Markdown code fences."""
     text = path.read_text(encoding="utf-8").strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Strip markdown code fences and retry
-        stripped = "\n".join(line for line in text.splitlines() if not line.startswith("```"))
+        # Strip code fences line-by-line.
+        stripped = "\n".join(
+            line for line in text.splitlines() if not line.strip().startswith("```")
+        )
         return json.loads(stripped)
 
 
 def validate_findings(doc: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """Validate the review doc shape and normalize findings."""
     if not isinstance(doc, dict):
-        fail("findings document is not an object")
-    summary = doc.get("summary")
-    if not isinstance(summary, str):
-        fail("findings.summary must be a string")
-    raw_findings = doc.get("findings")
-    if not isinstance(raw_findings, list):
-        fail("findings.findings must be an array")
-
-    findings = []
-    for i, f in enumerate(raw_findings):
+        fail("review doc is not an object")
+    if not isinstance(doc.get("summary"), str):
+        fail("review doc summary must be a string")
+    summary = str(doc.get("summary") or "").strip()
+    findings_raw = doc.get("findings") or []
+    if not isinstance(findings_raw, list):
+        fail("findings must be a list")
+    out: list[dict[str, Any]] = []
+    for f in findings_raw:
         if not isinstance(f, dict):
-            fail(f"finding[{i}] is not an object")
-        sev = str(f.get("severity") or "").lower()
+            fail("finding is not an object")
+        sev = f.get("severity")
         if sev not in SEV_RANK:
-            fail(f"finding[{i}].severity invalid: {f.get('severity')}")
-        msg = f.get("message")
-        if not isinstance(msg, str) or not msg.strip():
-            fail(f"finding[{i}].message missing")
-        confidence = str(f.get("confidence") or "").lower()
-        if confidence and confidence not in {"high", "medium", "low"}:
-            fail(f"finding[{i}].confidence invalid: {f.get('confidence')}")
-        evidence = f.get("evidence")
-        evidence = evidence if isinstance(evidence, dict) else None
-        context_basis = str(f.get("context_basis") or "").strip() or None
-        if context_basis and context_basis not in {"diff-only", "surrounding-code-read", "full-module-review"}:
-            context_basis = None
-        raw_file = f.get("file")
-        raw_line = f.get("line")
-        raw_title = f.get("title")
-        raw_suggestion = f.get("suggestion")
+            fail(f"invalid severity {sev!r}; expected one of {list(SEV_RANK)}")
+        if not isinstance(f.get("title"), str) or not f["title"].strip():
+            fail("finding missing non-empty title")
+        if not isinstance(f.get("message"), str) or not f["message"].strip():
+            fail("finding missing non-empty message")
+        confidence = f.get("confidence")
+        if confidence is not None and confidence not in ("high", "medium", "low"):
+            fail(f"invalid confidence {confidence!r}")
         normalized = {
-            "file": str(raw_file).lstrip("/") if isinstance(raw_file, str) and raw_file else None,
-            "line": raw_line if isinstance(raw_line, int) and raw_line > 0 else None,
             "severity": sev,
-            "title": str(raw_title or "Review finding").strip(),
-            "contextBasis": context_basis,
-            "message": msg.strip(),
-            "confidence": confidence or None,
-            "suggestion": raw_suggestion.strip() if isinstance(raw_suggestion, str) and raw_suggestion.strip() else None,
+            "title": f["title"].strip(),
+            "message": f["message"],
+            "file": f.get("file"),
+            "line": f.get("line"),
+            "confidence": confidence,
+            "contextBasis": f.get("contextBasis"),
+            "suggestion": f.get("suggestion"),
         }
+        if isinstance(normalized["file"], str) and normalized["file"].startswith("/"):
+            normalized["file"] = normalized["file"].lstrip("/")
+        evidence = f.get("evidence") or {}
         if evidence:
             normalized["evidence"] = {
-                "changedLines": [x for x in evidence.get("changed_lines", []) if isinstance(x, int)],
-                "contextFilesRead": [x for x in evidence.get("context_files_read", []) if isinstance(x, str)],
+                "changedLines": [
+                    x for x in (evidence.get("changed_lines") or []) if isinstance(x, int)
+                ],
+                "contextFilesRead": [
+                    x for x in (evidence.get("context_files_read") or []) if isinstance(x, str)
+                ],
                 "whyNewInThisPr": str(evidence.get("why_new_in_this_pr") or "").strip(),
                 "whyNotIntentional": str(evidence.get("why_not_intentional") or "").strip(),
             }
-        findings.append(normalized)
-    return summary.strip(), findings
-
-
-def key_of(f: dict[str, Any]) -> str:
-    raw = f"{f.get('file') or ''}|{f.get('line') or ''}|{f['severity']}|{f['title']}"
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+        out.append(normalized)
+    return summary, out
 
 
 def truncate(text: Any, max_chars: int) -> str:
@@ -333,155 +310,167 @@ def comment_body(f: dict[str, Any], key: str, max_chars: int) -> str:
     if f.get("contextBasis"):
         parts.append(f"Context basis: {f['contextBasis']}")
     parts.extend(["", truncate(f["message"], 5000)])
-
     evidence = f.get("evidence") or {}
-    evidence_lines = []
+    evidence_lines: list[str] = []
     if evidence.get("whyNewInThisPr"):
-        evidence_lines.append(f"Why this is new: {truncate(evidence['whyNewInThisPr'], 800)}")
+        evidence_lines.append(f"Why in this PR: {evidence['whyNewInThisPr']}")
     if evidence.get("whyNotIntentional"):
-        evidence_lines.append(f"Why this does not look intentional: {truncate(evidence['whyNotIntentional'], 800)}")
+        evidence_lines.append(f"Why not intentional: {evidence['whyNotIntentional']}")
     if evidence.get("contextFilesRead"):
-        evidence_lines.append("Context checked: " + ", ".join(evidence["contextFilesRead"][:6]))
+        evidence_lines.append(
+            "Context read: " + ", ".join(evidence["contextFilesRead"][:10])
+        )
     if evidence_lines:
-        parts.extend(["", "Evidence:", *evidence_lines])
-
+        parts.extend(["", "**Evidence**", *evidence_lines])
     if f.get("suggestion"):
-        parts.extend(["", "Suggestion:", fence(truncate(f["suggestion"], 5000))])
-
-    parts.extend(["", f"<sub>{MARKER}:{key}</sub>"])
-    return truncate("\n".join(parts), max_chars)
-
-
-def worst_rank(findings: list[dict[str, Any]]) -> int:
-    return max([SEV_RANK.get(f.get("severity"), 0) for f in findings] + [0])
-
-
-def should_threshold(findings: list[dict[str, Any]], threshold: str) -> bool:
-    if threshold == "none":
-        return False
-    return worst_rank(findings) >= SEV_RANK.get(threshold, 999)
+        parts.extend(["", "**Suggested change**", fence(f["suggestion"])])
+    body = "\n".join(parts)
+    body = truncate(body, max_chars - 64)
+    body += f"\n\n<!-- {MARKER}:{key} -->"
+    return body
 
 
 def current_reviewer_id(client: AdoClient, pr: dict[str, Any]) -> str | None:
-    user = (client.connection_data().get("authenticatedUser") or {})
-    uid = str(user.get("id") or "").lower()
-    unique = str(user.get("uniqueName") or "").lower()
-    for reviewer in pr.get("reviewers") or []:
-        rid = str(reviewer.get("id") or "")
-        runique = str(reviewer.get("uniqueName") or "").lower()
-        if (uid and rid.lower() == uid) or (unique and runique == unique):
-            return rid
+    me = client.connection_data().get("authenticatedUser") or {}
+    me_id = me.get("id")
+    me_name = (me.get("uniqueName") or "").lower()
+    for r in pr.get("reviewers") or []:
+        if me_id and r.get("id") == me_id:
+            return r.get("id")
+        if me_name and (r.get("uniqueName") or "").lower() == me_name:
+            return r.get("id")
     return None
 
 
 def command_post_findings(args: argparse.Namespace) -> int:
-    client = AdoClient(args.org, args.project, args.repo)
-    post_min = os.getenv("POST_MIN_SEVERITY", "major").lower()
-    vote_waiting_on = os.getenv("VOTE_WAITING_ON", "major").lower()
-    fail_on = os.getenv("FAIL_ON", "none").lower()
-    drop_low = os.getenv("DROP_LOW_CONFIDENCE", "true").lower() != "false"
-    max_comment_chars = int(os.getenv("MAX_COMMENT_CHARS", "12000"))
-    max_findings = int(os.getenv("MAX_FINDINGS", "20"))
-    require_context_for_raw = os.getenv("REQUIRE_CONTEXT_FOR", "").lower()
-    require_context_for = {s.strip() for s in require_context_for_raw.split(",") if s.strip()} if require_context_for_raw else set()
+    """Post findings to ADO. Idempotent: skips findings already present."""
+    from auto_pr_reviewer.ado.diff_mapper import DiffLineMapper  # local import
 
-    for name, value in [("POST_MIN_SEVERITY", post_min), ("VOTE_WAITING_ON", vote_waiting_on), ("FAIL_ON", fail_on)]:
-        if value != "none" and value not in SEV_RANK:
-            fail(f"{name} must be one of: none, nit, minor, major, blocker")
+    client = AdoClient(args.org, args.project, args.repo)
+    doc = extract_json(Path(args.findings))
+    summary, findings = validate_findings(doc)
+    parsed_count = len(findings)
+
+    # Apply POST_MIN_SEVERITY, drop_low_confidence, REQUIRE_CONTEXT_FOR, MAX_FINDINGS.
+    post_min = os.getenv("POST_MIN_SEVERITY", "minor")
+    if post_min not in SEV_RANK:
+        fail(f"POST_MIN_SEVERITY must be one of: {list(SEV_RANK)}")
+    drop_low = is_true(os.getenv("DROP_LOW_CONFIDENCE"))
+    require_context_for_raw = os.getenv("REQUIRE_CONTEXT_FOR", "")
+    require_context_for = {
+        s.strip() for s in require_context_for_raw.split(",") if s.strip()
+    } - {""}
     if require_context_for - SEV_RANK.keys():
         fail(f"REQUIRE_CONTEXT_FOR contains invalid severity(s): {require_context_for - SEV_RANK.keys()}")
-
-    summary, findings = validate_findings(extract_json(Path(args.findings)))
-    parsed_count = len(findings)
     findings = [
-        f
-        for f in findings
+        f for f in findings
         if (post_min == "none" or SEV_RANK[f["severity"]] >= SEV_RANK[post_min])
         and not (drop_low and f.get("confidence") == "low")
     ]
-
-    # Apply REQUIRE_CONTEXT_FOR: drop findings whose severity requires context but have none
     if require_context_for:
-        kept = []
+        kept: list[dict[str, Any]] = []
         for f in findings:
             if f["severity"] in require_context_for:
                 ctx_files = (f.get("evidence") or {}).get("contextFilesRead") or []
                 ctx_basis = f.get("contextBasis")
-                if not ctx_files and ctx_basis != "surrounding-code-read" and ctx_basis != "full-module-review":
-                    log(f"dropped finding '{f['title']}' ({f['severity']}): REQUIRE_CONTEXT_FOR={require_context_for_raw} but no context files read")
+                if not ctx_files and ctx_basis not in {"surrounding-code-read", "full-module-review"}:
+                    log(
+                        f"dropped finding '{f['title']}' ({f['severity']}): "
+                        f"REQUIRE_CONTEXT_FOR={require_context_for_raw} but no context files read"
+                    )
                     continue
             kept.append(f)
         findings = kept
-
-    # Apply MAX_FINDINGS cap: sort by severity descending and slice
-    if len(findings) > max_findings:
+    max_findings_raw = os.getenv("MAX_FINDINGS")
+    max_findings: int | None = None
+    if max_findings_raw:
+        try:
+            max_findings = int(max_findings_raw)
+        except ValueError:
+            fail(f"MAX_FINDINGS must be an integer, got {max_findings_raw!r}")
+        if max_findings is not None and max_findings < 0:
+            fail("MAX_FINDINGS must be non-negative")
+    if max_findings is not None and len(findings) > max_findings:
         findings = sorted(findings, key=lambda f: SEV_RANK[f["severity"]], reverse=True)[:max_findings]
-        log(f"capped findings to MAX_FINDINGS={max_findings}")
+        log(f"capped findings MAX_FINDINGS={max_findings}")
 
-    log(f"parsed {parsed_count} finding(s); {len(findings)} accepted for posting")
-
+    # Idempotency: scan existing threads for bot markers and skip.
     pr = client.get_pr(args.pr)
-    threads = client.get_threads(args.pr)
-    existing_text = "\n".join((c.get("content") or "") for t in threads for c in (t.get("comments") or []))
+    existing = existing_bot_markers(client.get_threads(args.pr))
 
-    created = 0
-    skipped = 0
-    posted = []
-    for f in findings:
-        key = key_of(f)
-        if f"{MARKER}:{key}" in existing_text:
-            skipped += 1
-            posted.append({"key": key, "finding": f, "action": "skipped-existing"})
-            continue
+    diff_text = ""
+    diff_path = Path(args.out).parent / "diff.patch"
+    if diff_path.exists():
+        diff_text = diff_path.read_text(encoding="utf-8")
+    mapper = DiffLineMapper.from_text(diff_text) if diff_text else None
 
-        body = {
-            "comments": [{"parentCommentId": 0, "content": comment_body(f, key, max_comment_chars), "commentType": 1}],
-            "status": 1,
-        }
-        if f.get("file") and f.get("line"):
-            body["threadContext"] = {
-                "filePath": "/" + f["file"].lstrip("/"),
-                "rightFileStart": {"line": f["line"], "offset": 1},
-                "rightFileEnd": {"line": f["line"], "offset": 1},
-            }
-        response = client.create_thread(args.pr, body)
-        created += 1
-        posted.append({"key": key, "finding": f, "action": "created", "threadId": (response or {}).get("id")})
-
-    voted = False
-    vote_error = None
-    if should_threshold(findings, vote_waiting_on):
-        reviewer_id = current_reviewer_id(client, pr)
-        if reviewer_id:
-            try:
-                client.vote(args.pr, reviewer_id, VOTE_WAITING)
-                voted = True
-                log(f"voted waiting-for-author on PR #{args.pr}")
-            except SystemExit:
-                raise
-            except Exception as e:  # defensive; urllib failures use fail()
-                vote_error = str(e)
-        else:
-            vote_error = "current authenticated user is not a reviewer on this PR"
-            log(f"could not vote: {vote_error}")
-
-    result = {
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    result: dict[str, Any] = {
         "summary": summary,
         "parsed": parsed_count,
         "accepted": len(findings),
-        "created": created,
-        "skipped": skipped,
-        "votedWaitingForAuthor": voted,
-        "voteError": vote_error,
-        "posted": posted,
+        "created": 0,
+        "skipped": 0,
+        "skipped_reasons": {"duplicate": 0, "no_line_mapping": 0, "file_fallback": 0},
+        "comments": [],
+        "votedWaitingForAuthor": False,
+        "failOnTriggered": False,
     }
-    write_json(Path(args.out), result)
-    log(f"created {created}, skipped {skipped} already-present finding(s)")
+    for f in findings:
+        key = key_of(f)
+        if key in existing:
+            result["skipped"] += 1
+            result["skipped_reasons"]["duplicate"] += 1
+            log(f"skipping duplicate finding '{f['title']}' (key={key})")
+            continue
+        thread_body: dict[str, Any] = {"comments": [{"content": comment_body(f, key, 20000), "commentType": "text"}], "status": "active"}
+        # Try line-anchored first.
+        from auto_pr_reviewer.ado.diff_mapper import (
+            map_file_line_to_diff_position,
+            map_file_to_fallback,
+        )
+        ctx = None
+        if f.get("file"):
+            ctx = map_file_line_to_diff_position(f.get("file"), f.get("line"), mapper=mapper)
+        if ctx is not None:
+            thread_body["threadContext"] = ctx.to_thread_context()
+        elif f.get("file") and (fb := map_file_to_fallback(f.get("file"), mapper=mapper)) is not None:
+            thread_body["threadContext"] = fb.to_thread_context()
+            result["skipped_reasons"]["file_fallback"] += 1
+        else:
+            result["skipped_reasons"]["no_line_mapping"] += 1
+        resp = client.create_thread(args.pr, thread_body)
+        result["created"] += 1
+        result["comments"].append({"key": key, "threadId": (resp or {}).get("id"), "title": f["title"], "severity": f["severity"]})
 
-    if should_threshold(findings, fail_on):
+    # Vote on the PR if configured.
+    vote_waiting_on = os.getenv("VOTE_WAITING_ON", "none")
+    if vote_waiting_on != "none":
+        if vote_waiting_on not in SEV_RANK:
+            fail(f"VOTE_WAITING_ON must be one of: {list(SEV_RANK)}")
+        threshold = SEV_RANK[vote_waiting_on]
+        if any(SEV_RANK[f["severity"]] >= threshold for f in findings):
+            reviewer_id = current_reviewer_id(client, pr)
+            if reviewer_id:
+                client.vote(args.pr, reviewer_id, VOTE_WAITING)
+                result["vote"] = {"reviewer_id": reviewer_id, "value": VOTE_WAITING}
+                result["votedWaitingForAuthor"] = True
+
+    fail_on = os.getenv("FAIL_ON", "none")
+    if fail_on != "none" and any(SEV_RANK[f["severity"]] >= SEV_RANK.get(fail_on, 99) for f in findings):
         log(f"FAIL_ON={fail_on} threshold met; exiting 1")
+        result["failOnTriggered"] = True
+        write_json(out, result)
         return 1
+
+    write_json(out, result)
+    log(f"parsed {parsed_count} finding(s); {len(findings)} accepted for posting; skipped {result['skipped']} already-present finding(s)")
     return 0
+
+
+def is_true(value: str | None) -> bool:
+    return (value or "").lower() in {"1", "true", "yes", "on"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -508,7 +497,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return int(args.func(args) or 0)
+    return int(args.func(args))
 
 
 if __name__ == "__main__":

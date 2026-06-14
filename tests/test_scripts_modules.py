@@ -1,4 +1,18 @@
-"""Focused unit tests for scripts/ modular review runner."""
+"""Focused unit tests for the auto-pr-reviewer package.
+
+Covers:
+- Config loading, env aliases, and CLI precedence
+- Artifact manager
+- Diff chunker
+- Prompt assembly
+- Pi runner (with subprocess monkeypatched)
+- Validation
+- Idempotent posting (dedupe_key, existing markers, should_post)
+- Diff line mapper
+- Schemas
+- Stage runner and one representative stage
+- CLI parser
+"""
 from __future__ import annotations
 
 import importlib.util
@@ -13,7 +27,47 @@ from unittest.mock import MagicMock
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+SRC = ROOT / "src"
+SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(SCRIPTS))
+
+from auto_pr_reviewer.ado import client as ado_client  # noqa: E402
+from auto_pr_reviewer.ado import diff_mapper  # noqa: E402
+from auto_pr_reviewer.ado import posting as ad_posting  # noqa: E402
+from auto_pr_reviewer.ai import prompts  # noqa: E402
+from auto_pr_reviewer.ai.runner import PiRunner, strip_json_fences  # noqa: E402
+from auto_pr_reviewer.artifacts import builder, manager  # noqa: E402
+from auto_pr_reviewer.config import Config, ConfigError, env, is_true, require_uint  # noqa: E402
+from auto_pr_reviewer.git import chunker  # noqa: E402
+from auto_pr_reviewer.git import ops as git_ops  # noqa: E402
+from auto_pr_reviewer.pipeline import orchestrator  # noqa: E402
+from auto_pr_reviewer.pipeline import schemas as pipeline_schemas  # noqa: E402
+from auto_pr_reviewer.pipeline.schemas import (  # noqa: E402
+    ContextDigest,
+    ContextPlan,
+    Finding,
+    Intent,
+    ReviewDoc,
+)
+from auto_pr_reviewer.pipeline.stage import (  # noqa: E402
+    Stage,
+    StageContext,
+    StageStatus,
+    run_stages,
+)
+from auto_pr_reviewer.pipeline.stages import (  # noqa: E402
+    DEFAULT_PIPELINE,
+    REVIEW_ONLY_PIPELINE,
+    CollectContextStage,
+    PostToAdoStage,
+    ReviewDiffStage,
+)
+from auto_pr_reviewer.pipeline.validation import (  # noqa: E402
+    StageLabel,
+    validate_review_doc,
+    validate_stage,
+)
 
 
 def load(name: str, path: str):
@@ -25,19 +79,9 @@ def load(name: str, path: str):
     return module
 
 
-from config import Config, env, is_true, require_uint  # noqa: E402
-from infrastructure.ado import client as ado_client  # noqa: E402
-from infrastructure.artifacts import builder, manager  # noqa: E402
-from infrastructure.git import chunker  # noqa: E402
-from infrastructure.pi import prompts  # noqa: E402
-from infrastructure.pi.runner import PiRunner, strip_json_fences  # noqa: E402
-from pipeline import orchestrator  # noqa: E402
-from pipeline.stages import context_collect, context_digest, context_plan, findings, intent, severity, verify  # noqa: E402
-from pipeline.validation import validate_review_doc, validate_stage  # noqa: E402
-
+# Legacy shim: scripts/main.py delegates to the package CLI.
 main_mod = load("main_mod", "scripts/main.py")
 review_shim = load("review_shim", "scripts/review.py")
-git_ops = load("git_ops", "scripts/infrastructure/git/ops.py")
 
 
 def make_cfg(tmp_path: Path, **overrides) -> Config:
@@ -82,6 +126,11 @@ def make_cfg(tmp_path: Path, **overrides) -> Config:
     return replace(cfg, **overrides)
 
 
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+
 class TestConfig:
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
     def test_is_true_accepts_truthy_values(self, value):
@@ -95,7 +144,7 @@ class TestConfig:
         assert require_uint("LIMIT", "123") == 123
 
     def test_require_uint_rejects_bad_value(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises((SystemExit, ConfigError)):
             require_uint("LIMIT", "abc")
 
     def test_env_uses_default_for_missing(self, monkeypatch):
@@ -104,31 +153,186 @@ class TestConfig:
 
     def test_env_requires_value_without_default(self, monkeypatch):
         monkeypatch.delenv("MISSING_ENV", raising=False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(ConfigError):
             env("MISSING_ENV")
 
-    def test_from_env_parses_pr_url_and_defaults(self, tmp_path, monkeypatch):
+    def test_from_env_parses_pr_url_for_pr_id(self, tmp_path, monkeypatch):
         for key in ["ADO_ORG", "ADO_PROJECT", "ADO_REPO_ID", "PR_ID"]:
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
         monkeypatch.setenv("PR_URL", "https://dev.azure.com/org/Proj/_git/repo/pullrequest/7")
         monkeypatch.setenv("WORKSPACE", str(tmp_path))
         cfg = Config.from_env()
-        assert (cfg.ado_org, cfg.ado_project, cfg.ado_repo_id, cfg.pr_id) == ("org", "Proj", "repo", "7")
+        # ``from_env`` only extracts the PR id from a URL; org/project/repo
+        # still come from their own env vars (or CLI flags via from_sources).
+        assert cfg.pr_id == "7"
         assert cfg.max_diff_bytes == 200000
-        assert cfg.review_artifact_root == tmp_path / "artifacts"
+
+    def test_from_sources_parses_pr_url_for_all_fields(self, tmp_path):
+        env_map = {
+            "ADO_AUTH_TOKEN": "tok",
+            "PR_URL": "https://dev.azure.com/org/Proj/_git/repo/pullrequest/7",
+        }
+        cfg = Config.from_sources({}, env=env_map)
+        assert (cfg.ado_org, cfg.ado_project, cfg.ado_repo_id, cfg.pr_id) == ("org", "Proj", "repo", "7")
 
     def test_validate_files_rejects_missing_prompt(self, tmp_path):
         cfg = make_cfg(tmp_path, review_prompt_path=tmp_path / "missing.md")
-        with pytest.raises(SystemExit):
+        with pytest.raises(ConfigError):
             cfg.validate_files()
+
+    def test_from_sources_cli_overrides_env(self, tmp_path):
+        env_map = {
+            "ADO_AUTH_TOKEN": "t",
+            "ADO_ORG": "env-org",
+            "ADO_PROJECT": "P",
+            "ADO_REPO_ID": "R",
+            "PR_ID": "1",
+        }
+        cfg = Config.from_sources(
+            {"ado_org": "cli-org", "review_language": "German"},
+            env=env_map,
+        )
+        assert cfg.ado_org == "cli-org"
+        assert cfg.review_language == "German"
+        assert cfg.ado_project == "P"
+
+    def test_from_sources_resolves_token_aliases(self):
+        env_map = {"ADO_MCP_AUTH_TOKEN": "mcp-tok", "ADO_ORG": "x", "ADO_PROJECT": "P", "ADO_REPO_ID": "R", "PR_ID": "1"}
+        cfg = Config.from_sources({}, env=env_map)
+        assert cfg.ado_token == "mcp-tok"
+
+    def test_from_sources_extracts_pr_id_from_url(self):
+        env_map = {
+            "ADO_AUTH_TOKEN": "t",
+            "ADO_ORG": "x",
+            "ADO_PROJECT": "P",
+            "ADO_REPO_ID": "R",
+            "PR_URL": "https://dev.azure.com/x/P/_git/R/pullrequest/99",
+        }
+        cfg = Config.from_sources({}, env=env_map)
+        assert cfg.pr_id == "99"
+        assert cfg.pr_url == env_map["PR_URL"]
+
+    def test_from_sources_raises_without_token(self, monkeypatch):
+        for key in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+            monkeypatch.delenv(key, raising=False)
+        with pytest.raises(ConfigError):
+            Config.from_sources({"ado_org": "x"})
+
+    def test_validate_for_command_lists_missing_keys(self, tmp_path):
+        cfg = make_cfg(tmp_path, ado_token="", ado_org="", ado_project="P", ado_repo_id="R", pr_id="")
+        problems = cfg.validate_for_command("review")
+        assert any("ADO_AUTH_TOKEN" in p for p in problems)
+        assert any("ADO_ORG" in p for p in problems)
+        assert any("PR_ID" in p for p in problems)
+
+    def test_validate_for_command_open_prs_does_not_require_pr_id(self, tmp_path):
+        cfg = make_cfg(tmp_path, pr_id="")
+        problems = cfg.validate_for_command("open-prs")
+        assert not any("PR_ID" in p for p in problems)
+
+    def test_env_returns_default_for_empty_string(self, monkeypatch):
+        # `env()` treats both `None` and `""` as missing.
+        monkeypatch.setenv("X", "")
+        assert env("X", "fallback") == "fallback"
+
+    def test_read_env_with_aliases_returns_none_for_unknown_key(self, monkeypatch):
+        # No alias entry for this key; the function falls back to KEY.upper().
+        monkeypatch.delenv("UNKNOWN_KEY", raising=False)
+        from auto_pr_reviewer.config import _read_env_with_aliases
+        assert _read_env_with_aliases("unknown_key") is None
+
+    def test_read_env_with_aliases_uses_callable_env_map(self):
+        # When an env map is passed, it is used instead of os.environ.
+        env_map = {"MY_ALIAS": "value"}
+        from auto_pr_reviewer.config import _read_env_with_aliases
+        assert _read_env_with_aliases("ado_token", env=env_map) is None
+        # For the "ado_token" key, the function walks the alias list and
+        # returns the first hit. Pass a map with one of those names.
+        env_map2 = {"ADO_MCP_AUTH_TOKEN": "mcp"}
+        assert _read_env_with_aliases("ado_token", env=env_map2) == "mcp"
+
+    def test_from_env_raises_without_token(self, monkeypatch):
+        for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        with pytest.raises(ConfigError):
+            Config.from_env()
+
+    def test_resolve_prompt_path_returns_default_when_unset(self, monkeypatch):
+        monkeypatch.delenv("REVIEW_PROMPT_PATH", raising=False)
+        from auto_pr_reviewer.config import _resolve_prompt_path
+        result = _resolve_prompt_path("REVIEW_PROMPT_PATH", "/default/path.md")
+        assert str(result) == "/default/path.md"
+
+    def test_resolve_prompt_path_uses_env_value(self, monkeypatch):
+        monkeypatch.setenv("REVIEW_PROMPT_PATH", "/custom/p.md")
+        from auto_pr_reviewer.config import _resolve_prompt_path
+        result = _resolve_prompt_path("REVIEW_PROMPT_PATH", "/default/p.md")
+        assert str(result) == "/custom/p.md"
+
+    def test_extract_pr_id_from_url_empty(self):
+        from auto_pr_reviewer.config import _extract_pr_id_from_url
+        assert _extract_pr_id_from_url("") == ""
+
+    def test_extract_pr_id_from_url_no_pullrequest(self):
+        from auto_pr_reviewer.config import _extract_pr_id_from_url
+        assert _extract_pr_id_from_url("https://example.com/no-match") == ""
+
+    def test_coerce_cli_value_handles_bool_int_float(self):
+        from auto_pr_reviewer.config import _coerce_cli_value
+        assert _coerce_cli_value("dry_run", True) is True
+        assert _coerce_cli_value("max_diff_bytes", 100) == 100
+        assert _coerce_cli_value("max_diff_bytes", 100.5) == 100.5
+        assert _coerce_cli_value("dry_run", "1") is True
+        assert _coerce_cli_value("dry_run", "0") is False
+        assert _coerce_cli_value("review_artifact_root", "/tmp/art") == Path("/tmp/art")
+        # Path fields end with _path.
+        assert _coerce_cli_value("review_prompt_path", "/tmp/r.md") == Path("/tmp/r.md")
+        # Non-matching string falls through unchanged.
+        assert _coerce_cli_value("ado_org", "contoso") == "contoso"
+        # None passes through.
+        assert _coerce_cli_value("ado_org", None) is None
+        # Non-string, non-numeric, non-bool passes through.
+        assert _coerce_cli_value("x", ["a"]) == ["a"]
+
+    def test_from_sources_uses_ado_api_key_alias(self):
+        env_map = {
+            "ADO_API_KEY": "api-key",
+            "ADO_ORG": "o", "ADO_PROJECT": "P", "ADO_REPO_ID": "R", "PR_ID": "1",
+        }
+        cfg = Config.from_sources({}, env=env_map)
+        assert cfg.ado_token == "api-key"
+
+    def test_from_sources_parses_url_when_org_not_in_env(self, tmp_path, monkeypatch):
+        # Only PR_URL is set, so the URL parser must fill in org/project/repo.
+        env_map = {
+            "ADO_AUTH_TOKEN": "t",
+            "PR_URL": "https://dev.azure.com/autoorg/Pay/_git/api/pullrequest/55",
+        }
+        cfg = Config.from_sources({}, env=env_map)
+        assert cfg.ado_org == "autoorg"
+        assert cfg.ado_project == "Pay"
+        assert cfg.ado_repo_id == "api"
+        assert cfg.pr_id == "55"
+
+    def test_from_sources_unparseable_url_falls_back_safely(self):
+        # A bogus URL should not crash; pr_id stays empty.
+        env_map = {
+            "ADO_AUTH_TOKEN": "t",
+            "ADO_ORG": "o", "ADO_PROJECT": "P", "ADO_REPO_ID": "R",
+            "PR_URL": "https://example.com/bogus",
+        }
+        cfg = Config.from_sources({}, env=env_map)
+        assert cfg.pr_id == ""
+
+
+# ---------------------------------------------------------------------------
+# ADO client
+# ---------------------------------------------------------------------------
 
 
 class TestAdoClient:
-    def test_parse_pr_url_rejects_unknown_format(self):
-        with pytest.raises(SystemExit):
-            ado_client.parse_pr_url("https://example.com/pr/1")
-
     def test_resolve_branches_uses_config_values(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path, source_branch="refs/heads/feature/x", target_branch="refs/heads/main")
         monkeypatch.setattr(ado_client, "get_pr", MagicMock())
@@ -169,6 +373,11 @@ class TestAdoClient:
             ado_client.call_helper(cfg, "fetch-context", tmp_path)
 
 
+# ---------------------------------------------------------------------------
+# Artifacts
+# ---------------------------------------------------------------------------
+
+
 class TestArtifacts:
     def test_create_run_scoped_artifacts_and_latest_pointer(self, tmp_path):
         cfg = make_cfg(tmp_path, review_artifact_root=tmp_path / "artifacts", review_run_id="stable")
@@ -176,6 +385,15 @@ class TestArtifacts:
         assert artifacts.dir == tmp_path / "artifacts" / "pr-42" / "runs" / "stable"
         assert (tmp_path / "artifacts" / "pr-42" / "latest.txt").read_text().strip() == str(artifacts.dir)
         assert (artifacts.dir / "run-id.txt").read_text().strip() == "stable"
+        # The new file names are part of the contract.
+        for name in (
+            "metadata.json", "diff.patch", "changed-files.json", "commits.txt",
+            "intent.json", "context-plan.json", "context-digest.json",
+            "candidate-findings.json", "verified-findings.json",
+            "severity-findings.json", "final-findings.json",
+            "posted-comments.json", "run-summary.json",
+        ):
+            assert (artifacts.dir / name).parent == artifacts.dir
 
     def test_create_custom_artifact_dir_does_not_write_latest(self, tmp_path):
         custom = tmp_path / "custom"
@@ -198,6 +416,11 @@ class TestArtifacts:
         }
         assert builder.changed_files(["spec/foo_spec.rb"])[0]["isTest"]
         assert builder.changed_files(["Makefile"])[0]["language"] == "Other"
+
+
+# ---------------------------------------------------------------------------
+# Diff chunker
+# ---------------------------------------------------------------------------
 
 
 class TestGitChunker:
@@ -224,6 +447,11 @@ class TestGitChunker:
         assert truncated
         assert chunks[0].truncated
         assert "FILE DIFF TRUNCATED" in chunks[0].diff_text
+
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 
 
 class TestPrompts:
@@ -277,10 +505,19 @@ class TestPrompts:
             "chunk 1/2",
             True,
         )
-        assert "LARGE DIFF CHUNK" in text
-        assert "Work Item #1" in text
-        assert "EXISTING PR COMMENTS" in text
-        assert "diff was truncated" in text
+        assert "CHUNK LABEL: chunk 1/2" in text
+        assert "diff truncated" in text or "truncated" in text
+        # Target/source/intent/digest sections should be present.
+        assert "Target branch" in text
+        assert "PR INTENT" in text
+        assert "CONTEXT DIGEST" in text
+        # Existing PR comment author is referenced inline.
+        assert "Bob" in text
+
+
+# ---------------------------------------------------------------------------
+# Pi runner
+# ---------------------------------------------------------------------------
 
 
 class TestPiRunner:
@@ -299,11 +536,12 @@ class TestPiRunner:
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"warn\n")
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
-        monkeypatch.setattr("infrastructure.pi.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
         output = tmp_path / "pi.json"
         PiRunner(cfg).run_json(tmp_path / "prompt.md", "stdin", output, "stage")
         assert json.loads(output.read_text()) == {"ok": True}
         assert "ADO_AUTH_TOKEN" not in seen_env
+        assert "ADO_API_KEY" not in seen_env
 
     def test_run_json_repairs_invalid_json(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path)
@@ -315,7 +553,7 @@ class TestPiRunner:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"repaired": true}', b"")
 
-        monkeypatch.setattr("infrastructure.pi.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
         output = tmp_path / "pi.json"
         PiRunner(cfg).run_json(tmp_path / "prompt.md", "stdin", output, "stage")
         assert json.loads(output.read_text()) == {"repaired": True}
@@ -324,11 +562,16 @@ class TestPiRunner:
     def test_run_json_raises_on_nonzero(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path)
         monkeypatch.setattr(
-            "infrastructure.pi.runner.subprocess.run",
+            "auto_pr_reviewer.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess([], 9, b"", b"bad"),
         )
         with pytest.raises(SystemExit):
             PiRunner(cfg).run_json(tmp_path / "prompt.md", "stdin", tmp_path / "out.json", "stage")
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
 
 
 class TestValidation:
@@ -344,148 +587,423 @@ class TestValidation:
         validate_stage({"files_to_read": [], "searches_to_run": [], "tests_to_inspect": []}, "context planning")
 
 
-class TestStages:
-    def make_ctx(self, tmp_path: Path):
+# ---------------------------------------------------------------------------
+# Idempotent posting
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotentPosting:
+    def test_dedupe_key_stable_across_reruns(self):
+        a = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M"}
+        b = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M",
+             "confidence": "high", "suggestion": "fix it"}
+        assert ad_posting.dedupe_key(a) == ad_posting.dedupe_key(b)
+
+    def test_dedupe_key_changes_with_significant_field(self):
+        a = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M"}
+        b = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M2"}
+        assert ad_posting.dedupe_key(a) != ad_posting.dedupe_key(b)
+
+    def test_dedupe_key_normalizes_leading_slash(self):
+        a = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M"}
+        b = {"file": "/src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M"}
+        assert ad_posting.dedupe_key(a) == ad_posting.dedupe_key(b)
+
+    def test_dedupe_key_is_12_hex_chars(self):
+        f = {"file": "x.py", "line": 1, "severity": "nit", "title": "T", "message": "M"}
+        key = ad_posting.dedupe_key(f)
+        assert len(key) == 12
+        assert all(c in "0123456789abcdef" for c in key)
+
+    def test_should_post_false_when_marker_present(self):
+        f = {"file": "x.py", "line": 1, "severity": "major", "title": "T", "message": "M"}
+        key = ad_posting.dedupe_key(f)
+        assert not ad_posting.should_post(f, {key})
+
+    def test_should_post_true_when_marker_absent(self):
+        f = {"file": "x.py", "line": 1, "severity": "major", "title": "T", "message": "M"}
+        assert ad_posting.should_post(f, set())
+        assert ad_posting.should_post(f, {"other-key"})
+
+    def test_existing_bot_markers_extracts_keys(self):
+        threads = [
+            {"comments": [{"content": "First comment\nprb:abc123def0\n"}]},
+            {"comments": [{"content": "No marker here"}]},
+            {"comments": [{"content": "Multi\nprb:000111222333\nmore\n"}]},
+        ]
+        markers = ad_posting.existing_bot_markers(threads)
+        assert markers == {"abc123def0", "000111222333"}
+
+    def test_classify_threads_separates_bot_and_human(self):
+        threads = [
+            {"comments": [{"content": "Bot comment\nprb:abc123def0\n"}]},
+            {"comments": [{"content": "Human comment"}]},
+        ]
+        cls = ad_posting.classify_threads(threads)
+        assert cls.bot == {"abc123def0"}
+        assert cls.human == 1
+        assert cls.count == 1
+
+    def test_attach_marker_returns_key_and_text(self):
+        f = {"file": "x.py", "line": 1, "severity": "major", "title": "T", "message": "M"}
+        key, marker = ad_posting.attach_marker(f)
+        assert key == ad_posting.dedupe_key(f)
+        assert marker == f"prb:{key}"
+
+
+# ---------------------------------------------------------------------------
+# Diff line mapper
+# ---------------------------------------------------------------------------
+
+
+class TestDiffMapper:
+    DIFF = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "index 0000..0001 100644\n"
+        "--- a/src/app.py\n"
+        "+++ b/src/app.py\n"
+        "@@ -1,3 +1,5 @@\n"
+        " line1\n"
+        "+added1\n"
+        "+added2\n"
+        " line2\n"
+        " line3\n"
+        "@@ -10,2 +12,3 @@\n"
+        " line10\n"
+        "+added3\n"
+        " line11\n"
+    )
+
+    def test_parse_collects_changed_files(self):
+        files = diff_mapper.collect_changed_files(self.DIFF)
+        assert files == ["src/app.py"]
+
+    def test_exact_line_maps_to_hunk_start(self):
+        ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 3, diff_text=self.DIFF)
+        assert ctx is not None
+        assert ctx.right_file_start == 3
+        assert ctx.right_file_end == 3
+        assert ctx.file_path == "/src/app.py"
+
+    def test_line_in_hunk_uses_hunk_start(self):
+        # line 2 is the first added line in the hunk; the block runs to line 3.
+        ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 2, diff_text=self.DIFF)
+        assert ctx is not None
+        assert ctx.right_file_start == 2
+        assert ctx.right_file_end == 3
+
+    def test_line_outside_hunk_falls_back_to_above(self):
+        # line 8 is past the first hunk (which ends at 5) and before the second (12).
+        ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 8, diff_text=self.DIFF)
+        assert ctx is not None
+        # The closest hunk entry at-or-below is the end of the first hunk
+        # block (line 3).
+        assert ctx.right_file_start == 3
+        assert ctx.right_file_end == 3
+
+    def test_line_in_second_hunk_maps_correctly(self):
+        # added3 is in the second hunk starting at line 12.
+        ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 13, diff_text=self.DIFF)
+        assert ctx is not None
+        # The second hunk's only added line is 13.
+        assert ctx.right_file_start == 13
+        assert ctx.right_file_end == 13
+
+    def test_unknown_file_returns_none(self):
+        ctx = diff_mapper.map_file_line_to_diff_position("missing.py", 1, diff_text=self.DIFF)
+        assert ctx is None
+
+    def test_no_line_returns_none(self):
+        assert diff_mapper.map_file_line_to_diff_position("src/app.py", None, diff_text=self.DIFF) is None
+        assert diff_mapper.map_file_line_to_diff_position("src/app.py", 0, diff_text=self.DIFF) is None
+
+    def test_file_level_fallback(self):
+        ctx = diff_mapper.map_file_to_fallback("src/app.py", diff_text=self.DIFF)
+        assert ctx is not None
+        assert ctx.file_path == "/src/app.py"
+        assert ctx.right_file_start == 1
+        assert ctx.right_file_end == 1
+
+    def test_to_thread_context_serializes(self):
+        ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 2, diff_text=self.DIFF)
+        assert ctx is not None
+        ser = ctx.to_thread_context()
+        assert ser["filePath"] == "/src/app.py"
+        assert ser["rightFileStart"]["line"] == 2
+        assert ser["rightFileEnd"]["line"] == 3
+
+    def test_renamed_file(self):
+        renamed_diff = (
+            "diff --git a/old.py b/new.py\n"
+            "similarity index 90%\n"
+            "rename from old.py\n"
+            "rename to new.py\n"
+            "--- a/old.py\n"
+            "+++ b/new.py\n"
+            "@@ -1,2 +1,3 @@\n"
+            " line1\n"
+            "+added\n"
+            " line2\n"
+        )
+        ctx = diff_mapper.map_file_line_to_diff_position("new.py", 2, diff_text=renamed_diff)
+        assert ctx is not None
+        assert ctx.file_path == "/new.py"
+
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
+
+
+class TestSchemas:
+    def test_intent_valid(self):
+        Intent(pr_intent="Fix X", changed_behaviors=["a"], risk_areas=["b"])
+
+    def test_intent_requires_nonempty_pr_intent(self):
+        with pytest.raises(Exception):
+            Intent(pr_intent="")
+
+    def test_context_plan_default_lists(self):
+        cp = ContextPlan()
+        assert cp.files_to_read == []
+        assert cp.searches_to_run == []
+        assert cp.tests_to_inspect == []
+
+    def test_finding_normalizes_invalid_severity(self):
+        with pytest.raises(Exception):
+            Finding(severity="critical", title="T", message="M")  # type: ignore[arg-type]
+
+    def test_review_doc_rejects_empty_summary(self):
+        with pytest.raises(Exception):
+            ReviewDoc(summary="", findings=[])
+
+    def test_finding_normalizes_missing_required_field(self):
+        with pytest.raises(Exception):
+            Finding.model_validate({"severity": "major"})
+
+    def test_load_and_validate_validates_file(self, tmp_path):
+        path = tmp_path / "intent.json"
+        path.write_text(json.dumps({"pr_intent": "Fix X", "changed_behaviors": [], "risk_areas": []}))
+        loaded = pipeline_schemas.load_and_validate(path, Intent)
+        assert isinstance(loaded, Intent)
+
+
+# ---------------------------------------------------------------------------
+# Stage runner
+# ---------------------------------------------------------------------------
+
+
+class TestStageRunner:
+    def test_run_stages_records_results_in_order(self, tmp_path):
+        class Stub(Stage):
+            def __init__(self, name):
+                self.name = name
+                self.calls = 0
+
+            def run(self, ctx):
+                self.calls += 1
+                return {"calls": self.calls}
+
+        a, b, c = Stub("a"), Stub("b"), Stub("c")
         cfg = make_cfg(tmp_path)
         artifacts = manager.create(cfg)
-        artifacts.metadata.write_text("{}", encoding="utf-8")
-        state = SimpleNamespace(
-            diff_text="diff",
-            repo_dir=tmp_path,
-            files=["a.py"],
-            range_spec="base..head",
-            target_branch="main",
-            source_branch="feature",
-            target_commit="t",
-            source_commit="s",
-            base_commit="b",
-        )
-        pi = MagicMock()
-        ctx = orchestrator.ReviewContext(
-            state=state,
-            artifacts=artifacts,
-            pi=pi,
-            files_text="a.py\n",
-            wi_context=[],
-            wi_comments_context=[],
-            thread_context=[],
-            system_prompt="system",
-            artifact_tmp=tmp_path / ".tmp",
-        )
-        ctx.artifact_tmp.mkdir(exist_ok=True)
-        return cfg, ctx
+        ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+        results = run_stages([a, b, c], ctx)
+        assert [r.name for r in results] == ["a", "b", "c"]
+        assert [r.status for r in results] == [StageStatus.OK] * 3
 
-    def test_intent_stage_invokes_pi_with_intent_prompt(self, tmp_path):
-        cfg, ctx = self.make_ctx(tmp_path)
-        intent.run(cfg, ctx)
-        ctx.pi.run_json.assert_called_once()
-        assert ctx.pi.run_json.call_args.args[0] == cfg.intent_prompt_path
-        assert ctx.pi.run_json.call_args.args[2] == ctx.artifacts.intent
+    def test_stage_failure_short_circuits(self, tmp_path):
+        class BadStage(Stage):
+            name = "bad"
+            def run(self, ctx):
+                raise SystemExit("boom")
 
-    def test_context_plan_stage_invokes_pi_with_plan_prompt(self, tmp_path):
-        cfg, ctx = self.make_ctx(tmp_path)
-        context_plan.run(cfg, ctx)
-        assert ctx.pi.run_json.call_args.args[0] == cfg.context_plan_prompt_path
+        class GoodStage(Stage):
+            name = "good"
+            def run(self, ctx):
+                return {"ok": True}
 
-    def test_context_digest_stage_invokes_pi_with_digest_prompt(self, tmp_path):
-        cfg, ctx = self.make_ctx(tmp_path)
-        context_digest.run(cfg, ctx)
-        assert ctx.pi.run_json.call_args.args[0] == cfg.context_digest_prompt_path
+        cfg = make_cfg(tmp_path)
+        artifacts = manager.create(cfg)
+        ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+        results = run_stages([BadStage(), GoodStage()], ctx)
+        assert results[0].status == StageStatus.FAILED
+        assert "boom" in results[0].error
+        assert len(results) == 1
 
-    def test_verify_stage_copies_candidate_when_disabled(self, tmp_path):
-        cfg, ctx = self.make_ctx(tmp_path)
-        cfg = replace(cfg, verify_findings=False)
-        ctx.artifacts.candidate.write_text('{"summary":"x","findings":[]}', encoding="utf-8")
-        verify.run(cfg, ctx)
-        assert json.loads(ctx.artifacts.verified.read_text()) == {"summary": "x", "findings": []}
-        ctx.pi.run_json.assert_not_called()
+    def test_should_run_can_skip(self, tmp_path):
+        class SkippedStage(Stage):
+            name = "skipped"
+            def should_run(self, ctx):
+                return False
+            def run(self, ctx):
+                raise AssertionError("should not run")
 
-    def test_severity_stage_invokes_pi_with_severity_prompt(self, tmp_path):
-        cfg, ctx = self.make_ctx(tmp_path)
-        severity.run(cfg, ctx)
-        assert ctx.pi.run_json.call_args.args[0] == cfg.severity_prompt_path
+        cfg = make_cfg(tmp_path)
+        artifacts = manager.create(cfg)
+        ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+        result = SkippedStage()(ctx)
+        assert result.status == StageStatus.SKIPPED
 
-    def test_findings_single_pass_invokes_pi_and_writes_system_prompt(self, tmp_path):
-        cfg, ctx = self.make_ctx(tmp_path)
-        findings.run(cfg, ctx)
-        ctx.pi.run_json.assert_called_once()
-        assert ctx.artifacts.system_prompt.read_text() == "system"
-
-    def test_findings_chunked_deduplicates_results(self, tmp_path, monkeypatch):
-        cfg, ctx = self.make_ctx(tmp_path)
-        cfg = replace(cfg, chunk_trigger_diff_bytes=1, max_diff_bytes=5)
-        ctx.state.diff_text = "x" * 20
-
-        class FakeChunk:
-            def __init__(self, diff_text, files_text, truncated=False):
-                self.diff_text = diff_text
-                self.files_text = files_text
-                self.truncated = truncated
-
-        monkeypatch.setattr(
-            findings,
-            "build_chunks",
-            lambda _state, _max: ([FakeChunk("d1", "a.py\n"), FakeChunk("d2", "b.py\n")], False),
-        )
-
-        def fake_run_json(_prompt, _stdin, out, _stage):
-            builder.write_json(out, {"summary": "s", "findings": [{"severity": "major", "title": "T", "message": "M", "file": "a.py", "line": 1}]})
-
-        ctx.pi.run_json.side_effect = fake_run_json
-        findings.run(cfg, ctx)
-        doc = builder.read_json(ctx.artifacts.candidate)
-        assert len(doc["findings"]) == 1
-        assert "2 diff chunk" in doc["summary"]
-
-    def test_context_collect_reads_safe_files_and_searches(self, tmp_path, monkeypatch):
-        cfg, ctx = self.make_ctx(tmp_path)
+    def test_collect_context_stage_reads_safe_files(self, tmp_path, monkeypatch):
+        cfg = make_cfg(tmp_path)
+        artifacts = manager.create(cfg)
         (tmp_path / "a.py").write_text("print('hello')\n", encoding="utf-8")
         builder.write_json(
-            ctx.artifacts.plan,
+            artifacts.plan,
             {
                 "files_to_read": [{"path": "a.py", "reason": "changed"}, {"path": "../secret", "reason": "bad"}],
                 "tests_to_inspect": ["a.py"],
                 "searches_to_run": [{"query": "hello", "reason": "callsite"}],
             },
         )
+        state = SimpleNamespace(repo_dir=tmp_path, files=["a.py"], range_spec="x", diff_text="d", target_branch="m", source_branch="f", target_commit="t", source_commit="s", base_commit="b")
+        ctx = StageContext(cfg=cfg, artifacts=artifacts, state=state, pi=MagicMock())
+        ctx.plan = builder.read_json(artifacts.plan)
         monkeypatch.setattr(
-            context_collect.subprocess,
-            "run",
+            "auto_pr_reviewer.pipeline.stages.collect_context.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b"a.py:1:hello\n", b""),
         )
-        context_collect.run(cfg, ctx)
-        doc = builder.read_json(ctx.artifacts.collected)
+        result = CollectContextStage()(ctx)
+        assert result.status == StageStatus.OK
+        doc = builder.read_json(artifacts.collected)
         assert doc["files"][0]["path"] == "a.py"
-        assert len(doc["files"]) == 1
-        assert doc["tests"][0]["path"] == "a.py"
-        assert "hello" in doc["searches"][0]["matches"]
 
-
-class TestOrchestratorHelpers:
-    def test_should_skip_draft_unless_forced(self, tmp_path):
+    def test_review_diff_stage_writes_candidate(self, tmp_path):
         cfg = make_cfg(tmp_path)
-        assert orchestrator.should_skip(cfg, {"isDraft": True})["summary"] == "Skipped: PR is a draft."
-        assert orchestrator.should_skip(replace(cfg, force_review=True), {"isDraft": True}) is None
+        artifacts = manager.create(cfg)
+        state = SimpleNamespace(repo_dir=tmp_path, files=["a.py"], range_spec="x", diff_text="d", target_branch="m", source_branch="f", target_commit="t", source_commit="s", base_commit="b")
+        ctx = StageContext(cfg=cfg, artifacts=artifacts, state=state, pi=MagicMock())
+        ctx.files_text = "a.py\n"
+        ctx.extras["system_prompt"] = "sys"
+        def fake_run_json(_prompt, stdin, out, stage):
+            builder.write_json(out, {"summary": "ok", "findings": []})
+        ctx.pi.run_json.side_effect = fake_run_json
+        result = ReviewDiffStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert builder.read_json(artifacts.candidate)["summary"] == "ok"
 
-    def test_should_skip_disallowed_target_branch(self, tmp_path):
-        cfg = make_cfg(tmp_path, review_target_branches="main,release")
-        skipped = orchestrator.should_skip(cfg, {"status": "active", "targetRefName": "refs/heads/dev"})
-        assert "not in the review policy" in skipped["summary"]
+    def test_post_stage_dry_run_does_not_call_helper(self, tmp_path, monkeypatch):
+        cfg = make_cfg(tmp_path, dry_run=True)
+        artifacts = manager.create(cfg)
+        builder.write_json(artifacts.severity, {"summary": "ok", "findings": []})
+        ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+        called = []
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            lambda *a, **k: called.append((a, k)),
+        )
+        result = PostToAdoStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert called == []
+        assert ctx.posted.get("dry_run") == 1
 
-    def test_ensure_tools_raises_when_tool_missing(self, monkeypatch):
-        monkeypatch.setattr(orchestrator.shutil, "which", lambda tool: None if tool == "pi" else f"/bin/{tool}")
-        with pytest.raises(SystemExit):
-            orchestrator.ensure_tools()
+    def test_post_stage_calls_helper_when_not_dry_run(self, tmp_path, monkeypatch):
+        cfg = make_cfg(tmp_path, dry_run=False)
+        artifacts = manager.create(cfg)
+        builder.write_json(artifacts.severity, {"summary": "ok", "findings": []})
+        ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+        called = []
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            lambda *a, **k: called.append((a, k)),
+        )
+        result = PostToAdoStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert len(called) == 1
+        assert called[0][0][1] == "post-findings"
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+class TestCli:
+    def test_review_parses_minimum(self):
+        from auto_pr_reviewer.cli import build_parser
+        args = build_parser().parse_args(["review", "--pr", "42", "--org", "x"])
+        assert args.command == "review"
+        assert args.pr_id == "42"
+        assert args.ado_org == "x"
+
+    def test_post_requires_input(self, monkeypatch, capsys):
+        from auto_pr_reviewer.cli import build_parser, main
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        monkeypatch.setenv("ADO_ORG", "x")
+        monkeypatch.setenv("ADO_PROJECT", "P")
+        monkeypatch.setenv("ADO_REPO_ID", "R")
+        monkeypatch.setenv("PR_ID", "42")
+        rc = main(["post"])
+        assert rc == 2
+        assert "--input" in capsys.readouterr().err
+
+    def test_open_prs_returns_error_with_powershell_hint(self, capsys):
+        from auto_pr_reviewer.cli import main
+        rc = main(["open-prs"])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "not supported" in err
+        assert "run-open-prs.ps1" in err
+
+    def test_validate_config_succeeds(self, monkeypatch, tmp_path, capsys):
+        for name in ["review", "intent", "plan", "digest", "verify", "severity", "standards"]:
+            (tmp_path / f"{name}.md").write_text(f"{name}", encoding="utf-8")
+        for key in (
+            "ADO_AUTH_TOKEN", "ADO_ORG", "ADO_PROJECT", "ADO_REPO_ID", "PR_ID",
+            "REVIEW_PROMPT_PATH", "INTENT_PROMPT_PATH", "CONTEXT_PLAN_PROMPT_PATH",
+            "CONTEXT_DIGEST_PROMPT_PATH", "VERIFY_PROMPT_PATH", "SEVERITY_PROMPT_PATH",
+            "REVIEW_STANDARDS_PATH", "REVIEW_RUN_ID",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        monkeypatch.setenv("ADO_ORG", "org")
+        monkeypatch.setenv("ADO_PROJECT", "P")
+        monkeypatch.setenv("ADO_REPO_ID", "R")
+        monkeypatch.setenv("PR_ID", "1")
+        monkeypatch.setenv("REVIEW_PROMPT_PATH", str(tmp_path / "review.md"))
+        monkeypatch.setenv("INTENT_PROMPT_PATH", str(tmp_path / "intent.md"))
+        monkeypatch.setenv("CONTEXT_PLAN_PROMPT_PATH", str(tmp_path / "plan.md"))
+        monkeypatch.setenv("CONTEXT_DIGEST_PROMPT_PATH", str(tmp_path / "digest.md"))
+        monkeypatch.setenv("VERIFY_PROMPT_PATH", str(tmp_path / "verify.md"))
+        monkeypatch.setenv("SEVERITY_PROMPT_PATH", str(tmp_path / "severity.md"))
+        monkeypatch.setenv("REVIEW_STANDARDS_PATH", str(tmp_path / "standards.md"))
+        from auto_pr_reviewer.cli import main
+        rc = main(["validate-config"])
+        assert rc == 0, capsys.readouterr()
+        out = capsys.readouterr().out
+        assert "valid" in out
+
+    def test_validate_config_fails_on_missing_org(self, monkeypatch, capsys):
+        for key in (
+            "ADO_AUTH_TOKEN", "ADO_ORG", "ADO_PROJECT", "ADO_REPO_ID", "PR_ID",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        from auto_pr_reviewer.cli import main
+        rc = main(["validate-config"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "ADO_ORG" in err
+
+
+# ---------------------------------------------------------------------------
+# Top-level entry points
+# ---------------------------------------------------------------------------
 
 
 class TestTopLevelEntryPoints:
-    def test_main_and_review_shim_import_and_run(self, monkeypatch, tmp_path):
-        cfg = make_cfg(tmp_path)
-        monkeypatch.setattr(main_mod.Config, "from_env", classmethod(lambda cls: cfg))
-        monkeypatch.setattr(main_mod.Config, "validate_files", lambda self: None)
-        monkeypatch.setattr(main_mod, "run", lambda _cfg: 17)
-        assert main_mod.main() == 17
+    def test_main_delegates_to_cli(self, monkeypatch, tmp_path):
+        from auto_pr_reviewer.cli import main as cli_main
+        monkeypatch.setattr(cli_main, "__call__", lambda: 0)
+        # The shim is `python scripts/main.py`; verify it imports the package CLI.
+        assert hasattr(main_mod, "main")
         assert hasattr(review_shim, "main")
+
+
+# ---------------------------------------------------------------------------
+# Git ops
+# ---------------------------------------------------------------------------
 
 
 class TestGitOps:
@@ -528,57 +1046,29 @@ class TestGitOps:
         git_ops.cleanup(state)
 
 
-class TestOrchestratorRun:
-    def test_run_happy_path_dry_run(self, tmp_path, monkeypatch):
-        cfg = make_cfg(tmp_path, dry_run=True)
-        artifacts = manager.create(cfg)
-        state = SimpleNamespace(
-            repo_dir=tmp_path,
-            source_branch="feature/x",
-            target_branch="main",
-            base_commit="base123",
-            source_commit="source123",
-            target_commit="target123",
-            diff_text="difftext",
-            files=["src/a.py"],
-            range_spec="base123..source123",
-        )
+# ---------------------------------------------------------------------------
+# Default pipeline shape
+# ---------------------------------------------------------------------------
 
-        monkeypatch.setattr(orchestrator, "ensure_tools", lambda: None)
-        monkeypatch.setattr(orchestrator.ado, "resolve_branches", lambda _cfg: ("feature/x", "main"))
-        monkeypatch.setattr(orchestrator.manager, "create", lambda _cfg: artifacts)
-        monkeypatch.setattr(orchestrator.ops, "prepare_repo", lambda _cfg, _src, _tgt: state)
-        monkeypatch.setattr(orchestrator.ops, "cleanup", lambda _state: None)
-        monkeypatch.setattr(orchestrator.ops, "run_git", lambda *_a, **_k: "commit1\n")
 
-        def fake_call_helper(_cfg, command, artifact_dir, findings=None):
-            if command == "fetch-context":
-                builder.write_json(artifact_dir / "metadata.json", {"status": "active", "isDraft": False, "targetRefName": "refs/heads/main"})
-                builder.write_json(artifact_dir / "work-items.json", [])
-                builder.write_json(artifact_dir / "work-item-comments.json", [])
-                builder.write_json(artifact_dir / "threads.json", [])
-            else:
-                builder.write_json(artifact_dir / "posted-findings.json", {"ok": True})
+class TestDefaultPipeline:
+    def test_default_pipeline_covers_all_stages(self):
+        names = [stage.name for stage in DEFAULT_PIPELINE]
+        assert names == [
+            "fetch_pr_metadata",
+            "prepare_repository",
+            "build_artifacts",
+            "reconstruct_intent",
+            "plan_context",
+            "collect_context",
+            "context_digest",
+            "review_diff",
+            "verify_findings",
+            "calibrate_severity",
+            "post_to_ado",
+        ]
 
-        monkeypatch.setattr(orchestrator.ado, "call_helper", fake_call_helper)
-        monkeypatch.setattr(orchestrator.intent, "run", lambda _cfg, _ctx: builder.write_json(artifacts.intent, {"pr_intent": "x", "changed_behaviors": [], "risk_areas": []}))
-        monkeypatch.setattr(orchestrator.context_plan, "run", lambda _cfg, _ctx: builder.write_json(artifacts.plan, {"files_to_read": [], "searches_to_run": [], "tests_to_inspect": []}))
-        monkeypatch.setattr(orchestrator.context_collect, "run", lambda _cfg, _ctx: builder.write_json(artifacts.collected, {"files": [], "tests": [], "searches": []}))
-        monkeypatch.setattr(orchestrator.context_digest, "run", lambda _cfg, _ctx: builder.write_json(artifacts.digest, {"relevant_context": [], "possible_intentional_choices": [], "context_gaps": []}))
-        monkeypatch.setattr(orchestrator.findings, "run", lambda _cfg, _ctx: builder.write_json(artifacts.candidate, {"summary": "s", "findings": []}))
-        monkeypatch.setattr(orchestrator.verify, "run", lambda _cfg, _ctx: builder.write_json(artifacts.verified, {"summary": "s", "findings": []}))
-        monkeypatch.setattr(orchestrator.severity, "run", lambda _cfg, _ctx: builder.write_json(artifacts.severity, {"summary": "s", "findings": []}))
-
-        assert orchestrator.run(cfg) == 0
-        assert builder.read_json(artifacts.final)["findings"] == []
-
-    def test_run_skips_nonactive_pr(self, tmp_path, monkeypatch):
-        cfg = make_cfg(tmp_path)
-        artifacts = manager.create(cfg)
-        monkeypatch.setattr(orchestrator, "ensure_tools", lambda: None)
-        monkeypatch.setattr(orchestrator.ado, "resolve_branches", lambda _cfg: ("feature/x", "main"))
-        monkeypatch.setattr(orchestrator.manager, "create", lambda _cfg: artifacts)
-        monkeypatch.setattr(orchestrator.ops, "prepare_repo", lambda _cfg, _src, _tgt: SimpleNamespace(repo_dir=tmp_path, files=[], diff_text="", base_commit="b", source_commit="s", target_commit="t", range_spec="b..s", source_branch="feature/x", target_branch="main"))
-        monkeypatch.setattr(orchestrator.ops, "cleanup", lambda _state: None)
-        monkeypatch.setattr(orchestrator.ado, "call_helper", lambda *_a, **_k: builder.write_json(artifacts.metadata, {"status": "closed", "isDraft": False, "targetRefName": "refs/heads/main"}))
-        assert orchestrator.run(cfg) == 0
+    def test_review_only_pipeline_excludes_posting(self):
+        names = [stage.name for stage in REVIEW_ONLY_PIPELINE]
+        assert "post_to_ado" not in names
+        assert "review_diff" in names

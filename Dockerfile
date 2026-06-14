@@ -16,11 +16,13 @@ RUN npm install -g --ignore-scripts \
 
 WORKDIR /app
 COPY scripts/ ./scripts/
+COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY standards/ ./standards/
 RUN chmod +x ./scripts/main.py ./scripts/review.py ./scripts/ado_review.py
 
 # The repo is cloned here by the Python runner; main.py orchestrates review.
+ENV PYTHONPATH=/app/src
 ENV WORKSPACE=/workspace
 ENV PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 WORKDIR /workspace

@@ -5,20 +5,15 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
 
-
-def load(name: str, path: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-ado_client = load("ado_client", "scripts/infrastructure/ado/client.py")
-artifact_builder = load("artifact_builder", "scripts/infrastructure/artifacts/builder.py")
-validation = load("validation", "scripts/pipeline/validation.py")
+from auto_pr_reviewer.ado import client as ado_client  # noqa: E402
+from auto_pr_reviewer.artifacts import builder as artifact_builder  # noqa: E402
+from auto_pr_reviewer.pipeline.validation import validate_review_doc  # noqa: E402
 
 
 def test_parse_dev_azure_pr_url():
@@ -33,6 +28,11 @@ def test_parse_visualstudio_pr_url():
     ) == ("contoso", "Payments", "payments-api", "1423")
 
 
+def test_parse_pr_url_rejects_unknown_format():
+    with pytest.raises(SystemExit):
+        ado_client.parse_pr_url("https://example.com/pr/1")
+
+
 def test_build_changed_files_classifies_language_and_tests():
     entries = artifact_builder.changed_files(["src/app.py", "tests/app.test.ts", "README.md"])
     assert entries == [
@@ -43,6 +43,6 @@ def test_build_changed_files_classifies_language_and_tests():
 
 
 def test_review_doc_validation_accepts_minimal_document():
-    validation.validate_review_doc(
+    validate_review_doc(
         {"summary": "ok", "findings": [{"severity": "major", "title": "T", "message": "M"}]}
     )

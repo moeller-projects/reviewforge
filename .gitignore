@@ -159,6 +159,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+# One-off virtualenv created by `python -m venv pytest-env` from earlier sessions.
+pytest-env/
 
 # Spyder project settings
 .spyderproject
