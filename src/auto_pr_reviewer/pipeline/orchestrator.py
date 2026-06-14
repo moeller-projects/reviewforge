@@ -249,6 +249,7 @@ def _record_results(summary: RunSummary, results: list) -> None:
                 started_at=r.started_at,
                 duration_ms=r.duration_ms,
                 details=r.details or {},
+                token_usage=getattr(r, "token_usage", {}) or {},
             )
         )
 

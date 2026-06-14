@@ -24,6 +24,7 @@ class StageRecord:
     started_at: str
     duration_ms: int
     details: dict[str, Any] = field(default_factory=dict)
+    token_usage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +33,7 @@ class StageRecord:
             "started_at": self.started_at,
             "duration_ms": self.duration_ms,
             "details": self.details,
+            "token_usage": self.token_usage,
         }
 
 
@@ -153,6 +155,24 @@ def finalize_run_summary(
         "severity": _safe_count_findings(artifacts.severity),
         "final": _safe_count_findings(artifacts.final),
     }
+    # Aggregate token usage across all stage records.
+    total_in = 0
+    total_out = 0
+    any_tokens = False
+    for rec in summary.stages:
+        tu = rec.token_usage or {}
+        if tu.get("in"):
+            total_in += int(tu["in"])
+            any_tokens = True
+        if tu.get("out"):
+            total_out += int(tu["out"])
+            any_tokens = True
+    if any_tokens:
+        summary.token_usage = {
+            "in": total_in,
+            "out": total_out,
+            "total": total_in + total_out,
+        }
     return summary.to_dict()
 
 

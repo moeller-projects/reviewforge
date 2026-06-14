@@ -203,18 +203,24 @@ class PiRunner:
         except Exception:
             pass
 
-        # Repair attempt: in-session, ask Pi to return only JSON.
-        # The model already has the original context; we don't re-send it.
+        # Repair attempt:
+        # - In session mode, the model already has the original context, so
+        #   we send empty stdin and just ask it to return only JSON.
+        # - In legacy / no-session mode, the model has no memory of the
+        #   original payload, so we resend it.
         repair = self._build_cmd(
             prompt_path,
             "Your previous response was not valid JSON. "
             "Return only the JSON object – no markdown fences, no prose.",
         )
-        _log(f"running Pi {stage} repair (in session)")
+        repair_input = b"" if self.cfg.pi_session_enabled else stdin_text.encode()
+        _log(
+            f"running Pi {stage} repair ({'in session' if self.cfg.pi_session_enabled else 'legacy mode'})"
+        )
         try:
             cp = subprocess.run(
                 repair,
-                input=b"",
+                input=repair_input,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=self.cfg.pi_timeout_secs,
@@ -225,8 +231,13 @@ class PiRunner:
                 f"[review][ERROR] Pi {stage} repair timed out"
             )
         if cp.stderr:
-            for line in cp.stderr.decode(errors="replace").splitlines():
+            stderr_text = cp.stderr.decode(errors="replace")
+            for line in stderr_text.splitlines():
                 _log(f"[pi {stage} repair] {line}")
+            # Update last_tokens from the repair call's stderr as well.
+            parsed = self._parse_token_usage(stderr_text)
+            if parsed:
+                self._last_tokens = parsed
         if cp.returncode or not cp.stdout:
             raise SystemExit(f"[review][ERROR] Pi {stage} repair call failed")
         output_path.write_bytes(cp.stdout)
