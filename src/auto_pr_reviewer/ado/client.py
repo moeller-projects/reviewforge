@@ -108,15 +108,30 @@ class AdoClient:
             method=method,
             headers={
                 "Authorization": f"Bearer {self.token}",
-                "Accept": "application/json",
+                "Accept": "application/json; api-version=7.0",
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        with urllib.request.urlopen(req, timeout=60) as response:  # nosec - trusted URL
-            raw = response.read().decode("utf-8")
-            if not raw:
-                return {}
-            return json.loads(raw)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:  # nosec - trusted URL
+                raw = response.read().decode("utf-8")
+                if not raw:
+                    return {}
+                return json.loads(raw)
+        except urllib.error.HTTPError as exc:
+            # Log the response body for debugging (ADO often includes error details)
+            error_body = ""
+            try:
+                error_body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            print(
+                f"[review][ERROR] ADO API {method} {url} returned {exc.code} {exc.reason}",
+                file=sys.stderr,
+            )
+            if error_body:
+                print(f"[review][ERROR] ADO response body: {error_body}", file=sys.stderr)
+            raise
 
     # ----- paths ------------------------------------------------------------
 

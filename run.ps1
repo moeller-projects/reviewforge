@@ -63,6 +63,11 @@
 .PARAMETER ContainerName
     Optional Docker/Podman container name. Defaults to pr-review-bot-pr-{PrId} when -PrId is provided.
 
+.PARAMETER ArtifactPath
+    Local directory path for review artifacts. When provided, this directory is mounted
+    into the container instead of using a named volume. Useful for inspecting artifacts
+    after the run. Example: -ArtifactPath "$PWD/artifacts"
+
 .PARAMETER DryRun
     Review only; print the findings JSON and do not post to the PR.
 
@@ -98,6 +103,7 @@ param(
     [string] $PiModel      = "openai/gpt-5.5",
     [string] $Image        = "pr-review-bot:latest",
     [string] $ContainerName,
+    [string] $ArtifactPath,
     [string] $EnvFile = ".env",
     [switch] $DryRun
 )
@@ -125,6 +131,7 @@ if (-not $PSBoundParameters.ContainsKey('PiModel') -and $env:PI_MODEL) { $PiMode
 if (-not $PSBoundParameters.ContainsKey('Image') -and $env:IMAGE_NAME) { $Image = $env:IMAGE_NAME }
 if (-not $PSBoundParameters.ContainsKey('Image') -and $env:IMAGE) { $Image = $env:IMAGE }
 if (-not $PSBoundParameters.ContainsKey('ContainerName') -and $env:CONTAINER_NAME) { $ContainerName = $env:CONTAINER_NAME }
+if (-not $PSBoundParameters.ContainsKey('ArtifactPath') -and $env:ARTIFACT_PATH) { $ArtifactPath = $env:ARTIFACT_PATH }
 if (-not $PSBoundParameters.ContainsKey('DryRun') -and $env:DRY_RUN) { $DryRun = $env:DRY_RUN -in @('1','true','True','yes','on') }
 
 if ($Org) { $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization' }
@@ -140,15 +147,30 @@ if (-not $OpenAiApiKey) {
 
 $Runtime = Get-ContainerRuntime
 $Token = Get-AdoToken $AdoToken
-$ArtifactVolumeName = $env:REVIEW_ARTIFACT_VOLUME_NAME
-if (-not $ArtifactVolumeName) {
-    $ArtifactVolumeName = 'pr-review-bot-artifacts'
-}
 
-Write-Step "Ensuring artifact volume '$ArtifactVolumeName' exists"
-& $Runtime volume create $ArtifactVolumeName | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Fail "Failed to create or reuse artifact volume '$ArtifactVolumeName'."
+# --- Prepare artifact storage (named volume or local path) -------------------
+$useNamedVolume = -not $ArtifactPath
+$ArtifactVolumeName = $null
+
+if ($useNamedVolume) {
+    $ArtifactVolumeName = $env:REVIEW_ARTIFACT_VOLUME_NAME
+    if (-not $ArtifactVolumeName) {
+        $ArtifactVolumeName = 'pr-review-bot-artifacts'
+    }
+
+    Write-Step "Ensuring artifact volume '$ArtifactVolumeName' exists"
+    # volume create is idempotent in Docker/Podman; ignore "already exists" error
+    & $Runtime volume create $ArtifactVolumeName 2>&1 | Out-Null
+    # Exit code may be non-zero if volume already exists - that's OK
+    Write-Step "Artifact volume '$ArtifactVolumeName' ready"
+} else {
+    # Validate and create local path if needed
+    $ArtifactPath = [System.IO.Path]::GetFullPath($ArtifactPath)
+    if (-not (Test-Path -LiteralPath $ArtifactPath)) {
+        Write-Step "Creating artifact directory: $ArtifactPath"
+        New-Item -Path $ArtifactPath -ItemType Directory -Force | Out-Null
+    }
+    Write-Step "Using local artifact path: $ArtifactPath"
 }
 
 # --- Build env file -----------------------------------------------------------
@@ -218,7 +240,21 @@ if ($Runtime -eq "podman") {
 if ($ContainerName) {
     $dockerArgs += @("--name", $ContainerName)
 }
-$dockerArgs += @("--volume", "$($ArtifactVolumeName):/workspace/artifacts", "--env-file", $envFile, $Image)
+
+# Mount artifact storage (named volume or local path)
+if ($useNamedVolume) {
+    $dockerArgs += @("--volume", "$($ArtifactVolumeName):/workspace/artifacts")
+} else {
+    # Convert Windows path to WSL path for Podman if needed
+    $containerPath = $ArtifactPath
+    if ($Runtime -eq "podman" -and $ArtifactPath -match '^[A-Z]:') {
+        # Convert C:\path to /c/path for Podman
+        $containerPath = $ArtifactPath -replace '^([A-Z]):', '/$1' -replace '\\', '/'
+    }
+    $dockerArgs += @("--volume", "$($containerPath):/workspace/artifacts")
+}
+
+$dockerArgs += @("--env-file", $envFile, $Image)
 
 Write-Step $runLabel
 try {

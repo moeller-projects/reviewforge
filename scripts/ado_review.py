@@ -439,7 +439,12 @@ def command_post_findings(args: argparse.Namespace) -> int:
             thread_body["threadContext"] = fb.to_thread_context()
             result["skipped_reasons"]["file_fallback"] += 1
         else:
+            # No valid thread context — skip this finding to avoid HTTP 400
+            result["skipped"] += 1
             result["skipped_reasons"]["no_line_mapping"] += 1
+            log(f"skipped finding '{f['title']}' (key={key}): no line mapping available")
+            continue
+        
         resp = client.create_thread(args.pr, thread_body)
         result["created"] += 1
         result["comments"].append({"key": key, "threadId": (resp or {}).get("id"), "title": f["title"], "severity": f["severity"]})
