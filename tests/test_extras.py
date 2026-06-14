@@ -57,6 +57,7 @@ class TestPiRunnerEdgeCases:
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
+            pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
         )
 
     def test_timeout_raises_systemexit(self, tmp_path, monkeypatch):
@@ -145,6 +146,137 @@ class TestPiRunnerEdgeCases:
         err = capsys.readouterr().err
         assert "[pi stage] line1" in err
         assert "[pi stage] line2" in err
+
+    def test_session_enabled_uses_session_flag(self, tmp_path, monkeypatch):
+        cfg = SimpleNamespace(
+            pi_model="m", pi_timeout_secs=5, dry_run=True,
+            review_prompt_path=Path("/tmp/r.md"),
+            intent_prompt_path=Path("/tmp/i.md"),
+            context_plan_prompt_path=Path("/tmp/p.md"),
+            context_digest_prompt_path=Path("/tmp/d.md"),
+            verify_prompt_path=Path("/tmp/v.md"),
+            severity_prompt_path=Path("/tmp/s.md"),
+            standards_path=Path("/tmp/s.md"),
+            pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-42-review-r1",
+        )
+        runner = PiRunner(cfg)
+        captured = []
+        monkeypatch.setattr(
+            "auto_pr_reviewer.ai.runner.subprocess.run",
+            lambda cmd, **k: (
+                captured.append(cmd)
+                or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+            ),
+        )
+        runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert "--session" in captured[0]
+        assert "pr-42-review-r1" in captured[0]
+        assert "--no-session" not in captured[0]
+        assert runner.session_id == "pr-42-review-r1"
+
+    def test_session_clear_flag_added(self, tmp_path, monkeypatch):
+        cfg = SimpleNamespace(
+            pi_model="m", pi_timeout_secs=5, dry_run=True,
+            review_prompt_path=Path("/tmp/r.md"),
+            intent_prompt_path=Path("/tmp/i.md"),
+            context_plan_prompt_path=Path("/tmp/p.md"),
+            context_digest_prompt_path=Path("/tmp/d.md"),
+            verify_prompt_path=Path("/tmp/v.md"),
+            severity_prompt_path=Path("/tmp/s.md"),
+            standards_path=Path("/tmp/s.md"),
+            pi_session_enabled=True, pi_session_clear=True, pi_session_id="x",
+        )
+        runner = PiRunner(cfg)
+        captured = []
+        monkeypatch.setattr(
+            "auto_pr_reviewer.ai.runner.subprocess.run",
+            lambda cmd, **k: (
+                captured.append(cmd)
+                or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+            ),
+        )
+        runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert "--clear-session" in captured[0]
+        assert "--session" in captured[0]
+
+    def test_default_session_id_uses_pr_and_run(self, tmp_path):
+        cfg = SimpleNamespace(
+            pi_model="m", pi_timeout_secs=5, dry_run=True,
+            review_prompt_path=Path("/tmp/r.md"),
+            intent_prompt_path=Path("/tmp/i.md"),
+            context_plan_prompt_path=Path("/tmp/p.md"),
+            context_digest_prompt_path=Path("/tmp/d.md"),
+            verify_prompt_path=Path("/tmp/v.md"),
+            severity_prompt_path=Path("/tmp/s.md"),
+            standards_path=Path("/tmp/s.md"),
+            pi_session_enabled=True, pi_session_clear=False, pi_session_id=None,
+            pr_id="42", review_run_id="r-1",
+        )
+        assert PiRunner(cfg).session_id == "pr-42-review-r-1"
+
+    def test_default_session_id_without_run_id(self, tmp_path):
+        cfg = SimpleNamespace(
+            pi_model="m", pi_timeout_secs=5, dry_run=True,
+            review_prompt_path=Path("/tmp/r.md"),
+            intent_prompt_path=Path("/tmp/i.md"),
+            context_plan_prompt_path=Path("/tmp/p.md"),
+            context_digest_prompt_path=Path("/tmp/d.md"),
+            verify_prompt_path=Path("/tmp/v.md"),
+            severity_prompt_path=Path("/tmp/s.md"),
+            standards_path=Path("/tmp/s.md"),
+            pi_session_enabled=True, pi_session_clear=False, pi_session_id=None,
+            pr_id="42", review_run_id=None,
+        )
+        assert PiRunner(cfg).session_id == "pr-42-review"
+
+    def test_token_usage_parsed_from_stderr(self, tmp_path, monkeypatch):
+        cfg = SimpleNamespace(
+            pi_model="m", pi_timeout_secs=5, dry_run=True,
+            review_prompt_path=Path("/tmp/r.md"),
+            intent_prompt_path=Path("/tmp/i.md"),
+            context_plan_prompt_path=Path("/tmp/p.md"),
+            context_digest_prompt_path=Path("/tmp/d.md"),
+            verify_prompt_path=Path("/tmp/v.md"),
+            severity_prompt_path=Path("/tmp/s.md"),
+            standards_path=Path("/tmp/s.md"),
+            pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+        )
+        runner = PiRunner(cfg)
+        stderr = b"[pi] tokens: 1234 in / 567 out\n"
+        monkeypatch.setattr(
+            "auto_pr_reviewer.ai.runner.subprocess.run",
+            lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', stderr),
+        )
+        runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert runner.last_tokens == {"in": 1234, "out": 567, "total": 1801}
+
+    def test_repair_call_uses_session_and_empty_stdin(self, tmp_path, monkeypatch):
+        cfg = SimpleNamespace(
+            pi_model="m", pi_timeout_secs=5, dry_run=True,
+            review_prompt_path=Path("/tmp/r.md"),
+            intent_prompt_path=Path("/tmp/i.md"),
+            context_plan_prompt_path=Path("/tmp/p.md"),
+            context_digest_prompt_path=Path("/tmp/d.md"),
+            verify_prompt_path=Path("/tmp/v.md"),
+            severity_prompt_path=Path("/tmp/s.md"),
+            standards_path=Path("/tmp/s.md"),
+            pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-1",
+        )
+        runner = PiRunner(cfg)
+        calls = []
+        def fake_run(cmd, input=b"", **k):
+            calls.append((cmd, input))
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
+            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        # Repair call: same --session, empty stdin (no re-send).
+        repair_cmd, repair_input = calls[1]
+        assert "--session" in repair_cmd
+        assert "pr-1" in repair_cmd
+        assert repair_input == b""
+        assert "return only the json" in repair_cmd[-1].lower()
 
 
 # ---------------------------------------------------------------------------

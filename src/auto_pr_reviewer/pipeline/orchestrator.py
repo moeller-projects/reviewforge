@@ -128,6 +128,10 @@ def _make_stage_context(
         "verified": artifacts.verified,
         "severity": artifacts.severity,
         "final": artifacts.final,
+        "metadata": artifacts.metadata,
+        "diff": artifacts.diff,
+        "work_items": artifacts.work_items,
+        "threads": artifacts.threads,
     }
     return ctx
 

@@ -50,6 +50,10 @@ class StageContext:
     posted: dict[str, int] = field(default_factory=dict)
     skip_reason: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    #: Token usage reported by the most recent Pi call. Updated by stages
+    #: after they call :meth:`PiRunner.run_json`. Aggregated into the
+    #: run-summary by the orchestrator.
+    last_token_usage: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -63,6 +67,7 @@ class StageResult:
     duration_ms: int
     details: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    token_usage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +78,7 @@ class StageResult:
             "duration_ms": self.duration_ms,
             "details": self.details,
             "error": self.error,
+            "token_usage": self.token_usage,
         }
 
 
@@ -110,6 +116,8 @@ class Stage:
             if not isinstance(details, dict):
                 details = {"result": details}
             finished_at = _now_iso()
+            # Capture token usage if the stage left it on the context.
+            tokens = ctx.last_token_usage
             return StageResult(
                 name=self.name,
                 status=StageStatus.OK,
@@ -117,6 +125,7 @@ class Stage:
                 finished_at=finished_at,
                 duration_ms=int((time.monotonic() - t0) * 1000),
                 details=details,
+                token_usage=dict(tokens),
             )
         except SystemExit as exc:
             finished_at = _now_iso()

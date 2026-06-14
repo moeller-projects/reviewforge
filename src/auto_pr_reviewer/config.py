@@ -26,6 +26,22 @@ def is_true(value: str | None) -> bool:
     return (value or "").lower() in {"1", "true", "yes", "on"}
 
 
+def _coerce_bool(value: Any, default: bool, *, env_value: str | None = None) -> bool:
+    """Coerce a CLI/env value to a bool with a sensible default.
+
+    - ``True`` / ``False`` pass through.
+    - Strings parse via :func:`is_true`.
+    - ``None`` falls back to ``env_value`` (string), then to ``default``.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is not None:
+        return is_true(str(value))
+    if env_value is not None:
+        return is_true(env_value)
+    return default
+
+
 def require_uint(name: str, value: str) -> int:
     if not re.fullmatch(r"\d+", value or ""):
         raise ConfigError(f"{name} must be a non-negative integer, got: {value!r}")
@@ -127,6 +143,17 @@ class Config:
     review_run_id: str | None
     #: Optional pre-resolved PR URL string. When set, ``pr_id`` was derived from it.
     pr_url: str | None = field(default=None, compare=False)
+    # --- Pi session reuse (Phases A + E) -------------------------------
+    #: When ``True`` (default), the runner uses ``--session`` to keep state
+    #: between stages and chunks. Disable for deterministic reruns or when
+    #: the underlying Pi session is corrupted.
+    pi_session_enabled: bool = field(default=True, compare=False)
+    #: When ``True``, the runner starts a fresh session, ignoring any
+    #: prior state for the same session id.
+    pi_session_clear: bool = field(default=False, compare=False)
+    #: Session id used by Pi. Defaults to ``pr-{pr_id}-review-{run_id}``
+    #: so the same PR reuses state across reruns.
+    pi_session_id: str | None = field(default=None, compare=False)
 
     # ------------------------------------------------------------------ env --
 
@@ -153,6 +180,11 @@ class Config:
         review_run_id = os.getenv("REVIEW_RUN_ID") or None
         if not os.getenv("CHUNK_TRIGGER_DIFF_BYTES"):
             os.environ["CHUNK_TRIGGER_DIFF_BYTES"] = str(int(os.getenv("MAX_DIFF_BYTES", "200000")))
+
+        # Pi session controls.
+        pi_session_id = os.getenv("PI_SESSION_ID") or None
+        pi_session_enabled = (os.getenv("PI_SESSION_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
+        pi_session_clear = (os.getenv("PI_SESSION_CLEAR", "0").lower() in {"1", "true", "yes", "on"})
 
         cfg = cls(
             ado_org=os.getenv("ADO_ORG", ""),
@@ -189,6 +221,9 @@ class Config:
             review_artifact_root=review_artifact_root,
             review_run_id=review_run_id,
             pr_url=os.getenv("PR_URL") or None,
+            pi_session_id=pi_session_id,
+            pi_session_enabled=pi_session_enabled,
+            pi_session_clear=pi_session_clear,
         )
         return cfg
 
@@ -354,6 +389,13 @@ def _build_from_sources(
     review_artifact_root = cli_or_env("review_artifact_root", "REVIEW_ARTIFACT_ROOT") or "/workspace/artifacts"
     review_run_id = cli_or_env("review_run_id", "REVIEW_RUN_ID") or None
 
+    # Pi session controls (Phase A + E).
+    pi_session_id = cli.get("pi_session_id") or os.getenv("PI_SESSION_ID") or None
+    pi_session_enabled = _coerce_bool(cli.get("pi_session_enabled"), default=True,
+                                       env_value=os.getenv("PI_SESSION_ENABLED"))
+    pi_session_clear = _coerce_bool(cli.get("pi_session_clear"), default=False,
+                                     env_value=os.getenv("PI_SESSION_CLEAR"))
+
     # PR id: prefer explicit CLI ``--pr``; fall back to PR_ID env, then PR_URL.
     pr_id = cli_or_env("pr_id", "PR_ID")
     pr_url = cli_or_env("pr_url", "PR_URL") or None
@@ -433,6 +475,9 @@ def _build_from_sources(
         review_artifact_root=Path(review_artifact_root),
         review_run_id=review_run_id,
         pr_url=pr_url,
+        pi_session_id=pi_session_id,
+        pi_session_enabled=pi_session_enabled,
+        pi_session_clear=pi_session_clear,
     )
 
 

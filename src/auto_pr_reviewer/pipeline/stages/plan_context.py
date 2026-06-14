@@ -26,6 +26,7 @@ class PlanContextStage(Stage):
         ctx.pi.run_json(
             cfg.context_plan_prompt_path, text, ctx.artifacts.plan, "context planning"
         )
+        ctx.last_token_usage = ctx.pi.last_tokens
         doc = read_json(ctx.artifacts.plan) or {}
         validate_stage(doc, StageLabel.CONTEXT_PLANNING)
         ctx.plan = doc

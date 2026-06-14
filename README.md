@@ -36,7 +36,7 @@ src/
     __init__.py
     __main__.py        # python -m auto_pr_reviewer
     cli.py             # argparse entrypoint: review / post / validate-config (open-prs unsupported)
-    config.py          # Config dataclass, env/.env/CLI layering, alias resolution
+    config.py          # Config dataclass, env/.env/CLI layering, alias resolution, Pi session controls
     ado/
       client.py        # AdoClient, parse_pr_url, resolve_branches, call_helper
       posting.py       # dedupe_key, existing_bot_markers, should_post, classify_threads

@@ -28,6 +28,7 @@ class ReconstructIntentStage(Stage):
             ctx.extras.get("paths", {}),
         ) + (ctx.state.diff_text if ctx.state else "")
         ctx.pi.run_json(cfg.intent_prompt_path, text, ctx.artifacts.intent, "intent reconstruction")
+        ctx.last_token_usage = ctx.pi.last_tokens
         doc = read_json(ctx.artifacts.intent) or {}
         validate_stage(doc, StageLabel.INTENT_RECONSTRUCTION)
         ctx.intent = doc

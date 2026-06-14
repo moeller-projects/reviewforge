@@ -61,6 +61,7 @@ class ReviewDiffStage(Stage):
                 truncated,
             ) + diff
             ctx.pi.run_json(cfg.review_prompt_path, text, out_path, "reviewer")
+            ctx.last_token_usage = ctx.pi.last_tokens
             return read_json(out_path) or {}
 
         diff_bytes = len(ctx.state.diff_text.encode())

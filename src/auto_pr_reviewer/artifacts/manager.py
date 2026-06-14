@@ -31,6 +31,8 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "posted-comments.json",
     "run-summary.json",
     "review-system.combined.md",
+    "work-items.json",
+    "threads.json",
 )
 
 
@@ -59,6 +61,8 @@ class Artifacts:
     summary: Path
     system_prompt: Path
     raw_dir: Path
+    work_items: Path
+    threads: Path
 
     def as_dict(self) -> dict[str, str]:
         """Return a dict mapping artifact name → absolute path string.
@@ -84,6 +88,8 @@ class Artifacts:
             "posted-comments.json": str(self.posted),
             "run-summary.json": str(self.summary),
             "review-system.combined.md": str(self.system_prompt),
+            "work-items.json": str(self.work_items),
+            "threads.json": str(self.threads),
         }
 
 
@@ -131,6 +137,8 @@ def create(cfg: Config) -> Artifacts:
         summary=root / "run-summary.json",
         system_prompt=root / "review-system.combined.md",
         raw_dir=root / "raw",
+        work_items=root / "work-items.json",
+        threads=root / "threads.json",
     )
 
 

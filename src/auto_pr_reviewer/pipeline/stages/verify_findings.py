@@ -42,6 +42,7 @@ class VerifyFindingsStage(Stage):
             + (ctx.state.diff_text if ctx.state else "")
         )
         ctx.pi.run_json(cfg.verify_prompt_path, text, ctx.artifacts.verified, "finding verification")
+        ctx.last_token_usage = ctx.pi.last_tokens
         doc = read_json(ctx.artifacts.verified) or {"summary": "", "findings": []}
         validate_stage(doc, StageLabel.FINDING_VERIFICATION)
         ctx.verified = doc

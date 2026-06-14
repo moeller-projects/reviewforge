@@ -32,6 +32,7 @@ class CalibrateSeverityStage(Stage):
             + (ctx.state.diff_text if ctx.state else "")
         )
         ctx.pi.run_json(cfg.severity_prompt_path, text, ctx.artifacts.severity, "severity calibration")
+        ctx.last_token_usage = ctx.pi.last_tokens
         doc = read_json(ctx.artifacts.severity) or {"summary": "", "findings": []}
         validate_stage(doc, StageLabel.SEVERITY_CALIBRATION)
         ctx.severity = doc

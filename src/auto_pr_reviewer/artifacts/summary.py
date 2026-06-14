@@ -53,6 +53,11 @@ class RunSummary:
     exit_code: int = 0
     artifact_dir: str = ""
     review_language: str = ""
+    # Phase E + F: session tracking.
+    pi_session_id: str | None = None
+    pi_session_enabled: bool = True
+    pi_session_cleared: bool = False
+    token_usage: dict[str, int] = field(default_factory=dict)
 
     def add_stage(self, rec: StageRecord) -> None:
         self.stages.append(rec)
@@ -73,6 +78,10 @@ class RunSummary:
             "exit_code": self.exit_code,
             "artifact_dir": self.artifact_dir,
             "review_language": self.review_language,
+            "pi_session_id": self.pi_session_id,
+            "pi_session_enabled": self.pi_session_enabled,
+            "pi_session_cleared": self.pi_session_cleared,
+            "token_usage": self.token_usage,
         }
 
 
@@ -82,6 +91,7 @@ def _iso_now() -> str:
 
 def new_run_summary(cfg: Config, artifacts: Artifacts) -> RunSummary:
     """Build a fresh :class:`RunSummary` for the current run."""
+    from ..ai.runner import _default_session_id
     return RunSummary(
         pr_id=cfg.pr_id,
         run_id=artifacts.run_id,
@@ -92,6 +102,9 @@ def new_run_summary(cfg: Config, artifacts: Artifacts) -> RunSummary:
         pi_model=cfg.pi_model,
         artifact_dir=str(artifacts.dir),
         review_language=cfg.review_language,
+        pi_session_id=cfg.pi_session_id or _default_session_id(cfg),
+        pi_session_enabled=cfg.pi_session_enabled,
+        pi_session_cleared=cfg.pi_session_clear,
     )
 
 

@@ -26,6 +26,7 @@ class ContextDigestStage(Stage):
         ctx.pi.run_json(
             cfg.context_digest_prompt_path, text, ctx.artifacts.digest, "context digest"
         )
+        ctx.last_token_usage = ctx.pi.last_tokens
         doc = read_json(ctx.artifacts.digest) or {}
         validate_stage(doc, StageLabel.CONTEXT_DIGEST)
         ctx.digest = doc

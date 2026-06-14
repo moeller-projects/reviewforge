@@ -474,11 +474,16 @@ class TestPrompts:
             "digest": tmp_path / "missing-digest.json",
             "candidate": tmp_path / "missing-candidate.json",
             "verified": tmp_path / "missing-verified.json",
+            "metadata": metadata,
+            "diff": tmp_path / "diff.patch",
+            "work_items": tmp_path / "work-items.json",
+            "threads": tmp_path / "threads.json",
         }
         text = prompts.stage_instruction("intent", cfg, metadata, "a.py\n", [], [], paths)
-        assert "Repository/project metadata" in text
-        assert "Intent reconstruction" in text
-        assert "Unified diff follows" in text
+        # Phase B: with sessions enabled, the prompt only references paths.
+        assert str(metadata) in text
+        assert "Changed files" in text
+        assert "read" in text or "grep" in text  # mentions the tools
 
     def test_review_instruction_includes_chunk_and_truncation_notes(self, tmp_path):
         cfg = make_cfg(tmp_path)
@@ -506,13 +511,28 @@ class TestPrompts:
             True,
         )
         assert "CHUNK LABEL: chunk 1/2" in text
-        assert "diff truncated" in text or "truncated" in text
-        # Target/source/intent/digest sections should be present.
-        assert "Target branch" in text
-        assert "PR INTENT" in text
-        assert "CONTEXT DIGEST" in text
-        # Existing PR comment author is referenced inline.
-        assert "Bob" in text
+        assert "truncated" in text
+        # Phase B: session path. The intent/digest paths are referenced for
+        # optional reading, and we mention the chunk's diff is on stdin.
+        assert str(intent_file) in text
+        assert str(digest_file) in text
+        assert "stdin" in text
+
+    def test_stage_instruction_embeds_in_legacy_mode(self, tmp_path):
+        # No sessions: original embed-everything behavior.
+        cfg = replace(make_cfg(tmp_path), pi_session_enabled=False)
+        metadata = tmp_path / "metadata.json"
+        metadata.write_text('{"title":"PR"}', encoding="utf-8")
+        paths = {
+            "metadata": metadata,
+            "diff": tmp_path / "diff.patch",
+            "work_items": tmp_path / "work-items.json",
+            "threads": tmp_path / "threads.json",
+        }
+        text = prompts.stage_instruction("intent", cfg, metadata, "a.py\n", [], [], paths)
+        assert "Repository/project metadata" in text
+        assert "Linked work items" in text
+        assert "Existing PR comments" in text
 
 
 # ---------------------------------------------------------------------------
