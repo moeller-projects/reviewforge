@@ -58,6 +58,36 @@ def env(name: str, default: str | None = None) -> str:
     return value
 
 
+def parse_dotenv(path: str | os.PathLike[str]) -> dict[str, str]:
+    """Parse a ``.env`` file into a flat dict of string→string.
+
+    Format follows the de-facto convention used by Docker / dotenv / pip:
+
+    * Blank lines and ``#`` comments are skipped.
+    * Each non-empty line is ``KEY=VALUE`` (with optional surrounding
+      whitespace).
+    * Values may be wrapped in matching ``"`` or ``'`` quotes; the quotes
+      are stripped. (No escape processing — keep it simple.)
+    * Lines that do not match ``KEY=VALUE`` are silently ignored.
+    """
+    out: dict[str, str] = {}
+    p = Path(path)
+    if not p.exists():
+        return out
+    for raw in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+        if not m:
+            continue
+        key, value = m.group(1), m.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
 class ConfigError(ValueError):
     """Raised when configuration is missing or invalid.
 
@@ -72,7 +102,7 @@ class ConfigError(ValueError):
 
 #: Mapping of logical key → tuple of accepted env var names. The first hit wins.
 _ENV_ALIASES: dict[str, tuple[str, ...]] = {
-    "ado_token": ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"),
+    "ado_token": ("SYSTEM_ACCESSTOKEN", "ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"),
     "ado_org": ("ADO_ORG",),
     "ado_project": ("ADO_PROJECT",),
     "ado_repo_id": ("ADO_REPO_ID",),
@@ -143,6 +173,24 @@ class Config:
     review_run_id: str | None
     #: Optional pre-resolved PR URL string. When set, ``pr_id`` was derived from it.
     pr_url: str | None = field(default=None, compare=False)
+    # --- Posting & severity thresholds (used by the posting CLI / stage) ---
+    #: ADO posting: minimum severity to actually post. ``none`` disables.
+    post_min_severity: str = field(default="none", compare=False)
+    #: ADO posting: drop findings with ``confidence == "low"`` when true.
+    drop_low_confidence: bool = field(default=False, compare=False)
+    #: ADO posting: comma-separated severities that require evidence.
+    require_context_for: str = field(default="", compare=False)
+    #: ADO posting: hard cap on number of findings posted. ``None`` = no cap.
+    max_findings: int | None = field(default=None, compare=False)
+    #: ADO voting: severity at-or-above which to vote ``waiting for author``.
+    vote_waiting_on: str = field(default="none", compare=False)
+    #: Exit non-zero when findings at-or-above this severity are present.
+    fail_on: str = field(default="none", compare=False)
+    # --- Context collection ---
+    #: Max lines to read from a single file referenced by the context plan.
+    context_file_max_lines: int = field(default=260, compare=False)
+    #: Max search matches per ``searches_to_run`` query.
+    context_search_max_matches: int = field(default=40, compare=False)
     # --- Pi session reuse (Phases A + E) -------------------------------
     #: When ``True`` (default), the runner uses ``--session`` to keep state
     #: between stages and chunks. Disable for deterministic reruns or when
@@ -171,9 +219,6 @@ class Config:
                 "Missing required config: ADO_AUTH_TOKEN (aliases: ADO_MCP_AUTH_TOKEN, ADO_API_KEY). "
                 "Set it in .env, as an environment variable, or pass --ado-token."
             )
-        # Mirror the original behavior: copy token into both env names.
-        os.environ["ADO_AUTH_TOKEN"] = token
-        os.environ.setdefault("ADO_MCP_AUTH_TOKEN", token)
 
         review_artifact_dir = os.getenv("REVIEW_ARTIFACT_DIR") or None
         review_artifact_root = Path(os.getenv("REVIEW_ARTIFACT_ROOT", "/workspace/artifacts"))
@@ -185,6 +230,33 @@ class Config:
         pi_session_id = os.getenv("PI_SESSION_ID") or None
         pi_session_enabled = (os.getenv("PI_SESSION_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
         pi_session_clear = (os.getenv("PI_SESSION_CLEAR", "0").lower() in {"1", "true", "yes", "on"})
+
+        # Posting thresholds (used by scripts/ado_review.py legacy posting).
+        post_min_severity = os.getenv("POST_MIN_SEVERITY", "none")
+        drop_low_confidence = is_true(os.getenv("DROP_LOW_CONFIDENCE"))
+        require_context_for = os.getenv("REQUIRE_CONTEXT_FOR", "")
+        max_findings_raw = os.getenv("MAX_FINDINGS")
+        if max_findings_raw is None or max_findings_raw == "":
+            max_findings = None
+        else:
+            try:
+                max_findings = int(max_findings_raw)
+            except ValueError:
+                max_findings = None
+        vote_waiting_on = os.getenv("VOTE_WAITING_ON", "none")
+        fail_on = os.getenv("FAIL_ON", "none")
+
+        # Context collection caps.
+        context_file_max_lines_raw = os.getenv("CONTEXT_FILE_MAX_LINES", "260")
+        context_search_max_matches_raw = os.getenv("CONTEXT_SEARCH_MAX_MATCHES", "40")
+        try:
+            context_file_max_lines = int(context_file_max_lines_raw)
+        except ValueError:
+            context_file_max_lines = 260
+        try:
+            context_search_max_matches = int(context_search_max_matches_raw)
+        except ValueError:
+            context_search_max_matches = 40
 
         cfg = cls(
             ado_org=os.getenv("ADO_ORG", ""),
@@ -224,6 +296,14 @@ class Config:
             pi_session_id=pi_session_id,
             pi_session_enabled=pi_session_enabled,
             pi_session_clear=pi_session_clear,
+            post_min_severity=post_min_severity,
+            drop_low_confidence=drop_low_confidence,
+            require_context_for=require_context_for,
+            max_findings=max_findings,
+            vote_waiting_on=vote_waiting_on,
+            fail_on=fail_on,
+            context_file_max_lines=context_file_max_lines,
+            context_search_max_matches=context_search_max_matches,
         )
         return cfg
 
@@ -245,6 +325,29 @@ class Config:
         env_map = env if env is not None else os.environ
         cli_map = dict(cli or {})
         return _build_from_sources(cls, cli_map, env_map)
+
+    @classmethod
+    def from_env_file(
+        cls,
+        path: str | os.PathLike[str] | None = None,
+        cli: Mapping[str, Any] | None = None,
+    ) -> "Config":
+        """Build a config by merging a ``.env`` file with the process env.
+
+        Precedence: ``cli`` > process env > ``.env`` file. The ``.env`` file
+        is the *lowest* layer; the existing process env (already in
+        ``os.environ``) takes precedence because PowerShell forwards the
+        live env first, then the file is the fallback.
+
+        Pass ``path=None`` to read ``.env`` in the current directory; pass
+        a different path to point at any file.
+        """
+        if path is None:
+            path = Path(".env")
+        file_values = parse_dotenv(path)
+        # Merge: process env overrides the file. Then call from_sources.
+        merged: dict[str, str] = {**file_values, **os.environ}
+        return cls.from_sources(cli, env=merged)
 
     # -------------------------------------------------------- validation --
 
@@ -380,11 +483,6 @@ def _build_from_sources(
             "Set it in .env, as an environment variable, or pass --ado-token."
         )
 
-    # Mirror token to both names so the rest of the codebase can keep reading
-    # ADO_AUTH_TOKEN / ADO_MCP_AUTH_TOKEN.
-    os.environ["ADO_AUTH_TOKEN"] = token
-    os.environ.setdefault("ADO_MCP_AUTH_TOKEN", token)
-
     review_artifact_dir = cli_or_env("review_artifact_dir", "REVIEW_ARTIFACT_DIR") or None
     review_artifact_root = cli_or_env("review_artifact_root", "REVIEW_ARTIFACT_ROOT") or "/workspace/artifacts"
     review_run_id = cli_or_env("review_run_id", "REVIEW_RUN_ID") or None
@@ -486,5 +584,6 @@ __all__ = [
     "ConfigError",
     "env",
     "is_true",
+    "parse_dotenv",
     "require_uint",
 ]

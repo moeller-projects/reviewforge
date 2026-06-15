@@ -48,6 +48,10 @@ nosetests.xml
 coverage.xml
 *.cover
 *.py.cover
+# `coverage annotate` writes per-source-file sidecar files with a literal
+# comma separator (e.g. `foo.py,cover`). Globbing patterns above miss this
+# because the comma is not a wildcard. Cover it explicitly.
+*.py,cover
 *.lcov
 .hypothesis/
 .pytest_cache/

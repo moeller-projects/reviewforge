@@ -41,6 +41,39 @@ def parse_pr_url(value: str) -> tuple[str, str, str, str]:
     raise SystemExit("[review][ERROR] Could not parse PR_URL")
 
 
+def normalize_ado_segment(value: str, name: str) -> str:
+    """Validate and normalize an ADO org/project/repo segment.
+
+    Rules (preserved from the legacy PowerShell helper):
+
+    * Must be non-empty after stripping.
+    * Must not contain ``://`` (i.e. must be the short name, not a URL).
+    * Must not contain CR/LF (defense against header-injection style attacks).
+    * Strips a trailing ``/``.
+    """
+    if value is None:
+        raise ValueError(f"{name} is required")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{name} is required")
+    if "://" in normalized:
+        raise ValueError(
+            f"{name} must be the short Azure DevOps name, not a URL: {value!r}"
+        )
+    if re.search(r"[\r\n]", normalized):
+        raise ValueError(
+            f"{name} must not contain line breaks: {value!r}"
+        )
+    return normalized.rstrip("/")
+
+
+def normalize_branch_name(branch: str) -> str:
+    """Strip a leading ``refs/heads/`` prefix from a branch name."""
+    if not branch:
+        return branch
+    return re.sub(r"^refs/heads/", "", branch)
+
+
 def parse_pr_identity(value: str) -> PrIdentity:
     """Convenience wrapper that returns a :class:`PrIdentity`."""
     org, project, repo, pr_id = parse_pr_url(value)
@@ -203,6 +236,61 @@ def resolve_branches(cfg: Config) -> tuple[str, str]:
     if not source or not target:
         raise SystemExit("[review][ERROR] could not resolve source/target branch from API")
     return source.removeprefix("refs/heads/"), target.removeprefix("refs/heads/")
+
+
+def list_active_pull_requests(
+    cfg: Config,
+    *,
+    project: str | None = None,
+    target_branches: list[str] | None = None,
+    max_results: int = 0,
+) -> list[dict[str, Any]]:
+    """List active PRs for a project, with optional branch / cap filters.
+
+    Paginates ADO's ``/pullRequests?searchCriteria.status=active`` endpoint.
+    ``target_branches`` may contain either short branch names (``main``) or
+    full ref names (``refs/heads/main``). Matching is exact after stripping
+    the ``refs/heads/`` prefix.
+
+    Returns a list of PR dicts (the same shape ``AdoClient.get_pr`` returns
+    plus the project name).
+    """
+    project_name = project or cfg.ado_project
+    project_name = normalize_ado_segment(project_name, "ADO project")
+    client = AdoClient(cfg.ado_org, project_name, cfg.ado_repo_id, token=cfg.ado_token)
+    target_set: set[str] | None = None
+    if target_branches:
+        target_set = {normalize_branch_name(b) for b in target_branches if b}
+        target_set = {b for b in target_set if b}
+
+    page_size = 100
+    skip = 0
+    out: list[dict[str, Any]] = []
+    while True:
+        encoded_repo = urllib.parse.quote(client.repo, safe="")
+        url = (
+            f"{client.base}/_apis/git/repositories/{encoded_repo}/pullRequests"
+            f"?searchCriteria.status=active&api-version=7.0"
+            f"&$top={page_size}&$skip={skip}"
+        )
+        page = client._request("GET", url).get("value", [])  # noqa: SLF001 — internal
+        if not page:
+            break
+        for pr in page:
+            target_ref = pr.get("targetRefName") or ""
+            if target_set is not None:
+                short = normalize_branch_name(target_ref)
+                if short not in target_set:
+                    continue
+            pr_out = dict(pr)
+            pr_out["project"] = project_name
+            out.append(pr_out)
+            if max_results and len(out) >= max_results:
+                return out
+        if len(page) < page_size:
+            break
+        skip += page_size
+    return out
 
 
 def call_helper(

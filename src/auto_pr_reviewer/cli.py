@@ -13,6 +13,7 @@ shape. CLI flags override environment variables and ``.env`` values.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -183,8 +184,76 @@ def cmd_open_prs(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_discover(args: argparse.Namespace) -> int:
+    """Discover active pull requests for a project. Emits JSON on stdout.
+
+    Output shape::
+
+        [
+            {
+                "pullRequestId": 123,
+                "title": "...",
+                "sourceRefName": "refs/heads/feature/x",
+                "targetRefName": "refs/heads/main",
+                "isDraft": false,
+                "status": "active",
+                "project": "Payments",
+                "repositoryId": "...",
+                "reviewers": [...],
+                "createdBy": {...}
+            },
+            ...
+        ]
+
+    Used by ``run-open-prs.ps1`` to discover PRs without calling the
+    Azure CLI directly.
+    """
+    from .ado.client import list_active_pull_requests
+    from .config import ConfigError
+
+    cli = {
+        "ado_org": args.ado_org,
+        "ado_project": args.ado_project,
+        "pr_id": "",  # not needed for list
+    }
+    if args.ado_token:
+        cli["ado_token"] = args.ado_token
+    try:
+        cfg = Config.from_sources(cli)
+    except ConfigError as exc:
+        print(f"[review][ERROR] {exc}", file=sys.stderr)
+        return 2
+    if not cfg.ado_token:
+        print(
+            "[review][ERROR] Missing required config: ADO_AUTH_TOKEN (aliases: ADO_MCP_AUTH_TOKEN, ADO_API_KEY).",
+            file=sys.stderr,
+        )
+        return 2
+
+    target_branches = [b.strip() for b in (args.target_branches or "").split(",") if b.strip()] or None
+    try:
+        prs = list_active_pull_requests(
+            cfg,
+            project=args.ado_project or cfg.ado_project,
+            target_branches=target_branches,
+            max_results=args.max or 0,
+        )
+    except SystemExit as exc:
+        print(f"[review][ERROR] {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(prs, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_validate_config(args: argparse.Namespace) -> int:
-    cfg = _build_config(args)
+    try:
+        cfg = _build_config(args)
+    except SystemExit as exc:
+        # _build_config raises SystemExit(2) on hard config errors so that
+        # other commands fail fast. ``validate-config`` is the one place
+        # where we want a clean exit code (1) and a captured error, so
+        # swallow the SystemExit here and let the caller see rc=1.
+        return int(exc.code) if isinstance(exc.code, int) and exc.code in (0, 1) else 1
     command = getattr(args, "_command", "review")
     problems = cfg.validate_for_command(command)
     if problems:
@@ -263,6 +332,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate the configuration and exit.",
     )
     validate.set_defaults(func=cmd_validate_config, _command="review")
+
+    # ``discover`` has a different arg surface than the PR-scoped commands,
+    # so it does not inherit from the common parent parser.
+    discover = sub.add_parser(
+        "discover",
+        help="Discover active pull requests for a project (emits JSON).",
+    )
+    discover.add_argument(
+        "--org", dest="ado_org", help="ADO org short name (env: ADO_ORG)",
+    )
+    discover.add_argument(
+        "--project", dest="ado_project", required=True,
+        help="ADO project name to scan (env: ADO_PROJECT)",
+    )
+    discover.add_argument(
+        "--ado-token", dest="ado_token",
+        help="ADO bearer token (env: ADO_AUTH_TOKEN / ADO_MCP_AUTH_TOKEN / ADO_API_KEY)",
+    )
+    discover.add_argument(
+        "--target-branches", dest="target_branches",
+        help="Comma-separated list of target branch names (ref names OK)",
+    )
+    discover.add_argument(
+        "--max", type=int, default=0, help="Cap the number of results (0 = no cap)",
+    )
+    discover.set_defaults(func=cmd_discover, _command="discover")
 
     # Legacy: a bare ``--pr`` invocation runs the full review pipeline.
     parser.set_defaults(func=cmd_review, _command="review", no_post=False)

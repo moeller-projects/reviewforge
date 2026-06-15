@@ -1,7 +1,6 @@
 """Stage: collect deterministic context (files, tests, searches) from the plan."""
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -39,8 +38,11 @@ class CollectContextStage(Stage):
         plan = ctx.plan or {}
         repo_dir = ctx.state.repo_dir
         result: dict[str, Any] = {"files": [], "tests": [], "searches": []}
-        max_lines = int(os.getenv("CONTEXT_FILE_MAX_LINES", "260"))
-        max_matches = int(os.getenv("CONTEXT_SEARCH_MAX_MATCHES", "40"))
+        # Context caps live on Config (single source of truth). The stage
+        # reads them off the stage context so the orchestrator and any
+        # out-of-band caller stay in sync.
+        max_lines = ctx.cfg.context_file_max_lines
+        max_matches = ctx.cfg.context_search_max_matches
         for item in plan.get("files_to_read", []):
             if not isinstance(item, dict):
                 continue

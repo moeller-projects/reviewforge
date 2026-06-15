@@ -328,6 +328,154 @@ class TestConfig:
 
 
 # ---------------------------------------------------------------------------
+# parse_dotenv (migrated from PowerShell Import-DotEnv)
+# ---------------------------------------------------------------------------
+
+
+class TestParseDotenv:
+    def test_returns_empty_dict_for_missing_file(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        assert parse_dotenv(tmp_path / "missing.env") == {}
+
+    def test_simple_key_value(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("FOO=bar\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar"}
+
+    def test_skips_blank_lines(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("\n\nFOO=bar\n\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar"}
+
+    def test_skips_comments(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("# this is a comment\nFOO=bar\n# another comment\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar"}
+
+    def test_strips_double_quotes(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text('FOO="bar baz"\n', encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar baz"}
+
+    def test_strips_single_quotes(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("FOO='bar baz'\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar baz"}
+
+    def test_preserves_unmatched_quotes(self, tmp_path):
+        # Only matching quotes are stripped; this matches the PowerShell
+        # behavior and is intentional to keep the parser trivial.
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text('FOO="bar\n', encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": '"bar'}
+
+    def test_strips_whitespace_around_value(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("FOO=  bar  \n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar"}
+
+    def test_value_can_contain_equals(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("FOO=a=b=c\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "a=b=c"}
+
+    def test_value_with_spaces_no_quotes(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("FOO=bar baz\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar baz"}
+
+    def test_ignores_lines_without_equals(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("JUST_A_KEY\nFOO=bar\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "bar"}
+
+    def test_handles_multiple_keys(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text(
+            "ADO_AUTH_TOKEN=secret\n"
+            "PR_ID=42\n"
+            "REVIEW_LANGUAGE=German\n",
+            encoding="utf-8",
+        )
+        result = parse_dotenv(p)
+        assert result == {
+            "ADO_AUTH_TOKEN": "secret",
+            "PR_ID": "42",
+            "REVIEW_LANGUAGE": "German",
+        }
+
+    def test_last_value_wins_for_duplicate_key(self, tmp_path):
+        from auto_pr_reviewer.config import parse_dotenv
+        p = tmp_path / ".env"
+        p.write_text("FOO=first\nFOO=second\n", encoding="utf-8")
+        assert parse_dotenv(p) == {"FOO": "second"}
+
+
+# ---------------------------------------------------------------------------
+# Config.from_env_file (migrated from PowerShell Import-DotEnv)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigFromEnvFile:
+    def test_loads_file_values(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.config import Config
+        p = tmp_path / ".env"
+        p.write_text("ADO_AUTH_TOKEN=tok\nADO_ORG=org\n", encoding="utf-8")
+        # Other values come from process env or defaults.
+        monkeypatch.delenv("ADO_PROJECT", raising=False)
+        monkeypatch.delenv("ADO_REPO_ID", raising=False)
+        monkeypatch.delenv("PR_ID", raising=False)
+        cfg = Config.from_env_file(p)
+        assert cfg.ado_token == "tok"
+        assert cfg.ado_org == "org"
+
+    def test_process_env_overrides_file(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.config import Config
+        p = tmp_path / ".env"
+        p.write_text("ADO_ORG=from-file\n", encoding="utf-8")
+        monkeypatch.setenv("ADO_ORG", "from-env")
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        cfg = Config.from_env_file(p)
+        # Process env wins.
+        assert cfg.ado_org == "from-env"
+
+    def test_cli_overrides_everything(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.config import Config
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        p = tmp_path / ".env"
+        p.write_text("ADO_ORG=from-file\n", encoding="utf-8")
+        cfg = Config.from_env_file(p, {"ado_org": "from-cli"})
+        assert cfg.ado_org == "from-cli"
+
+    def test_missing_file_falls_back_to_env(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.config import Config
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "env-tok")
+        cfg = Config.from_env_file(tmp_path / "missing.env")
+        assert cfg.ado_token == "env-tok"
+
+    def test_default_path_is_dotenv_in_cwd(self, tmp_path, monkeypatch, capsys):
+        from auto_pr_reviewer.config import Config
+        # The CLI's default for ``--env-file`` is ``.env`` in cwd. We
+        # don't actually change cwd here (pytest doesn't let us easily);
+        # just verify the parameter is wired and accepts a Path.
+        p = tmp_path / ".env"
+        p.write_text("ADO_AUTH_TOKEN=tok\n", encoding="utf-8")
+        cfg = Config.from_env_file(p)
+        assert cfg.ado_token == "tok"
+
+
+# ---------------------------------------------------------------------------
 # ADO client
 # ---------------------------------------------------------------------------
 

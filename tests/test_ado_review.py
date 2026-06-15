@@ -1,4 +1,12 @@
-"""pytest suite for scripts/ado_review.py."""
+"""pytest suite for the legacy ``ado_review`` CLI.
+
+These tests exercise the same public surface that the original
+``scripts/ado_review.py`` used to expose directly, but they import from
+the canonical package location (``auto_pr_reviewer.ado.legacy``) so the
+test suite is independent of the script's location on disk. The script
+itself is now a thin shim; its delegation is verified by
+``tests/test_entry_points.py``.
+"""
 
 from __future__ import annotations
 
@@ -13,10 +21,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Make the scripts package importable without installation.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-
-import ado_review as m  # noqa: E402
+# Import the canonical implementation from the package.
+from auto_pr_reviewer.ado import legacy as m  # noqa: E402  (legacy CLI surface)
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +429,7 @@ class TestCommandPostFindings:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -459,7 +465,7 @@ class TestCommandPostFindings:
         monkeypatch.delenv("FAIL_ON", raising=False)
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -500,7 +506,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -530,7 +536,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("FAIL_ON", "blocker")
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 1
@@ -560,7 +566,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -593,7 +599,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("VOTE_WAITING_ON", "major")
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -636,7 +642,7 @@ class TestCommandFetchContext:
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.command_fetch_context(self._args(tmp_path))
 
         assert rc == 0
@@ -662,7 +668,7 @@ class TestCommandFetchContext:
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             m.command_fetch_context(self._args(tmp_path))
 
         metadata = json.loads((tmp_path / "metadata.json").read_text())
@@ -699,7 +705,7 @@ class TestCli:
         mock_client.get_threads.return_value = []
         mock_client.org_name = "contoso"
 
-        with patch("ado_review.AdoClient", return_value=mock_client):
+        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
             rc = m.main(
                 [
                     "fetch-context",
@@ -733,3 +739,191 @@ class TestAdditionalCoverage:
         client = MagicMock()
         items, comments = m.fetch_work_items(client, {'workItemRefs': []})
         assert items == [] and comments == []
+
+    def test_fetch_work_items_with_refs(self):
+        client = MagicMock()
+        client.post.return_value = {
+            "value": [
+                {
+                    "id": 100,
+                    "fields": {
+                        "System.WorkItemType": "User Story",
+                        "System.Title": "Login flow",
+                        "System.State": "Active",
+                    },
+                }
+            ]
+        }
+        client.get.return_value = {
+            "comments": [
+                {"id": 1, "author": {"displayName": "alice"}, "text": "hi"}
+            ]
+        }
+        pr = {"workItemRefs": [{"id": 100}]}
+        items, comments = m.fetch_work_items(client, pr)
+        assert items[0]["title"] == "Login flow"
+        assert items[0]["type"] == "User Story"
+        assert comments[0]["workItemId"] == "100"
+        assert comments[0]["comments"][0]["author"] == "alice"
+
+
+# ---------------------------------------------------------------------------
+# _filter_findings (POST_MIN_SEVERITY, DROP_LOW_CONFIDENCE, REQUIRE_CONTEXT_FOR, MAX_FINDINGS)
+# ---------------------------------------------------------------------------
+
+
+class TestFilterFindings:
+    def _f(self, severity, **extras):
+        base = {"severity": severity, "title": f"t-{severity}"}
+        base.update(extras)
+        return base
+
+    @pytest.fixture(autouse=True)
+    def _clean_filter_env(self, monkeypatch):
+        # _filter_findings reads POST_MIN_SEVERITY / DROP_LOW_CONFIDENCE /
+        # REQUIRE_CONTEXT_FOR / MAX_FINDINGS directly from os.environ; isolate
+        # tests from each other and from a real .env.
+        for k in (
+            "POST_MIN_SEVERITY",
+            "DROP_LOW_CONFIDENCE",
+            "REQUIRE_CONTEXT_FOR",
+            "MAX_FINDINGS",
+        ):
+            monkeypatch.delenv(k, raising=False)
+
+    def test_post_min_severity_drops_lower(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "major")
+        out = m._filter_findings([self._f("minor"), self._f("major"), self._f("blocker")])
+        assert [f["severity"] for f in out] == ["major", "blocker"]
+
+    def test_post_min_severity_lowest_keeps_all(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        out = m._filter_findings([self._f("nit"), self._f("minor"), self._f("major")])
+        assert len(out) == 3
+
+    def test_post_min_severity_invalid_exits(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "bogus")
+        with pytest.raises(SystemExit):
+            m._filter_findings([self._f("minor")])
+
+    def test_drop_low_confidence(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        monkeypatch.setenv("DROP_LOW_CONFIDENCE", "1")
+        out = m._filter_findings([
+            self._f("major", confidence="low"),
+            self._f("major", confidence="high"),
+        ])
+        assert len(out) == 1
+        assert out[0]["confidence"] == "high"
+
+    def test_require_context_for_drops_without_context(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        monkeypatch.setenv("REQUIRE_CONTEXT_FOR", "blocker")
+        out = m._filter_findings([
+            self._f("blocker"),  # no context, no basis → dropped
+            self._f("blocker", evidence={"contextFilesRead": ["x.py"]}),
+        ])
+        assert len(out) == 1
+        assert out[0]["evidence"]["contextFilesRead"] == ["x.py"]
+
+    def test_require_context_for_invalid_exits(self, monkeypatch):
+        monkeypatch.setenv("REQUIRE_CONTEXT_FOR", "bogus")
+        with pytest.raises(SystemExit):
+            m._filter_findings([self._f("minor")])
+
+    def test_require_context_basis_keeps_finding(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        monkeypatch.setenv("REQUIRE_CONTEXT_FOR", "blocker")
+        out = m._filter_findings([
+            self._f("blocker", contextBasis="surrounding-code-read"),
+        ])
+        assert len(out) == 1
+
+    def test_max_findings_caps(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        monkeypatch.setenv("MAX_FINDINGS", "2")
+        out = m._filter_findings([
+            self._f("nit"), self._f("minor"), self._f("major"), self._f("blocker"),
+        ])
+        # Sorted by severity desc, top 2 = blocker + major
+        assert [f["severity"] for f in out] == ["blocker", "major"]
+
+    def test_max_findings_negative_exits(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        monkeypatch.setenv("MAX_FINDINGS", "-1")
+        with pytest.raises(SystemExit):
+            m._filter_findings([self._f("minor")])
+
+    def test_max_findings_invalid_exits(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        monkeypatch.setenv("MAX_FINDINGS", "notanumber")
+        with pytest.raises(SystemExit):
+            m._filter_findings([self._f("minor")])
+
+
+# ---------------------------------------------------------------------------
+# token() / org() / project() / repo() env shims
+# ---------------------------------------------------------------------------
+
+
+class TestEnvShims:
+    """Compatibility shims for callers that imported ``token()`` /
+    ``org()`` / ``project()`` / ``repo()`` from the original
+    ``scripts/ado_review.py``."""
+
+    def test_token_resolves_canonical(self, monkeypatch):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "primary")
+        monkeypatch.setenv("ADO_MCP_AUTH_TOKEN", "mcp")
+        monkeypatch.setenv("ADO_API_KEY", "api")
+        monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
+        assert m.token() == "primary"
+
+    def test_token_resolves_system_access_token_first(self, monkeypatch):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "primary")
+        monkeypatch.setenv("SYSTEM_ACCESSTOKEN", "sys")
+        assert m.token() == "sys"
+
+    def test_token_falls_back_to_mcp(self, monkeypatch):
+        for k in ("ADO_AUTH_TOKEN", "SYSTEM_ACCESSTOKEN"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("ADO_MCP_AUTH_TOKEN", "mcp-tok")
+        assert m.token() == "mcp-tok"
+
+    def test_token_falls_back_to_api_key(self, monkeypatch):
+        for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "SYSTEM_ACCESSTOKEN"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("ADO_API_KEY", "api-key-tok")
+        assert m.token() == "api-key-tok"
+
+    def test_token_missing_exits(self, monkeypatch):
+        for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY", "SYSTEM_ACCESSTOKEN"):
+            monkeypatch.delenv(k, raising=False)
+        with pytest.raises(SystemExit):
+            m.token()
+
+    def test_org_returns_env_value(self, monkeypatch):
+        monkeypatch.setenv("ADO_ORG", "contoso")
+        assert m.org() == "contoso"
+
+    def test_org_missing_exits(self, monkeypatch):
+        monkeypatch.delenv("ADO_ORG", raising=False)
+        with pytest.raises(SystemExit):
+            m.org()
+
+    def test_project_returns_env_value(self, monkeypatch):
+        monkeypatch.setenv("ADO_PROJECT", "Pay")
+        assert m.project() == "Pay"
+
+    def test_project_missing_exits(self, monkeypatch):
+        monkeypatch.delenv("ADO_PROJECT", raising=False)
+        with pytest.raises(SystemExit):
+            m.project()
+
+    def test_repo_returns_env_value(self, monkeypatch):
+        monkeypatch.setenv("ADO_REPO_ID", "api")
+        assert m.repo() == "api"
+
+    def test_repo_missing_exits(self, monkeypatch):
+        monkeypatch.delenv("ADO_REPO_ID", raising=False)
+        with pytest.raises(SystemExit):
+            m.repo()

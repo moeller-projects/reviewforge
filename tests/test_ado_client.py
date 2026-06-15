@@ -23,6 +23,8 @@ from auto_pr_reviewer.ado.client import (  # noqa: E402
     _normalize_org,
     call_helper,
     get_pr,
+    normalize_ado_segment,
+    normalize_branch_name,
     parse_pr_url,
     resolve_branches,
     resolve_token,
@@ -86,6 +88,78 @@ class TestNormalizeOrg:
     def test_short_name_with_dot_raises(self):
         with pytest.raises(SystemExit):
             _normalize_org("contoso.example.com")
+
+
+# ---------------------------------------------------------------------------
+# normalize_ado_segment (migrated from PowerShell Normalize-AdoSegment)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeAdoSegment:
+    def test_short_name(self):
+        assert normalize_ado_segment("contoso", "org") == "contoso"
+
+    def test_strips_trailing_slash(self):
+        assert normalize_ado_segment("contoso/", "org") == "contoso"
+
+    def test_strips_whitespace(self):
+        assert normalize_ado_segment("  contoso  ", "org") == "contoso"
+
+    def test_rejects_url(self):
+        with pytest.raises(ValueError, match="must be the short Azure DevOps name"):
+            normalize_ado_segment("https://dev.azure.com/contoso", "org")
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="required"):
+            normalize_ado_segment("", "org")
+
+    def test_rejects_whitespace_only(self):
+        with pytest.raises(ValueError, match="required"):
+            normalize_ado_segment("   ", "org")
+
+    def test_rejects_none(self):
+        with pytest.raises(ValueError, match="required"):
+            normalize_ado_segment(None, "org")
+
+    def test_rejects_newlines(self):
+        # CR/LF injection defense.
+        with pytest.raises(ValueError, match="line breaks"):
+            normalize_ado_segment("contoso\r\nX-Injected: true", "org")
+
+    def test_preserves_dots_underscores_dashes(self):
+        # Project / repo names commonly contain these.
+        assert normalize_ado_segment("my.project_name-2", "project") == "my.project_name-2"
+
+    def test_includes_name_in_error(self):
+        with pytest.raises(ValueError, match="ADO organization"):
+            normalize_ado_segment("", "ADO organization")
+
+
+# ---------------------------------------------------------------------------
+# normalize_branch_name (migrated from PowerShell Normalize-BranchName)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeBranchName:
+    def test_strips_refs_heads(self):
+        assert normalize_branch_name("refs/heads/main") == "main"
+
+    def test_passes_through_short_name(self):
+        assert normalize_branch_name("main") == "main"
+
+    def test_passes_through_nested_branch(self):
+        # Nested branches keep their structure.
+        assert normalize_branch_name("refs/heads/feature/foo") == "feature/foo"
+
+    def test_only_strips_at_start(self):
+        # Doesn't accidentally strip ``refs/heads/`` from the middle.
+        assert normalize_branch_name("refs/heads/refs/heads/x") == "refs/heads/x"
+
+    def test_empty_branch(self):
+        assert normalize_branch_name("") == ""
+
+    def test_none_branch(self):
+        assert normalize_branch_name(None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -414,3 +488,131 @@ class TestCallHelper:
         )
         with pytest.raises(SystemExit):
             call_helper(cfg, "fetch-context", tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# list_active_pull_requests
+# ---------------------------------------------------------------------------
+
+
+class TestListActivePullRequests:
+    def _cfg(self, **overrides):
+        from auto_pr_reviewer.config import Config
+        defaults = dict(
+            ado_org="contoso", ado_project="Pay", ado_repo_id="api", pr_id="1",
+            ado_token="t", source_branch="s", target_branch="main",
+            review_language="English",
+            pi_model="m", max_diff_bytes=1, chunk_trigger_diff_bytes=1,
+            disable_chunk_review=False, pi_timeout_secs=5, dry_run=True,
+            include_work_items=True, include_existing_comments=True,
+            verify_findings=True, force_review=False,
+            review_target_branches="",
+            review_artifact_dir=None, review_run_id=None,
+        )
+        defaults.update(overrides)
+        from auto_pr_reviewer.config import Config
+        return Config(**defaults)
+
+    def test_returns_empty_when_no_prs(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        cfg = self._cfg(
+            workspace=tmp_path, clone_root=tmp_path,
+            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "std.md",
+            review_artifact_root=tmp_path,
+        )
+        with patch.object(AdoClient, "_request", return_value={"value": []}):
+            out = list_active_pull_requests(cfg, project="Pay")
+        assert out == []
+
+    def test_returns_all_prs(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        cfg = self._cfg(
+            workspace=tmp_path, clone_root=tmp_path,
+            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "std.md",
+            review_artifact_root=tmp_path,
+        )
+        page = {
+            "value": [
+                {"pullRequestId": 1, "targetRefName": "refs/heads/main"},
+                {"pullRequestId": 2, "targetRefName": "refs/heads/develop"},
+            ]
+        }
+        with patch.object(AdoClient, "_request", return_value=page):
+            out = list_active_pull_requests(cfg, project="Pay")
+        assert [p["pullRequestId"] for p in out] == [1, 2]
+        assert all(p["project"] == "Pay" for p in out)
+
+    def test_filters_by_target_branches(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        cfg = self._cfg(
+            workspace=tmp_path, clone_root=tmp_path,
+            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "std.md",
+            review_artifact_root=tmp_path,
+        )
+        page = {
+            "value": [
+                {"pullRequestId": 1, "targetRefName": "refs/heads/main"},
+                {"pullRequestId": 2, "targetRefName": "refs/heads/feature/x"},
+            ]
+        }
+        with patch.object(AdoClient, "_request", return_value=page):
+            out = list_active_pull_requests(
+                cfg, project="Pay", target_branches=["main", "develop"]
+            )
+        assert [p["pullRequestId"] for p in out] == [1]
+
+    def test_respects_max_results_cap(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        cfg = self._cfg(
+            workspace=tmp_path, clone_root=tmp_path,
+            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "std.md",
+            review_artifact_root=tmp_path,
+        )
+        page = {
+            "value": [
+                {"pullRequestId": i, "targetRefName": "refs/heads/main"}
+                for i in range(1, 4)
+            ]
+        }
+        with patch.object(AdoClient, "_request", return_value=page):
+            out = list_active_pull_requests(cfg, project="Pay", max_results=2)
+        assert len(out) == 2
+
+    def test_paginates(self, tmp_path, monkeypatch):
+        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        cfg = self._cfg(
+            workspace=tmp_path, clone_root=tmp_path,
+            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "std.md",
+            review_artifact_root=tmp_path,
+        )
+        # Two pages: first full, second short.
+        full_page = {
+            "value": [
+                {"pullRequestId": i, "targetRefName": "refs/heads/main"}
+                for i in range(100)
+            ]
+        }
+        second_page = {
+            "value": [
+                {"pullRequestId": 100, "targetRefName": "refs/heads/main"}
+            ]
+        }
+        responses = [full_page, second_page]
+        with patch.object(AdoClient, "_request", side_effect=responses):
+            out = list_active_pull_requests(cfg, project="Pay")
+        assert len(out) == 101

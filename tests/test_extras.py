@@ -169,7 +169,7 @@ class TestPiRunnerEdgeCases:
             ),
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
-        assert "--session" in captured[0]
+        assert "--session-id" in captured[0]
         assert "pr-42-review-r1" in captured[0]
         assert "--no-session" not in captured[0]
         assert runner.session_id == "pr-42-review-r1"
@@ -197,7 +197,7 @@ class TestPiRunnerEdgeCases:
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "--clear-session" in captured[0]
-        assert "--session" in captured[0]
+        assert "--session-id" in captured[0]
 
     def test_default_session_id_uses_pr_and_run(self, tmp_path):
         cfg = SimpleNamespace(
@@ -273,7 +273,7 @@ class TestPiRunnerEdgeCases:
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         # Repair call: same --session, empty stdin (no re-send).
         repair_cmd, repair_input = calls[1]
-        assert "--session" in repair_cmd
+        assert "--session-id" in repair_cmd
         assert "pr-1" in repair_cmd
         assert repair_input == b""
         assert "return only the json" in repair_cmd[-1].lower()

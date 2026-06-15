@@ -6,11 +6,16 @@ sure the model cannot exfiltrate them.
 
 Session reuse (Phases A + D + E of the token-savings plan):
 
-* By default, the runner uses ``--session <id>`` so the model keeps the
-  system prompt, the diff, and prior turn context between stage calls.
-  The first stage pays the full context cost; subsequent stages
+* By default, the runner uses ``--session-id <id>`` so the model keeps
+  the system prompt, the diff, and prior turn context between stage
+  calls. The first stage pays the full context cost; subsequent stages
   (plan, digest, review chunks, verify, severity) just send the new
   instruction and the per-chunk diff.
+* ``--session-id`` is preferred over ``--session <id>`` because it
+  *creates* the session if it doesn't exist yet, whereas ``--session``
+  errors on a missing id (which would be the case on the first stage
+  call). This keeps the per-PR session deterministic even when the
+  runner is invoked from scratch.
 * ``cfg.pi_session_enabled=False`` falls back to ``--no-session`` for
   deterministic reruns.
 * ``cfg.pi_session_clear=True`` passes ``--clear-session`` to start a
@@ -94,7 +99,7 @@ class PiRunner:
         cmd = [
             "pi",
             *(["--no-session"] if not self.cfg.pi_session_enabled else []),
-            *(["--session", self.session_id] if self.cfg.pi_session_enabled else []),
+            *(["--session-id", self.session_id] if self.cfg.pi_session_enabled else []),
             *(["--clear-session"] if self.cfg.pi_session_clear else []),
             "--no-context-files",
             "--no-extensions",

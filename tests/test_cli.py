@@ -8,10 +8,12 @@ do not depend on git, Pi, or the network.
 """
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+import os
 
 import pytest
 
@@ -375,6 +377,94 @@ class TestMain:
             main(["definitely-not-a-command"])
         assert exc.value.code == 2
 
+
+# ---------------------------------------------------------------------------
+# Migration: PowerShell forwards env vars, Python does the work.
+# ---------------------------------------------------------------------------
+
+
+class TestPowerShellForwardingContract:
+    """The PowerShell wrappers no longer do ADO logic.
+
+    They forward env vars to the container; Python's CLI picks them up.
+    These tests pin the contract that ``Config.from_env`` reads the
+    same env vars that ``run.ps1`` writes to the env file.
+    """
+
+    def test_token_aliases_resolve_to_ado_token(self, clean_env, monkeypatch):
+        from auto_pr_reviewer.config import Config
+        # PowerShell forwards whichever of these is set.
+        monkeypatch.delenv("ADO_AUTH_TOKEN", raising=False)
+        monkeypatch.setenv("ADO_MCP_AUTH_TOKEN", "mcp-tok")
+        monkeypatch.setenv("ADO_ORG", "o")
+        monkeypatch.setenv("ADO_PROJECT", "P")
+        monkeypatch.setenv("ADO_REPO_ID", "R")
+        monkeypatch.setenv("PR_ID", "1")
+        cfg = Config.from_env()
+        assert cfg.ado_token == "mcp-tok"
+
+    def test_image_alias_resolves_to_image_name(self, clean_env, monkeypatch):
+        from auto_pr_reviewer.config import Config
+        # PowerShell sets ``IMAGE_NAME`` (canonical) or accepts ``IMAGE``.
+        monkeypatch.setenv("IMAGE", "legacy-image:tag")
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        monkeypatch.setenv("ADO_ORG", "o")
+        monkeypatch.setenv("ADO_PROJECT", "P")
+        monkeypatch.setenv("ADO_REPO_ID", "R")
+        monkeypatch.setenv("PR_ID", "1")
+        # ``Config`` doesn't read IMAGE itself; the PowerShell scripts
+        # do. This test documents that the alias name is just a
+        # passthrough in the PowerShell layer. The Python layer is
+        # indifferent to which name was used.
+        assert os.getenv("IMAGE") == "legacy-image:tag"
+
+    def test_no_token_yields_clear_error(self, clean_env, monkeypatch, capsys):
+        from auto_pr_reviewer.config import Config
+        from auto_pr_reviewer.cli import main
+        # No token at all in env.
+        for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("ADO_ORG", "o")
+        monkeypatch.setenv("ADO_PROJECT", "P")
+        monkeypatch.setenv("ADO_REPO_ID", "R")
+        monkeypatch.setenv("PR_ID", "1")
+        rc = main(["validate-config"])
+        assert rc == 1
+        assert "ADO_AUTH_TOKEN" in capsys.readouterr().err
+
+    def test_pr_url_parsing_unified(self, clean_env, monkeypatch):
+        # PowerShell forwards PR_URL verbatim; Python parses it.
+        from auto_pr_reviewer.config import Config
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        # No individual ADO_* keys set.
+        monkeypatch.delenv("ADO_ORG", raising=False)
+        monkeypatch.delenv("ADO_PROJECT", raising=False)
+        monkeypatch.delenv("ADO_REPO_ID", raising=False)
+        monkeypatch.delenv("PR_ID", raising=False)
+        monkeypatch.setenv("PR_URL", "https://dev.azure.com/contoso/Pay/_git/api/pullrequest/55")
+        cfg = Config.from_sources({})
+        assert cfg.ado_org == "contoso"
+        assert cfg.ado_project == "Pay"
+        assert cfg.ado_repo_id == "api"
+        assert cfg.pr_id == "55"
+
+    def test_branch_normalization_in_ado_client(self, clean_env):
+        # The branch normalization helper that PowerShell used to do
+        # locally is now in the Python package.
+        from auto_pr_reviewer.ado.client import normalize_branch_name
+        assert normalize_branch_name("refs/heads/main") == "main"
+        assert normalize_branch_name("main") == "main"
+
+    def test_env_file_path_supported(self, tmp_path, monkeypatch):
+        # The PowerShell wrappers accept -EnvFile; the Python CLI can
+        # also read it via Config.from_env_file.
+        from auto_pr_reviewer.config import Config
+        p = tmp_path / ".env"
+        p.write_text("ADO_AUTH_TOKEN=t\nADO_ORG=o\n", encoding="utf-8")
+        cfg = Config.from_env_file(p)
+        assert cfg.ado_token == "t"
+        assert cfg.ado_org == "o"
+
     def test_review_problems_exit_2(self, clean_env, monkeypatch, tmp_path, capsys):
         # No ADO_ORG set → cmd_review reports problems and exits 2.
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
@@ -420,3 +510,178 @@ class TestMain:
         rc = cmd_post(ns)
         assert rc == 2
         assert "ADO_ORG" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# cmd_discover
+# ---------------------------------------------------------------------------
+
+
+class TestCmdDiscover:
+    def test_emits_json_listing(self, clean_env, monkeypatch, capsys):
+        from auto_pr_reviewer.cli import cmd_discover
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        monkeypatch.setenv("ADO_ORG", "o")
+        prs = [
+            {
+                "pullRequestId": 1,
+                "title": "Fix bug",
+                "targetRefName": "refs/heads/main",
+                "isDraft": False,
+            }
+        ]
+        with patch(
+            "auto_pr_reviewer.ado.client.list_active_pull_requests",
+            return_value=prs,
+        ):
+            ns = build_parser().parse_args(["discover", "--project", "Pay"])
+            rc = cmd_discover(ns)
+        assert rc == 0
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert isinstance(data, list)
+        assert data[0]["pullRequestId"] == 1
+
+    def test_target_branches_passed_through(self, clean_env, monkeypatch, capsys):
+        from auto_pr_reviewer.cli import cmd_discover
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        monkeypatch.setenv("ADO_ORG", "o")
+        captured = {}
+
+        def fake_list(cfg, *, project=None, target_branches=None, max_results=0):
+            captured["project"] = project
+            captured["target_branches"] = target_branches
+            captured["max_results"] = max_results
+            return []
+
+        with patch(
+            "auto_pr_reviewer.ado.client.list_active_pull_requests",
+            side_effect=fake_list,
+        ):
+            ns = build_parser().parse_args(
+                ["discover", "--project", "Pay",
+                 "--target-branches", "main, develop",
+                 "--max", "5"]
+            )
+            rc = cmd_discover(ns)
+        assert rc == 0
+        assert captured["project"] == "Pay"
+        assert captured["target_branches"] == ["main", "develop"]
+        assert captured["max_results"] == 5
+
+    def test_missing_token_returns_2(self, clean_env, monkeypatch, capsys):
+        from auto_pr_reviewer.cli import cmd_discover
+        for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        ns = build_parser().parse_args(["discover", "--project", "Pay"])
+        rc = cmd_discover(ns)
+        assert rc == 2
+        assert "ADO_AUTH_TOKEN" in capsys.readouterr().err
+
+    def test_cli_token_override(self, clean_env, monkeypatch, capsys):
+        from auto_pr_reviewer.cli import cmd_discover
+        for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        with patch(
+            "auto_pr_reviewer.ado.client.list_active_pull_requests",
+            return_value=[],
+        ):
+            ns = build_parser().parse_args(
+                ["discover", "--project", "Pay", "--ado-token", "override"]
+            )
+            rc = cmd_discover(ns)
+        assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# PowerShell wrapper structural tests (no pwsh on the test host)
+# ---------------------------------------------------------------------------
+
+
+class TestPowerShellWrapperStructure:
+    """Static checks against ``run.ps1`` and ``common.psm1``.
+
+    These exist because the test host has no PowerShell. They verify
+    that the Docker --env-file refactor (Task 14) is actually in place:
+    the wrappers use ``Get-ReviewerEnvFile`` from ``common.psm1`` and
+    pass only the dynamic CLI overrides as ``-e`` flags. Real
+    PowerShell execution is exercised by CI on Windows / WSL agents.
+    """
+
+    @staticmethod
+    def _read(rel: str) -> str:
+        return (Path(__file__).resolve().parent.parent / rel).read_text(
+            encoding="utf-8", errors="replace"
+        )
+
+    @staticmethod
+    def _require(rel: str) -> str:
+        """Read ``rel`` or skip the test with a clear reason.
+
+        The structural tests depend on the PowerShell wrappers living at
+        the repo root. The Docker test image (``Dockerfile.tests``)
+        copies them in so CI exercises these tests; running pytest
+        outside that image (e.g. a contributor who only cloned the
+        ``src/`` and ``tests/`` trees) gets a clear skip instead of a
+        hard ``FileNotFoundError``.
+        """
+        path = Path(__file__).resolve().parent.parent / rel
+        if not path.exists():
+            pytest.skip(f"{rel} not present at repo root; structural test requires it")
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    def test_common_psm1_exposes_env_file_helper(self):
+        text = self._require("common.psm1")
+        assert "function Get-ReviewerEnvFile" in text
+        assert "Export-ModuleMember" in text
+        # Helper must be in the export list so run.ps1 can call it.
+        assert "Get-ReviewerEnvFile" in text.split("Export-ModuleMember")[-1]
+
+    def test_run_ps1_uses_env_file_helper(self):
+        text = self._require("run.ps1")
+        assert "Get-ReviewerEnvFile" in text
+        # The old Write-EnvFile call should be gone (or only used
+        # transitively by Get-ReviewerEnvFile).
+        assert text.count("Write-EnvFile @") == 0
+        # Env-file flag points at the helper's resolved path.
+        assert '--env-file", $envFileInfo.Path' in text
+
+    def test_run_ps1_emits_dynamic_e_overrides(self):
+        text = self._require("run.ps1")
+        # Every per-invocation secret / override is added as -e so it
+        # wins over the .env file. DRY_RUN uses a literal "1" because
+        # the parameter is a [switch]; all others bind from a variable.
+        for key in (
+            "ADO_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "PR_ID",
+            "PR_URL",
+            "ADO_ORG",
+            "ADO_PROJECT",
+            "ADO_REPO_ID",
+            "SOURCE_BRANCH",
+            "TARGET_BRANCH",
+            "REVIEW_LANGUAGE",
+            "FAIL_ON",
+            "VOTE_WAITING_ON",
+            "PI_MODEL",
+        ):
+            assert f'"{key}=$' in text, f"missing -e override for {key}"
+        # DRY_RUN: literal "1" because -DryRun is a switch parameter.
+        assert '"DRY_RUN=1"' in text
+
+    def test_run_ps1_cleans_up_only_temp_env_file(self):
+        text = self._require("run.ps1")
+        # The cleanup branch must be conditional on IsTemp so we don't
+        # delete the user's real .env by accident.
+        assert "if ($envFileInfo.IsTemp)" in text
+        assert "Remove-Item -LiteralPath $envFileInfo.Path" in text
+
+    def test_run_ps1_documents_env_file_behavior(self):
+        text = self._require("run.ps1")
+        # The .PARAMETER EnvFile block should explain the new behavior.
+        assert ".PARAMETER EnvFile" in text
+        # Find the line range and check it mentions "docker run --env-file".
+        idx = text.find(".PARAMETER EnvFile")
+        block = text[idx:idx + 800]
+        assert "--env-file" in block

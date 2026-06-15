@@ -133,7 +133,7 @@ class TestSubprocessCommandShape:
         runner.run_json(tmp_path / "p2.md", "second call", tmp_path / "o2.json", "plan")
         assert len(calls) == 2
         for cmd in calls:
-            assert "--session" in cmd
+            assert "--session-id" in cmd
             assert "pr-42-review-r1" in cmd
             assert "--no-session" not in cmd
 
@@ -150,7 +150,7 @@ class TestSubprocessCommandShape:
         runner = PiRunner(cfg)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "--clear-session" in calls[0]
-        assert "--session" in calls[0]
+        assert "--session-id" in calls[0]
 
     def test_session_disabled_uses_no_session_flag(self, cfg, tmp_path, monkeypatch):
         calls: list[list[str]] = []
@@ -165,7 +165,7 @@ class TestSubprocessCommandShape:
         runner = PiRunner(cfg)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "--no-session" in calls[0]
-        assert "--session" not in calls[0]
+        assert "--session-id" not in calls[0]
         assert "--clear-session" not in calls[0]
 
 
@@ -250,7 +250,7 @@ class TestRepairStaysInSession:
         assert len(calls) == 2
         # Same session id in both calls.
         for c in calls:
-            assert "--session" in c["cmd"]
+            assert "--session-id" in c["cmd"]
             assert "pr-42-review-r1" in c["cmd"]
         # Repair: empty stdin (no re-send of full context).
         assert calls[1]["input"] == b""
@@ -529,7 +529,7 @@ class TestChunkedReviewSession:
         ReviewDiffStage()(ctx)
         assert len(calls) == 3
         for cmd in calls:
-            assert "--session" in cmd
+            assert "--session-id" in cmd
             assert "pr-42-review-r1" in cmd
             assert "--no-session" not in cmd
 
@@ -596,7 +596,7 @@ class TestChunkedReviewSession:
         ctx.extras["system_prompt"] = "sys"
         ReviewDiffStage()(ctx)
         assert "--no-session" in calls[0]
-        assert "--session" not in calls[0]
+        assert "--session-id" not in calls[0]
 
 
 # =====================================================================
@@ -620,7 +620,7 @@ class TestRepairStaysInSession:
         PiRunner(cfg).run_json(tmp_path / "p.md", "original", tmp_path / "out.json", "stage")
         assert len(calls) == 2
         for c in calls:
-            assert "--session" in c["cmd"]
+            assert "--session-id" in c["cmd"]
             assert "pr-42-review-r1" in c["cmd"]
 
     def test_repair_strips_ado_env_in_both_calls(self, cfg, tmp_path, monkeypatch):

@@ -3,13 +3,25 @@
     Run the PR review bot against an Azure DevOps pull request.
 
 .DESCRIPTION
-    Pass just a PR URL and the container resolves everything (org, project,
-    repo, PR id, branches) internally via the ADO REST API.
+    Thin Docker orchestrator. All ADO logic, token resolution, branch
+    normalization, PR URL parsing, and REST calls live in the Python
+    package ``auto_pr_reviewer`` and are executed inside the container.
+    This script only:
 
-    Alternatively, pass individual params (-Org, -Project, -RepoId, -PrId)
-    and branches will still be auto-resolved unless overridden.
+      * reads CLI args and forwards them as env vars,
+      * optionally loads a ``.env`` file into the process env,
+      * picks a container runtime (docker or podman),
+      * runs the container with the env vars and cleans up the temp
+        env file in a ``finally`` block.
 
-    Use -DryRun to review only (print findings JSON) without posting to the PR.
+    Pass just a PR URL and the container resolves everything (org,
+    project, repo, PR id, branches) internally via the ADO REST API.
+    Alternatively, pass individual params (-Org, -Project, -RepoId,
+    -PrId) and the container will still auto-resolve branches unless
+    they are overridden.
+
+    Use -DryRun to review only (print findings JSON) without posting
+    to the PR.
 
 .PARAMETER PrUrl
     Full Azure DevOps pull-request URL. When provided, the container handles
@@ -19,8 +31,8 @@
       https://{org}.visualstudio.com/{project}/_git/{repo}/pullrequest/{id}
 
 .PARAMETER Org
-    Azure DevOps organization SHORT name (e.g. "contoso"). Required if -PrUrl is
-    not given; otherwise auto-detected from the URL.
+    Azure DevOps organization SHORT name (e.g. "contoso"). Required if -PrUrl
+    is not given; otherwise auto-detected from the URL.
 
 .PARAMETER Project
     Azure DevOps project name. Required if -PrUrl is not given.
@@ -48,8 +60,10 @@
     none | nit | minor | major | blocker. Default: major.
 
 .PARAMETER AdoToken
-    Bearer token for ADO. If omitted, the script gets one via
-    `az account get-access-token` for the Azure DevOps resource.
+    Bearer token for ADO. If omitted, the script forwards whatever
+    ``$env:ADO_AUTH_TOKEN`` is set to (or ``ADO_MCP_AUTH_TOKEN`` /
+    ``ADO_API_KEY`` as aliases — see the Python package for the full
+    resolution order). The container does not acquire tokens itself.
 
 .PARAMETER OpenAiApiKey
     Model provider key for Pi. Defaults to $env:OPENAI_API_KEY.
@@ -68,6 +82,14 @@
     into the container instead of using a named volume. Useful for inspecting artifacts
     after the run. Example: -ArtifactPath "$PWD/artifacts"
 
+.PARAMETER EnvFile
+    Optional path to a ``.env`` file. Default: ``.env`` in the current
+    directory. When the file exists, it is passed directly to
+    ``docker run --env-file`` (Docker's native behavior — secrets are
+    never copied to a temp file). When the file is missing or this
+    parameter is empty, the script falls back to a temp env file built
+    from the process env so shell-set vars still reach the container.
+
 .PARAMETER DryRun
     Review only; print the findings JSON and do not post to the PR.
 
@@ -78,7 +100,7 @@
     # Dry run to iterate on prompts without posting:
     ./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
 
-    # Individual params (branches still auto-resolved):
+    # Individual params (branches still auto-resolved by the container):
     ./run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
 
     # German review comments:
@@ -113,7 +135,10 @@ $ErrorActionPreference = "Stop"
 
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
 
-if ($EnvFile -and (Test-Path -LiteralPath $EnvFile)) { Import-DotEnv -Path $EnvFile }
+# Layer 1: load .env (if any) into the process env.  Process env wins.
+if ($EnvFile -and (Test-Path -LiteralPath $EnvFile)) {
+    Import-DotEnv -Path $EnvFile
+}
 if (-not $PSBoundParameters.ContainsKey('PrUrl') -and $env:PR_URL) { $PrUrl = $env:PR_URL }
 if (-not $PSBoundParameters.ContainsKey('Org') -and $env:ADO_ORG) { $Org = $env:ADO_ORG }
 if (-not $PSBoundParameters.ContainsKey('Project') -and $env:ADO_PROJECT) { $Project = $env:ADO_PROJECT }
@@ -134,19 +159,43 @@ if (-not $PSBoundParameters.ContainsKey('ContainerName') -and $env:CONTAINER_NAM
 if (-not $PSBoundParameters.ContainsKey('ArtifactPath') -and $env:ARTIFACT_PATH) { $ArtifactPath = $env:ARTIFACT_PATH }
 if (-not $PSBoundParameters.ContainsKey('DryRun') -and $env:DRY_RUN) { $DryRun = $env:DRY_RUN -in @('1','true','True','yes','on') }
 
-if ($Org) { $Org = Normalize-AdoSegment -Value $Org -Name 'ADO organization' }
-if ($Project) { $Project = Normalize-AdoSegment -Value $Project -Name 'ADO project' }
-if ($RepoId) { $RepoId = Normalize-AdoSegment -Value $RepoId -Name 'ADO repository' }
+# Layer 2: CLI args win over process env.
+function Apply-Env {
+    param([string]$Name, [string]$Value)
+    if ($PSBoundParameters.ContainsKey($Name) -and $Value) {
+        [System.Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+}
+Apply-Env 'PrUrl'          $PrUrl
+Apply-Env 'ADO_ORG'        $Org
+Apply-Env 'ADO_PROJECT'    $Project
+Apply-Env 'ADO_REPO_ID'    $RepoId
+Apply-Env 'PR_ID'          $(if ($PrId -gt 0) { "$PrId" } else { $null })
+Apply-Env 'SOURCE_BRANCH'  $SourceBranch
+Apply-Env 'TARGET_BRANCH'  $TargetBranch
+Apply-Env 'REVIEW_LANGUAGE' $Language
+Apply-Env 'FAIL_ON'        $FailOn
+Apply-Env 'VOTE_WAITING_ON' $VoteWaitingOn
+Apply-Env 'PI_MODEL'       $PiModel
+Apply-Env 'ADO_AUTH_TOKEN' $AdoToken
+Apply-Env 'OPENAI_API_KEY' $OpenAiApiKey
+Apply-Env 'IMAGE_NAME'     $Image
+Apply-Env 'CONTAINER_NAME' $ContainerName
+if ($PSBoundParameters.ContainsKey('DryRun') -and $env:DRY_RUN) {
+    [System.Environment]::SetEnvironmentVariable('DRY_RUN', '1', 'Process')
+}
 
-$runLabel = $null
-
-# --- Prerequisites ------------------------------------------------------------
-if (-not $OpenAiApiKey) {
+# Layer 3: prerequisites.
+if (-not $env:OPENAI_API_KEY) {
     Fail 'No model key. Set $env:OPENAI_API_KEY or pass -OpenAiApiKey.'
 }
 
 $Runtime = Get-ContainerRuntime
 $Token = Get-AdoToken $AdoToken
+$ArtifactVolumeName = $env:REVIEW_ARTIFACT_VOLUME_NAME
+if (-not $ArtifactVolumeName) {
+    $ArtifactVolumeName = 'pr-review-bot-artifacts'
+}
 
 # --- Prepare artifact storage (named volume or local path) -------------------
 $useNamedVolume = -not $ArtifactPath
@@ -173,68 +222,65 @@ if ($useNamedVolume) {
     Write-Step "Using local artifact path: $ArtifactPath"
 }
 
-# --- Build env file -----------------------------------------------------------
-# When -PrUrl is given, let the container resolve everything.
-# When individual params are given, resolve on the host and pass them explicitly.
-if ($PrUrl -and -not $SourceBranch -and -not $TargetBranch) {
-    # Simplified path: container handles URL parsing + branch resolution
-    $envFile = Write-EnvFile @{
-        PrUrl         = $PrUrl
-        Language      = $Language
-        FailOn        = $FailOn
-        VoteWaitingOn = $VoteWaitingOn
-        PiModel       = $PiModel
-        Token         = $Token
-        OpenAiApiKey  = $OpenAiApiKey
-        DryRun        = $DryRun
-    }
-    $runLabel = "Running reviewer with PR_URL (container resolves identity){0} [runtime: {1}]" -f $(if($DryRun){" [dry run]"}else{""}), $Runtime
-} else {
-    # Legacy path: resolve on host, pass individual vars
-    if ($PrUrl) {
-        $parsed = Resolve-PrUrl $PrUrl
-        Write-Step "Parsed PR URL: org=$($parsed.Org) project=$($parsed.Project) repo=$($parsed.RepoId) pr=$($parsed.PrId)"
-        $Org     = if ($Org)        { $Org }        else { $parsed.Org }
-        $Project = if ($Project)    { $Project }    else { $parsed.Project }
-        $RepoId  = if ($RepoId)     { $RepoId }     else { $parsed.RepoId }
-        $PrId    = if ($PrId -gt 0) { $PrId }       else { $parsed.PrId }
-    }
+# Layer 4: build the Docker invocation.
+#
+# Env-file: prefer Docker's native `--env-file .env` behavior. When a
+# ``.env`` file exists (the default ``$EnvFile = '.env'``), pass it
+# straight to Docker so secrets are never copied into a temp file.
+# When no ``.env`` is available, fall back to a temp env file built
+# from the process env so shell-set vars still reach the container.
+# Only the secrets / per-invocation overrides are passed as `-e` so
+# they win over whatever the env-file said.
 
-    if (-not $Org)     { Fail "-Org is required (or use -PrUrl to auto-detect)." }
-    if (-not $Project) { Fail "-Project is required (or use -PrUrl to auto-detect)." }
-    if (-not $RepoId)  { Fail "-RepoId is required (or use -PrUrl to auto-detect)." }
-    if ($PrId -le 0)   { Fail "-PrId is required (or use -PrUrl to auto-detect)." }
-
-    $branches = Resolve-PrBranches -Org $Org -Project $Project -RepoId $RepoId -PrId $PrId -Token $Token -SourceBranch $SourceBranch -TargetBranch $TargetBranch
-    $Source = Normalize-BranchName $branches.SourceBranch
-    $Target = Normalize-BranchName $branches.TargetBranch
-
-    $envFile = Write-EnvFile @{
-        Org           = $Org
-        Project       = $Project
-        RepoId        = $RepoId
-        PrId          = $PrId
-        Source        = $Source
-        Target        = $Target
-        Language      = $Language
-        FailOn        = $FailOn
-        VoteWaitingOn = $VoteWaitingOn
-        PiModel       = $PiModel
-        Token         = $Token
-        OpenAiApiKey  = $OpenAiApiKey
-        DryRun        = $DryRun
-    }
-    $runLabel = "Running reviewer on PR #{0} ({1} -> {2}){3} [runtime: {4}]" -f $PrId,$Source,$Target, $(if($DryRun){" [dry run]"}else{""}), $Runtime
+# Snapshot of every env var the container should see via the temp
+# fallback. Pulled from the process env that Layers 1-3 populated.
+$tempEnvSnapshot = @{
+    PR_URL            = $env:PR_URL
+    ADO_ORG           = $env:ADO_ORG
+    ADO_PROJECT       = $env:ADO_PROJECT
+    ADO_REPO_ID       = $env:ADO_REPO_ID
+    PR_ID             = $env:PR_ID
+    SOURCE_BRANCH     = $env:SOURCE_BRANCH
+    TARGET_BRANCH     = $env:TARGET_BRANCH
+    ADO_AUTH_TOKEN    = $env:ADO_AUTH_TOKEN
+    OPENAI_API_KEY    = $env:OPENAI_API_KEY
+    REVIEW_LANGUAGE   = $env:REVIEW_LANGUAGE
+    FAIL_ON           = $env:FAIL_ON
+    VOTE_WAITING_ON   = $env:VOTE_WAITING_ON
+    PI_MODEL          = $env:PI_MODEL
+    DRY_RUN           = $env:DRY_RUN
+    DISABLE_CHUNK_REVIEW = $env:DISABLE_CHUNK_REVIEW
+    MAX_DIFF_BYTES    = $env:MAX_DIFF_BYTES
+    CHUNK_TRIGGER_DIFF_BYTES = $env:CHUNK_TRIGGER_DIFF_BYTES
+    POST_MIN_SEVERITY = $env:POST_MIN_SEVERITY
+    REQUIRE_CONTEXT_FOR = $env:REQUIRE_CONTEXT_FOR
+    DROP_LOW_CONFIDENCE = $env:DROP_LOW_CONFIDENCE
+    MAX_FINDINGS      = $env:MAX_FINDINGS
+    CONTEXT_FILE_MAX_LINES = $env:CONTEXT_FILE_MAX_LINES
+    CONTEXT_SEARCH_MAX_MATCHES = $env:CONTEXT_SEARCH_MAX_MATCHES
+    REVIEW_RUN_ID     = $env:REVIEW_RUN_ID
+    REVIEW_ARTIFACT_ROOT = $env:REVIEW_ARTIFACT_ROOT
 }
 
-if (-not $ContainerName -and $PrId -gt 0) {
-    $ContainerName = "pr-review-bot-pr-$PrId"
+$envFileInfo = Get-ReviewerEnvFile -EnvFile $EnvFile -ProcessEnvSnapshot $tempEnvSnapshot
+if ($envFileInfo.IsTemp) {
+    Write-Step "Using temp env-file (no .env found): $($envFileInfo.Path)"
+} else {
+    Write-Step "Using .env file: $($envFileInfo.Path)"
+}
+
+$runLabel = if ($env:PR_URL) {
+    "Running reviewer with PR_URL (container resolves identity){0} [runtime: {1}]" -f $(if($DryRun){" [dry run]"}else{""}), $Runtime
+} else {
+    "Running reviewer on PR #{0}{1} [runtime: {2}]" -f $env:PR_ID, $(if($DryRun){" [dry run]"}else{""}), $Runtime
+}
+
+if (-not $ContainerName -and $env:PR_ID) {
+    $ContainerName = "pr-review-bot-pr-$($env:PR_ID)"
 }
 
 $dockerArgs = @("run", "--rm", "--network", "host")
 if ($Runtime -eq "podman") {
-    # Podman on Windows/WSL2 does not forward DNS with the default network;
-    # bridge mode with explicit public DNS ensures dev.azure.com resolves.
     $dockerArgs = @("run", "--rm", "--network", "bridge", "--dns", "8.8.8.8", "--dns", "1.1.1.1")
 }
 if ($ContainerName) {
@@ -254,14 +300,37 @@ if ($useNamedVolume) {
     $dockerArgs += @("--volume", "$($containerPath):/workspace/artifacts")
 }
 
-$dockerArgs += @("--env-file", $envFile, $Image)
+$dockerArgs += @("--env-file", $envFileInfo.Path)
+
+# Dynamic CLI overrides: passed as -e so they win over --env-file.
+# These are secrets / per-invocation values the user passes explicitly.
+if ($AdoToken)       { $dockerArgs += @("-e", "ADO_AUTH_TOKEN=$AdoToken") }
+if ($OpenAiApiKey)   { $dockerArgs += @("-e", "OPENAI_API_KEY=$OpenAiApiKey") }
+if ($PrUrl)          { $dockerArgs += @("-e", "PR_URL=$PrUrl") }
+if ($Org)            { $dockerArgs += @("-e", "ADO_ORG=$Org") }
+if ($Project)        { $dockerArgs += @("-e", "ADO_PROJECT=$Project") }
+if ($RepoId)         { $dockerArgs += @("-e", "ADO_REPO_ID=$RepoId") }
+if ($PrId -gt 0)     { $dockerArgs += @("-e", "PR_ID=$PrId") }
+if ($SourceBranch)   { $dockerArgs += @("-e", "SOURCE_BRANCH=$SourceBranch") }
+if ($TargetBranch)   { $dockerArgs += @("-e", "TARGET_BRANCH=$TargetBranch") }
+if ($Language)       { $dockerArgs += @("-e", "REVIEW_LANGUAGE=$Language") }
+if ($FailOn)         { $dockerArgs += @("-e", "FAIL_ON=$FailOn") }
+if ($VoteWaitingOn)  { $dockerArgs += @("-e", "VOTE_WAITING_ON=$VoteWaitingOn") }
+if ($PiModel)        { $dockerArgs += @("-e", "PI_MODEL=$PiModel") }
+if ($PSBoundParameters.ContainsKey('DryRun') -and $DryRun) {
+    $dockerArgs += @("-e", "DRY_RUN=1")
+}
+
+$dockerArgs += $Image
 
 Write-Step $runLabel
 try {
     & $Runtime @dockerArgs
     $rc = $LASTEXITCODE
 } finally {
-    Remove-Item -LiteralPath $envFile -Force -ErrorAction SilentlyContinue
+    if ($envFileInfo.IsTemp) {
+        Remove-Item -LiteralPath $envFileInfo.Path -Force -ErrorAction SilentlyContinue
+    }
 }
 Write-Step "Container exited with code $rc"
 exit $rc

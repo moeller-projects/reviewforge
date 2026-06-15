@@ -118,9 +118,12 @@ function Invoke-AzJson {
     }
 }
 
+# Strip ``refs/heads/`` from a branch name. The Python side has the same
+# helper (see ``auto_pr_reviewer.ado.client.normalize_branch_name``); this
+# local copy is used to filter ``az repos pr list`` output for the
+# script's target-branch policy.
 function Normalize-RefName {
     param([string]$Branch)
-
     if (-not $Branch) { return $Branch }
     return $Branch -replace '^refs/heads/', ''
 }
@@ -183,7 +186,9 @@ if (-not $OpenAiApiKey) {
 
 $Organization = Normalize-OrganizationUrl -Value $Organization
 $Org = Get-OrganizationNameFromUrl -OrganizationUrl $Organization
-$Projects = @($Projects | Where-Object { $_ } | ForEach-Object { Normalize-AdoSegment -Value $_ -Name 'ADO project' } | Select-Object -Unique)
+# Inline project name normalization. The Python container does the
+# authoritative validation (``auto_pr_reviewer.ado.client.normalize_ado_segment``).
+$Projects = @($Projects | Where-Object { $_ } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
 $TargetBranches = @($TargetBranches | Where-Object { $_ } | ForEach-Object { Normalize-RefName $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
 
 if (-not $Projects) { Fail "At least one project is required." }
@@ -194,7 +199,18 @@ if (-not $extension) {
     Fail "Azure CLI azure-devops extension is not installed. Run: az extension add --name azure-devops"
 }
 
-$Token = Get-AdoToken $AdoToken
+# ADO bearer token: the wrapper does NOT acquire one. The user supplies
+# it via $env:ADO_AUTH_TOKEN (or one of the aliases recognized by the
+# Python package). The -AdoToken parameter is honored: if the caller
+# passed it, we forward it to the process env so the per-PR run.ps1
+# invocations see it. If missing, the run.ps1 per-PR call will fail
+# with a clear "Missing required config" error.
+if ($PSBoundParameters.ContainsKey('AdoToken') -and $AdoToken) {
+    [System.Environment]::SetEnvironmentVariable('ADO_AUTH_TOKEN', $AdoToken, 'Process')
+}
+if (-not $env:ADO_AUTH_TOKEN) {
+    Write-Step "WARN: `$env:ADO_AUTH_TOKEN is not set. run.ps1 will fail unless it is set or passed via -AdoToken."
+}
 
 $AllPullRequests = @(
     foreach ($project in $Projects) {
@@ -284,7 +300,7 @@ foreach ($entry in $SelectedPullRequests) {
         -Language $Language `
         -FailOn $FailOn `
         -VoteWaitingOn $VoteWaitingOn `
-        -AdoToken $Token `
+        -AdoToken $env:ADO_AUTH_TOKEN `
         -OpenAiApiKey $OpenAiApiKey `
         -PiModel $PiModel `
         -Image $Image `
