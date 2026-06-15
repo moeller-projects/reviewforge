@@ -170,7 +170,13 @@ Resolution is done by `_read_env_with_aliases(key, env)`: it walks the alias tup
 - No escape processing — keep it simple.
 - Malformed lines are silently ignored.
 
-The same parser runs in PowerShell (`common.psm1::Import-DotEnv`) and in Python (`config.parse_dotenv`). They agree on the format so a single `.env` works on both sides of the Docker boundary.
+The PowerShell side no longer ships an `Import-DotEnv` helper — the wrappers
+read the live process environment only, on the principle that the user is
+responsible for loading the file (via `direnv`, `set -a; source .env; set +a`,
+etc.) and the file itself is data, not policy. The Python `parse_dotenv`
+remains as a library helper for direct Python callers who want to load a file
+explicitly; `Config.from_env_file(path)` uses it and merges the file values
+*under* `os.environ` so the live env still wins.
 
 ## How to add a new tunable (how-to)
 

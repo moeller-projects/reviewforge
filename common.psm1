@@ -75,38 +75,40 @@ function ConvertFrom-CommaList {
 
 <#
 .SYNOPSIS
-    Load ``.env`` (if present) and snapshot every config var the
-    wrapper scripts care about into a single hashtable. Eliminates
-    the repeated 20-line ``if (-not $PSBoundParameters...``
-    preamble that used to live in ``run.ps1``.
-
-.PARAMETER EnvFile
-    Path to the ``.env`` file. Defaults to ``.env`` in the current
-    working directory.
+    Snapshot every config var the wrapper scripts care about into a
+    single hashtable by reading the live process environment, then
+    layer explicit ``-Parameters`` overrides on top. Eliminates the
+    repeated 20-line ``if (-not $PSBoundParameters...`` preamble
+    that used to live in ``run.ps1``.
 
 .PARAMETER Required
     Array of env-var names that MUST be set after loading. The
-    function fails with a clear "set X in .env or pass -X" message
-    listing all missing keys.
+    function fails with a clear "set X in the environment or pass
+    -X" message listing all missing keys.
 
 .DESCRIPTION
     The returned hashtable is the authoritative source of config
     for the script. Callers pass it to ``Get-ReviewerEnvFile`` and
     to the per-PR ``-e`` overrides. This is the single seam where
     "config comes from somewhere" is decided: precedence is
-    explicit -Parameters > process env > .env > defaults baked into
-    the called function.
+    explicit -Parameters > process env > defaults baked into the
+    called function.
+
+    This function does NOT load ``.env`` files. The ``.env`` file at
+    the repo root is a reference / template (see ``.env.example``)
+    that documents the available env vars and their typical values.
+    The user is responsible for loading it into the process env
+    themselves (e.g. via direnv, ``set -a; source .env; set +a`` in
+    bash, or manual exports). Once loaded, the vars are visible here
+    via ``GetEnvironmentVariable`` exactly like any other env var.
+    This keeps precedence predictable and matches the spirit of
+    12-factor / docker ``--env-file`` (the file is data, not policy).
 #>
 function Resolve-ScriptConfig {
     param(
-        [string] $EnvFile = ".env",
         [hashtable] $Parameters = @{},
         [string[]] $Required = @()
     )
-
-    if ($EnvFile -and (Test-Path -LiteralPath $EnvFile)) {
-        Import-DotEnv -Path $EnvFile
-    }
 
     # Env-var name -> default. Wrappers pass $Parameters (the
     # CmdletBinding param table) for explicit overrides; defaults
@@ -264,35 +266,6 @@ function Get-ContainerRuntime {
 
 <#
 .SYNOPSIS
-    Load KEY=VALUE pairs from a ``.env`` file into the current process
-    environment. Existing process env vars always win. Lines that are
-    blank, start with ``#``, or do not match ``KEY=VALUE`` are silently
-    ignored. Quoted values are NOT processed (kept verbatim including
-    the quotes); users can write ``ADO_AUTH_TOKEN=xyz`` without quoting
-    and rely on the Python side to consume the value as-is.
-
-    This helper exists for the PowerShell wrappers only so they can
-    populate the temp env-file used by ``docker run --env-file``. The
-    canonical .env parser lives in ``auto_pr_reviewer.config.parse_dotenv``
-    for callers that invoke the Python CLI directly.
-#>
-function Import-DotEnv {
-    param([string]$Path)
-    if (-not $Path) { return }
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
-    foreach ($line in [System.IO.File]::ReadLines($resolved)) {
-        $trimmed = $line.Trim()
-        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
-        if ($trimmed -notmatch '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { continue }
-        $key = $Matches[1]
-        if ([System.Environment]::GetEnvironmentVariable($key, 'Process')) { continue }
-        [System.Environment]::SetEnvironmentVariable($key, $Matches[2], 'Process')
-    }
-}
-
-<#
-.SYNOPSIS
     Write the env file for the container and return its path.
 
     Pure string concatenation. No parsing, no normalization, no token
@@ -374,4 +347,4 @@ function Get-ReviewerEnvFile {
     }
 }
 
-Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Import-DotEnv, Write-EnvFile, Get-ReviewerEnvFile, Get-EnvOrDefault, Resolve-ScriptConfig, ConvertFrom-CommaList, Show-InteractivePrompt
+Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Write-EnvFile, Get-ReviewerEnvFile, Get-EnvOrDefault, Resolve-ScriptConfig, ConvertFrom-CommaList, Show-InteractivePrompt

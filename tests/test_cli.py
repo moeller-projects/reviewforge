@@ -466,8 +466,10 @@ class TestPowerShellForwardingContract:
         assert normalize_branch_name("main") == "main"
 
     def test_env_file_path_supported(self, tmp_path, monkeypatch):
-        # The PowerShell wrappers accept -EnvFile; the Python CLI can
-        # also read it via Config.from_env_file.
+        # Direct Python callers can load a .env file explicitly via
+        # Config.from_env_file. The PowerShell wrappers do NOT do
+        # this; they read the live process env and expect the user
+        # to have loaded the file themselves.
         from auto_pr_reviewer.config import Config
         p = tmp_path / ".env"
         p.write_text("ADO_AUTH_TOKEN=t\nADO_ORG=o\n", encoding="utf-8")
@@ -689,12 +691,18 @@ class TestPowerShellWrapperStructure:
 
     def test_run_ps1_documents_env_file_behavior(self):
         text = self._require("run.ps1")
-        # The .PARAMETER EnvFile block should explain the new behavior.
-        assert ".PARAMETER EnvFile" in text
-        # Find the line range and check it mentions "docker run --env-file".
-        idx = text.find(".PARAMETER EnvFile")
-        block = text[idx:idx + 800]
-        assert "--env-file" in block
+        # The script's preamble (or .PARAMETER block) must make it
+        # clear that the .env file is not auto-loaded — the user is
+        # responsible for populating the process env. The wrapper
+        # only forwards the file path to ``docker run --env-file``
+        # when the file exists, so the per-PR container sees the
+        # same values.
+        assert "--env-file" in text
+        preamble = text[: text.find("[CmdletBinding()]")]
+        assert "NOT auto-loaded" in preamble or "not auto-loaded" in preamble.lower(), (
+            "run.ps1 preamble should explicitly say the .env is not auto-loaded"
+        )
+        assert "docker run --env-file" in preamble or "--env-file" in preamble
 
 
 class TestRefactoredWrappers:

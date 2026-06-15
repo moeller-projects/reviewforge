@@ -10,8 +10,18 @@
     The hardcoded "aveato" project list and "main/master/dev/develop"
     target-branch list from earlier versions are gone: this script
     requires ADO_ORGANIZATION, ADO_PROJECTS, and ADO_TARGET_BRANCHES
-    in .env (or as parameters) and has no other "default" project
+    in the environment (typically loaded from a pre-populated
+    ``.env`` reference file, e.g. via direnv) or as parameters and
+    has no other "default" project
     or branch knowledge. This makes the script portable to any org.
+
+    The ``.env`` file at the repo root is a reference / template,
+    NOT auto-loaded. The user is responsible for loading it into the
+    process env themselves (e.g. via direnv, ``set -a; source .env;
+    set +a`` in bash, or manual exports). The wrapper does forward
+    the file path to ``docker run --env-file`` via ``run.ps1`` when
+    the file exists, so the per-PR container still sees the same
+    curated values.
 
     Interactive selection: pass -Interactive to choose which
     discovered PRs to review (e.g. ``1,3-5``, ``all``, ``none``).
@@ -49,7 +59,8 @@
     Build the image first (replaces the deleted ``run-local.ps1``).
 
 .EXAMPLE
-    # Everything from .env, no params:
+    # Everything from a pre-loaded .env (e.g. ``set -a; source
+    # .env; set +a`` in bash, or direnv on Linux/macOS), no params:
     ./run-open-prs.ps1
 
     # Override projects and pick which to review:
@@ -93,10 +104,16 @@ if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
 # Resolve all config. The required keys are organization, projects,
 # and target branches — all three are mandatory, no defaults baked
 # into the script (hardcoded project/branch lists removed).
+# Resolve-ScriptConfig reads the live process env (which the user
+# is responsible for populating — e.g. via direnv, ``set -a; source
+# .env; set +a``, or manual exports). The ``.env`` file at the
+# repo root is a reference / template, NOT auto-loaded. The same
+# path is forwarded to ``docker run --env-file`` by ``run.ps1``
+# when the file exists, so the per-PR container still picks up
+# the curated values.
 $envProjects = $env:ADO_PROJECTS
 $envBranches = $env:ADO_TARGET_BRANCHES
 $cfg = Resolve-ScriptConfig `
-    -EnvFile $EnvFile `
     -Parameters @{
         ADO_ORGANIZATION     = $Organization
         ADO_PROJECTS         = $envProjects
@@ -125,7 +142,7 @@ if (-not $env:ADO_AUTH_TOKEN) {
 }
 
 if (-not $env:OPENAI_API_KEY) {
-    Fail 'No model key. Set OPENAI_API_KEY in .env.'
+    Fail 'No model key. Set OPENAI_API_KEY in the environment (e.g. via your .env loader).'
 }
 
 # Verify the azure-devops extension is installed.

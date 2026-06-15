@@ -167,16 +167,32 @@ Copy-Item .env.example .env
 # Dry run: iterate on prompt/standards without posting to the PR
 ./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
 
-# Review all active PRs across the org (all config from .env)
+# Review all active PRs across the org (config already in shell env,
+# e.g. loaded by direnv from .env):
 ./run-open-prs.ps1
 ```
 
 ### Configuration via `.env` (recommended)
 
-All operational config — language, fail threshold, model name, image
-tag, ADO identity, etc. — lives in `.env`. Script parameters override
-`.env` for the duration of a single invocation. Copy
-`.env.example` to `.env` and fill in at minimum:
+The `.env` file at the repo root is a **reference / template** of
+all operational settings — language, fail threshold, model name,
+image tag, ADO identity, etc. The PowerShell wrappers do NOT
+auto-load it. Pick whichever loader matches your shell and load it
+once per session:
+
+```bash
+# bash / zsh
+set -a; source .env; set +a
+
+# direnv (recommended for per-directory auto-load)
+echo 'dotenv .env' > .envrc && direnv allow
+```
+
+Once loaded, the variables are part of the process env and are
+read by the wrappers the same way as any other env var. Script
+parameters (`-AdoToken`, `-DryRun`, ...) still win for the
+duration of a single invocation. Copy `.env.example` to `.env`
+and fill in at minimum:
 
 ```dotenv
 # Required for both run.ps1 and run-open-prs.ps1
@@ -247,7 +263,7 @@ findings JSON.
 The PowerShell scripts are intentionally minimal. They only:
 
 * parse CLI args and forward them as environment variables,
-* optionally load a `.env` file (KEY=VALUE only) into the process env,
+* read the live process env (which the user is responsible for populating — the `.env` at the repo root is a reference / template, not auto-loaded),
 * pick a container runtime (`docker` or `podman`),
 * run the container with the env vars and delete the temp env file in a `finally` block.
 
@@ -258,7 +274,10 @@ the container. The local `common.psm1` only contains:
 
 * `Write-Step`, `Fail` (output helpers)
 * `Get-ContainerRuntime` (docker/podman detection)
-* `Import-DotEnv` (trivial KEY=VALUE parser for the local `run.ps1` only)
+* `Get-EnvOrDefault` (env-var lookup with default)
+* `Resolve-ScriptConfig` (read process env, layer CLI overrides, validate required keys)
+* `ConvertFrom-CommaList` (csv / array normalization)
+* `Show-InteractivePrompt` (REPL menu for selecting PRs)
 * `Write-EnvFile` (string-concat helper that builds the temp env file)
 
 If you need new ADO behavior, add it to the Python package and call it from

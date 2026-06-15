@@ -22,6 +22,13 @@
     to the PR. Use -Build to build the image first (replaces the
     former ``run-local.ps1``).
 
+    The ``.env`` file at the repo root is a reference / template,
+    NOT auto-loaded. The user is responsible for loading it into the
+    process env themselves (e.g. via direnv, ``set -a; source .env;
+    set +a`` in bash, or manual exports). The wrapper does forward
+    the file path to ``docker run --env-file`` when the file exists,
+    so the per-PR container still sees the same curated values.
+
 .EXAMPLE
     # Simplest invocation — just the PR URL (container resolves everything):
     ./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423"
@@ -32,7 +39,7 @@
     # Build the image first (replaces ./run-local.ps1):
     ./run.ps1 -PrUrl "..." -Build
 
-    # All config in .env, no params:
+    # All config in shell env (or pre-loaded .env), no params:
     ./run.ps1
 #>
 [CmdletBinding()]
@@ -61,13 +68,15 @@ if ($Build) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-# Resolve all config in one call. Resolve-ScriptConfig loads .env
-# into process env (if present), then layers explicit -Parameters
-# overrides on top. Required keys: ADO_AUTH_TOKEN (or one of its
-# aliases) + OPENAI_API_KEY. Other keys are forwarded to the
-# container as env vars only.
+# Resolve all config. Resolve-ScriptConfig reads the live process
+# env (which the user is responsible for populating — e.g. via
+# direnv, ``set -a; source .env; set +a``, or manual exports) and
+# layers explicit -Parameters overrides on top. The ``.env`` file
+# at the repo root is a reference / template, NOT auto-loaded.
+# Required keys: ADO_AUTH_TOKEN (or one of its aliases) +
+# OPENAI_API_KEY. Other keys are forwarded to the container as
+# env vars only.
 $cfg = Resolve-ScriptConfig `
-    -EnvFile $EnvFile `
     -Parameters @{
         PR_URL          = $PrUrl
         ADO_ORG         = $Org

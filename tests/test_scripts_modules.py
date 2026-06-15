@@ -328,7 +328,10 @@ class TestConfig:
 
 
 # ---------------------------------------------------------------------------
-# parse_dotenv (migrated from PowerShell Import-DotEnv)
+# parse_dotenv (library helper; PS Import-DotEnv is gone — the
+# wrappers no longer parse .env, the user loads it into the shell
+# themselves and Python direct callers use parse_dotenv or
+# Config.from_env_file explicitly when they want it).
 # ---------------------------------------------------------------------------
 
 
@@ -423,7 +426,10 @@ class TestParseDotenv:
 
 
 # ---------------------------------------------------------------------------
-# Config.from_env_file (migrated from PowerShell Import-DotEnv)
+# Config.from_env_file (explicit file loader for direct Python
+# callers; the PowerShell wrappers do NOT use this — they read the
+# live process env only and expect the user to load the .env file
+# themselves before invoking the script).
 # ---------------------------------------------------------------------------
 
 
