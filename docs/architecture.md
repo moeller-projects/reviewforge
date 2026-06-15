@@ -15,10 +15,11 @@ The package has three layers, separated by purpose:
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  Operator layer (PowerShell wrappers + scripts/*.py shims)               │
-│  - run.ps1, run-open-prs.ps1, run-local.ps1, common.psm1                 │
+│  - run.ps1, run-open-prs.ps1 (common.psm1, build.ps1, run-local.ps1)   │
 │  - scripts/main.py, scripts/review.py, scripts/ado_review.py             │
 │  - Responsibility: Docker orchestration, env forwarding, secrets in      │
-│    --env-file .env. No application logic.                                 │
+│    --env-file .env. No application logic. run-local.ps1 is a thin        │
+│    deprecation shim that forwards to run.ps1 -Build.                      │
 └──────────────────────────────────────────────────────────────────────────┘
                                 │ docker run / python -m
                                 ▼

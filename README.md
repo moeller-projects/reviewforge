@@ -144,8 +144,8 @@ on reviews without rebuilding:
 | --- | --- |
 | `build.ps1` | Build the container image |
 | `run.ps1` | Run the reviewer against a PR |
-| `run-open-prs.ps1` | Review every active PR assigned to you except ones where your vote is “waiting for author” |
-| `run-local.ps1` | Convenience: build + run in one call |
+| `run-open-prs.ps1` | Discover active PRs and review each one |
+| `run-local.ps1` | **Deprecated.** Use `run.ps1 -Build` instead |
 
 ### Quick start — just pass the PR URL
 
@@ -167,75 +167,75 @@ Copy-Item .env.example .env
 # Dry run: iterate on prompt/standards without posting to the PR
 ./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
 
-# German comments, cheaper model
-./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -Language German -PiModel openai/gpt-5.4-mini
-
-# Review all active PRs where you are a reviewer and not waiting for author (all projects)
-./run-open-prs.ps1 -Org contoso
+# Review all active PRs across the org (all config from .env)
+./run-open-prs.ps1
 ```
 
-### `.env` invocation
+### Configuration via `.env` (recommended)
 
-Most settings can live in `.env`; explicit script parameters still win:
-
-```powershell
-./build.ps1
-./run.ps1
-
-# Or build + run:
-./run-local.ps1
-```
-
-Minimum useful `.env`:
+All operational config — language, fail threshold, model name, image
+tag, ADO identity, etc. — lives in `.env`. Script parameters override
+`.env` for the duration of a single invocation. Copy
+`.env.example` to `.env` and fill in at minimum:
 
 ```dotenv
-PR_URL=https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423
-ADO_API_KEY=...
-OPENAI_API_KEY=...
+# Required for both run.ps1 and run-open-prs.ps1
+ADO_AUTH_TOKEN=<your-pat>
+OPENAI_API_KEY=<your-key>
+
+# Required for run-open-prs.ps1
+ADO_ORGANIZATION=https://dev.azure.com/<your-org>/
+ADO_PROJECTS=<proj1>,<proj2>
+ADO_TARGET_BRANCHES=main,master,develop,dev
+
+# Required for run.ps1 (when no -PrUrl is given)
+ADO_ORG=<your-org>
+ADO_PROJECT=<project>
+ADO_REPO_ID=<repo-name-or-guid>
+PR_ID=<int>
+
+# Optional
+REVIEW_LANGUAGE=English
+PI_MODEL=openai/gpt-5.4-mini
+DRY_RUN=0
 ```
 
-### Legacy invocation (individual params)
+### `run-open-prs.ps1` interactive mode
 
-If you prefer, you can still pass each parameter separately. Branches are
-auto-resolved from the ADO REST API unless you override them:
+When the terminal is a TTY (or `-Interactive` is passed), the
+script lists the discovered PRs and asks which to review:
 
 ```powershell
-./run.ps1 -Org contoso -Project Payments -RepoId payments-api -PrId 1423
+==> Found 3 active pull request(s):
+  [ 1] PR #8388  Laekker.Kitchen/Laekker.Kitchen -> main  Fix allergen mapping…
+  [ 2] PR #8390  Laekker.Kitchen/Laekker.Kitchen -> main  Fix allergen backfill…
+  [ 3] PR #8392  Laekker.Kitchen/Laekkerai.Ordering -> dev  Normalize phone numbers…
+  [all] review all  |  [none] cancel
+Selection: 1,3
 ```
 
-### Batch mode: review all open PRs assigned to you
+Selection syntax: ``1,3-5``, ``all``, ``none``, ``a``, ``n``.
+Invalid input re-prompts. ``none`` exits cleanly with no runs.
 
-Use `run-open-prs.ps1` when you want Windows/PowerShell to scan all repos
-visible to your token (optionally scoped by `-Project`) for active PRs where **you** are a reviewer, skip PRs where your reviewer vote
-is already **waiting for author** (`-5`), and then launch one containerized
-review run per remaining PR.
+### Build + run in one call
+
+Replace the deleted `run-local.ps1` with `-Build` on either entrypoint:
 
 ```powershell
-# Review every matching PR in one project
-./run-open-prs.ps1 -Org contoso -Project Payments
-
-# Review every matching PR across all visible projects/repos
-./run-open-prs.ps1 -Org contoso
-
-# Cap the batch size and avoid posting while iterating
-./run-open-prs.ps1 -Org contoso -MaxPullRequests 5 -DryRun
+./run.ps1 -PrUrl "https://dev.azure.com/.../pullrequest/1423" -Build
+./run-open-prs.ps1 -Build
 ```
 
-The script reuses the same auth flow as `run.ps1`: pass `-AdoToken` or
-sign in with `az login`, and provide `$env:OPENAI_API_KEY` (or `-OpenAiApiKey`).
+### Script parameter matrix (current)
 
-### All-in-one: `run-local.ps1`
+| Script | Required params | Common optional params |
+| --- | --- | --- |
+| `build.ps1` | (none) | `-Image`, `-PiVersion`, `-EnvFile` |
+| `run.ps1` | `-PrUrl` *or* (`-Org` + `-Project` + `-RepoId` + `-PrId`) | `-AdoToken`, `-DryRun`, `-Build`, `-EnvFile` |
+| `run-open-prs.ps1` | `-Organization`, `-Projects`, `-TargetBranches` (or `.env` values) | `-AdoToken`, `-DryRun`, `-Interactive`, `-MaxPullRequests`, `-Build`, `-EnvFile` |
 
-The original script still works and now also supports `-PrUrl`:
-
-```powershell
-# New style (recommended)
-./run-local.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
-
-# Legacy style (still works)
-./run-local.ps1 -Org contoso -Project Payments -RepoId payments-api `
-    -PrId 1423 -SourceBranch feature/x -SkipBuild
-```
+Most settings now live in `.env`. The explicit params above are
+shortcuts for the per-invocation override path.
 
 Prereqs: Docker Desktop and a model key in `$env:OPENAI_API_KEY`, plus either
 `az login` (for the token) or an explicit `-AdoToken`. `-DryRun` still needs the

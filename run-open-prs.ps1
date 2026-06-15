@@ -1,74 +1,77 @@
 <#
 .SYNOPSIS
-    Run the reviewer against active Azure DevOps pull requests that still need your vote.
+    Run the reviewer against active Azure DevOps pull requests.
 
 .DESCRIPTION
-    Uses the Azure CLI azure-devops extension (`az repos pr list`) to discover
-    active pull requests for a predefined project list and target branch list.
+    Discovers active pull requests across one or more projects in the
+    given organization, filters by target branch and draft status,
+    and invokes run.ps1 once per matching pull request.
 
-    The script skips draft PRs and invokes run.ps1 once per matching pull request.
+    The hardcoded "aveato" project list and "main/master/dev/develop"
+    target-branch list from earlier versions are gone: this script
+    requires ADO_ORGANIZATION, ADO_PROJECTS, and ADO_TARGET_BRANCHES
+    in .env (or as parameters) and has no other "default" project
+    or branch knowledge. This makes the script portable to any org.
+
+    Interactive selection: pass -Interactive to choose which
+    discovered PRs to review (e.g. ``1,3-5``, ``all``, ``none``).
+    Auto-detects a TTY so the prompt only appears when stdin is
+    attached to a console.
 
 .PARAMETER Organization
-    Azure DevOps organization URL. Defaults to the static script value below.
-    Example: https://dev.azure.com/MyOrganizationName/
+    Azure DevOps organization URL. Reads from ADO_ORGANIZATION env var
+    if not given. Required.
 
 .PARAMETER Projects
-    Azure DevOps project names to scan. Defaults to the predefined list below.
+    Azure DevOps project names to scan. Reads from ADO_PROJECTS env var
+    (comma-separated) if not given. Required.
 
 .PARAMETER TargetBranches
-    Target branch names to scan. Defaults to main, master, dev, develop.
+    Target branch names to filter by. Reads from ADO_TARGET_BRANCHES
+    env var (comma-separated) if not given. Required.
 
 .PARAMETER AdoToken
-    Access token for Azure DevOps, passed to run.ps1. If omitted,
-    run.ps1/common.psm1 gets one via Azure CLI.
-
-.PARAMETER OpenAiApiKey
-    Model provider key for Pi. Defaults to $env:OPENAI_API_KEY.
-
-.PARAMETER Language
-    Comment language passed to each run. Default: English.
-
-.PARAMETER FailOn
-    none | nit | minor | major | blocker. Default: none.
-
-.PARAMETER VoteWaitingOn
-    Vote "waiting for author" on the PR when findings meet this severity threshold.
-    none | nit | minor | major | blocker. Default: major.
-
-.PARAMETER PiModel
-    Model pattern Pi should use. Default: openai/gpt-5.5.
-
-.PARAMETER Image
-    Docker/Podman image tag. Default: pr-review-bot:latest.
-
-.PARAMETER MaxPullRequests
-    Optional cap on the number of matching PRs to review. Default: 0 (no cap).
+    Bearer token for Azure DevOps. Optional; if not given, the env
+    var ADO_AUTH_TOKEN (or alias ADO_API_KEY) is used.
 
 .PARAMETER DryRun
-    Review only; print findings JSON for each PR and do not post to Azure DevOps.
+    Review only; print findings JSON and do not post to Azure DevOps.
+
+.PARAMETER MaxPullRequests
+    Optional cap on the number of matching PRs to review. Default: 0
+    (no cap).
+
+.PARAMETER Interactive
+    Show the discovered PRs and prompt for which to review. Default:
+    false. Auto-enabled when stdout is attached to a TTY.
+
+.PARAMETER Build
+    Build the image first (replaces the deleted ``run-local.ps1``).
 
 .EXAMPLE
+    # Everything from .env, no params:
     ./run-open-prs.ps1
 
-.EXAMPLE
-    ./run-open-prs.ps1 -Organization https://dev.azure.com/contoso/ -Projects Laekker.Kitchen -TargetBranches main,develop -MaxPullRequests 5 -DryRun
+    # Override projects and pick which to review:
+    ./run-open-prs.ps1 -Projects Laekker.Kitchen,Aveato -Interactive
+
+    # Cap to 3 PRs, dry run, no posting:
+    ./run-open-prs.ps1 -MaxPullRequests 3 -DryRun
+
+    # Build first, then run:
+    ./run-open-prs.ps1 -Build
 #>
 [CmdletBinding()]
 param(
-    [string]   $Organization = "https://dev.azure.com/aveato/",
-    [string[]] $Projects = @("Laekker.Kitchen", "AveatoApp", "Aveato", "Laekkerai.CustomerProjects"),
-    [string[]] $TargetBranches = @("main", "master", "dev", "develop"),
-    [string]   $AdoToken = $env:ADO_API_KEY,
-    [string]   $OpenAiApiKey = $env:OPENAI_API_KEY,
-    [string]   $Language     = "German",
-    [ValidateSet("none","nit","minor","major","blocker")]
-    [string]   $FailOn       = "none",
-    [ValidateSet("none","nit","minor","major","blocker")]
-    [string]   $VoteWaitingOn = "major",
-    [string]   $PiModel      = "openai/gpt-5.5",
-    [string]   $Image        = "pr-review-bot:latest",
+    [string]   $Organization,
+    [string[]] $Projects,
+    [string[]] $TargetBranches,
+    [string]   $AdoToken,
     [int]      $MaxPullRequests = 0,
-    [switch]   $DryRun
+    [switch]   $DryRun,
+    [switch]   $Interactive,
+    [switch]   $Build,
+    [string]   $EnvFile = ".env"
 )
 
 Set-StrictMode -Version Latest
@@ -76,75 +79,83 @@ $ErrorActionPreference = "Stop"
 
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
 
-function Normalize-OrganizationUrl {
-    param([Parameter(Mandatory)][string]$Value)
-
-    $normalized = $Value.Trim()
-    if (-not $normalized) { Fail "Azure DevOps organization URL is required." }
-    if ($normalized -notmatch '^https://') {
-        Fail "Azure DevOps organization must be a URL, for example: https://dev.azure.com/MyOrganizationName/"
-    }
-    return $normalized.TrimEnd('/') + '/'
+if ($Build) {
+    Write-Step "Building image (run-open-prs.ps1 -Build)"
+    & (Join-Path $PSScriptRoot 'build.ps1') -EnvFile $EnvFile
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-function Get-OrganizationNameFromUrl {
-    param([Parameter(Mandatory)][string]$OrganizationUrl)
-
-    if ($OrganizationUrl -match '^https://dev\.azure\.com/([^/]+)/?') { return $Matches[1] }
-    if ($OrganizationUrl -match '^https://([^/.]+)\.visualstudio\.com/?') { return $Matches[1] }
-
-    Fail "Could not derive organization short name from '$OrganizationUrl'. Expected https://dev.azure.com/{organization}/."
+if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+    Fail "Azure CLI ('az') was not found on PATH. Install Azure CLI and the azure-devops extension."
 }
 
-function Invoke-AzJson {
-    param(
-        [Parameter(Mandatory)][string[]]$Arguments,
-        [Parameter(Mandatory)][string]$Context
-    )
+# Resolve all config. The required keys are organization, projects,
+# and target branches — all three are mandatory, no defaults baked
+# into the script (hardcoded project/branch lists removed).
+$envProjects = $env:ADO_PROJECTS
+$envBranches = $env:ADO_TARGET_BRANCHES
+$cfg = Resolve-ScriptConfig `
+    -EnvFile $EnvFile `
+    -Parameters @{
+        ADO_ORGANIZATION     = $Organization
+        ADO_PROJECTS         = $envProjects
+        ADO_TARGET_BRANCHES  = $envBranches
+        ADO_AUTH_TOKEN       = $AdoToken
+    } `
+    -Required @('ADO_ORGANIZATION', 'ADO_PROJECTS', 'ADO_TARGET_BRANCHES')
 
-    $output = & az @Arguments --only-show-errors -o json 2>&1
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        Fail "Azure CLI failed while ${Context}: $output"
-    }
+$Organization = $cfg['ADO_ORGANIZATION']
+$Projects     = ConvertFrom-CommaList $cfg['ADO_PROJECTS']
+$TargetBranches = ConvertFrom-CommaList $cfg['ADO_TARGET_BRANCHES']
 
-    $text = ($output | Out-String).Trim()
-    if (-not $text) { return $null }
+# Normalize the organization URL. Trailing slash required by az.
+$Organization = $Organization.Trim().TrimEnd('/') + '/'
+$Org = if ($Organization -match '^https://dev\.azure\.com/([^/]+)/?') { $Matches[1] }
+       elseif ($Organization -match '^https://([^/.]+)\.visualstudio\.com/?') { $Matches[1] }
+       else { Fail "Could not derive organization short name from '$Organization'. Expected https://dev.azure.com/{org}/." }
 
-    try {
-        return $text | ConvertFrom-Json
-    } catch {
-        Fail "Azure CLI returned invalid JSON while ${Context}: $_`n$text"
-    }
+# ADO bearer token: -AdoToken param wins; otherwise the env-var
+# chain (ADO_AUTH_TOKEN / ADO_API_KEY) loaded by Resolve-ScriptConfig.
+if ($cfg['ADO_AUTH_TOKEN']) {
+    [System.Environment]::SetEnvironmentVariable('ADO_AUTH_TOKEN', $cfg['ADO_AUTH_TOKEN'], 'Process')
+}
+if (-not $env:ADO_AUTH_TOKEN) {
+    Write-Step "WARN: `$env:ADO_AUTH_TOKEN is not set. run.ps1 will fail unless it is set or passed via -AdoToken."
 }
 
-# Strip ``refs/heads/`` from a branch name. The Python side has the same
-# helper (see ``auto_pr_reviewer.ado.client.normalize_branch_name``); this
-# local copy is used to filter ``az repos pr list`` output for the
-# script's target-branch policy.
-function Normalize-RefName {
+if (-not $env:OPENAI_API_KEY) {
+    Fail 'No model key. Set OPENAI_API_KEY in .env.'
+}
+
+# Verify the azure-devops extension is installed.
+$extension = & az extension show --name azure-devops --only-show-errors -o json 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Fail "Azure CLI azure-devops extension is not installed. Run: az extension add --name azure-devops"
+}
+
+# Helper: strip ``refs/heads/`` from a branch name. The Python side
+# has the same helper; this local copy is for filtering az output.
+function script:Normalize-RefName {
     param([string]$Branch)
     if (-not $Branch) { return $Branch }
     return $Branch -replace '^refs/heads/', ''
 }
 
-function Get-ObjectProperty {
+# Helper: safe property access on PSCustomObjects.
+function script:Get-ObjectProperty {
     param(
         $InputObject,
         [Parameter(Mandatory)][string]$Name
     )
-
     if ($null -eq $InputObject) { return $null }
     $property = $InputObject.PSObject.Properties[$Name]
     if (-not $property) { return $null }
     return $property.Value
 }
 
-# List active PRs for a project across all branches in one paginated
-# pass. The per-PR dedupe loop downstream filters by target branch
-# and draft status, so the server-side ``--target-branch`` filter is
-# intentionally omitted to avoid 4x duplicate az calls per project.
-function Get-AzPullRequestsForProject {
+# List active PRs for one project (paginated). Used in the PS 5.1
+# fallback. The PS 7+ path inlines this for parallel speedup.
+function script:Get-AzPullRequestsForProject {
     param(
         [Parameter(Mandatory)][string]$OrganizationUrl,
         [Parameter(Mandatory)][string]$Project
@@ -153,81 +164,43 @@ function Get-AzPullRequestsForProject {
     $top = 100
     $skip = 0
     $allPullRequests = @()
-
     do {
-        $page = Invoke-AzJson `
-            -Arguments @(
-                'repos', 'pr', 'list',
-                '--organization', $OrganizationUrl,
-                '--project', $Project,
-                '--status', 'active',
-                '--top', ([string]$top),
-                '--skip', ([string]$skip)
-            ) `
-            -Context "listing active PRs for project '$Project'"
-
-        $items = @($page)
+        $output = & az repos pr list `
+            --organization $OrganizationUrl `
+            --project $Project `
+            --status active `
+            --top $top `
+            --skip $skip `
+            --only-show-errors -o json 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "az repos pr list failed for '$Project' (exit $LASTEXITCODE): $output"
+        }
+        $text = ($output | Out-String).Trim()
+        $items = @()
+        if ($text) {
+            try { $items = @($text | ConvertFrom-Json -Depth 10) }
+            catch { throw "az returned invalid JSON for '$Project': $_`n$text" }
+        }
         $allPullRequests += $items
         $skip += $items.Count
     } while ($items.Count -eq $top)
-
     return $allPullRequests
 }
 
-if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
-    Fail "Azure CLI ('az') was not found on PATH. Install Azure CLI and the azure-devops extension."
-}
-
-if ($Organization -like '*CHANGE_ME*') {
-    Fail "Set the default -Organization value in run-open-prs.ps1 or pass -Organization https://dev.azure.com/{organization}/."
-}
-
-if (-not $OpenAiApiKey) {
-    Fail 'No model key. Set $env:OPENAI_API_KEY or pass -OpenAiApiKey.'
-}
-
-$Organization = Normalize-OrganizationUrl -Value $Organization
-$Org = Get-OrganizationNameFromUrl -OrganizationUrl $Organization
-# Inline project name normalization. The Python container does the
-# authoritative validation (``auto_pr_reviewer.ado.client.normalize_ado_segment``).
-$Projects = @($Projects | Where-Object { $_ } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
-$TargetBranches = @($TargetBranches | Where-Object { $_ } | ForEach-Object { Normalize-RefName $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
-
-if (-not $Projects) { Fail "At least one project is required." }
-if (-not $TargetBranches) { Fail "At least one target branch is required." }
-
-$extension = Invoke-AzJson -Arguments @('extension', 'show', '--name', 'azure-devops') -Context 'checking Azure CLI azure-devops extension'
-if (-not $extension) {
-    Fail "Azure CLI azure-devops extension is not installed. Run: az extension add --name azure-devops"
-}
-
-# ADO bearer token: the wrapper does NOT acquire one. The user supplies
-# it via $env:ADO_AUTH_TOKEN (or one of the aliases recognized by the
-# Python package). The -AdoToken parameter is honored: if the caller
-# passed it, we forward it to the process env so the per-PR run.ps1
-# invocations see it. If missing, the run.ps1 per-PR call will fail
-# with a clear "Missing required config" error.
-if ($PSBoundParameters.ContainsKey('AdoToken') -and $AdoToken) {
-    [System.Environment]::SetEnvironmentVariable('ADO_AUTH_TOKEN', $AdoToken, 'Process')
-}
-if (-not $env:ADO_AUTH_TOKEN) {
-    Write-Step "WARN: `$env:ADO_AUTH_TOKEN is not set. run.ps1 will fail unless it is set or passed via -AdoToken."
-}
-
-# Fetch active PRs for every project concurrently. With N=4 projects the
-# serial loop paid N x (az handshake + first-page latency) = ~1-5s; the
-# parallel cut is bounded by the slowest single project. ThrottleLimit
-# is capped at the project count to avoid spawning idle runspaces, and
-# the upper bound of 4 keeps us well under ADO REST throttling.
+# Fetch active PRs for every project concurrently. With N=4
+# projects the serial loop paid N x (az handshake + first-page
+# latency) = ~1-5s; the parallel cut is bounded by the slowest
+# single project. ThrottleLimit is capped at the project count
+# to avoid spawning idle runspaces, and the upper bound of 4
+# keeps us well under ADO REST throttling.
 #
-# Note: ForEach-Object -Parallel runs each iteration in an isolated
-# runspace, so the script-scope helpers (Get-AzPullRequestsForProject,
-# Invoke-AzJson, Fail, Write-Step from common.psm1) are NOT visible.
-# We re-import common.psm1 inside the block to recover them. The az
-# call is inlined to avoid needing Invoke-AzJson. Fail is replaced
-# with `throw` so failures propagate back to the parent runspace.
-# On PowerShell 5.1 this falls back to the sequential helper path
-# via the version check below.
+# Note: ForEach-Object -Parallel runs each iteration in an
+# isolated runspace, so script-scope helpers aren't visible. We
+# re-import common.psm1 inside the block to recover them. The az
+# call is inlined to avoid needing Invoke-AzJson. Fail is
+# replaced with `throw` so failures propagate back to the
+# parent runspace. On PowerShell 5.1 this falls back to the
+# sequential helper path via the version check below.
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     $throttle = [Math]::Min($Projects.Count, 4)
     $commonModulePath = Join-Path $PSScriptRoot 'common.psm1'
@@ -270,7 +243,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
         }
     )
 } else {
-    # PowerShell 5.1 fallback (ForEach-Object -Parallel not available).
+    # PowerShell 5.1 fallback.
     $AllPullRequests = @(
         foreach ($project in $Projects) {
             Write-Step "Listing active PRs in '$project'..."
@@ -286,45 +259,40 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
     )
 }
 
+# Dedupe + filter. Keyed by (project, repoId, prId) so cross-project
+# PRs on repos with the same name don't collide.
 $seen = @{}
-$SelectedPullRequests = @(
-    foreach ($pullRequestEntry in $AllPullRequests) {
-        $pullRequest = $pullRequestEntry.PullRequest
-        $repository = Get-ObjectProperty -InputObject $pullRequest -Name 'repository'
-        $projectName = $pullRequestEntry.Project
-        $repoId = @(
-            (Get-ObjectProperty -InputObject $repository -Name 'id'),
-            (Get-ObjectProperty -InputObject $repository -Name 'name')
-        ) |
-            Where-Object { $_ } |
-            Select-Object -First 1
-        $repoName = @(
-            (Get-ObjectProperty -InputObject $repository -Name 'name'),
-            $repoId
-        ) |
-            Where-Object { $_ } |
-            Select-Object -First 1
-        $prId = [int](Get-ObjectProperty -InputObject $pullRequest -Name 'pullRequestId')
+$SelectedPullRequests = @(foreach ($pullRequestEntry in $AllPullRequests) {
+    $pullRequest = $pullRequestEntry.PullRequest
+    $repository = Get-ObjectProperty -InputObject $pullRequest -Name 'repository'
+    $projectName = $pullRequestEntry.Project
+    $repoId = @(
+        (Get-ObjectProperty -InputObject $repository -Name 'id'),
+        (Get-ObjectProperty -InputObject $repository -Name 'name')
+    ) | Where-Object { $_ } | Select-Object -First 1
+    $repoName = @(
+        (Get-ObjectProperty -InputObject $repository -Name 'name'),
+        $repoId
+    ) | Where-Object { $_ } | Select-Object -First 1
+    $prId = [int](Get-ObjectProperty -InputObject $pullRequest -Name 'pullRequestId')
+    if (-not $projectName -or -not $repoId -or $prId -le 0) { continue }
 
-        if (-not $projectName -or -not $repoId -or $prId -le 0) { continue }
+    $dedupeKey = "$projectName|$repoId|$prId"
+    if ($seen.ContainsKey($dedupeKey)) { continue }
+    $seen[$dedupeKey] = $true
 
-        $dedupeKey = "$projectName|$repoId|$prId"
-        if ($seen.ContainsKey($dedupeKey)) { continue }
-        $seen[$dedupeKey] = $true
+    $targetBranch = Normalize-RefName (Get-ObjectProperty -InputObject $pullRequest -Name 'targetRefName')
+    if ($TargetBranches -notcontains $targetBranch) { continue }
+    if ((Get-ObjectProperty -InputObject $pullRequest -Name 'isDraft') -eq $true) { continue }
 
-        $targetBranch = Normalize-RefName (Get-ObjectProperty -InputObject $pullRequest -Name 'targetRefName')
-        if ($TargetBranches -notcontains $targetBranch) { continue }
-        if ((Get-ObjectProperty -InputObject $pullRequest -Name 'isDraft') -eq $true) { continue }
-
-        [pscustomobject]@{
-            PullRequest = $pullRequest
-            Project     = $projectName
-            RepoId      = $repoId
-            RepoName    = $repoName
-            Target      = $targetBranch
-        }
+    [pscustomobject]@{
+        PullRequest = $pullRequest
+        Project     = $projectName
+        RepoId      = $repoId
+        RepoName    = $repoName
+        Target      = $targetBranch
     }
-) | Sort-Object Project, RepoName, Target, { Get-ObjectProperty -InputObject $_.PullRequest -Name 'pullRequestId' }
+}) | Sort-Object Project, RepoName, Target, { Get-ObjectProperty -InputObject $_.PullRequest -Name 'pullRequestId' }
 
 if ($MaxPullRequests -gt 0) {
     $SelectedPullRequests = @($SelectedPullRequests | Select-Object -First $MaxPullRequests)
@@ -336,6 +304,28 @@ if (-not $SelectedPullRequests) {
 }
 
 Write-Step ("Found {0} active pull request(s)." -f $SelectedPullRequests.Count)
+
+# Interactive selection. Auto-enable on TTY. CI / piped input skips
+# the prompt and processes every selected PR.
+$isTty = -not [Console]::IsInputRedirected
+if (-not $Interactive -and $isTty -and -not [Console]::IsOutputRedirected) {
+    $Interactive = $true
+}
+if ($Interactive) {
+    $labels = $SelectedPullRequests | ForEach-Object {
+        $pr = $_.PullRequest
+        $prId = [int](Get-ObjectProperty -InputObject $pr -Name 'pullRequestId')
+        $title = Get-ObjectProperty -InputObject $pr -Name 'title'
+        "PR #$prId  $($_.Project)/$($_.RepoName) -> $($_.Target)  $title"
+    }
+    $picks = Show-InteractivePrompt -Items $labels -Prompt "==> Select PRs to review"
+    if ($picks.Count -eq 0) {
+        Write-Step "No PRs selected. Exiting."
+        exit 0
+    }
+    $SelectedPullRequests = @($SelectedPullRequests | Select-Object -Index ($picks | ForEach-Object { $_ - 1 }))
+    Write-Step ("Selected {0} pull request(s) for review." -f $SelectedPullRequests.Count)
+}
 
 $runScript = Join-Path $PSScriptRoot 'run.ps1'
 $failedRuns = 0
@@ -354,15 +344,9 @@ foreach ($entry in $SelectedPullRequests) {
         -Project $projectName `
         -RepoId $repoId `
         -PrId $prId `
-        -Language $Language `
-        -FailOn $FailOn `
-        -VoteWaitingOn $VoteWaitingOn `
         -AdoToken $env:ADO_AUTH_TOKEN `
-        -OpenAiApiKey $OpenAiApiKey `
-        -PiModel $PiModel `
-        -Image $Image `
-        -ContainerName "pr-review-bot-pr-$prId" `
-        -DryRun:$DryRun
+        -DryRun:$DryRun `
+        -EnvFile $EnvFile
 
     $rc = $LASTEXITCODE
     if ($rc -ne 0) {

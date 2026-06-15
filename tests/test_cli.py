@@ -659,11 +659,11 @@ class TestPowerShellWrapperStructure:
     def test_run_ps1_emits_dynamic_e_overrides(self):
         text = self._require("run.ps1")
         # Every per-invocation secret / override is added as -e so it
-        # wins over the .env file. DRY_RUN uses a literal "1" because
-        # the parameter is a [switch]; all others bind from a variable.
+        # wins over the .env file. The post-refactor implementation
+        # uses a hashtable + loop; we check the keys are present and
+        # that the docker invocation adds them via the loop.
         for key in (
             "ADO_AUTH_TOKEN",
-            "OPENAI_API_KEY",
             "PR_ID",
             "PR_URL",
             "ADO_ORG",
@@ -676,9 +676,9 @@ class TestPowerShellWrapperStructure:
             "VOTE_WAITING_ON",
             "PI_MODEL",
         ):
-            assert f'"{key}=$' in text, f"missing -e override for {key}"
-        # DRY_RUN: literal "1" because -DryRun is a switch parameter.
-        assert '"DRY_RUN=1"' in text
+            assert f"'{key}'" in text, f"missing -e override for {key}"
+        # The loop itself must add the per-key -e flag.
+        assert '"-e", "$k=$v"' in text or '"-e","$k=$v"' in text or '-e", "$k=$v"' in text
 
     def test_run_ps1_cleans_up_only_temp_env_file(self):
         text = self._require("run.ps1")
@@ -695,3 +695,196 @@ class TestPowerShellWrapperStructure:
         idx = text.find(".PARAMETER EnvFile")
         block = text[idx:idx + 800]
         assert "--env-file" in block
+
+
+class TestRefactoredWrappers:
+    """Structural checks for the PS-wrapper consolidation refactor.
+
+    These tests don't exercise PowerShell on the test host (no pwsh on
+    CI runners). They verify that the source files contain the expected
+    surface so the refactor doesn't regress:
+
+      * ``common.psm1`` exports the new helpers
+        (Get-EnvOrDefault, Resolve-ScriptConfig, ConvertFrom-CommaList,
+        Show-InteractivePrompt).
+      * ``run.ps1`` and ``run-open-prs.ps1`` have no hardcoded
+        "aveato" / "main,master,dev,develop" defaults — those moved
+        entirely to env vars.
+      * ``run.ps1`` and ``run-open-prs.ps1`` accept ``-Build`` so the
+        deleted ``run-local.ps1`` shim still has a way to combine
+        build + run.
+      * ``run-local.ps1`` is a thin deprecation shim that forwards to
+        ``run.ps1``.
+    """
+
+    REPO = Path(__file__).resolve().parent.parent
+
+    def _read(self, name: str) -> str:
+        path = self.REPO / name
+        if not path.exists():
+            pytest.skip(f"{name} not present on this host")
+        return path.read_text(encoding="utf-8")
+
+    def test_common_psm1_exports_new_helpers(self):
+        text = self._read("common.psm1")
+        # Each new helper must be defined and exported.
+        for fn in (
+            "Get-EnvOrDefault",
+            "Resolve-ScriptConfig",
+            "ConvertFrom-CommaList",
+            "Show-InteractivePrompt",
+        ):
+            assert f"function {fn}" in text, f"{fn} not defined in common.psm1"
+        export_line = next(
+            (l for l in text.splitlines() if l.startswith("Export-ModuleMember")),
+            "",
+        )
+        for fn in (
+            "Get-EnvOrDefault",
+            "Resolve-ScriptConfig",
+            "ConvertFrom-CommaList",
+            "Show-InteractivePrompt",
+        ):
+            assert fn in export_line, f"{fn} not exported from common.psm1"
+
+    def test_run_ps1_minimal_params(self):
+        text = self._read("run.ps1")
+        # Parse the [CmdletBinding()] param block to count named params.
+        # The post-refactor script should expose only 9 params
+        # (PrUrl, Org, Project, RepoId, PrId, AdoToken, EnvFile, DryRun, Build).
+        param_names = set()
+        in_param = False
+        for line in text.splitlines():
+            if "[CmdletBinding()]" in line:
+                in_param = True
+                continue
+            if in_param and line.startswith(")"):
+                break
+            if in_param:
+                stripped = line.strip()
+                if stripped.startswith("[") and "]" in stripped:
+                    # type / validate attribute line
+                    after = stripped.split("]", 1)[1].strip()
+                    if after.startswith("$"):
+                        # `]` $Foo` -> first ident after `$`
+                        ident = after.lstrip("$").split()[0].rstrip(",")
+                        param_names.add(ident)
+        # Switch params (``[switch] $Build``) have the `$` directly
+        # attached, not separated by a space. Catch those too.
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[switch]"):
+                after = stripped.split("$", 1)[1]
+                ident = after.split()[0].rstrip(",")
+                param_names.add(ident)
+
+        expected = {"PrUrl", "Org", "Project", "RepoId", "PrId", "AdoToken", "EnvFile", "DryRun", "Build"}
+        assert expected.issubset(param_names), (
+            f"run.ps1 missing expected params. Found: {sorted(param_names)}, expected: {sorted(expected)}"
+        )
+        # Heuristic cap: post-refactor run.ps1 should be < 15 params.
+        # If this fails, somebody re-added a 10th config param that
+        # should have moved to env.
+        assert len(param_names) <= 12, f"run.ps1 has too many params: {sorted(param_names)}"
+
+    def test_run_open_prs_ps1_minimal_params(self):
+        text = self._read("run-open-prs.ps1")
+        param_names = set()
+        in_param = False
+        for line in text.splitlines():
+            if "[CmdletBinding()]" in line:
+                in_param = True
+                continue
+            if in_param and line.startswith(")"):
+                break
+            if in_param:
+                stripped = line.strip()
+                if stripped.startswith("[") and "]" in stripped:
+                    after = stripped.split("]", 1)[1].strip()
+                    if after.startswith("$"):
+                        ident = after.lstrip("$").split()[0].rstrip(",")
+                        param_names.add(ident)
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[switch]"):
+                after = stripped.split("$", 1)[1]
+                ident = after.split()[0].rstrip(",")
+                param_names.add(ident)
+
+        expected = {
+            "Organization", "Projects", "TargetBranches", "AdoToken",
+            "EnvFile", "DryRun", "Interactive", "MaxPullRequests", "Build",
+        }
+        assert expected.issubset(param_names), (
+            f"run-open-prs.ps1 missing expected params. Found: {sorted(param_names)}, expected: {sorted(expected)}"
+        )
+        assert len(param_names) <= 14, f"run-open-prs.ps1 has too many params: {sorted(param_names)}"
+
+    def test_no_hardcoded_aveato_default(self):
+        # The refactor removed the hardcoded ``https://dev.azure.com/aveato/``
+        # default and the hardcoded project list. Both scripts must
+        # require org/projects/branches from env / explicit params.
+        for script in ("run.ps1", "run-open-prs.ps1"):
+            text = self._read(script)
+            assert "aveato" not in text, f"{script} still contains hardcoded 'aveato' default"
+        # run-open-prs.ps1 must not carry the old project list either.
+        text = self._read("run-open-prs.ps1")
+        for project in ("Laekker.Kitchen", "AveatoApp", "Laekkerai.CustomerProjects"):
+            assert project not in text, f"run-open-prs.ps1 still has hardcoded project '{project}'"
+        # And the old hardcoded target-branch list.
+        for branch in ("master", "develop"):
+            # The token "master" / "develop" may appear in the docs as
+            # legitimate examples; the actual hardcoded default is the
+            # ``@("main", "master", "dev", "develop")`` array literal.
+            # That whole array literal must be gone.
+            pass
+        assert '@("main", "master", "dev", "develop")' not in text, (
+            "run-open-prs.ps1 still has the hardcoded target-branches default array"
+        )
+
+    def test_build_switch_present(self):
+        for script in ("run.ps1", "run-open-prs.ps1"):
+            text = self._read(script)
+            assert "[switch] $Build" in text or "[switch]$Build" in text, (
+                f"{script} missing -Build switch (replaces run-local.ps1)"
+            )
+
+    def test_run_local_ps1_is_deprecation_shim(self):
+        text = self._read("run-local.ps1")
+        # Must print a deprecation warning.
+        assert "deprecated" in text.lower() or "DEPRECATED" in text
+        # Must forward to run.ps1 (or run-open-prs.ps1) rather than
+        # doing the work itself.
+        assert "run.ps1" in text
+        # Must NOT contain a duplicated full run-flow (no Resolve-ScriptConfig
+        # import, no Get-ContainerRuntime, no direct podman/docker build).
+        assert "Get-ContainerRuntime" not in text
+
+    def test_env_example_exists(self):
+        path = self.REPO / ".env.example"
+        assert path.exists(), ".env.example not present"
+        text = path.read_text(encoding="utf-8")
+        for key in (
+            "ADO_ORGANIZATION",
+            "ADO_PROJECTS",
+            "ADO_TARGET_BRANCHES",
+            "ADO_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+        ):
+            assert key in text, f".env.example missing required env var {key}"
+
+    def test_interactive_prompt_supports_all_none_range(self):
+        text = self._read("common.psm1")
+        # The interactive helper must accept: all, none, n, a,
+        # comma-separated indices, inclusive ranges.
+        for token in ("'all'", "'a'", "'none'", "'n'", "(\\d+)-(\\d+)"):
+            assert token in text, f"Show-InteractivePrompt missing pattern {token}"
+
+    def test_resolve_script_config_requires_keys(self):
+        text = self._read("common.psm1")
+        # Resolve-ScriptConfig must accept a -Required parameter and
+        # surface a clear error when keys are missing.
+        assert "param(" in text
+        assert "-Required" in text
+        assert "Missing required configuration" in text
+
