@@ -191,7 +191,11 @@ if (-not $env:OPENAI_API_KEY) {
 }
 
 $Runtime = Get-ContainerRuntime
-$Token = Get-AdoToken $AdoToken
+# ADO bearer token resolution is handled by the Python container via
+# $env:ADO_AUTH_TOKEN (or the ADO_API_KEY / ADO_MCP_AUTH_TOKEN aliases).
+# The wrapper layers above (Apply-Env, --env-file, -e ADO_AUTH_TOKEN=...)
+# already forward the value; the container emits a clear error if it's
+# missing, so no extra PowerShell-side acquisition is required.
 $ArtifactVolumeName = $env:REVIEW_ARTIFACT_VOLUME_NAME
 if (-not $ArtifactVolumeName) {
     $ArtifactVolumeName = 'pr-review-bot-artifacts'
@@ -286,6 +290,8 @@ if ($Runtime -eq "podman") {
 if ($ContainerName) {
     $dockerArgs += @("--name", $ContainerName)
 }
+
+$dockerArgs += @("-d")
 
 # Mount artifact storage (named volume or local path)
 if ($useNamedVolume) {

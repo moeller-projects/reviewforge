@@ -19,6 +19,15 @@ COPY scripts/ ./scripts/
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY standards/ ./standards/
+
+# Strip Windows CRLF line endings from executable scripts. Editors on
+# Windows hosts can write CRLF into .py files even when the repo's
+# .gitattributes specifies eol=lf. The shebang on scripts/main.py is
+# parsed by the kernel (not Python), so a trailing \r turns
+# ``python3`` into ``python3\r`` and the container fails at exec time
+# with exit 127. Idempotent on already-LF files.
+RUN find ./scripts ./src -type f \( -name '*.py' -o -name '*.sh' \) -exec sed -i 's/\r$//' {} +
+
 RUN chmod +x ./scripts/main.py ./scripts/review.py ./scripts/ado_review.py
 
 # The repo is cloned here by the Python runner; main.py orchestrates review.
@@ -28,3 +37,8 @@ ENV PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 WORKDIR /workspace
 
 ENTRYPOINT ["/app/scripts/main.py"]
+# Default subcommand when the image is run with no extra args. Overridden
+# by ``podman run image <subcommand> ...`` to dispatch to other commands
+# like ``post`` or ``discover``. Mirrors the no-argv default in
+# cli.main() so the image is self-explanatory in isolation.
+CMD ["review"]

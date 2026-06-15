@@ -58,7 +58,7 @@ param(
     [string]   $Organization = "https://dev.azure.com/aveato/",
     [string[]] $Projects = @("Laekker.Kitchen", "AveatoApp", "Aveato", "Laekkerai.CustomerProjects"),
     [string[]] $TargetBranches = @("main", "master", "dev", "develop"),
-    [string]   $AdoToken,
+    [string]   $AdoToken = $env:ADO_API_KEY,
     [string]   $OpenAiApiKey = $env:OPENAI_API_KEY,
     [string]   $Language     = "German",
     [ValidateSet("none","nit","minor","major","blocker")]
@@ -140,11 +140,14 @@ function Get-ObjectProperty {
     return $property.Value
 }
 
-function Get-AzPullRequestsForProjectAndBranch {
+# List active PRs for a project across all branches in one paginated
+# pass. The per-PR dedupe loop downstream filters by target branch
+# and draft status, so the server-side ``--target-branch`` filter is
+# intentionally omitted to avoid 4x duplicate az calls per project.
+function Get-AzPullRequestsForProject {
     param(
         [Parameter(Mandatory)][string]$OrganizationUrl,
-        [Parameter(Mandatory)][string]$Project,
-        [Parameter(Mandatory)][string]$TargetBranch
+        [Parameter(Mandatory)][string]$Project
     )
 
     $top = 100
@@ -158,11 +161,10 @@ function Get-AzPullRequestsForProjectAndBranch {
                 '--organization', $OrganizationUrl,
                 '--project', $Project,
                 '--status', 'active',
-                '--target-branch', $TargetBranch,
                 '--top', ([string]$top),
                 '--skip', ([string]$skip)
             ) `
-            -Context "listing active PRs for project '$Project' targeting '$TargetBranch'"
+            -Context "listing active PRs for project '$Project'"
 
         $items = @($page)
         $allPullRequests += $items
@@ -212,22 +214,77 @@ if (-not $env:ADO_AUTH_TOKEN) {
     Write-Step "WARN: `$env:ADO_AUTH_TOKEN is not set. run.ps1 will fail unless it is set or passed via -AdoToken."
 }
 
-$AllPullRequests = @(
-    foreach ($project in $Projects) {
-        foreach ($targetBranch in $TargetBranches) {
-            Write-Step "Listing active PRs in '$project' targeting '$targetBranch'..."
-            foreach ($pullRequest in @(Get-AzPullRequestsForProjectAndBranch `
+# Fetch active PRs for every project concurrently. With N=4 projects the
+# serial loop paid N x (az handshake + first-page latency) = ~1-5s; the
+# parallel cut is bounded by the slowest single project. ThrottleLimit
+# is capped at the project count to avoid spawning idle runspaces, and
+# the upper bound of 4 keeps us well under ADO REST throttling.
+#
+# Note: ForEach-Object -Parallel runs each iteration in an isolated
+# runspace, so the script-scope helpers (Get-AzPullRequestsForProject,
+# Invoke-AzJson, Fail, Write-Step from common.psm1) are NOT visible.
+# We re-import common.psm1 inside the block to recover them. The az
+# call is inlined to avoid needing Invoke-AzJson. Fail is replaced
+# with `throw` so failures propagate back to the parent runspace.
+# On PowerShell 5.1 this falls back to the sequential helper path
+# via the version check below.
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $throttle = [Math]::Min($Projects.Count, 4)
+    $commonModulePath = Join-Path $PSScriptRoot 'common.psm1'
+    $AllPullRequests = @(
+        $Projects | ForEach-Object -ThrottleLimit $throttle -Parallel {
+            $project = $_
+            $org = $using:Organization
+            Import-Module $using:commonModulePath -Force
+            Write-Step "Listing active PRs in '$project'..."
+            $top = 100
+            $skip = 0
+            $threadResults = @()
+            do {
+                $output = & az repos pr list `
+                    --organization $org `
+                    --project $project `
+                    --status active `
+                    --top $top `
+                    --skip $skip `
+                    --only-show-errors `
+                    -o json 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "az repos pr list failed for '$project' (exit $LASTEXITCODE): $output"
+                }
+                $text = ($output | Out-String).Trim()
+                $items = @()
+                if ($text) {
+                    try { $items = @($text | ConvertFrom-Json -Depth 10) }
+                    catch { throw "az returned invalid JSON for '$project': $_`n$text" }
+                }
+                foreach ($item in $items) {
+                    $threadResults += [pscustomobject]@{
+                        PullRequest = $item
+                        Project     = $project
+                    }
+                }
+                $skip += $items.Count
+            } while ($items.Count -eq $top)
+            $threadResults
+        }
+    )
+} else {
+    # PowerShell 5.1 fallback (ForEach-Object -Parallel not available).
+    $AllPullRequests = @(
+        foreach ($project in $Projects) {
+            Write-Step "Listing active PRs in '$project'..."
+            foreach ($pullRequest in @(Get-AzPullRequestsForProject `
                 -OrganizationUrl $Organization `
-                -Project $project `
-                -TargetBranch $targetBranch)) {
+                -Project $project)) {
                 [pscustomobject]@{
                     PullRequest = $pullRequest
                     Project     = $project
                 }
             }
         }
-    }
-)
+    )
+}
 
 $seen = @{}
 $SelectedPullRequests = @(

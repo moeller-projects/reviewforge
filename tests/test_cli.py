@@ -353,11 +353,21 @@ class TestCmdPost:
 
 
 class TestMain:
-    def test_no_args_prints_help(self, capsys):
+    def test_no_args_defaults_to_review(self, monkeypatch, tmp_path, capsys):
+        # main() with no argv should dispatch to cmd_review, not print
+        # help. This matches the Dockerfile ENTRYPOINT invocation and
+        # ``python -m auto_pr_reviewer`` (no subcommand) semantics.
+        _set_min_env(monkeypatch, tmp_path)
+
+        class FakeOutcome:
+            exit_code = 0
+
+        monkeypatch.setattr(cli, "run_full", lambda cfg: FakeOutcome())
         rc = main([])
-        assert rc == 1
+        assert rc == 0
+        # No help text should have been printed.
         out = capsys.readouterr().err
-        assert "usage" in out
+        assert "usage" not in out
 
     def test_dispatches_to_subcommand(self, clean_env, monkeypatch, tmp_path):
         _set_min_env(monkeypatch, tmp_path)

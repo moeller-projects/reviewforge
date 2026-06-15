@@ -366,10 +366,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    parser = build_parser()
+    # Default to ``review`` when no subcommand is given. The container
+    # ENTRYPOINT invokes this entrypoint with no args, and
+    # ``python -m auto_pr_reviewer`` (no subcommand) should also land
+    # on the primary use case. Callers wanting help should pass ``-h``.
     if not argv:
-        parser.print_help(sys.stderr)
-        return 1
+        argv = ["review"]
+    parser = build_parser()
     args = parser.parse_args(argv)
     func = getattr(args, "func", None)
     if func is None:
