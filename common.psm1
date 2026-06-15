@@ -194,7 +194,7 @@ function Show-InteractivePrompt {
         [scriptblock] $ReadHostHook = { param($p) Read-Host -Prompt $p }
     )
 
-    if ($Items.Count -eq 0) { return @() }
+    if ($Items.Count -eq 0) { return ,@() }
 
     Write-Host $Prompt -NoNewline
     Write-Host ""
@@ -209,14 +209,18 @@ function Show-InteractivePrompt {
 
     while ($true) {
         $raw = & $ReadHostHook "Selection: "
-        if ($null -eq $raw) { return @() }
+        if ($null -eq $raw) { return ,@() }
         $raw = "$raw".Trim().ToLowerInvariant()
         if ($raw -in @('all', 'a')) {
-            return @(1..$Items.Count)
+            # Unary comma keeps the array intact across the function
+            # boundary; without it, a 0/1-element return is unrolled by
+            # the pipeline and the caller's ``.Count`` throws under
+            # Set-StrictMode.
+            return ,(1..$Items.Count)
         }
         if ($raw -in @('none', 'n', '')) {
             if ($raw -eq '') { continue }   # re-prompt on empty
-            return @()
+            return ,@()
         }
         # Parse ``1,3-5`` syntax.
         $selected = New-Object System.Collections.Generic.List[int]
@@ -240,7 +244,9 @@ function Show-InteractivePrompt {
             if (-not $ok) { break }
         }
         if ($ok) {
-            return @($selected | Sort-Object -Unique)
+            # See note above: unary comma preserves the array shape
+            # for single-item selections (e.g. user typed "3").
+            return ,@($selected | Sort-Object -Unique)
         }
         Write-Host "  Invalid selection. Use 1,3-5, 'all', or 'none'." -ForegroundColor Yellow
     }

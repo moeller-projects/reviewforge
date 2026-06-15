@@ -71,7 +71,8 @@ param(
     [switch]   $DryRun,
     [switch]   $Interactive,
     [switch]   $Build,
-    [string]   $EnvFile = ".env"
+    [string]   $EnvFile = ".env",
+    [switch] $KeepContainer
 )
 
 Set-StrictMode -Version Latest
@@ -346,6 +347,7 @@ foreach ($entry in $SelectedPullRequests) {
         -PrId $prId `
         -AdoToken $env:ADO_AUTH_TOKEN `
         -DryRun:$DryRun `
+        -KeepContainer:$KeepContainer `
         -EnvFile $EnvFile
 
     $rc = $LASTEXITCODE

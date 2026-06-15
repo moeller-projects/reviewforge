@@ -45,7 +45,8 @@ param(
     [string] $AdoToken,
     [string] $EnvFile = ".env",
     [switch] $DryRun,
-    [switch] $Build
+    [switch] $Build,
+    [switch] $KeepContainer
 )
 
 Set-StrictMode -Version Latest
@@ -153,16 +154,18 @@ $runLabel = if ($cfg['PR_URL']) {
 }
 
 # Build the docker invocation.
-$dockerArgs = @("run", "--rm", "--network", "host")
+$dockerArgs = @("run", "--network", "host")
 if ($Runtime -eq "podman") {
-    $dockerArgs = @("run", "--rm", "--network", "bridge", "--dns", "8.8.8.8", "--dns", "1.1.1.1")
+    $dockerArgs = @("run", "--network", "bridge", "--dns", "8.8.8.8", "--dns", "1.1.1.1")
+}
+if (-not $KeepContainer) {
+    $dockerArgs += "--rm"
+    # Detached mode (per project decision: -d kept). The spawn exit
+    # code is what the script reports; the container's review result
+    # is not observable from this script.
+    $dockerArgs += @("-d")
 }
 if ($ContainerName) { $dockerArgs += @("--name", $ContainerName) }
-
-# Detached mode (per project decision: -d kept). The spawn exit
-# code is what the script reports; the container's review result
-# is not observable from this script.
-$dockerArgs += @("-d")
 
 if ($useNamedVolume) {
     $dockerArgs += @("--volume", "$($ArtifactVolumeName):/workspace/artifacts")
