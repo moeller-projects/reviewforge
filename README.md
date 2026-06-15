@@ -85,6 +85,19 @@ The Docker image copies both `src/` and `scripts/` and sets
 `ENTRYPOINT` and matches the previous interface 1:1, so existing
 PowerShell wrappers and the Azure pipeline definition need no changes.
 
+## Documentation
+
+Detailed per-module documentation lives under `docs/`:
+
+- [`docs/package-guide.md`](docs/package-guide.md) — index, package layout, key invariants.
+- [`docs/architecture.md`](docs/architecture.md) — components, data flow, design rationale.
+- [`docs/configuration.md`](docs/configuration.md) — `Config` dataclass, env-var precedence, alias map, every supported env var.
+- [`docs/cli.md`](docs/cli.md) — subcommands, flags, exit codes, programmatic entry.
+- [`docs/ado-integration.md`](docs/ado-integration.md) — `AdoClient` REST wrapper, idempotent posting, diff → threadContext mapping, legacy shim.
+- [`docs/pipeline.md`](docs/pipeline.md) — the `Stage` interface, the 11 default stages, how to add a new one.
+- [`docs/ai-runner.md`](docs/ai-runner.md) — `PiRunner` subprocess wrapper, session reuse, JSON repair, prompt assembly.
+- [`docs/artifacts.md`](docs/artifacts.md) — artifact directory layout, `ARTIFACT_NAMES` contract, `RunSummary` shape.
+
 ## CLI
 
 The Python CLI is the primary entry point. All four subcommands share a
@@ -228,6 +241,29 @@ Prereqs: Docker Desktop and a model key in `$env:OPENAI_API_KEY`, plus either
 `az login` (for the token) or an explicit `-AdoToken`. `-DryRun` still needs the
 token for the in-container clone, but it skips posting and just prints the
 findings JSON.
+
+### PowerShell is now a thin wrapper
+
+The PowerShell scripts are intentionally minimal. They only:
+
+* parse CLI args and forward them as environment variables,
+* optionally load a `.env` file (KEY=VALUE only) into the process env,
+* pick a container runtime (`docker` or `podman`),
+* run the container with the env vars and delete the temp env file in a `finally` block.
+
+All Azure DevOps logic — REST calls, PR URL parsing, branch normalization,
+reviewer lookup, branch resolution, JSON validation, severity calibration,
+vote / post — lives in the Python package `auto_pr_reviewer` and runs inside
+the container. The local `common.psm1` only contains:
+
+* `Write-Step`, `Fail` (output helpers)
+* `Get-ContainerRuntime` (docker/podman detection)
+* `Import-DotEnv` (trivial KEY=VALUE parser for the local `run.ps1` only)
+* `Write-EnvFile` (string-concat helper that builds the temp env file)
+
+If you need new ADO behavior, add it to the Python package and call it from
+the container. Do not extend `common.psm1` or the individual `*.ps1`
+wrappers with ADO logic.
 
 ### Run tests
 
