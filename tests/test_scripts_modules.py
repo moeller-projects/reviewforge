@@ -611,9 +611,57 @@ class TestGitChunker:
 class TestPrompts:
     def test_system_prompt_includes_language_and_standards(self, tmp_path):
         cfg = make_cfg(tmp_path, review_language="German")
-        assert "LANGUAGE" in prompts.system_prompt(cfg)
-        assert "German" in prompts.system_prompt(cfg)
-        assert "standards prompt" in prompts.system_prompt(cfg)
+        text = prompts.system_prompt(cfg)
+        assert "LANGUAGE" in text
+        assert "German" in text
+        assert "standards prompt" in text
+        # Directive must come AFTER the standards block so it sits in the
+        # model's recency window (small models weight the tail most).
+        assert text.index("standards prompt") < text.index("LANGUAGE:")
+
+    def test_language_directive_replaces_language_value(self, tmp_path):
+        cfg = make_cfg(tmp_path, review_language="German")
+        assert "in German" in prompts.language_directive(cfg)
+        cfg_fr = make_cfg(tmp_path, review_language="French")
+        assert "in French" in prompts.language_directive(cfg_fr)
+        assert "in German" not in prompts.language_directive(cfg_fr)
+
+    def test_augment_prompt_file_appends_directive(self, tmp_path):
+        source = tmp_path / "verify-findings.md"
+        source.write_text("base verify prompt", encoding="utf-8")
+        cfg = make_cfg(tmp_path, review_language="German")
+        dest = prompts.augment_prompt_file(source, cfg)
+        text = dest.read_text(encoding="utf-8")
+        assert text.startswith("base verify prompt")
+        assert text.rstrip().endswith(
+            "value in German. Do NOT translate file paths, identifiers, code."
+        )
+
+    def test_augment_prompt_file_is_idempotent(self, tmp_path):
+        source = tmp_path / "severity.md"
+        source.write_text("base severity prompt", encoding="utf-8")
+        cfg = make_cfg(tmp_path, review_language="German")
+        dest1 = prompts.augment_prompt_file(source, cfg)
+        text1 = dest1.read_text(encoding="utf-8")
+        # Re-augmenting the same source must not double-append the directive.
+        dest2 = prompts.augment_prompt_file(source, cfg)
+        text2 = dest2.read_text(encoding="utf-8")
+        assert dest1 == dest2
+        assert text1 == text2
+        assert text2.count("LANGUAGE: Write every") == 1
+
+    def test_augment_prompt_file_tracks_review_language_change(self, tmp_path):
+        source = tmp_path / "review-system.md"
+        source.write_text("base", encoding="utf-8")
+        cfg_de = make_cfg(tmp_path, review_language="German")
+        dest = prompts.augment_prompt_file(source, cfg_de)
+        assert "in German" in dest.read_text(encoding="utf-8")
+        # Switching language writes a fresh augmented file. The cache in
+        # the runner is keyed on (cfg), so this is observable when the
+        # runner is rebuilt with a different cfg.
+        cfg_fr = make_cfg(tmp_path, review_language="French")
+        dest_fr = prompts.augment_prompt_file(source, cfg_fr)
+        assert "in French" in dest_fr.read_text(encoding="utf-8")
 
     def test_stage_instruction_includes_available_context_files(self, tmp_path):
         cfg = make_cfg(tmp_path)
@@ -711,8 +759,10 @@ class TestPiRunner:
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
         monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
-        PiRunner(cfg).run_json(tmp_path / "prompt.md", "stdin", output, "stage")
+        PiRunner(cfg).run_json(prompt, "stdin", output, "stage")
         assert json.loads(output.read_text()) == {"ok": True}
         assert "ADO_AUTH_TOKEN" not in seen_env
         assert "ADO_API_KEY" not in seen_env
@@ -728,8 +778,10 @@ class TestPiRunner:
             return subprocess.CompletedProcess(cmd, 0, b'{"repaired": true}', b"")
 
         monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
-        PiRunner(cfg).run_json(tmp_path / "prompt.md", "stdin", output, "stage")
+        PiRunner(cfg).run_json(prompt, "stdin", output, "stage")
         assert json.loads(output.read_text()) == {"repaired": True}
         assert len(calls) == 2
 
@@ -739,8 +791,10 @@ class TestPiRunner:
             "auto_pr_reviewer.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess([], 9, b"", b"bad"),
         )
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("base prompt", encoding="utf-8")
         with pytest.raises(SystemExit):
-            PiRunner(cfg).run_json(tmp_path / "prompt.md", "stdin", tmp_path / "out.json", "stage")
+            PiRunner(cfg).run_json(prompt, "stdin", tmp_path / "out.json", "stage")
 
 
 # ---------------------------------------------------------------------------
@@ -897,6 +951,50 @@ class TestDiffMapper:
         assert ctx.file_path == "/src/app.py"
         assert ctx.right_file_start == 1
         assert ctx.right_file_end == 1
+
+    def test_file_level_fallback_for_mode_only_change(self):
+        # Mode-only chmod produces a diff with the file header but no
+        # `@@` hunk lines. The file-level fallback must still return
+        # something — a file-level context (no line anchor) — so the
+        # post step does not silently drop the finding.
+        chmod_diff = (
+            "diff --git a/Install-Requirements.sh b/Install-Requirements.sh\n"
+            "old mode 100755\n"
+            "new mode 100644\n"
+            "index 1234567..89abcde\n"
+            "--- a/Install-Requirements.sh\n"
+            "+++ b/Install-Requirements.sh\n"
+        )
+        ctx = diff_mapper.map_file_to_fallback("Install-Requirements.sh", diff_text=chmod_diff)
+        assert ctx is not None
+        assert ctx.file_path == "/Install-Requirements.sh"
+        assert ctx.is_file_level
+        # No line numbers — ADO attaches the comment to the file header.
+        assert ctx.right_file_start is None
+        assert ctx.right_file_end is None
+        ser = ctx.to_thread_context()
+        assert ser == {"filePath": "/Install-Requirements.sh"}
+
+    def test_file_level_fallback_for_binary_file(self):
+        # Binary files also have no `@@` hunks in the diff.
+        binary_diff = (
+            "diff --git a/img.png b/img.png\n"
+            "index 1234567..89abcde 100644\n"
+            "GIT binary patch\n"
+            "literal 1234\n"
+            "abc...\n"
+            "--- a/img.png\n"
+            "+++ b/img.png\n"
+        )
+        ctx = diff_mapper.map_file_to_fallback("img.png", diff_text=binary_diff)
+        assert ctx is not None
+        assert ctx.is_file_level
+        assert ctx.to_thread_context() == {"filePath": "/img.png"}
+
+    def test_file_level_fallback_for_unknown_file(self):
+        # File not in diff at all → still None.
+        ctx = diff_mapper.map_file_to_fallback("missing.py", diff_text=self.DIFF)
+        assert ctx is None
 
     def test_to_thread_context_serializes(self):
         ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 2, diff_text=self.DIFF)

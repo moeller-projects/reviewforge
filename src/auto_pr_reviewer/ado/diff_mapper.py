@@ -23,20 +23,37 @@ class AdoThreadContext:
     ``right_file_start`` and ``right_file_end`` are the line numbers in the
     new file. ``position`` is a placeholder for cases where ADO needs the
     diff hunk index instead of a line number.
+
+    All three line-anchoring fields are optional. When they are all
+    ``None`` the serialized form is just ``{"filePath": "..."}`` — ADO
+    accepts that as a file-level comment (attached to the file header in
+    the Files tab, not to a specific line). This is the fallback path
+    for findings on files that appear in the diff but where no usable
+    hunk can be anchored (mode-only changes, renames, binary files).
     """
 
     file_path: str
-    right_file_start: int
-    right_file_end: int
+    right_file_start: int | None = None
+    right_file_end: int | None = None
     position: int | None = None
 
+    @property
+    def is_file_level(self) -> bool:
+        """``True`` when no line anchor is set (file-level comment)."""
+        return self.right_file_start is None and self.right_file_end is None
+
     def to_thread_context(self) -> dict[str, Any]:
-        """Serialize to the dict shape expected by ADO's ``threadContext``."""
-        ctx: dict[str, Any] = {
-            "filePath": self.file_path,
-            "rightFileStart": {"line": self.right_file_start, "offset": 1},
-            "rightFileEnd": {"line": self.right_file_end, "offset": 1},
-        }
+        """Serialize to the dict shape expected by ADO's ``threadContext``.
+
+        File-level contexts (no line numbers) emit just ``filePath``;
+        inline contexts include ``rightFileStart`` / ``rightFileEnd`` and
+        optionally ``position``.
+        """
+        ctx: dict[str, Any] = {"filePath": self.file_path}
+        if self.right_file_start is not None:
+            ctx["rightFileStart"] = {"line": self.right_file_start, "offset": 1}
+        if self.right_file_end is not None:
+            ctx["rightFileEnd"] = {"line": self.right_file_end, "offset": 1}
         if self.position is not None:
             ctx["position"] = self.position
         return ctx
@@ -225,18 +242,33 @@ class DiffLineMapper:
         )
 
     def file_level_context(self, file_path: str) -> AdoThreadContext | None:
-        """Return a file-level (no line) thread context if the file is in the diff.
+        """Return a file-level thread context for ``file_path`` if the file appears in the diff.
 
-        Use this when the reviewer cannot confidently pin a comment to a line
-        but the file is clearly part of the change.
+        Two flavours:
+
+        * **Inline fallback** — file is in the diff with at least one hunk;
+          return a context anchored to the first hunk's start so ADO can
+          place the comment on a real line.
+        * **Pure file-level** — file is in the diff but has no usable
+          hunks (mode-only ``chmod`` change, rename, binary file, etc.).
+          Return a context with just ``filePath`` so ADO attaches the
+          comment to the file header in the Files tab rather than
+          rejecting the request with HTTP 400.
+
+        Returns ``None`` only when the file is not in the diff at all.
         """
         if not file_path:
             return None
         for f in self._files:
             if _normalize_path(f.path) == _normalize_path(file_path):
-                # Anchor to the first hunk's start so ADO accepts the comment.
                 if not f.hunks:
-                    return None
+                    # No content lines changed (mode-only, rename,
+                    # binary). ADO still accepts a threadContext with
+                    # just filePath — better than silently dropping the
+                    # finding on the floor.
+                    return AdoThreadContext(
+                        file_path=_with_leading_slash(file_path),
+                    )
                 h0 = f.hunks[0]
                 return AdoThreadContext(
                     file_path=_with_leading_slash(file_path),

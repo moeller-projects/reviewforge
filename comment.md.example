@@ -1,0 +1,94 @@
+{#─ Per-finding PR comment template (one thread per finding). ──────
+
+  This file is the default starting point for the bot's PR comments.
+  The bot renders it once per finding and posts the result as a single
+  ADO thread, with the finding's file + line attached so it shows up
+  inline in the PR's "Files" tab. The bot does NOT post a doc-level
+  summary — only the per-finding threads.
+
+  Point `COMMENT_TEMPLATE_PATH` at this file (after copying it to e.g.
+  `./comment.md` and editing) in your `.env`:
+
+      COMMENT_TEMPLATE_PATH=./comment.md
+
+  Available placeholders (all may be empty / null unless noted):
+
+      {{ title }}            finding title
+      {{ message }}          body text
+      {{ severity }}         nit | minor | major | blocker
+      {{ severity_label }}   "🔴 blocker" / "🟠 major" / "🟡 minor" / "💡 nit"
+      {{ confidence }}       high | medium | low   (or "")
+      {{ context_basis }}    diff-only | surrounding-code-read |
+                             full-module-review   (or "")
+      {{ suggestion }}       suggested fix         (or "")
+      {{ file }}             source file           (or "")
+      {{ line }}             line number           (or null)
+      {{ key }}              raw dedupe key
+      {{ marker }}           "prb:<key>"  — visible text, NOT the dedupe line
+      {{ summary }}          PR-level review summary
+      {{ evidence }}         dict with sub-fields:
+        .whyNewInThisPr
+        .whyNotIntentional
+        .changedLines        (list → pipe through `| join_list`)
+        .contextFilesRead    (list → pipe through `| join_list`)
+
+  Custom filters:
+
+      {{ x | join_list }}      list → ", "-joined string; None → ""
+      {{ x | join_list("; ")}} custom separator
+      {{ x | fence }}          smart-fenced code block (escapes inner ```)
+      {{ x | fence("ts") }}    with language hint
+
+  Invariants the formatter enforces (you don't have to handle these):
+
+    * The dedupe marker `<!-- prb:<key> -->` is appended as the LAST
+      line of every rendered body, on its own line. Do not hand-write
+      it — the formatter strips and re-appends it.
+    * If the template inlines `{{ marker }}` for display, that text
+      (raw `prb:<key>`) is left alone. The dedupe line is still
+      appended separately.
+    * The body is truncated to fit the thread if needed; the marker
+      line is always preserved.
+    * Optional placeholders (anything that may be missing on a given
+      finding) are guarded with `{% if X %}` rather than
+      `{% if X is defined %}` — the formatter pre-populates missing
+      fields with empty / null.
+
+  Note on per-finding vs summary: this template renders ONE thread per
+  finding. A PR-level summary comment was considered and dropped — the
+  per-finding threads give ADO the file/line context it needs to attach
+  each comment inline in the Files tab, which is the only way
+  reviewers see findings next to the code they apply to.
+
+─#}
+
+**{{ severity_label }}** — {{ title }}
+{% if file or line %}
+📍 `{{ file if file else "(no file)" }}`{% if line %} · line {{ line }}{% endif %}
+{% endif %}
+{% if confidence or context_basis %}
+<sub>{% if confidence %}confidence: {{ confidence }}{% endif %}{% if confidence and context_basis %} · {% endif %}{% if context_basis %}basis: {{ context_basis }}{% endif %}</sub>
+{% endif %}
+
+{{ message }}
+{% if evidence %}
+{% set ev = evidence %}
+{% if ev.whyNewInThisPr %}
+> **Why this is introduced by this PR:** {{ ev.whyNewInThisPr }}
+{% endif %}
+{% if ev.whyNotIntentional %}
+> **Why this is unlikely to be intentional:** {{ ev.whyNotIntentional }}
+{% endif %}
+{% if ev.changedLines %}
+> **Affected lines:** {{ ev.changedLines | join_list }}
+{% endif %}
+{% if ev.contextFilesRead %}
+> **Context read:** {{ ev.contextFilesRead | join_list }}
+{% endif %}
+{% endif %}
+{% if suggestion %}
+
+**Suggested fix:**
+
+{{ suggestion | fence }}
+{% endif %}

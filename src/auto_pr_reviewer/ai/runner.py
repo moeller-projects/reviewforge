@@ -36,8 +36,10 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 from ..config import Config
+from .prompts import augment_prompt_file
 
 
 #: Regex to find Pi's token-usage lines on stderr.
@@ -84,6 +86,14 @@ class PiRunner:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._last_tokens: dict[str, int] = {}
+        # Per-runner cache of source prompt path → augmented prompt path.
+        # The augmented copy has the LANGUAGE directive appended so every
+        # stage (review, verify, severity, intent, plan, digest) instructs
+        # the model in the configured review_language. Using a private
+        # temp dir keeps augmented files out of the read-only prompts dir
+        # shipped inside the container.
+        self._prompt_cache: dict[Path, Path] = {}
+        self._prompt_dir = Path(tempfile.mkdtemp(prefix="pr-review-prompts-"))
 
     @property
     def last_tokens(self) -> dict[str, int]:
@@ -93,6 +103,23 @@ class PiRunner:
     @property
     def session_id(self) -> str:
         return self.cfg.pi_session_id or _default_session_id(self.cfg)
+
+    def _resolve_system_prompt(self, prompt_path: Path) -> Path:
+        """Return a system-prompt path that ends with the LANGUAGE directive.
+
+        Pi only reads the prompt file once per call, so we materialize the
+        augmented version on disk and cache it for the lifetime of this
+        runner. Caching is keyed on the source ``Path`` (not its contents)
+        because the source prompt files are static templates shipped with
+        the package.
+        """
+        cached = self._prompt_cache.get(prompt_path)
+        if cached is not None:
+            return cached
+        dest = self._prompt_dir / f"{prompt_path.stem}.lang.md"
+        augmented = augment_prompt_file(prompt_path, self.cfg, dest=dest)
+        self._prompt_cache[prompt_path] = augmented
+        return augmented
 
     def _build_cmd(self, prompt_path: Path, instruction: str) -> list[str]:
         """Compose the Pi CLI command, including session flags when enabled."""
@@ -162,7 +189,8 @@ class PiRunner:
                 "Process the task described in the system prompt. "
                 "The instruction and unified diff are provided on stdin."
             )
-        cmd = self._build_cmd(prompt_path, instruction)
+        resolved_prompt = self._resolve_system_prompt(prompt_path)
+        cmd = self._build_cmd(resolved_prompt, instruction)
         env = self._build_subprocess_env()
 
         sid = self.session_id if self.cfg.pi_session_enabled else "<no-session>"
@@ -214,7 +242,7 @@ class PiRunner:
         # - In legacy / no-session mode, the model has no memory of the
         #   original payload, so we resend it.
         repair = self._build_cmd(
-            prompt_path,
+            resolved_prompt,
             "Your previous response was not valid JSON. "
             "Return only the JSON object – no markdown fences, no prose.",
         )

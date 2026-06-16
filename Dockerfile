@@ -7,8 +7,14 @@ FROM node:24-bookworm-slim
 ARG PI_VERSION=0.79.1
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git python3 ripgrep \
+ && apt-get install -y --no-install-recommends ca-certificates git python3 python3-pip ripgrep \
  && rm -rf /var/lib/apt/lists/*
+
+# Pin the third-party Python runtime deps. Keep this list small — most
+# logic uses the standard library. ``jinja2`` powers the optional
+# custom PR-comment template (see
+# ``auto_pr_reviewer.ado.comment_format.TemplateCommentFormatter``).
+RUN pip install --no-cache-dir --break-system-packages "jinja2>=3.1"
 
 # Global CLI: the Pi coding agent. Azure DevOps integration uses direct REST via Python.
 RUN npm install -g --ignore-scripts \

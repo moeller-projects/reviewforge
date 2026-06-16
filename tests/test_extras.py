@@ -47,6 +47,19 @@ from auto_pr_reviewer.pipeline.schemas import (  # noqa: E402
 
 
 class TestPiRunnerEdgeCases:
+    @pytest.fixture(autouse=True)
+    def _stub_prompt_files(self, tmp_path, monkeypatch):
+        """Make every prompt path the runner may read exist on disk.
+
+        The runner now reads the system-prompt file at the start of
+        :meth:`PiRunner.run_json` to append the LANGUAGE directive. The
+        edge-case tests pass a separate ``tmp_path / "p.md"`` path as
+        the call's prompt argument, so we only need to ensure that one
+        exists for the test bodies that exercise ``run_json``.
+        """
+        (tmp_path / "p.md").write_text("stub", encoding="utf-8")
+        yield
+
     def _cfg(self):
         return SimpleNamespace(
             pi_model="m", pi_timeout_secs=5, dry_run=True,
@@ -57,6 +70,7 @@ class TestPiRunnerEdgeCases:
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
+            review_language="English",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
         )
 
@@ -136,6 +150,41 @@ class TestPiRunnerEdgeCases:
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
             assert k not in seen_env
 
+    def test_run_json_passes_augmented_prompt_with_language_directive(self, tmp_path, monkeypatch):
+        cfg = SimpleNamespace(
+            pi_model="m", pi_timeout_secs=5, dry_run=True,
+            review_prompt_path=tmp_path / "r.md",
+            intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md",
+            context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md",
+            severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "st.md",
+            review_language="German",
+            pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+        )
+        source = tmp_path / "r.md"
+        source.write_text("base review", encoding="utf-8")
+        seen_cmd: list[list[str]] = []
+
+        def fake_run(cmd, input, stdout, stderr, timeout, env):
+            seen_cmd.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+
+        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        PiRunner(cfg).run_json(source, "in", tmp_path / "out.json", "stage")
+        # The prompt path handed to Pi must be the augmented file, not the
+        # original source. The augmented file lives in the runner's private
+        # temp dir and has the LANGUAGE directive appended.
+        assert len(seen_cmd) == 1
+        cmd = seen_cmd[0]
+        idx = cmd.index("--append-system-prompt") + 1
+        used = Path(cmd[idx])
+        assert used != source
+        text = used.read_text(encoding="utf-8")
+        assert text.startswith("base review")
+        assert "in German" in text
+
     def test_stderr_lines_are_logged(self, tmp_path, monkeypatch, capsys):
         runner = PiRunner(self._cfg())
         monkeypatch.setattr(
@@ -157,6 +206,7 @@ class TestPiRunnerEdgeCases:
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
+            review_language="English",
             pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-42-review-r1",
         )
         runner = PiRunner(cfg)
@@ -184,6 +234,7 @@ class TestPiRunnerEdgeCases:
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
+            review_language="English",
             pi_session_enabled=True, pi_session_clear=True, pi_session_id="x",
         )
         runner = PiRunner(cfg)
@@ -239,6 +290,7 @@ class TestPiRunnerEdgeCases:
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
+            review_language="English",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
         )
         runner = PiRunner(cfg)
@@ -260,6 +312,7 @@ class TestPiRunnerEdgeCases:
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
+            review_language="English",
             pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-1",
         )
         runner = PiRunner(cfg)

@@ -25,16 +25,79 @@ import json
 from ..config import Config
 
 
+LANGUAGE_DIRECTIVE_PREFIX = "LANGUAGE: Write every"
+
+
+def language_directive(cfg: Config) -> str:
+    """Return the LANGUAGE directive line for the configured review language.
+
+    The directive tells the model to write all user-facing text (titles,
+    messages, summaries, suggestions) in :attr:`Config.review_language`
+    and to leave file paths, identifiers, and code untranslated.
+    """
+    return (
+        f"\nLANGUAGE: Write every \"title\", \"message\", \"summary\", "
+        f"\"suggestion\" value in {cfg.review_language}. Do NOT translate "
+        "file paths, identifiers, code.\n"
+    )
+
+
 def system_prompt(cfg: Config) -> str:
-    """Combine the reviewer prompt, the language hint, and the standards file."""
+    """Combine reviewer prompt, standards file, and the language directive.
+
+    The language directive is appended last so it sits in the model's
+    recency window after the long standards block. Smaller models tend
+    to weight later instructions more heavily, and the directive was
+    previously buried between two large prompt blocks where it was
+    effectively ignored.
+    """
     return (
         cfg.review_prompt_path.read_text()
-        + "\n\n---\n"
-        + f"LANGUAGE: Write every \"title\", \"message\", \"summary\", \"suggestion\" "
-          f"value in {cfg.review_language}. Do NOT translate file paths, "
-          "identifiers, code.\n---\n\n"
+        + "\n\n---\n\n"
         + cfg.standards_path.read_text()
+        + language_directive(cfg)
     )
+
+
+def augment_prompt_file(source: Path, cfg: Config, dest: Path | None = None) -> Path:
+    """Return a copy of ``source`` with the language directive appended.
+
+    Pi loads the system prompt from a file (see
+    :func:`auto_pr_reviewer.ai.runner.PiRunner._build_cmd`), and the
+    per-stage prompt files (``review-system.md``, ``verify-findings.md``,
+    ``severity.md`` …) are generic templates that don't know the runtime
+    language. This helper writes a side-by-side copy with the runtime
+    directive appended so every stage sees the same instruction.
+
+    ``dest`` defaults to ``source.with_suffix(source.suffix + ".lang")``
+    in the same directory. Callers should treat the returned path as
+    cached: re-calling with the same ``source`` returns the same path.
+    """
+    if dest is None:
+        dest = source.with_name(source.name + ".lang")
+    if dest.exists():
+        # Cheap idempotence: the source prompt file is read-only, and the
+        # directive is fully determined by cfg.review_language, so a
+        # pre-existing file with our sentinel means we already augmented
+        # this source. Avoids redundant disk I/O on repeated stage calls.
+        try:
+            head = dest.read_text(encoding="utf-8")
+        except OSError:
+            head = ""
+        if LANGUAGE_DIRECTIVE_PREFIX in head and cfg.review_language in head:
+            return dest
+    try:
+        body = source.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Source file doesn't exist. The runner will fail downstream when
+        # Pi tries to load it, so we just return the source path as-is
+        # rather than masking the error with a misleading "augmented"
+        # file. This keeps test fixtures that pass a non-existent path
+        # simple without changing production behavior (where the file
+        # is always shipped with the image).
+        return source
+    dest.write_text(body + language_directive(cfg), encoding="utf-8")
+    return dest
 
 
 # ---------------------------------------------------------------------------

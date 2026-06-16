@@ -42,6 +42,12 @@ from .posting import (  # noqa: F401  (re-exports)
     existing_bot_markers,
     should_post,
 )
+from .comment_format import (  # noqa: F401  (re-exports)
+    CommentFormatter,
+    DefaultCommentFormatter,
+    TemplateCommentFormatter,
+    build_formatter,
+)
 from ..artifacts.builder import (  # noqa: F401  (re-exports)
     read_json,
     write_json,
@@ -247,32 +253,13 @@ def current_reviewer_id(client: AdoClient, pr: dict[str, Any]) -> str | None:
     return None
 
 
-def comment_body(f: dict[str, Any], key: str, max_chars: int) -> str:
-    """Render a single finding as a Markdown comment body for ADO."""
-    parts = [f"**{SEV_LABEL[f['severity']]}** — {f['title']}"]
-    if f.get("confidence"):
-        parts.append(f"Confidence: {f['confidence']}")
-    if f.get("contextBasis"):
-        parts.append(f"Context basis: {f['contextBasis']}")
-    parts.extend(["", truncate(f["message"], 5000)])
-    evidence = f.get("evidence") or {}
-    evidence_lines: list[str] = []
-    if evidence.get("whyNewInThisPr"):
-        evidence_lines.append(f"Why in this PR: {evidence['whyNewInThisPr']}")
-    if evidence.get("whyNotIntentional"):
-        evidence_lines.append(f"Why not intentional: {evidence['whyNotIntentional']}")
-    if evidence.get("contextFilesRead"):
-        evidence_lines.append(
-            "Context read: " + ", ".join(evidence["contextFilesRead"][:10])
-        )
-    if evidence_lines:
-        parts.extend(["", "**Evidence**", *evidence_lines])
-    if f.get("suggestion"):
-        parts.extend(["", "**Suggested change**", fence(f["suggestion"])])
-    body = "\n".join(parts)
-    body = truncate(body, max_chars - 64)
-    body += f"\n\n<!-- {MARKER}:{key} -->"
-    return body
+def comment_body(f: dict[str, Any], key: str, max_chars: int, summary: str | None = None) -> str:
+    """Back-compat shim. Delegates to :class:`DefaultCommentFormatter`.
+
+    New code should call :func:`build_formatter` directly so that
+    ``COMMENT_TEMPLATE_PATH`` (when set) is honoured.
+    """
+    return DefaultCommentFormatter().format(f, key=key, max_chars=max_chars, summary=summary)
 
 
 # --- JSON helpers ---------------------------------------------------------
@@ -521,7 +508,7 @@ def command_post_findings(args: argparse.Namespace) -> int:
             continue
         thread_body: dict[str, Any] = {
             "comments": [
-                {"content": comment_body(f, key, 20000), "commentType": "text"}
+                {"content": build_formatter().format(f, key=key, max_chars=20000, summary=summary), "commentType": "text"}
             ],
             "status": "active",
         }

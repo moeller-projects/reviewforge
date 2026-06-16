@@ -229,3 +229,78 @@ The shape of a posted thread:
 ```
 
 The marker is always the last line of the comment body, on its own line, so the regex `^prb:([a-zA-Z0-9]{6,32})$` finds it cleanly.
+
+## Customizing the comment format
+
+The default layout (the markdown rendered by the original `commentBody()`)
+ships in `auto_pr_reviewer.ado.comment_format.DefaultCommentFormatter` and
+is selected when no override is configured. To use a different layout,
+point `COMMENT_TEMPLATE_PATH` at a Jinja2 template file:
+
+```dotenv
+# .env
+COMMENT_TEMPLATE_PATH=./pr-comment.md
+```
+
+The template is plain Markdown. The body of each finding is rendered with
+this context:
+
+| Placeholder | Source |
+|-------------|--------|
+| `{{ title }}` | finding title |
+| `{{ message }}` | finding message (body) |
+| `{{ severity }}` | `major` / `minor` / `nit` / `blocker` |
+| `{{ severity_label }}` | `🟠 major` etc. (emoji + label) |
+| `{{ confidence }}` | `high` / `medium` / `low` (or `""`) |
+| `{{ context_basis }}` | `contextBasis` field (or `""`) |
+| `{{ suggestion }}` | suggested change (or `""`) |
+| `{{ file }}` | source file |
+| `{{ line }}` | line number |
+| `{{ key }}` | raw dedupe key |
+| `{{ marker }}` | `prb:<key>` (visible) |
+| `{{ summary }}` | PR-level review summary |
+| `{{ evidence.whyNewInThisPr }}` | nested |
+| `{{ evidence.whyNotIntentional }}` | nested |
+| `{{ evidence.contextFilesRead }}` | list — pipe through `join_list` |
+| `{{ evidence.changedLines }}` | list — pipe through `join_list` |
+
+Three custom filters are exposed:
+
+* `join_list(value, sep=", ")` — join a list; `None` becomes `""`.
+* `fence(value, language="")` — wrap in a fenced code block. Width
+  adapts to the body: if the body already contains a run of backticks,
+  the fence uses one more.
+* `fence_lang(value, language)` — alias for `fence` with explicit lang.
+
+Minimal example (`./pr-comment.md`):
+
+```markdown
+## {{ severity_label }} — {{ title }}
+
+{{ message }}
+
+{% if suggestion %}
+**Suggested change**
+
+{{ suggestion | fence }}
+{% endif %}
+
+{% if evidence.contextFilesRead %}
+**Files read:** {{ evidence.contextFilesRead | join_list(", ") }}
+{% endif %}
+```
+
+### Invariants the formatter enforces
+
+* The dedupe marker (`<!-- prb:<key> -->`) is **always** the last line
+  of the rendered body, on its own line, regardless of template
+  content. The regex `^prb:([a-zA-Z0-9]{6,32})$` in `posting.py`
+  relies on this for idempotent re-runs.
+* If the template inlines `{{ marker }}` (or hand-writes a marker
+  line), the formatter strips it and re-appends the canonical form.
+* Output is truncated to `max_chars - 64` so the marker line always
+  fits.
+* `COMMENT_TEMPLATE_PATH` pointing at a missing file is a hard error
+  (`ConfigError`). It does **not** silently fall back to the default
+  — that would make typos look like "comments are formatted
+  normally" when in fact the user expected a different layout.
