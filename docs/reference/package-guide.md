@@ -11,7 +11,7 @@ The package is the **single source of truth for application logic**. PowerShell 
 | Reader | What they want | Where to look |
 |---|---|---|
 | Operator running the bot | "How do I configure and run it?" | [`configuration.md`](configuration.md), [`cli.md`](cli.md) |
-| Maintainer extending it | "How do the pieces fit? Where do I add a stage?" | [`architecture.md`](architecture.md), [`pipeline.md`](pipeline.md) |
+| Maintainer extending it | "How do the pieces fit? Where do I add a stage?" | [`../design/architecture.md`](../design/architecture.md), [`pipeline.md`](pipeline.md) |
 | Maintainer debugging it | "Why did this stage fail? What artifacts were written?" | [`artifacts.md`](artifacts.md), [`ado-integration.md`](ado-integration.md) |
 | Maintainer tuning AI cost | "How does the Pi session reuse work?" | [`ai-runner.md`](ai-runner.md) |
 
@@ -72,7 +72,7 @@ src/auto_pr_reviewer/
 
 | Doc | Mode | Summary |
 |---|---|---|
-| [`architecture.md`](architecture.md) | explanation | System components, data flow, key invariants. Start here for "how does it all fit together". |
+| [`../design/architecture.md`](../design/architecture.md) | explanation | System components, data flow, key invariants. Start here for "how does it all fit together". |
 | [`configuration.md`](configuration.md) | reference + how-to | `Config` dataclass, env var precedence, alias map, `.env` loading, validation. |
 | [`cli.md`](cli.md) | reference | Subcommands (`review`, `post`, `open-prs`, `validate-config`, `discover`), flags, exit codes. |
 | [`ado-integration.md`](ado-integration.md) | explanation + reference | `AdoClient` REST wrapper, idempotent posting (`dedupe_key`, `existing_bot_markers`), diff → threadContext mapping, legacy shim contract. |

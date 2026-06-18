@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Explain the major components of `auto_pr_reviewer`, how data flows between them on a single review run, and the invariants the system maintains. This is the explanation-mode companion to the [`package-guide.md`](package-guide.md) index.
+Explain the major components of `auto_pr_reviewer`, how data flows between them on a single review run, and the invariants the system maintains. This is the explanation-mode companion to the [`package-guide.md`](../reference/package-guide.md) index.
 
 ## Audience
 
@@ -130,23 +130,23 @@ A stage owns a name, decides whether to run, runs, and returns a dict of details
 
 ### `Artifacts` (per-run output paths)
 
-`auto_pr_reviewer.artifacts.manager.Artifacts` is a frozen dataclass with one field per output file. The set of fields is fixed (`ARTIFACT_NAMES` is a module-level tuple); the orchestrator and stages treat it as a stable contract. See [`artifacts.md`](artifacts.md).
+`auto_pr_reviewer.artifacts.manager.Artifacts` is a frozen dataclass with one field per output file. The set of fields is fixed (`ARTIFACT_NAMES` is a module-level tuple); the orchestrator and stages treat it as a stable contract. See [`artifacts.md`](../reference/artifacts.md).
 
 ### `PiRunner` (LLM subprocess wrapper)
 
-Owns one concern: launch `pi` as a subprocess, capture JSON output, repair on failure, and surface token usage. Session reuse is the key cost-saver: a multi-stage review reuses one Pi session so the model keeps the diff and prior context between calls. See [`ai-runner.md`](ai-runner.md).
+Owns one concern: launch `pi` as a subprocess, capture JSON output, repair on failure, and surface token usage. Session reuse is the key cost-saver: a multi-stage review reuses one Pi session so the model keeps the diff and prior context between calls. See [`ai-runner.md`](../reference/ai-runner.md).
 
 ### `AdoClient` (thin REST wrapper)
 
-`auto_pr_reviewer.ado.client.AdoClient` is a minimal bearer-token REST client. It exposes only the verbs the reviewer needs (`get_pr`, `get_threads`, `create_thread`, `vote`, plus generic `get`/`post`/`put` for the work-items and connection-data endpoints). No retry, no rate-limit logic, no SDK dependencies — just `urllib.request` with a JSON body and a 60-second timeout. See [`ado-integration.md`](ado-integration.md).
+`auto_pr_reviewer.ado.client.AdoClient` is a minimal bearer-token REST client. It exposes only the verbs the reviewer needs (`get_pr`, `get_threads`, `create_thread`, `vote`, plus generic `get`/`post`/`put` for the work-items and connection-data endpoints). No retry, no rate-limit logic, no SDK dependencies — just `urllib.request` with a JSON body and a 60-second timeout. See [`ado-integration.md`](../reference/ado-integration.md).
 
 ## Why these design choices
 
 A few decisions are not obvious from reading the code. They live here so future maintainers don't undo them.
 
-- **Why a separate `legacy.py` module?** The Docker image and CI still invoke `scripts/ado_review.py` as a subprocess. The script cannot import the package without path manipulation, so we keep a thin subprocess-friendly shim. The shim's job is purely the CLI surface; all logic is in the package. See [`ado-integration.md`](ado-integration.md#legacy-shim).
+- **Why a separate `legacy.py` module?** The Docker image and CI still invoke `scripts/ado_review.py` as a subprocess. The script cannot import the package without path manipulation, so we keep a thin subprocess-friendly shim. The shim's job is purely the CLI surface; all logic is in the package. See [`ado-integration.md`](../reference/ado-integration.md#legacy-shim).
 
-- **Why pydantic for stage outputs?** The model occasionally produces malformed JSON (missing fields, wrong severity strings). Pydantic gives clear, actionable validation errors immediately, instead of letting bad values silently propagate. See [`pipeline.md`](pipeline.md#schemas).
+- **Why pydantic for stage outputs?** The model occasionally produces malformed JSON (missing fields, wrong severity strings). Pydantic gives clear, actionable validation errors immediately, instead of letting bad values silently propagate. See [`pipeline.md`](../reference/pipeline.md#schemas).
 
 - **Why file-based prompts, not inline strings?** The system prompt is ~30 KB. Keeping it in a file makes it diffable, testable, and editable without rebuilding the container. The path is `Config.review_prompt_path`, configurable per env.
 
@@ -168,7 +168,7 @@ A few decisions are not obvious from reading the code. They live here so future 
 
 ## Where to look next
 
-- Adding a stage: [`pipeline.md`](pipeline.md#extending-the-pipeline)
-- Tuning AI cost: [`ai-runner.md`](ai-runner.md#session-reuse)
-- Changing the posting format: [`ado-integration.md`](ado-integration.md#posting-format)
-- Reading a run's output: [`artifacts.md`](artifacts.md)
+- Adding a stage: [`pipeline.md`](../reference/pipeline.md#extending-the-pipeline)
+- Tuning AI cost: [`ai-runner.md`](../reference/ai-runner.md#session-reuse)
+- Changing the posting format: [`ado-integration.md`](../reference/ado-integration.md#posting-format)
+- Reading a run's output: [`artifacts.md`](../reference/artifacts.md)
