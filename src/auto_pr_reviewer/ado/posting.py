@@ -156,6 +156,55 @@ def attach_marker(finding: dict[str, Any]) -> tuple[str, str]:
     return key, make_marker(key)
 
 
+# ---------------------------------------------------------------------------
+# Work item findings — defense in depth
+# ---------------------------------------------------------------------------
+#
+# The review prompt (``prompts/review-system.md``) instructs the model to
+# create a finding with ``file: null, line: null`` whenever it reports a
+# missing or unaddressed work item requirement. Work item findings are
+# categorically different from code findings:
+#
+# * They are not anchored to a file or line.
+# * They require reading the work item history, not the diff.
+# * They are judged by the author against work item scope, split
+#   implementations, and stale descriptions.
+#
+# Posting them inline (as a file comment) makes the false positive look
+# authoritative. The ``prompts/review-system.md`` rule is the primary
+# contract. The helpers below are defense in depth: if a model "helps"
+# by guessing a file, the posting path strips it before posting so the
+# finding is always a general PR comment.
+
+#: Regex matching the canonical "Work item #N ..." title prefix the
+#: review prompt requires. Matched case-insensitively and tolerant of
+#: leading whitespace so a reworded title still triggers the rule.
+WORK_ITEM_TITLE_RE = re.compile(r"^\s*work\s+item\s+#\d+", re.IGNORECASE)
+
+
+def is_work_item_finding(finding: dict[str, Any]) -> bool:
+    """Return ``True`` iff ``finding`` is a work-item-requirement finding.
+
+    Detection is by title prefix (``Work item #<id>``) per the contract
+    in ``prompts/review-system.md``. The check is intentionally strict:
+    if a finding does not start with the prefix, it is treated as a
+    normal code finding and routed through the standard file/line path.
+    """
+    title = finding.get("title") or ""
+    return bool(WORK_ITEM_TITLE_RE.match(str(title)))
+
+
+def as_general_comment(finding: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``finding`` with ``file`` and ``line`` cleared.
+
+    Use this as a defense-in-depth step for work item findings: even if
+    the model guessed a file/line, the posting path strips them so the
+    finding is posted as a general PR comment, not as an inline file
+    comment. The original ``finding`` is not mutated.
+    """
+    return {**finding, "file": None, "line": None}
+
+
 # Backward-compat alias used by older scripts.
 DedupeKey = str  # type alias
 
@@ -164,10 +213,13 @@ __all__ = [
     "BotMarkers",
     "DedupeKey",
     "MARKER_PREFIX",
+    "WORK_ITEM_TITLE_RE",
+    "as_general_comment",
     "attach_marker",
     "classify_threads",
     "dedupe_key",
     "existing_bot_markers",
+    "is_work_item_finding",
     "make_marker",
     "should_post",
 ]

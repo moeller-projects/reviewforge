@@ -121,7 +121,15 @@ def _make_pi(artifact_paths: dict[str, Path], payload: Any) -> MagicMock:
 
 
 def _stage_context(
-    cfg: Config, artifacts, pi, *, state=None, metadata=None
+    cfg: Config,
+    artifacts,
+    pi,
+    *,
+    state=None,
+    metadata=None,
+    wi_context=None,
+    wi_comments_context=None,
+    thread_context=None,
 ) -> StageContext:
     """Build a populated :class:`StageContext`.
 
@@ -129,6 +137,13 @@ def _stage_context(
     can read it (in production this file is created by
     :class:`FetchPrMetadataStage`). Pre-populates ``ctx.files_text``
     with a placeholder so downstream stages don't see ``AttributeError``.
+
+    The ``wi_context`` / ``wi_comments_context`` / ``thread_context``
+    parameters mirror what :class:`FetchPrMetadataStage` populates in
+    ``ctx.extras``. When ``None`` (the default), the fixture writes empty
+    lists — matching the legacy / pre-loader behaviour, so tests that
+    don't care about work items keep working unchanged. Tests that need
+    the new loader behaviour pass explicit lists.
     """
     if metadata is None and not artifacts.metadata.exists():
         builder.write_json(artifacts.metadata, {"status": "active", "isDraft": False})
@@ -145,9 +160,15 @@ def _stage_context(
         "severity": artifacts.severity,
         "final": artifacts.final,
     }
-    ctx.extras["wi_context"] = []
-    ctx.extras["wi_comments_context"] = []
-    ctx.extras["thread_context"] = []
+    # Default to empty lists (legacy behaviour). Tests that exercise the
+    # post-loader pipeline pass explicit populated values.
+    ctx.extras["wi_context"] = [] if wi_context is None else wi_context
+    ctx.extras["wi_comments_context"] = (
+        [] if wi_comments_context is None else wi_comments_context
+    )
+    ctx.extras["thread_context"] = (
+        [] if thread_context is None else thread_context
+    )
     if metadata is not None:
         ctx.metadata = metadata
     return ctx
@@ -169,13 +190,218 @@ class TestFetchPrMetadataStage:
         )
         result = FetchPrMetadataStage()(ctx)
         assert result.status == StageStatus.OK
-        assert result.details == {"pr_id": "42", "status": "active", "is_draft": False}
+        assert result.details == {
+            "pr_id": "42",
+            "status": "active",
+            "is_draft": False,
+            "work_items_loaded": 0,
+            "threads_loaded": 0,
+        }
         assert ctx.metadata["status"] == "active"
 
     def test_returns_cached_when_metadata_already_set(self, cfg, artifacts):
         ctx = _stage_context(cfg, artifacts, MagicMock(), metadata={"status": "active"})
         result = FetchPrMetadataStage()(ctx)
         assert result.details == {"cached": True, "pr_id": "42"}
+
+    def test_loads_fetched_context_into_extras(self, cfg, artifacts, monkeypatch):
+        # The fetch-context subprocess writes four files. The stage must
+        # load them back into ctx.extras so downstream stages see the
+        # work items and threads (without this, the work-item-aware
+        # prompts operate on empty lists — see
+        # docs/design/work-item-verification-false-positives.md).
+        builder.write_json(
+            artifacts.metadata, {"status": "active", "isDraft": False}
+        )
+        builder.write_json(
+            artifacts.work_items,
+            [
+                {
+                    "id": 42,
+                    "type": "Bug",
+                    "title": "Charge fails on retry",
+                    "state": "Active",
+                    "description": "Retries fail with 502.",
+                    "acceptanceCriteria": "Retry returns 200 within 3s.",
+                }
+            ],
+        )
+        builder.write_json(
+            artifacts.work_items.with_name("work-item-comments.json"),
+            [
+                {
+                    "workItemId": "42",
+                    "comments": [
+                        {
+                            "id": 1,
+                            "author": "pm@example.com",
+                            "text": "Retry is in scope for this PR.",
+                        }
+                    ],
+                }
+            ],
+        )
+        builder.write_json(
+            artifacts.threads,
+            [
+                {
+                    "id": 7,
+                    "status": "active",
+                    "filePath": None,
+                    "line": None,
+                    "firstComment": "Already discussed in the sync.",
+                    "author": "reviewer@example.com",
+                }
+            ],
+        )
+
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper",
+            lambda *a, **k: None,
+        )
+
+        result = FetchPrMetadataStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert result.details["work_items_loaded"] == 1
+        assert result.details["threads_loaded"] == 1
+        assert len(ctx.extras["wi_context"]) == 1
+        assert ctx.extras["wi_context"][0]["id"] == 42
+        assert len(ctx.extras["wi_comments_context"]) == 1
+        assert ctx.extras["wi_comments_context"][0]["workItemId"] == "42"
+        assert len(ctx.extras["thread_context"]) == 1
+        assert ctx.extras["thread_context"][0]["id"] == 7
+
+    def test_cached_metadata_skips_loader(self, cfg, artifacts, monkeypatch):
+        # When the metadata is already cached (rerun with cached state),
+        # the fetch-context subprocess is NOT called and the loader is
+        # not run. The existing ctx.extras (if any) is preserved. This
+        # matches the cached fast path.
+        ctx = _stage_context(
+            cfg,
+            artifacts,
+            MagicMock(),
+            metadata={"status": "active"},
+            wi_context=[{"id": 99, "type": "Task", "title": "cached", "state": "Active"}],
+        )
+        # Ensure no fetch artifacts exist on disk; the loader would
+        # otherwise try to read them.
+        for p in (
+            artifacts.work_items,
+            artifacts.work_items.with_name("work-item-comments.json"),
+            artifacts.threads,
+        ):
+            if p.exists():
+                p.unlink()
+        # Should not be called.
+        called = []
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper",
+            lambda *a, **k: called.append((a, k)),
+        )
+        result = FetchPrMetadataStage()(ctx)
+        assert result.details == {"cached": True, "pr_id": "42"}
+        assert called == []  # subprocess not invoked
+        # Pre-populated extras are preserved (caller is responsible for
+        # what goes in them on a cached rerun).
+        assert ctx.extras["wi_context"][0]["id"] == 99
+
+    def test_loader_skips_missing_files(self, cfg, artifacts, monkeypatch):
+        # If the fetch-context subprocess failed and only some files
+        # exist on disk, the loader should load what it can and leave
+        # the rest at the default empty list. The pipeline still runs.
+        builder.write_json(artifacts.metadata, {"status": "active", "isDraft": False})
+        # Only work-items.json present; threads and comments missing.
+        builder.write_json(
+            artifacts.work_items,
+            [{"id": 1, "type": "Task", "title": "x", "state": "Active"}],
+        )
+        # threads and work-item-comments intentionally not written.
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper",
+            lambda *a, **k: None,
+        )
+        result = FetchPrMetadataStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert len(ctx.extras["wi_context"]) == 1
+        assert ctx.extras["wi_comments_context"] == []
+        assert ctx.extras["thread_context"] == []
+        assert result.details["work_items_loaded"] == 1
+        assert result.details["threads_loaded"] == 0
+
+    def test_loader_ignores_malformed_files(self, cfg, artifacts, monkeypatch):
+        # A malformed file (not a JSON list) should be skipped, not crash
+        # the stage. A dict in place of the expected list is the most
+        # likely failure mode (a future fetch-context refactor that
+        # accidentally writes context.json instead of work-items.json).
+        builder.write_json(artifacts.metadata, {"status": "active", "isDraft": False})
+        builder.write_json(artifacts.work_items, {"not": "a list"})  # wrong shape
+        builder.write_json(artifacts.threads, "also not a list")
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        monkeypatch.setattr(
+            "auto_pr_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper".replace(
+                "auto_pr_pr_reviewer", "auto_pr_reviewer"
+            ),
+            lambda *a, **k: None,
+        )
+        result = FetchPrMetadataStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert ctx.extras["wi_context"] == []
+        assert ctx.extras["thread_context"] == []
+
+
+# ---------------------------------------------------------------------------
+# _load_fetched_context helper (unit tests)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadFetchedContext:
+    def test_loads_all_three_files(self, artifacts):
+        from auto_pr_reviewer.pipeline.stages.fetch_pr_metadata import (
+            _load_fetched_context,
+        )
+
+        builder.write_json(
+            artifacts.work_items,
+            [{"id": 1, "type": "Bug", "title": "x", "state": "Active"}],
+        )
+        builder.write_json(
+            artifacts.work_items.with_name("work-item-comments.json"),
+            [{"workItemId": "1", "comments": []}],
+        )
+        builder.write_json(
+            artifacts.threads,
+            [{"id": 2, "status": "active"}],
+        )
+        result = _load_fetched_context(artifacts)
+        assert "wi_context" in result
+        assert "wi_comments_context" in result
+        assert "thread_context" in result
+        assert result["wi_context"][0]["id"] == 1
+        assert result["thread_context"][0]["id"] == 2
+
+    def test_missing_files_returns_empty_dict(self, artifacts):
+        from auto_pr_reviewer.pipeline.stages.fetch_pr_metadata import (
+            _load_fetched_context,
+        )
+
+        result = _load_fetched_context(artifacts)
+        assert result == {}
+
+    def test_malformed_json_skipped(self, artifacts):
+        from auto_pr_reviewer.pipeline.stages.fetch_pr_metadata import (
+            _load_fetched_context,
+        )
+
+        artifacts.work_items.write_text("not json at all", encoding="utf-8")
+        # threads is valid; the helper should still load it.
+        builder.write_json(artifacts.threads, [{"id": 9}])
+        result = _load_fetched_context(artifacts)
+        assert "wi_context" not in result
+        assert "thread_context" in result
+        assert result["thread_context"][0]["id"] == 9
 
 
 # ---------------------------------------------------------------------------

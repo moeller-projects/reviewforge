@@ -38,8 +38,10 @@ from .diff_mapper import (  # noqa: F401  (re-exports)
     map_file_to_fallback,
 )
 from .posting import (  # noqa: F401  (re-exports)
+    as_general_comment,
     dedupe_key,
     existing_bot_markers,
+    is_work_item_finding,
     should_post,
 )
 from .comment_format import (  # noqa: F401  (re-exports)
@@ -500,6 +502,17 @@ def command_post_findings(args: argparse.Namespace) -> int:
         "failOnTriggered": False,
     }
     for f in findings:
+        # Defense in depth: work item findings are always general PR
+        # comments. The review prompt says file: null, line: null, but a
+        # model that "helps" by guessing a file would otherwise be
+        # silently dropped at the no_line_mapping branch below, or posted
+        # inline against the wrong line. Strip file/line up front so the
+        # dedupe key is also computed against the general-comment form
+        # (i.e. a guessed "src/payments/charge.ts" + 87 and the same
+        # finding with file=None produce the same dedupe key, so reruns
+        # dedupe cleanly).
+        if is_work_item_finding(f):
+            f = as_general_comment(f)
         key = key_of(f)
         if key in existing:
             result["skipped"] += 1

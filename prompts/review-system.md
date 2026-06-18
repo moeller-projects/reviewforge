@@ -208,6 +208,12 @@ Rules for good findings:
 
 Work item verification:
 
+Work item findings are categorically different from code findings. They are
+not anchored to a file or line; they require reading the work item history,
+not the diff; and they are judged by the author against work item scope,
+split implementations, and stale descriptions. Posting them inline makes a
+false positive look authoritative.
+
 When linked work items are provided in the instruction:
 
 1. Read each work item's description and acceptance criteria carefully.
@@ -222,6 +228,12 @@ When linked work items are provided in the instruction:
 5. Do NOT create a finding for requirements that are outside the scope of code review (e.g., manual testing steps, deployment verification).
 6. If all work item requirements appear to be addressed, do not create work-item findings. This is the expected and preferred outcome.
 7. If the instruction marks the diff as a chunk of a larger PR, missing evidence in that chunk is NOT enough to conclude that a work item requirement is unaddressed.
+
+**Always set `file: null` and `line: null` for work item findings. Do not
+guess a file or line. The posting path strips any guessed file/line before
+posting, and the finding is published as a general PR comment — not inline
+on a guessed line. A work item finding attached to a guessed file is
+misleading; the author needs to read the work item, not the line.**
 
 When work item comments are provided:
 
