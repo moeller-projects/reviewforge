@@ -6,6 +6,40 @@ against the target branch, reviews it against coding standards with the Pi codin
 agent (read-only), and posts findings as PR comment threads through direct Azure
 DevOps REST calls — in the language you configure.
 
+## User quickstart
+
+Clone, build, and review a single PR. The script extracts org / project / repo
+/ PR id from the URL and resolves source and target branches via the ADO REST
+API, so you do not need to pre-fetch the branch.
+
+```powershell
+# 1. (One time) install dev deps
+pip install -e ".[dev]"
+
+# 2. Copy the env template and fill in tokens
+Copy-Item .env.example .env
+#  Edit .env — at minimum set ADO_AUTH_TOKEN and OPENAI_API_KEY.
+
+# 3. Build the container image (auto-detects docker / podman)
+./build.ps1
+
+# 4. Review a PR — pass the full ADO pull-request URL
+./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423"
+
+# Or a dry run that produces findings JSON without posting:
+./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423" -DryRun
+```
+
+PowerShell wrappers do not auto-load `.env`. Load it once per session with
+`set -a; source .env; set +a` (bash) or `dotenv .env` (direnv). Precedence
+everywhere: **CLI flag > env var > `.env`**.
+
+For the Python CLI inside the container or on a host with the package
+installed, use the same arguments through `python scripts/main.py review ...`
+— see [Run locally (Windows / PowerShell)](#run-locally-windows--powershell)
+below, and [`docs/reference/cli.md`](docs/reference/cli.md) for the full
+subcommand reference.
+
 ## Design (why it's split in two)
 
 The model does **judgment**; a script does **side effects**.
@@ -87,16 +121,22 @@ PowerShell wrappers and the Azure pipeline definition need no changes.
 
 ## Documentation
 
-Detailed per-module documentation lives under `docs/`:
+The full docs are split by purpose so you can find the right level of detail fast:
 
-- [`docs/package-guide.md`](docs/package-guide.md) — index, package layout, key invariants.
-- [`docs/architecture.md`](docs/architecture.md) — components, data flow, design rationale.
-- [`docs/configuration.md`](docs/configuration.md) — `Config` dataclass, env-var precedence, alias map, every supported env var.
-- [`docs/cli.md`](docs/cli.md) — subcommands, flags, exit codes, programmatic entry.
-- [`docs/ado-integration.md`](docs/ado-integration.md) — `AdoClient` REST wrapper, idempotent posting, diff → threadContext mapping, legacy shim.
-- [`docs/pipeline.md`](docs/pipeline.md) — the `Stage` interface, the 11 default stages, how to add a new one.
-- [`docs/ai-runner.md`](docs/ai-runner.md) — `PiRunner` subprocess wrapper, session reuse, JSON repair, prompt assembly.
-- [`docs/artifacts.md`](docs/artifacts.md) — artifact directory layout, `ARTIFACT_NAMES` contract, `RunSummary` shape.
+- [`docs/reference/`](docs/reference/) — current implemented behavior (`cli`, `pipeline`, `ado-integration`, `ai-runner`, `configuration`, `artifacts`, plus a `package-guide` index).
+- [`docs/design/`](docs/design/) — architecture decisions and the rationale behind the current shape.
+- [`docs/archive/`](docs/archive/) — historical migration / triage notes that no longer describe the system.
+
+Start here:
+
+- [`docs/reference/package-guide.md`](docs/reference/package-guide.md) — package index, layout, key invariants.
+- [`docs/design/architecture.md`](docs/design/architecture.md) — components, data flow, design rationale.
+- [`docs/reference/configuration.md`](docs/reference/configuration.md) — `Config` dataclass, env-var precedence, alias map, every supported env var.
+- [`docs/reference/cli.md`](docs/reference/cli.md) — subcommands, flags, exit codes, programmatic entry.
+- [`docs/reference/ado-integration.md`](docs/reference/ado-integration.md) — `AdoClient` REST wrapper, idempotent posting, diff → threadContext mapping, legacy shim.
+- [`docs/reference/pipeline.md`](docs/reference/pipeline.md) — the `Stage` interface, the 11 default stages, how to add a new one.
+- [`docs/reference/ai-runner.md`](docs/reference/ai-runner.md) — `PiRunner` subprocess wrapper, session reuse, JSON repair, prompt assembly.
+- [`docs/reference/artifacts.md`](docs/reference/artifacts.md) — artifact directory layout, `ARTIFACT_NAMES` contract, `RunSummary` shape.
 
 ## CLI
 
