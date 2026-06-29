@@ -191,6 +191,8 @@ class Config:
     context_file_max_lines: int = field(default=260, compare=False)
     #: Max search matches per ``searches_to_run`` query.
     context_search_max_matches: int = field(default=40, compare=False)
+    #: Max worker threads used by context collection.
+    collect_context_workers: int = field(default=8, compare=False)
     # --- Pi session reuse (Phases A + E) -------------------------------
     #: When ``True`` (default), the runner uses ``--session`` to keep state
     #: between stages and chunks. Disable for deterministic reruns or when
@@ -249,6 +251,7 @@ class Config:
         # Context collection caps.
         context_file_max_lines_raw = os.getenv("CONTEXT_FILE_MAX_LINES", "260")
         context_search_max_matches_raw = os.getenv("CONTEXT_SEARCH_MAX_MATCHES", "40")
+        collect_context_workers_raw = os.getenv("COLLECT_CONTEXT_WORKERS", "8")
         try:
             context_file_max_lines = int(context_file_max_lines_raw)
         except ValueError:
@@ -257,6 +260,10 @@ class Config:
             context_search_max_matches = int(context_search_max_matches_raw)
         except ValueError:
             context_search_max_matches = 40
+        try:
+            collect_context_workers = int(collect_context_workers_raw)
+        except ValueError:
+            collect_context_workers = 8
 
         cfg = cls(
             ado_org=os.getenv("ADO_ORG", ""),
@@ -304,6 +311,7 @@ class Config:
             fail_on=fail_on,
             context_file_max_lines=context_file_max_lines,
             context_search_max_matches=context_search_max_matches,
+            collect_context_workers=collect_context_workers,
         )
         return cfg
 
@@ -518,6 +526,15 @@ def _build_from_sources(
         chunk_trigger = str(max_diff_bytes)
     chunk_trigger_diff_bytes = require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk_trigger)
     pi_timeout = require_uint("PI_TIMEOUT_SECS", cli_or_env("pi_timeout_secs", "PI_TIMEOUT_SECS", "600"))
+    context_file_max_lines = require_uint(
+        "CONTEXT_FILE_MAX_LINES", cli_or_env("context_file_max_lines", "CONTEXT_FILE_MAX_LINES", "260")
+    )
+    context_search_max_matches = require_uint(
+        "CONTEXT_SEARCH_MAX_MATCHES", cli_or_env("context_search_max_matches", "CONTEXT_SEARCH_MAX_MATCHES", "40")
+    )
+    collect_context_workers = require_uint(
+        "COLLECT_CONTEXT_WORKERS", cli_or_env("collect_context_workers", "COLLECT_CONTEXT_WORKERS", "8")
+    )
 
     def to_path(value: str, default: str) -> Path:
         return Path(value) if value else Path(default)
@@ -572,6 +589,9 @@ def _build_from_sources(
         review_artifact_dir=review_artifact_dir,
         review_artifact_root=Path(review_artifact_root),
         review_run_id=review_run_id,
+        context_file_max_lines=context_file_max_lines,
+        context_search_max_matches=context_search_max_matches,
+        collect_context_workers=collect_context_workers,
         pr_url=pr_url,
         pi_session_id=pi_session_id,
         pi_session_enabled=pi_session_enabled,

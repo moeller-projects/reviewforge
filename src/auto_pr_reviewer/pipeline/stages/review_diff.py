@@ -6,12 +6,14 @@ goes to ``candidate-findings.json``.
 """
 from __future__ import annotations
 
-import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from typing import Any
 
 from ...ai.prompts import review_instruction
 from ...artifacts.builder import read_json, write_json
 from ...git.chunker import build_chunks
+from ..cache import cache_key, load_cached_json, store_cached_json
 from ..stage import Stage, StageContext
 
 
@@ -41,12 +43,19 @@ class ReviewDiffStage(Stage):
             ctx.extras.get("system_prompt", ""), encoding="utf-8"
         )
 
+        def _fork_runner():
+            if type(ctx.pi).__name__ == "PiRunner" and hasattr(ctx.pi, "cfg"):
+                return type(ctx.pi)(ctx.pi.cfg)
+            return ctx.pi
+
         def run_one(
             diff: str,
             files_text: str,
             out_path,
             label: str = "",
             truncated: bool = False,
+            *,
+            pi_runner=None,
         ) -> dict[str, Any]:
             text = review_instruction(
                 cfg,
@@ -60,38 +69,79 @@ class ReviewDiffStage(Stage):
                 label,
                 truncated,
             ) + diff
-            ctx.pi.run_json(cfg.review_prompt_path, text, out_path, "reviewer")
-            ctx.last_token_usage = ctx.pi.last_tokens
+            runner = pi_runner or ctx.pi
+            runner.run_json(cfg.review_prompt_path, text, out_path, "reviewer")
+            if runner is ctx.pi:
+                ctx.last_token_usage = ctx.pi.last_tokens
             return read_json(out_path) or {}
 
         diff_bytes = len(ctx.state.diff_text.encode())
+        metadata = read_json(ctx.artifacts.metadata) or {}
+        review_cache_key = cache_key([
+            "review_diff",
+            cfg.review_prompt_path.as_posix(),
+            metadata.get("sourceCommit"),
+            metadata.get("targetCommit"),
+            metadata.get("lastMergeSourceCommit"),
+            ctx.state.diff_text,
+            ctx.files_text,
+            ctx.artifacts.intent,
+            ctx.artifacts.digest,
+            ctx.extras.get("wi_context", []),
+            ctx.extras.get("wi_comments_context", []),
+            ctx.extras.get("thread_context", []),
+            cfg.disable_chunk_review,
+            cfg.chunk_trigger_diff_bytes,
+            cfg.max_diff_bytes,
+        ])
+        cached = load_cached_json(cfg, "review_diff", review_cache_key)
+        if cached:
+            _log("review diff cache hit")
+            write_json(ctx.artifacts.candidate, cached)
+            ctx.candidate = cached
+            return {"findings": len(cached.get("findings", [])), "chunks": cached.get("chunks", 0), "cached": True}
         if cfg.disable_chunk_review or diff_bytes <= cfg.chunk_trigger_diff_bytes:
             if cfg.disable_chunk_review and diff_bytes > cfg.chunk_trigger_diff_bytes:
                 _log("DISABLE_CHUNK_REVIEW enabled; reviewing large diff in single pass")
-            run_one(ctx.state.diff_text, ctx.files_text, ctx.artifacts.candidate)
+            doc = run_one(ctx.state.diff_text, ctx.files_text, ctx.artifacts.candidate)
+            payload = {"summary": doc.get("summary", ""), "findings": [_normalize_finding(f) for f in doc.get("findings", [])], "chunks": 0}
+            write_json(ctx.artifacts.candidate, payload)
+            store_cached_json(cfg, "review_diff", review_cache_key, payload)
+            ctx.candidate = payload
+            return {"findings": len(payload.get("findings", [])), "chunks": 0}
         else:
             _log("diff exceeds chunk trigger; splitting file-based chunks")
             chunks, truncated_any = build_chunks(ctx.state, cfg.max_diff_bytes)
             findings_list: list[dict[str, Any]] = []
             summaries: list[str] = []
             seen: set[tuple] = set()
-            for i, ch in enumerate(chunks, 1):
-                out = ctx.artifacts.dir / "raw" / f"chunk-{i}.json"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                doc = run_one(ch.diff_text, ch.files_text, out, f"chunk {i}/{len(chunks)}", ch.truncated)
-                summaries.append(doc.get("summary", ""))
-                for f in doc.get("findings", []):
-                    key = (
-                        f.get("file") or "",
-                        f.get("line") or 0,
-                        f.get("severity") or "",
-                        f.get("title") or "",
-                        f.get("message") or "",
-                    )
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    findings_list.append(_normalize_finding(f))
+            import os
+            max_workers = max(1, min(len(chunks), max(2, (os.cpu_count() or 2) // 2), 8))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                future_map = {}
+                for i, ch in enumerate(chunks, 1):
+                    out = ctx.artifacts.dir / "raw" / f"chunk-{i}.json"
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    future = pool.submit(run_one, ch.diff_text, ch.files_text, out, f"chunk {i}/{len(chunks)}", ch.truncated, pi_runner=_fork_runner())
+                    future_map[future] = (i, out)
+                ordered_docs: list[dict[str, Any]] = [None] * len(chunks)  # type: ignore[list-item]
+                for future in as_completed(future_map):
+                    idx, _out = future_map[future]
+                    ordered_docs[idx - 1] = future.result()
+                for doc in ordered_docs:
+                    summaries.append(doc.get("summary", ""))
+                    for f in doc.get("findings", []):
+                        key = (
+                            f.get("file") or "",
+                            f.get("line") or 0,
+                            f.get("severity") or "",
+                            f.get("title") or "",
+                            f.get("message") or "",
+                        )
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        findings_list.append(_normalize_finding(f))
             summary = " ".join(s for s in summaries if s).strip()
             if not summary:
                 summary = f"Reviewed {len(chunks)} diff chunks."

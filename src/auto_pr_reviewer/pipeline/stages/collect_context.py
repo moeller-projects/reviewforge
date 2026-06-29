@@ -1,6 +1,7 @@
 """Stage: collect deterministic context (files, tests, searches) from the plan."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -43,34 +44,26 @@ class CollectContextStage(Stage):
         # out-of-band caller stay in sync.
         max_lines = ctx.cfg.context_file_max_lines
         max_matches = ctx.cfg.context_search_max_matches
-        for item in plan.get("files_to_read", []):
-            if not isinstance(item, dict):
-                continue
-            p = _safe_path(repo_dir, str(item.get("path", "")))
-            if p:
-                lines = p.read_text(errors="replace").splitlines()
-                result["files"].append(
-                    {
-                        "path": str(p.relative_to(repo_dir)),
-                        "reason": item.get("reason", ""),
-                        "truncated": len(lines) > max_lines,
-                        "content": "\n".join(lines[:max_lines]),
-                    }
-                )
-        for hint in plan.get("tests_to_inspect", []):
-            p = _safe_path(repo_dir, str(hint))
-            if p:
-                result["tests"].append(
-                    {
-                        "path": str(p.relative_to(repo_dir)),
-                        "content": "\n".join(
-                            p.read_text(errors="replace").splitlines()[:max_lines]
-                        ),
-                    }
-                )
-        for item in plan.get("searches_to_run", []):
+        def read_file(item: dict[str, Any], kind: str) -> dict[str, Any] | None:
+            p = _safe_path(repo_dir, str(item.get("path", "") if kind == "files" else item))
+            if not p:
+                return None
+            lines = p.read_text(errors="replace").splitlines()
+            if kind == "files":
+                return {
+                    "path": str(p.relative_to(repo_dir)),
+                    "reason": item.get("reason", ""),
+                    "truncated": len(lines) > max_lines,
+                    "content": "\n".join(lines[:max_lines]),
+                }
+            return {
+                "path": str(p.relative_to(repo_dir)),
+                "content": "\n".join(lines[:max_lines]),
+            }
+
+        def run_search(item: dict[str, Any]) -> dict[str, Any] | None:
             if not isinstance(item, dict) or not item.get("query"):
-                continue
+                return None
             cp = subprocess.run(
                 [
                     "rg", "-n", "--fixed-strings",
@@ -81,15 +74,31 @@ class CollectContextStage(Stage):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
-            result["searches"].append(
-                {
-                    "query": item["query"],
-                    "reason": item.get("reason", ""),
-                    "matches": "\n".join(
-                        cp.stdout.decode(errors="replace").splitlines()[:max_matches]
-                    ),
-                }
-            )
+            return {
+                "query": item["query"],
+                "reason": item.get("reason", ""),
+                "matches": "\n".join(
+                    cp.stdout.decode(errors="replace").splitlines()[:max_matches]
+                ),
+            }
+
+        max_workers = max(1, min(ctx.cfg.collect_context_workers, len(plan.get("files_to_read", [])) + len(plan.get("tests_to_inspect", [])) + len(plan.get("searches_to_run", [])) or 1))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            files_futures = [pool.submit(read_file, item, "files") for item in plan.get("files_to_read", []) if isinstance(item, dict)]
+            test_futures = [pool.submit(read_file, hint, "tests") for hint in plan.get("tests_to_inspect", [])]
+            search_futures = [pool.submit(run_search, item) for item in plan.get("searches_to_run", [])]
+            for fut in files_futures:
+                item = fut.result()
+                if item:
+                    result["files"].append(item)
+            for fut in test_futures:
+                item = fut.result()
+                if item:
+                    result["tests"].append(item)
+            for fut in search_futures:
+                item = fut.result()
+                if item:
+                    result["searches"].append(item)
         write_json(ctx.artifacts.collected, result)
         ctx.collected = result
         return {

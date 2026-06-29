@@ -201,6 +201,21 @@ class TestBuildConfig:
         assert cfg.review_language == "English"
         assert cfg.max_diff_bytes == 200000
 
+    def test_collect_context_workers_from_env(self, clean_env, monkeypatch):
+        from auto_pr_reviewer.config import Config
+
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        monkeypatch.setenv("COLLECT_CONTEXT_WORKERS", "12")
+        cfg = Config.from_env()
+        assert cfg.collect_context_workers == 12
+
+    def test_collect_context_workers_from_sources(self, clean_env, monkeypatch):
+        from auto_pr_reviewer.config import Config
+
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        cfg = Config.from_sources({"command": "review"}, env={"ADO_AUTH_TOKEN": "t", "COLLECT_CONTEXT_WORKERS": "9"})
+        assert cfg.collect_context_workers == 9
+
 
 # ---------------------------------------------------------------------------
 # cmd_open_prs

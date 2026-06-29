@@ -322,6 +322,26 @@ function Write-EnvFile {
     bookkeeping when ``IsTemp`` is true. This keeps the call site
     uniform regardless of whether the user has a ``.env`` file.
 #>
+function Import-DotEnvFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$OverrideExisting
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    Get-Content -LiteralPath $Path | ForEach-Object {
+        $line = $_.Trim()
+        if (-not $line -or $line.StartsWith('#')) { return }
+        if ($line -notmatch '^(?<key>[A-Za-z_][A-Za-z0-9_]*)=(?<value>.*)$') { return }
+        $key = $Matches['key']
+        $value = $Matches['value']
+        if ($OverrideExisting -or [string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($key, 'Process'))) {
+            [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
+        }
+    }
+    return $true
+}
+
 function Get-ReviewerEnvFile {
     param(
         [string] $EnvFile = ".env",
@@ -347,4 +367,4 @@ function Get-ReviewerEnvFile {
     }
 }
 
-Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Write-EnvFile, Get-ReviewerEnvFile, Get-EnvOrDefault, Resolve-ScriptConfig, ConvertFrom-CommaList, Show-InteractivePrompt
+Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Write-EnvFile, Get-ReviewerEnvFile, Import-DotEnvFile, Get-EnvOrDefault, Resolve-ScriptConfig, ConvertFrom-CommaList, Show-InteractivePrompt

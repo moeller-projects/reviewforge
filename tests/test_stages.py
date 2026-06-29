@@ -33,6 +33,7 @@ sys.path.insert(0, str(SRC))
 
 from auto_pr_reviewer.artifacts import builder, manager  # noqa: E402
 from auto_pr_reviewer.config import Config  # noqa: E402
+from auto_pr_reviewer.pipeline.cache import cache_key  # noqa: E402
 from auto_pr_reviewer.pipeline.stage import (  # noqa: E402
     StageContext,
     StageStatus,
@@ -968,3 +969,46 @@ class TestCollectContextExtras:
         doc = builder.read_json(artifacts.collected)
         assert doc["files"] == []
         assert doc["searches"] == []  # all invalid
+
+    def test_collect_context_uses_configured_worker_limit(self, cfg, artifacts, monkeypatch):
+        cfg = replace(cfg, collect_context_workers=2)
+        builder.write_json(
+            artifacts.plan,
+            {
+                "files_to_read": [{"path": "ok.py", "reason": "r"}],
+                "tests_to_inspect": ["ok.py"],
+                "searches_to_run": [{"query": "foo", "reason": "r"}],
+            },
+        )
+        (artifacts.dir / "ok.py").write_text("print('ok')\n", encoding="utf-8")
+        state = SimpleNamespace(repo_dir=artifacts.dir, files=["ok.py"], range_spec="x..y")
+        ctx = _stage_context(cfg, artifacts, MagicMock(), state=state)
+        ctx.plan = builder.read_json(artifacts.plan)
+        seen = {}
+
+        class DummyPool:
+            def __init__(self, max_workers):
+                seen["max_workers"] = max_workers
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def submit(self, fn, *args, **kwargs):
+                class F:
+                    def result(self_nonlocal):
+                        return fn(*args, **kwargs)
+                return F()
+
+        monkeypatch.setattr("auto_pr_reviewer.pipeline.stages.collect_context.ThreadPoolExecutor", DummyPool)
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.collect_context.subprocess.run",
+            lambda *a, **k: subprocess.CompletedProcess(a, 0, b"", b""),
+        )
+        CollectContextStage()(ctx)
+        assert seen["max_workers"] == 2
+
+    def test_cache_key_changes_with_head_sha(self):
+        base = ["review_diff", "p.md", "diff", "files", {}, {}, [], [], [], False, 100, 100]
+        k1 = cache_key(base + ["sha1"])
+        k2 = cache_key(base + ["sha2"])
+        assert k1 != k2

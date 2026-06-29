@@ -242,6 +242,7 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
 
 def _record_results(summary: RunSummary, results: list) -> None:
     for r in results:
+        _log(f"stage {r.name} {r.status} in {r.duration_ms}ms")
         summary.add_stage(
             StageRecord(
                 name=r.name,

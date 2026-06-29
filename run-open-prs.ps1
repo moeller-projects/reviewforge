@@ -323,10 +323,10 @@ if (-not $SelectedPullRequests) {
 
 Write-Step ("Found {0} active pull request(s)." -f $SelectedPullRequests.Count)
 
-# Interactive selection. Auto-enable on TTY. CI / piped input skips
-# the prompt and processes every selected PR.
+# Interactive selection. Auto-enable only when caller did not
+# pass -Interactive and stdin/stdout are attached to TTY.
 $isTty = -not [Console]::IsInputRedirected
-if (-not $Interactive -and $isTty -and -not [Console]::IsOutputRedirected) {
+if (-not $PSBoundParameters.ContainsKey('Interactive') -and $isTty -and -not [Console]::IsOutputRedirected) {
     $Interactive = $true
 }
 if ($Interactive) {

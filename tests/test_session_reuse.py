@@ -563,8 +563,8 @@ class TestChunkedReviewSession:
         ctx.files_text = "a.py\nb.py\n"
         ctx.extras["system_prompt"] = "sys"
         ReviewDiffStage()(ctx)
-        assert "chunk 1/2" in prompts_sent[0]
-        assert "chunk 2/2" in prompts_sent[1]
+        assert any("chunk 1/2" in p for p in prompts_sent)
+        assert any("chunk 2/2" in p for p in prompts_sent)
 
     def test_session_disabled_chunks_use_no_session(self, cfg, tmp_path, monkeypatch):
         from auto_pr_reviewer.pipeline.stages import ReviewDiffStage
