@@ -73,9 +73,11 @@ if ($Build) {
 # direnv, ``set -a; source .env; set +a``, or manual exports) and
 # layers explicit -Parameters overrides on top. The ``.env`` file
 # at the repo root is a reference / template, NOT auto-loaded.
-# Required keys: ADO_AUTH_TOKEN (or one of its aliases) +
-# OPENAI_API_KEY. Other keys are forwarded to the container as
-# env vars only.
+# Required keys: ADO_AUTH_TOKEN (or one of its aliases) and one
+# of: OPENAI_API_KEY env var, OR ~/.pi/agent/auth.json (Pi's
+# native credential store — populated by `pi` → /login, supports
+# API keys AND subscription OAuth like ChatGPT Plus/Pro Codex).
+# Other keys are forwarded to the container as env vars only.
 $cfg = Resolve-ScriptConfig `
     -Parameters @{
         PR_URL          = $PrUrl
@@ -94,8 +96,19 @@ if (-not $token) { $token = $cfg['ADO_API_KEY'] }
 if (-not $token) {
     Fail 'No ADO bearer token. Set ADO_AUTH_TOKEN (or ADO_API_KEY) in .env, or pass -AdoToken.'
 }
-if (-not $cfg['OPENAI_API_KEY']) {
-    Fail 'No model key. Set OPENAI_API_KEY in .env.'
+# Pi also reads ~/.pi/agent/auth.json — accept it as a stand-in
+# for OPENAI_API_KEY so ChatGPT Plus/Pro subscription OAuth (and
+# any other provider the user logged into via `pi` /login) works.
+$authJsonPath = $null
+$homeRoot = if ($HOME) { $HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $null }
+if ($homeRoot) {
+    $candidate = Join-Path $homeRoot '.pi/agent/auth.json'
+    if (Test-Path -LiteralPath $candidate) {
+        $authJsonPath = (Resolve-Path -LiteralPath $candidate).Path
+    }
+}
+if (-not $cfg['OPENAI_API_KEY'] -and -not $authJsonPath) {
+    Fail 'No model credentials. Set OPENAI_API_KEY in .env, or create ~/.pi/agent/auth.json (run `pi` locally and use /login).'
 }
 
 # DRY_RUN is a switch in PowerShell, an env var elsewhere. The
@@ -185,6 +198,17 @@ if ($useNamedVolume) {
         $containerPath = $ArtifactPath -replace '^([A-Z]):', '/$1' -replace '\\', '/'
     }
     $dockerArgs += @("--volume", "$($containerPath):/workspace/artifacts")
+}
+
+# Mount Pi's auth.json if present on the host, so subscription
+# OAuth tokens (ChatGPT Plus/Pro Codex, Claude Pro/Max, GitHub
+# Copilot, …) are visible inside the container. Pi reads
+# /root/.pi/agent/auth.json because the image runs as root.
+# Read-write: subscription OAuth auto-refresh writes back here,
+# and `:ro` would break token renewal on long runs.
+if ($authJsonPath) {
+    Write-Step "Mounting Pi auth.json: $authJsonPath"
+    $dockerArgs += @("--volume", "${authJsonPath}:/root/.pi/agent/auth.json")
 }
 
 $dockerArgs += @("--env-file", $envFileInfo.Path)

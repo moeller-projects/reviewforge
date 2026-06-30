@@ -13,6 +13,7 @@ in the same PR.
 | [`pipeline.md`](pipeline.md) | The `Stage` interface, the 11 default stages, ordering, how to add a new stage. |
 | [`ai-runner.md`](ai-runner.md) | `PiRunner` subprocess wrapper, session reuse, JSON repair, prompt assembly. |
 | [`artifacts.md`](artifacts.md) | Per-run artifact layout, the `ARTIFACT_NAMES` contract, `RunSummary` shape. |
+| [`scheduled-runs.md`](scheduled-runs.md) | How to run `run-open-prs-scheduled.ps1` on a free hosted scheduler (GitHub Actions recipe, Oracle / Fly.io alternatives, local Windows reminder). |
 
 For the bigger picture (system rationale, design trade-offs, future plans), see
 [`../design/`](../design/). For historical migration / triage notes that no
