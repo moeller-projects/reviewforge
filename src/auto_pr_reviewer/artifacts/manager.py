@@ -117,7 +117,10 @@ def create(cfg: Config) -> Artifacts:
         (root.parent.parent / "latest.txt").write_text(str(root) + "\n", encoding="utf-8")
 
     (root / "run-id.txt").write_text(run_id + "\n", encoding="utf-8")
-
+    # Stage runtimes write per-finding Pi outputs to ``raw/``. Create it
+    # eagerly so ``Path.write_bytes`` (used by ``PiRunner.run_json``) never
+    # has to materialise the parent directory on its own.
+    (root / "raw").mkdir(exist_ok=True)
     return Artifacts(
         dir=root,
         run_id=run_id,

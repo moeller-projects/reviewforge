@@ -1012,3 +1012,99 @@ class TestCollectContextExtras:
         k1 = cache_key(base + ["sha1"])
         k2 = cache_key(base + ["sha2"])
         assert k1 != k2
+
+
+# ---------------------------------------------------------------------------
+# VerifyFindingsStage batched-run regression (raw/ directory)
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyFindingsBatchedRegression:
+    """Regression for the batched verification path.
+
+    When ``candidate.findings`` has 2+ entries, ``VerifyFindingsStage``
+    fans out one Pi call per finding and writes the per-finding JSON
+    under ``raw/verify-N.json``. ``PiRunner.run_json`` writes with
+    :meth:`Path.write_bytes`, which does NOT create parent directories.
+    The artifacts manager must therefore create ``raw/`` eagerly, and the
+    stage must defend itself if a caller hand-builds the run tree.
+    """
+
+    @staticmethod
+    def _make_raw_pi(payloads):
+        """Mock :class:`PiRunner` whose ``run_json`` mirrors the real
+        implementation: it writes raw bytes via :meth:`Path.write_bytes`
+        and does NOT create parent directories. Each call emits the next
+        payload in ``payloads`` (last entry repeats when exhausted).
+        """
+        pi = MagicMock()
+
+        def record(prompt, stdin, out, stage):
+            idx = min(len(payloads) - 1, pi.run_json.call_count - 1)
+            out.write_bytes(
+                json.dumps(payloads[idx], ensure_ascii=False, indent=2).encode()
+            )
+
+        pi.run_json.side_effect = record
+        return pi
+
+    def _build_ctx(self, cfg, artifacts, pi):
+        builder.write_json(artifacts.candidate, {
+            "summary": "found 3",
+            "findings": [
+                {"severity": "major", "title": f"T{i}", "message": f"m{i}"}
+                for i in range(3)
+            ],
+        })
+        state = SimpleNamespace(
+            diff_text="d",
+            target_branch="m",
+            source_branch="f",
+            target_commit="t",
+            source_commit="s",
+            base_commit="b",
+        )
+        return _stage_context(cfg, artifacts, pi, state=state)
+
+    def test_manager_create_materialises_raw_dir(self, cfg, artifacts):
+        # Systemic guard: ``artifacts.manager.create`` must create
+        # ``raw/`` so downstream ``Path.write_bytes`` calls succeed.
+        if artifacts.raw_dir.exists():
+            shutil.rmtree(artifacts.raw_dir)
+        manager.create(cfg)
+        assert artifacts.raw_dir.is_dir()
+
+    def test_batched_run_writes_per_finding_outputs(self, cfg, artifacts):
+        # Happy path: per-finding Pi outputs land in ``raw/`` and the
+        # stage merges them into ``verified-findings.json``.
+        cfg = replace(cfg, verify_findings=True)
+        per_call = [
+            {"summary": f"verify-{i}", "findings": [
+                {"severity": "major", "title": f"V{i}", "message": f"M{i}"},
+            ]}
+            for i in range(1, 4)
+        ]
+        ctx = self._build_ctx(cfg, artifacts, self._make_raw_pi(per_call))
+        result = VerifyFindingsStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert result.details == {"findings": 3, "batched": True}
+        for i in range(1, 4):
+            assert (artifacts.raw_dir / f"verify-{i}.json").is_file()
+        merged = builder.read_json(artifacts.verified)
+        # Order is non-deterministic (ThreadPoolExecutor + as_completed).
+        assert {f["title"] for f in merged["findings"]} == {"V1", "V2", "V3"}
+
+    def test_batched_run_creates_raw_dir_when_missing(self, cfg, artifacts):
+        # Defence-in-depth: even if the artifacts tree is missing
+        # ``raw/`` (hand-built run dir, deleted before re-run), the
+        # stage must materialise the directory before parallel work.
+        cfg = replace(cfg, verify_findings=True)
+        shutil.rmtree(artifacts.raw_dir)
+        assert not artifacts.raw_dir.exists()
+        ctx = self._build_ctx(cfg, artifacts, self._make_raw_pi([
+            {"summary": f"verify-{i}", "findings": []} for i in range(1, 4)
+        ]))
+        result = VerifyFindingsStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert result.details == {"findings": 0, "batched": True}
+        assert artifacts.raw_dir.is_dir()

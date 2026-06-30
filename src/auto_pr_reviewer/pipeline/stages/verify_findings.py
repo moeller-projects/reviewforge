@@ -75,6 +75,11 @@ class VerifyFindingsStage(Stage):
             return {"findings": len(doc.get("findings", []))}
 
         _log(f"verifying {len(candidate_findings)} findings in parallel batches")
+        # Per-finding Pi outputs land in ``raw/``. ``artifacts.manager.create``
+        # already creates the directory, but be defensive: callers can
+        # construct an ``Artifacts`` manually, and ``PiRunner.run_json``
+        # uses ``Path.write_bytes`` which does NOT create parent dirs.
+        ctx.artifacts.raw_dir.mkdir(parents=True, exist_ok=True)
         def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
             out = ctx.artifacts.dir / "raw" / f"verify-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
