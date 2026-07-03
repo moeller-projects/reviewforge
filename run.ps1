@@ -244,7 +244,7 @@ try {
     $rc = $LASTEXITCODE
 } finally {
     if ($envFileInfo.IsTemp) {
-        Remove-Item -LiteralPath $envFileInfo.Path -Force -ErrorActionSilentlyContinue
+        Remove-Item -LiteralPath $envFileInfo.Path -Force -ErrorAction SilentlyContinue
     }
 }
 Write-Step "Container exited with code $rc"
