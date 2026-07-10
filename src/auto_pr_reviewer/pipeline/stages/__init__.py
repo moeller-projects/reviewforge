@@ -17,6 +17,7 @@ The orchestrator imports them and runs them in a fixed order:
 """
 from __future__ import annotations
 
+from .ac_coverage import AcceptanceCriteriaCoverageStage
 from .build_artifacts import BuildArtifactsStage
 from .calibrate_severity import CalibrateSeverityStage
 from .collect_context import CollectContextStage
@@ -40,6 +41,7 @@ DEFAULT_PIPELINE: list = [
     ReviewDiffStage(),
     VerifyFindingsStage(),
     CalibrateSeverityStage(),
+    AcceptanceCriteriaCoverageStage(),
     PostToAdoStage(),
 ]
 
@@ -56,6 +58,7 @@ REVIEW_ONLY_PIPELINE: list = [
     ReviewDiffStage(),
     VerifyFindingsStage(),
     CalibrateSeverityStage(),
+    AcceptanceCriteriaCoverageStage(),
 ]
 
 #: A minimal pipeline used by ``post`` to re-validate and post a previously
@@ -67,6 +70,7 @@ POST_ONLY_PIPELINE: list = [
 
 
 __all__ = [
+    "AcceptanceCriteriaCoverageStage",
     "BuildArtifactsStage",
     "CalibrateSeverityStage",
     "CollectContextStage",

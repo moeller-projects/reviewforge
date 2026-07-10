@@ -9,6 +9,7 @@ do not depend on git, Pi, or the network.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -721,6 +722,66 @@ class TestPowerShellWrapperStructure:
 
 
 class TestRefactoredWrappers:
+    # ------------------------------------------------------------------
+    # Parser helpers (shared by the param-name assertions above).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_powershell_param_names(text: str) -> set[str]:
+        """Extract declared param names from a PowerShell param block.
+
+        Tolerant to ``[type]`` and ``[type[]]`` attribute forms and to
+        any amount of whitespace between the attribute and ``$Name``.
+        Switches outside the main param block (they appear before it
+        in some scripts) are also captured.
+        """
+        names: set[str] = set()
+        in_param = False
+        for line in text.splitlines():
+            if "[CmdletBinding()]" in line:
+                in_param = True
+                continue
+            if in_param and line.startswith(")"):
+                break
+            if in_param:
+                stripped = line.strip()
+                # Match any [attribute] (possibly with extra [..] for
+                # array types) followed by $Name. The non-greedy match
+                # captures the first $[identifier] on the line.
+                m = re.search(
+                    r"\[[^\]]*(?:\[[^\]]*\])*\]\s*\$([A-Za-z_][A-Za-z0-9_]*)",
+                    stripped,
+                )
+                if m:
+                    names.add(m.group(1))
+            stripped = line.strip()
+            if stripped.startswith("[switch]"):
+                m = re.search(r"\[switch\]\s*\$([A-Za-z_][A-Za-z0-9_]*)", stripped)
+                if m:
+                    names.add(m.group(1))
+        return names
+
+    @staticmethod
+    def _strip_powershell_comments(text: str) -> str:
+        """Return the script text with all PowerShell comments stripped.
+
+        Handles both line comments (``# ...``) and ``<# ... #>`` block
+        comments. Used by the "no hardcoded default" tests so historical
+        references in the docstring / header do not trip the assertion.
+        """
+        no_block = re.sub(r"<#.*?#>", "", text, flags=re.DOTALL)
+        out_lines: list[str] = []
+        for line in no_block.splitlines():
+            hash_idx = line.find("#")
+            if hash_idx == -1:
+                out_lines.append(line)
+                continue
+            prefix = line[:hash_idx]
+            if prefix.count('"') % 2 == 1 or prefix.count("'") % 2 == 1:
+                out_lines.append(line)
+            else:
+                out_lines.append(prefix.rstrip())
+        return "\n".join(out_lines)
     """Structural checks for the PS-wrapper consolidation refactor.
 
     These tests don't exercise PowerShell on the test host (no pwsh on
@@ -812,28 +873,7 @@ class TestRefactoredWrappers:
 
     def test_run_open_prs_ps1_minimal_params(self):
         text = self._read("run-open-prs.ps1")
-        param_names = set()
-        in_param = False
-        for line in text.splitlines():
-            if "[CmdletBinding()]" in line:
-                in_param = True
-                continue
-            if in_param and line.startswith(")"):
-                break
-            if in_param:
-                stripped = line.strip()
-                if stripped.startswith("[") and "]" in stripped:
-                    after = stripped.split("]", 1)[1].strip()
-                    if after.startswith("$"):
-                        ident = after.lstrip("$").split()[0].rstrip(",")
-                        param_names.add(ident)
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("[switch]"):
-                after = stripped.split("$", 1)[1]
-                ident = after.split()[0].rstrip(",")
-                param_names.add(ident)
-
+        param_names = self._parse_powershell_param_names(text)
         expected = {
             "Organization", "Projects", "TargetBranches", "AdoToken",
             "EnvFile", "DryRun", "Interactive", "MaxPullRequests", "Build",
@@ -847,28 +887,30 @@ class TestRefactoredWrappers:
         # The refactor removed the hardcoded ``https://dev.azure.com/aveato/``
         # default and the hardcoded project list. Both scripts must
         # require org/projects/branches from env / explicit params.
+        # Comment lines (starting with #) are exempt — they document
+        # the removal and would trip a naive substring search.
         for script in ("run.ps1", "run-open-prs.ps1"):
-            text = self._read(script)
-            assert "aveato" not in text, f"{script} still contains hardcoded 'aveato' default"
+            code = self._strip_powershell_comments(self._read(script))
+            assert "aveato" not in code.lower(), (
+                f"{script} still contains hardcoded 'aveato' default outside comments"
+            )
         # run-open-prs.ps1 must not carry the old project list either.
-        text = self._read("run-open-prs.ps1")
+        code = self._strip_powershell_comments(self._read("run-open-prs.ps1"))
         for project in ("Laekker.Kitchen", "AveatoApp", "Laekkerai.CustomerProjects"):
-            assert project not in text, f"run-open-prs.ps1 still has hardcoded project '{project}'"
-        # And the old hardcoded target-branch list.
-        for branch in ("master", "develop"):
-            # The token "master" / "develop" may appear in the docs as
-            # legitimate examples; the actual hardcoded default is the
-            # ``@("main", "master", "dev", "develop")`` array literal.
-            # That whole array literal must be gone.
-            pass
-        assert '@("main", "master", "dev", "develop")' not in text, (
+            assert project not in code, f"run-open-prs.ps1 still has hardcoded project '{project}'"
+        # And the old hardcoded target-branch list — the array literal itself.
+        assert '@("main", "master", "dev", "develop")' not in code, (
             "run-open-prs.ps1 still has the hardcoded target-branches default array"
         )
 
     def test_build_switch_present(self):
         for script in ("run.ps1", "run-open-prs.ps1"):
             text = self._read(script)
-            assert "[switch] $Build" in text or "[switch]$Build" in text, (
+            # Tolerant to whitespace: ``[switch] $Build``, ``[switch]$Build``,
+            # and ``[switch]   $Build`` (3-space style used in the batch
+            # wrapper) all count. Regex is anchored to the switch
+            # attribute so it survives formatting drift.
+            assert re.search(r"\[switch\]\s*\$Build\b", text), (
                 f"{script} missing -Build switch (replaces run-local.ps1)"
             )
 
@@ -908,6 +950,16 @@ class TestRefactoredWrappers:
         # Resolve-ScriptConfig must accept a -Required parameter and
         # surface a clear error when keys are missing.
         assert "param(" in text
-        assert "-Required" in text
+        # ``$Required`` is the param-block variable form. The literal
+        # ``-Required`` token only appears at call sites (run.ps1 etc.),
+        # not inside the function definition itself.
+        assert re.search(r"\$Required\b", text), (
+            "Resolve-ScriptConfig does not declare a $Required param"
+        )
         assert "Missing required configuration" in text
+        # And the call site in run-open-prs.ps1 must use it.
+        call_site = self._read("run-open-prs.ps1")
+        assert re.search(r"-Required\b", call_site), (
+            "run-open-prs.ps1 does not call Resolve-ScriptConfig with -Required"
+        )
 

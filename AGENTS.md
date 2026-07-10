@@ -133,7 +133,7 @@ These exist for real reasons. Treat as **acceptance gates**, not style suggestio
 
 ---
 
-## 5. The 11-stage pipeline [explanation]
+## 5. The 12-stage pipeline [explanation]
 
 `auto_pr_reviewer.pipeline.stages.DEFAULT_PIPELINE` runs in this order. Each
 stage receives a mutable `StageContext`; stages may read prior outputs and
@@ -151,11 +151,16 @@ stage receives a mutable `StageContext`; stages may read prior outputs and
 | 8 | `ReviewDiffStage` | `candidate-findings.json` | — |
 | 9 | `VerifyFindingsStage` | `verified-findings.json` | — |
 | 10 | `CalibrateSeverityStage` | `severity-findings.json`, `final-findings.json` | — |
-| 11 | `PostToAdoStage` | `posted-comments.json` | `DRY_RUN=1` |
+| 11 | `AcceptanceCriteriaCoverageStage` | appends to `final-findings.json` (general-thread findings for uncovered ACs) | no linked work items, no `diff.patch`, `AC_COVERAGE_CHECK=0`, or `DRY_RUN=1` + `AC_COVERAGE_DRY_RUN=0` |
+| 12 | `PostToAdoStage` | `posted-comments.json` | `DRY_RUN=1` |
 
 A stage returns `StageStatus.OK`, `SKIPPED`, or `FAILED`. FAILED short-circuits
 the run; SKIPPED writes nothing and continues. Override `should_run(ctx)` for
 conditional execution; never raise from inside `should_run`.
+
+Stage 12 also runs the **stale-comment reconciliation pass** after the create
+loop: existing bot threads whose `(file, line)` is no longer in the current
+diff get a `"🤖 stale — ..."` follow-up comment. Disabled via `ANNOTATE_STALE=0`.
 
 ---
 

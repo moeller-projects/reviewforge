@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PR Review Bot — End-User Handoff</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { --fg:#1d1d1f; --mut:#6b6b70; --bg:#fbfbfd; --card:#fff; --acc:#0a5fff; --line:#e5e5ea; --ok:#0a7c2f; --warn:#a35c00; --err:#b3261e; --code-bg:#f4f4f7; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#f2f2f7; --mut:#9b9ba1; --bg:#15151a; --card:#1c1c22; --acc:#5b9bff; --line:#2c2c33; --ok:#4ec46b; --warn:#e8a64a; --err:#ff6b6b; --code-bg:#22222a; }
+  }
+  * { box-sizing:border-box }
+  body { font: 16px/1.55 -apple-system, "Segoe UI", Inter, system-ui, sans-serif; color:var(--fg); background:var(--bg); margin:0; padding:0; }
+  .wrap { max-width:880px; margin:0 auto; padding:48px 24px 96px; }
+  h1 { font-size:34px; margin:0 0 8px; letter-spacing:-0.02em; }
+  h2 { font-size:22px; margin:48px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--line); letter-spacing:-0.01em; }
+  h3 { font-size:17px; margin:24px 0 8px; }
+  p, li { color:var(--fg); }
+  .lede { color:var(--mut); font-size:17px; margin:0 0 32px; }
+  .meta { color:var(--mut); font-size:13px; margin:0 0 32px; }
+  .toc { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 20px; margin:0 0 32px; }
+  .toc ol { margin:8px 0 0; padding-left:22px; }
+  .toc a { color:var(--acc); text-decoration:none; }
+  .toc a:hover { text-decoration:underline; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 22px; margin:16px 0; }
+  .step { display:flex; gap:14px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--line); }
+  .step:first-of-type { border-top:0; }
+  .step .n { flex:0 0 28px; height:28px; border-radius:50%; background:var(--acc); color:#fff; font-weight:600; display:flex; align-items:center; justify-content:center; font-size:14px; }
+  .step .body { flex:1; }
+  .step .title { font-weight:600; margin-bottom:2px; }
+  .step .desc { color:var(--mut); font-size:14px; }
+  code, pre { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size:13.5px; }
+  code { background:var(--code-bg); padding:2px 6px; border-radius:5px; }
+  pre { background:var(--code-bg); padding:14px 16px; border-radius:8px; overflow:auto; border:1px solid var(--line); }
+  pre code { background:transparent; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:8px 0 16px; font-size:14px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-weight:600; color:var(--mut); background:var(--code-bg); }
+  .ok { color:var(--ok); font-weight:600; }
+  .warn { color:var(--warn); font-weight:600; }
+  .err { color:var(--err); font-weight:600; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:600; background:var(--code-bg); color:var(--mut); }
+  .pill.ok { color:var(--ok); }
+  .pill.warn { color:var(--warn); }
+  .pill.err { color:var(--err); }
+  ul, ol { padding-left:22px; }
+  li { margin:4px 0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:8px 0; }
+  .grid .card { margin:0; padding:14px 16px; }
+  .grid .card h4 { margin:0 0 4px; font-size:14px; color:var(--mut); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .grid .card .v { font-size:20px; font-weight:600; }
+  .diagram { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin:16px 0; overflow-x:auto; }
+  .diagram svg { display:block; max-width:100%; height:auto; margin:0 auto; }
+  .diagram .cap { font-size:13px; color:var(--mut); text-align:center; margin-top:8px; }
+  details.fallback { margin:8px 0 16px; }
+  details.fallback > summary { cursor:pointer; color:var(--mut); font-size:13px; padding:4px 0; }
+  details.fallback pre { margin:8px 0 0; font-size:12.5px; }
+  .mermaid { display:none; }
+  .footer { color:var(--mut); font-size:13px; margin-top:64px; border-top:1px solid var(--line); padding-top:16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>PR Review Bot — End-User Handoff</h1>
+<p class="lede">Plain-language guide for engineers and reviewers who trigger the bot and need to know what to expect in the PR, what the output means, and what to do when it misbehaves.</p>
+<p class="meta">Audience: anyone reviewing a PR that the bot touched. Owner: platform team. Source-of-truth: <code>AGENTS.md</code>, <code>docs/reference/*</code>.</p>
+
+<nav class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#trigger">What running <code>run-open-prs.ps1</code> actually does</a></li>
+    <li><a href="#diagrams">Visual overview</a></li>
+    <li><a href="#lifecycle">Per-PR lifecycle, end to end</a></li>
+    <li><a href="#pr-output">What you'll see in the PR</a></li>
+    <li><a href="#artifacts">Where the run output lives</a></li>
+    <li><a href="#rerun">Idempotency: re-running the bot</a></li>
+    <li><a href="#exit">Exit codes and "did it work"</a></li>
+    <li><a href="#triage">Triage playbook</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ol>
+</nav>
+
+<h2 id="trigger">1. What running <code>run-open-prs.ps1</code> actually does</h2>
+
+<p>The script is the batch entrypoint. It does <strong>not</strong> post comments itself. It enumerates PRs and spawns <strong>one short-lived container per PR</strong>; that container talks to Azure DevOps, runs the model, and posts findings. From the user's seat the flow is:</p>
+
+<div class="card">
+  <div class="step"><div class="n">1</div><div class="body"><div class="title">Discover</div><div class="desc">Lists active (non-draft) PRs across the configured projects whose target branch matches <code>ADO_TARGET_BRANCHES</code>. Parallel via <code>ForEach-Object -Parallel</code> (PS 7+), sequential fallback for PS 5.1. <code>az repos pr list --status active</code> paginates 100 at a time.</div></div></div>
+  <div class="step"><div class="n">2</div><div class="body"><div class="title">Select</div><div class="desc">Auto-prompts in a TTY (<code>1,3-5</code>, <code>all</code>, <code>none</code>). Skips when stdin/stdout are redirected (CI, scheduled runs).</div></div></div>
+  <div class="step"><div class="n">3</div><div class="body"><div class="title">Build (optional)</div><div class="desc">If <code>-Build</code> is passed (or you call <code>build.ps1</code> directly), runs <code>docker build</code> / <code>podman build</code> with <code>PI_VERSION</code> pinned via build-arg.</div></div></div>
+  <div class="step"><div class="n">4</div><div class="body"><div class="title">Spawn</div><div class="desc">For each selected PR, calls <code>run.ps1 -Org -Project -RepoId -PrId -AdoToken</code>. That script picks a container runtime (docker wins, podman fallback), mounts <code>~/.pi/agent/auth.json</code> if present, and starts a detached container (<code>-d --rm</code>).</div></div></div>
+  <div class="step"><div class="n">5</div><div class="body"><div class="title">Report</div><div class="desc">Tracks per-PR exit codes. Final output: <span class="pill ok">"Completed N pull request review run(s)."</span> or <span class="err">"ERROR: N pull request review run(s) failed."</span> with non-zero exit.</div></div></div>
+</div>
+
+<p><strong>One PR = one container.</strong> The script will not start a second review for a PR whose container is still running. Containers are detached, so the script's exit code reflects the spawn result, not the review itself.</p>
+
+<h2 id="diagrams">Visual overview</h2>
+
+<div class="diagram">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 780" role="img" aria-labelledby="t1">
+  <title id="t1">End-to-end flow from run-open-prs.ps1 to a posted PR comment</title>
+  <style>
+    .bg { fill:#fbfbfd; } .box { fill:#fff; stroke:#cdcdd3; stroke-width:1.2; } .box-h { fill:#e8efff; stroke:#0a5fff; stroke-width:1.4; }
+    .text { fill:#1d1d1f; font:600 14px -apple-system,"Segoe UI",system-ui,sans-serif; } .mut { fill:#6b6b70; font:500 12px -apple-system,"Segoe UI",system-ui,sans-serif; } .lbl { fill:#6b6b70; font:600 11px -apple-system,"Segoe UI",system-ui,sans-serif; text-transform:uppercase; letter-spacing:.04em; }
+    .arr { stroke:#0a5fff; stroke-width:1.6; fill:none; } .arrh { fill:#0a5fff; }
+    @media (prefers-color-scheme: dark){ .bg{fill:#15151a;} .box{fill:#1c1c22;stroke:#2c2c33;} .box-h{fill:#1a2540;stroke:#5b9bff;} .text{fill:#f2f2f7;} .mut{fill:#9b9ba1;} .lbl{fill:#9b9ba1;} .arr{stroke:#5b9bff;} .arrh{fill:#5b9bff;} }
+  </style>
+  <rect class="bg" width="720" height="780"/>
+  <text class="lbl" x="32" y="34">HOST · POWERSHELL</text>
+  <rect class="box-h" x="32" y="44" width="656" height="60" rx="8"/>
+  <text class="text" x="56" y="80">./run-open-prs.ps1</text>
+  <text class="mut" x="320" y="80" text-anchor="start">→ resolve ADO_ORG / PROJECTS / TARGET_BRANCHES</text>
+  <path class="arr" d="M360 104 V130"/><polygon class="arrh" points="356,128 364,128 360,138"/>
+
+  <text class="lbl" x="32" y="160">DISCOVERY</text>
+  <rect class="box" x="32" y="170" width="656" height="62" rx="8"/>
+  <text class="text" x="56" y="196">az repos pr list --status active</text>
+  <text class="mut" x="56" y="218">PS 7+ parallel per project (ThrottleLimit ≤4) · PS 5.1 serial fallback</text>
+  <path class="arr" d="M360 232 V258"/><polygon class="arrh" points="356,256 364,256 360,266"/>
+
+  <text class="lbl" x="32" y="288">FILTER</text>
+  <rect class="box" x="32" y="298" width="656" height="62" rx="8"/>
+  <text class="text" x="56" y="324">Dedupe + filter</text>
+  <text class="mut" x="56" y="346">target branch ∈ ADO_TARGET_BRANCHES  ·  drop drafts  ·  key = (project|repoId|prId)</text>
+  <path class="arr" d="M360 360 V386"/><polygon class="arrh" points="356,384 364,384 360,394"/>
+
+  <text class="lbl" x="32" y="416">PICK</text>
+  <rect class="box" x="32" y="426" width="656" height="62" rx="8"/>
+  <text class="text" x="56" y="452">Interactive picker (TTY only)</text>
+  <text class="mut" x="56" y="474">"1,3-5", "all", "none"  ·  auto-disabled in CI / scheduled runs</text>
+  <path class="arr" d="M360 488 V514"/><polygon class="arrh" points="356,512 364,512 360,522"/>
+
+  <text class="lbl" x="32" y="544">PER-PR LOOP</text>
+  <rect class="box-h" x="32" y="554" width="656" height="62" rx="8"/>
+  <text class="text" x="56" y="580">run.ps1 → docker run -d --rm IMAGE</text>
+  <text class="mut" x="56" y="602">one detached container per PR · exit code = spawn result only</text>
+  <path class="arr" d="M360 616 V642"/><polygon class="arrh" points="356,640 364,640 360,650"/>
+
+  <text class="lbl" x="32" y="672">CONTAINER</text>
+  <rect class="box" x="32" y="682" width="656" height="62" rx="8"/>
+  <text class="text" x="56" y="708">12-stage pipeline → artifacts/pr-&lt;id&gt;/runs/&lt;run_id&gt;/</text>
+  <text class="mut" x="56" y="730">Pi subprocess (read-only) · ADO client (write only in stage 12)</text>
+</svg>
+  <p class="cap">Figure 1 — Trigger flow: from the host shell down to per-container pipeline execution.</p>
+</div>
+
+<div class="diagram">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" role="img" aria-labelledby="t2">
+  <title id="t2">Anatomy of a posted PR comment</title>
+  <style>
+    .bg{fill:#fbfbfd;} .card{fill:#fff;stroke:#cdcdd3;stroke-width:1.2;}
+    .body{fill:#1d1d1f;font:500 13px -apple-system,"Segoe UI",system-ui,sans-serif;}
+    .meta{fill:#6b6b70;font:500 12px -apple-system,"Segoe UI",system-ui,sans-serif;}
+    .marker-bg{fill:#fff7e0;stroke:#a35c00;stroke-width:1.4;}
+    .marker-tx{fill:#5a3a00;font:700 13px ui-monospace,"JetBrains Mono",Menlo,monospace;}
+    .lbl{fill:#6b6b70;font:600 11px -apple-system,"Segoe UI",system-ui,sans-serif;text-transform:uppercase;letter-spacing:.04em;}
+    .anno{fill:#a35c00;font:600 12px -apple-system,"Segoe UI",system-ui,sans-serif;}
+    @media (prefers-color-scheme: dark){ .bg{fill:#15151a;} .card{fill:#1c1c22;stroke:#2c2c33;} .body{fill:#f2f2f7;} .meta{fill:#9b9ba1;} .lbl{fill:#9b9ba1;} .marker-bg{fill:#2a2114;stroke:#e8a64a;} .marker-tx{fill:#e8a64a;} .anno{fill:#e8a64a;} }
+  </style>
+  <rect class="bg" width="720" height="320"/>
+  <text class="lbl" x="32" y="34">POSTED COMMENT</text>
+  <rect class="card" x="32" y="48" width="656" height="170" rx="8"/>
+  <text class="meta" x="56" y="76">🤖 pr-review-bot · severity: major · confidence: 0.8</text>
+  <text class="body" x="56" y="108">**Unused parameter `cfg.dry_run` never referenced**</text>
+  <text class="body" x="56" y="130">The flag is parsed in `_build_common_parser` but the downstream</text>
+  <text class="body" x="56" y="148">`_build_config` does not propagate it into the Config dataclass.</text>
+  <text class="body" x="56" y="178">Suggestion: forward via `overrides["dry_run"]` like every other</text>
+  <text class="body" x="56" y="196">`--no-…` toggle.</text>
+  <rect class="marker-bg" x="40" y="206" width="640" height="24" rx="4"/>
+  <text class="marker-tx" x="56" y="224">prb:a1b2c3d4e5f6</text>
+  <line x1="640" y1="218" x2="690" y2="244" stroke="#a35c00" stroke-width="1.4"/>
+  <text class="anno" x="540" y="266">↑ dedupe marker</text>
+  <text class="meta" x="56" y="294">• Last line of body, on its own. Matches ^prb:([a-zA-Z0-9]{6,32})$</text>
+</svg>
+  <p class="cap">Figure 2 — Every posted comment ends with a marker line. That's the entire idempotency contract.</p>
+</div>
+
+<details class="fallback"><summary>Mermaid source (regenerable)</summary>
+<pre><code>flowchart TD
+  A["run-open-prs.ps1"] --&gt; B["az repos pr list --status active"]
+  B --&gt; C["Dedupe + filter (target branches, drop drafts)"]
+  C --&gt; D["Interactive pick (TTY only)"]
+  D --&gt; E["run.ps1 -&gt; docker run -d --rm IMAGE"]
+  E --&gt; F["Container: 12-stage pipeline (incl. AC coverage)"]
+  F --&gt; G["ADO comments posted (+ stale annotations)"]</code></pre>
+</details>
+
+<h2 id="lifecycle">2. Per-PR lifecycle, end to end</h2>
+
+<p>Inside the container (<code>/app/scripts/main.py</code> → <code>auto_pr_reviewer.cli.main</code>), the pipeline runs <strong>12 fixed stages</strong> in order. Each stage writes a JSON artifact; failures short-circuit the run.</p>
+
+<table>
+<thead><tr><th>#</th><th>Stage</th><th>Does</th><th>Writes</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>FetchPrMetadataStage</td><td>Pulls PR, work items, comments, threads from ADO REST.</td><td><code>metadata.json</code>, <code>work-items.json</code>, <code>threads.json</code></td></tr>
+<tr><td>2</td><td>PrepareRepositoryStage</td><td>Resolves source/target branches via ADO, clones, produces unified diff.</td><td><code>diff.patch</code>, <code>changed-files.json</code>, <code>commits.txt</code></td></tr>
+<tr><td>3</td><td>BuildArtifactsStage</td><td>Materialises the system prompt with the LANGUAGE directive appended.</td><td><code>review-system.combined.md</code></td></tr>
+<tr><td>4</td><td>ReconstructIntentStage</td><td>Pi call: infer author intent (work items, commit history, diff).</td><td><code>intent.json</code></td></tr>
+<tr><td>5</td><td>PlanContextStage</td><td>Pi call: what extra context (files, searches) is needed?</td><td><code>context-plan.json</code></td></tr>
+<tr><td>6</td><td>CollectContextStage</td><td>Resolves file slices and ripgrep matches from the local clone.</td><td><code>collected-context.json</code></td></tr>
+<tr><td>7</td><td>ContextDigestStage</td><td>Pi call: condense the collected context into a usable digest.</td><td><code>context-digest.json</code></td></tr>
+<tr><td>8</td><td>ReviewDiffStage</td><td>Pi call: produce candidate findings. Diff chunked at <code>MAX_DIFF_BYTES</code>; per-chunk outputs under <code>raw/</code>.</td><td><code>candidate-findings.json</code></td></tr>
+<tr><td>9</td><td>VerifyFindingsStage</td><td>Pi call: cross-check each candidate against the digest to drop false positives.</td><td><code>verified-findings.json</code></td></tr>
+<tr><td>10</td><td>CalibrateSeverityStage</td><td>Pi call: assign final severity &amp; produce review doc.</td><td><code>severity-findings.json</code>, <code>final-findings.json</code></td></tr>
+<tr><td>11</td><td>AcceptanceCriteriaCoverageStage</td><td>Deterministic heuristic: for each linked work item's acceptance criterion, checks whether its identifiers (file paths, function names) appear in the diff. Uncovered ACs become general-thread findings.</td><td>appends to <code>final-findings.json</code></td></tr>
+<tr><td>12</td><td>PostToAdoStage</td><td>Dedupe, post new findings as ADO threads, update vote. Also annotates prior bot threads whose <code>(file, line)</code> is no longer in the current diff with a "stale" comment.</td><td><code>posted-comments.json</code></td></tr>
+</tbody>
+</table>
+
+<p>Stages 4–10 each invoke the <code>pi</code> CLI as a subprocess. ADO credentials are <strong>stripped from the Pi subprocess env</strong> by <code>ai/runner.py</code> so the model cannot call ADO directly. All ADO traffic lives in <code>auto_pr_reviewer.ado.*</code> and is reachable only from stage 12.</p>
+
+<h2 id="pr-output">3. What you'll see in the PR</h2>
+
+<p>When the run posts (i.e. not <code>DRY_RUN=1</code>):</p>
+<ul>
+  <li><strong>One comment per finding.</strong> File-anchored findings become inline PR comments on the line <code>ReviewDiffStage</code> chose; unanchored findings (e.g. work-item scope gaps) become general PR comments.</li>
+  <li><strong>Each comment ends with a marker line</strong> of the form <code>prb:&lt;12-char-key&gt;</code>. The key is <code>sha1(file|line|severity|title|message)[:12]</code>. This marker is how the bot recognises its own comments on the next run.</li>
+  <li><strong>Vote.</strong> If <code>VOTE_WAITING_ON</code> is set to a severity (e.g. <code>major</code>) and any finding meets it, the bot casts <em>waiting for author</em>. Other reviewers' threads are never touched.</li>
+  <li><strong>No review summary comment</strong> when there are zero findings — only the file-anchored threads, if any.</li>
+  <li><strong>Acceptance-criterion gaps</strong> (linked work items only): if a work item's AC text mentions file paths, class names, or function names that are nowhere in the diff, the bot posts a general-thread finding titled <code>Work item #N acceptance criterion not covered: ...</code>. False positives are possible (heuristic, no LLM) — read the message, then dismiss if it's noise.</li>
+  <li><strong>Stale annotations</strong> on prior bot threads: when the source branch moves on, the bot appends a follow-up <em>"🤖 stale — this finding no longer anchors..."</em> comment to any of its previous inline findings whose <code>(file, line)</code> is no longer in the current diff. Threads are not deleted or resolved.</li>
+</ul>
+
+<div class="card">
+  <strong>Work-item findings always post as general comments.</strong> Even if the model "helpfully" guessed a file, the posting path strips <code>file</code>/<code>line</code> so the finding reads as PR-level scope commentary, not as an inline blame. The title prefix is <code>Work item #N ...</code>. AC-coverage findings use the same prefix and follow the same general-thread rule.
+</div>
+
+<h2 id="artifacts">4. Where the run output lives</h2>
+
+<p>Every run writes to <code>artifacts/pr-&lt;PR_ID&gt;/runs/&lt;RUN_ID&gt;/</code> (volume-mounted at <code>/workspace/artifacts</code>). <code>latest.txt</code> in <code>pr-&lt;PR_ID&gt;/</code> points at the most recent run.</p>
+
+<table>
+<thead><tr><th>File</th><th>Use it for</th></tr></thead>
+<tbody>
+<tr><td><code>final-findings.json</code></td><td>Authoritative review payload — same shape posted to ADO.</td></tr>
+<tr><td><code>posted-comments.json</code></td><td>What the bot actually posted (thread id, marker, URL).</td></tr>
+<tr><td><code>run-summary.json</code></td><td>Per-stage status, duration, token usage. Redacts secrets.</td></tr>
+<tr><td><code>raw/</code></td><td>Per-stage Pi outputs, including per-chunk review turns.</td></tr>
+<tr><td><code>diff.patch</code></td><td>Unified diff the model reviewed (what it actually saw).</td></tr>
+<tr><td><code>intent.json</code>, <code>context-plan.json</code>, <code>context-digest.json</code></td><td>Intermediate reasoning — useful when a finding looks off and you want to retrace the model's path.</td></tr>
+</tbody>
+</table>
+
+<p>The artifact tree is the ground truth for "what did the bot do". When ADO shows a comment you disagree with, open <code>raw/review_diff_chunk_*.json</code> and <code>final-findings.json</code> to see why.</p>
+
+<h2 id="rerun">5. Idempotency: re-running the bot</h2>
+
+<p>Re-running <code>run-open-prs.ps1</code> on the same PR is safe.</p>
+
+<ul>
+  <li>Each comment carries the <code>prb:&lt;key&gt;</code> marker on its own line. Stage 11 scans existing threads, computes the marker for each candidate finding, and <strong>skips</strong> any match.</li>
+  <li>Stable dedupe fields: <code>file</code>, <code>line</code>, <code>severity</code>, <code>title</code>, <code>message</code>. Fields excluded: <code>suggestion</code>, <code>contextBasis</code>, <code>confidence</code>, <code>severity_calibration</code>, timestamps. Reruns that don't move those five fields will not double-post.</li>
+  <li>Pi <em>session reuse</em> is on by default: the session id <code>pr-&lt;id&gt;-review-&lt;run_id&gt;</code> retains the system prompt, diff, and prior turns between stage calls, which keeps the per-PR token cost predictable. Set <code>PI_SESSION_ENABLED=0</code> for deterministic reruns.</li>
+  <li>To force a fresh session under the same id (e.g. after a schema change), pass <code>--pi-session-clear</code>.</li>
+</ul>
+
+<div class="card">
+  <strong>Marker regex is anchored:</strong> <code>^prb:([a-zA-Z0-9]{6,32})$</code>. If you ever paste a review into the same PR by hand, do not put <code>prb:</code> at the start of a line — you would confuse dedupe.
+</div>
+
+<h2 id="exit">6. Exit codes and "did it work"</h2>
+
+<table>
+<thead><tr><th>Exit</th><th>Source</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><span class="ok">0</span></td><td>Python orchestrator</td><td>All stages <code>OK</code> or <code>SKIPPED</code>. Post either succeeded or was skipped (<code>DRY_RUN</code>).</td></tr>
+<tr><td><span class="warn">1</span></td><td>Python orchestrator</td><td>At least one stage returned <code>FAILED</code>. Read <code>run-summary.json</code> for which one.</td></tr>
+<tr><td><span class="err">2</span></td><td>CLI</td><td>Config error — missing required env var (token, org, project, repo, pr_id). <code>validate-config</code> surfaces the exact key.</td></tr>
+<tr><td><span class="err">127</span></td><td>Container runtime</td><td>Container didn't start (image missing, CRLF on <code>scripts/main.py</code>, port, etc.). Check the spawn output.</td></tr>
+</tbody>
+</table>
+
+<p>The PowerShell wrapper returns the container's spawn exit code; per-PR results are independent. <code>run-open-prs.ps1</code> counts failures and exits non-zero if any PR failed.</p>
+
+<h2 id="triage">7. Triage playbook</h2>
+
+<h3>The bot posted a finding I disagree with</h3>
+<ol>
+  <li>Open <code>final-findings.json</code> for that PR. Read the finding's <code>message</code> and <code>contextBasis</code>.</li>
+  <li>Cross-check against <code>intent.json</code> and <code>context-digest.json</code> to see what the model had in scope.</li>
+  <li>If the finding is correct but the title/severity is off, edit the JSON and re-run <code>python -m auto_pr_reviewer post --input final-findings.json --pr &lt;PR&gt;</code> to re-post. Same dedupe key = same marker = no duplication.</li>
+  <li>If the finding is wrong, reply on the PR with reasoning. The bot does not currently delete or resolve its comments on rerun — see <em>Known limits</em> below.</li>
+</ol>
+
+<h3>Re-run produced duplicates</h3>
+<p>The marker regex must match on its own line, last line of the comment body. Open one of the bot's comments and verify the last line is exactly <code>prb:&lt;12 chars&gt;</code>. If your custom template (see <code>COMMENT_TEMPLATE_PATH</code>) appends text after the marker, fix the template — markers must be the very last line.</p>
+
+<h3>Container never starts</h3>
+<ol>
+  <li><code>docker images | grep pr-review-bot</code> — did <code>build.ps1</code> actually run?</li>
+  <li>Look for <code>python3\r</code> in the error — a Windows CRLF on <code>scripts/main.py</code> shebang. The Dockerfile strips CRLF; if you build outside Docker, run <code>find ./scripts ./src -type f -name '*.py' -exec sed -i 's/\r$//' {} +</code>.</li>
+  <li>Pull <code>az extension list</code> and verify <code>azure-devops</code> is installed.</li>
+</ol>
+
+<h3>Stage 11 didn't post</h3>
+<p>Either <code>DRY_RUN=1</code> or every finding collided with an existing marker. Check <code>posted-comments.json</code> — empty array means dedupe said "already up".</p>
+
+<h3>Pi timed out</h3>
+<p>Default <code>PI_TIMEOUT_SECS=600</code>. The stage that timed out is recorded in <code>run-summary.json</code>. Increase the cap, or split the diff with <code>MAX_DIFF_BYTES</code>. Diff > 200 KB auto-switches to file-based chunking unless <code>DISABLE_CHUNK_REVIEW=1</code>.</p>
+
+<h3>Known limits (out of scope)</h3>
+<ul>
+  <li>Bot threads are not deleted or resolved when the PR changes. Re-runs append a "stale" annotation (see §3) but never delete or resolve prior threads — the append-only comment trail is intentional for audit purposes.</li>
+  <li>Open-prs auto-discovery is PowerShell-only. The Python <code>open-prs</code> subcommand intentionally fails fast with a pointer to <code>./run-open-prs.ps1</code>.</li>
+  <li>Single-file diffs larger than the chunk budget are partially truncated; consider <code>DISABLE_CHUNK_REVIEW=0</code> + lower <code>MAX_DIFF_BYTES</code>.</li>
+  <li>AC coverage is a deterministic identifier-matching heuristic, not an LLM assessment. False positives are possible — dismiss in the PR if a finding doesn't apply.</li>
+</ul>
+
+<h2 id="glossary">8. Glossary</h2>
+<table>
+<thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Marker</td><td><code>prb:&lt;12-char-key&gt;</code> on the comment's last line. Idempotency anchor.</td></tr>
+<tr><td>Dedupe key</td><td><code>sha1(file|line|severity|title|message)[:12]</code>. Stable across reruns.</td></tr>
+<tr><td>Finding</td><td>One issue the bot wants to flag. Has <code>file</code>, <code>line</code>, <code>severity</code>, <code>title</code>, <code>message</code>, optional <code>suggestion</code> and <code>contextBasis</code>.</td></tr>
+<tr><td>Stage</td><td>One step in the 12-stage pipeline. Writes a JSON artifact; returns OK / SKIPPED / FAILED.</td></tr>
+<tr><td>Run id</td><td><code>YYYYMMDDTHHMMSSZ-&lt;pid&gt;</code> by default; override with <code>REVIEW_RUN_ID</code>.</td></tr>
+<tr><td>Session id</td><td><code>pr-&lt;id&gt;-review-&lt;run_id&gt;</code>. Pi's reuse key so the second-stage call doesn't resend the diff.</td></tr>
+<tr><td>Artifact dir</td><td><code>artifacts/pr-&lt;PR_ID&gt;/runs/&lt;RUN_ID&gt;/</code>. The mounted output.</td></tr>
+<tr><td>Volume / local path</td><td>Where artifacts land. <code>ARTIFACT_PATH</code> for local; named volume <code>pr-review-bot-artifacts</code> otherwise.</td></tr>
+</tbody>
+</table>
+
+<div class="footer">
+  Generated against the current <code>main</code> branch. Source: <code>AGENTS.md</code>, <code>docs/reference/*</code>, <code>src/auto_pr_reviewer/*</code>.
+  If the pipeline changes (stage order, new artifact, dedupe key), update this doc in the same PR.
+</div>
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>if(window.mermaid){mermaid.initialize({startOnLoad:true,theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'default'});}</script>
+</body>
+</html>

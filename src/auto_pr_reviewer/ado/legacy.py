@@ -34,6 +34,7 @@ from .client import (  # noqa: F401  (re-exports)
 )
 from .diff_mapper import (  # noqa: F401  (re-exports)
     DiffLineMapper,
+    line_set_for_file,
     map_file_line_to_diff_position,
     map_file_to_fallback,
 )
@@ -41,8 +42,10 @@ from .posting import (  # noqa: F401  (re-exports)
     as_general_comment,
     dedupe_key,
     existing_bot_markers,
+    find_stale_bot_threads,
     is_work_item_finding,
     should_post,
+    stale_comment_body,
 )
 from .comment_format import (  # noqa: F401  (re-exports)
     CommentFormatter,
@@ -467,7 +470,8 @@ def command_post_findings(args: argparse.Namespace) -> int:
     findings = _filter_findings(findings)
 
     pr = client.get_pr(args.pr)
-    existing = existing_bot_markers(client.get_threads(args.pr))
+    threads = client.get_threads(args.pr)
+    existing = existing_bot_markers(threads)
 
     diff_text = ""
     diff_path = Path(args.out).parent / "diff.patch"
@@ -567,6 +571,42 @@ def command_post_findings(args: argparse.Namespace) -> int:
             }
         )
 
+    # --- Stale-comment reconciliation ------------------------------
+    # When the source branch has moved on, previously-posted inline
+    # findings may anchor to lines that no longer exist in the current
+    # diff. Walk the existing bot threads, find any whose (file, line)
+    # is no longer in the current diff, and append a "stale" comment
+    # so reviewers don't trust an outdated inline finding. Disabled
+    # when ANNOTATE_STALE=0.
+    if os.getenv("ANNOTATE_STALE", "1") != "0":
+        diff_anchors = _build_diff_anchors(mapper)
+        just_posted_ids = {
+            c["threadId"] for c in result["comments"] if c.get("threadId")
+        }
+        stale = find_stale_bot_threads(
+            threads,
+            existing,
+            diff_anchors,
+            just_posted_thread_ids=just_posted_ids,
+        )
+        if stale:
+            short_sha = _short_sha(pr) or ""
+            for entry in stale:
+                try:
+                    client.add_comment(
+                        args.pr,
+                        entry["threadId"],
+                        stale_comment_body(short_sha=short_sha),
+                    )
+                except Exception as exc:  # noqa: BLE001 — best-effort
+                    log(
+                        f"failed to annotate stale thread {entry['threadId']}: {exc}"
+                    )
+                    continue
+            result["annotated_stale"] = len(stale)
+            result["stale_thread_ids"] = [e["threadId"] for e in stale]
+            log(f"annotated {len(stale)} stale thread(s)")
+
     vote_waiting_on = os.getenv("VOTE_WAITING_ON", "none")
     if vote_waiting_on != "none":
         if vote_waiting_on not in SEV_RANK:
@@ -625,6 +665,34 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return int(args.func(args))
+
+
+def _build_diff_anchors(mapper: DiffLineMapper | None) -> dict[str, set[int]]:
+    """Build ``{file_path: set_of_new_file_lines}`` from a diff mapper.
+
+    A ``None`` mapper (no diff.patch on disk) yields an empty mapping,
+    which causes every existing bot anchor to be flagged stale — the
+    safe failure mode, since we'd rather over-annotate than miss a
+    stale finding.
+    """
+    if mapper is None:
+        return {}
+    out: dict[str, set[int]] = {}
+    for f in mapper._files:  # noqa: SLF001 — accessing the file index
+        anchors = mapper.line_set(f.path)
+        if anchors:
+            out[f.path.lstrip("/")] = anchors
+    return out
+
+
+def _short_sha(pr: dict[str, Any]) -> str | None:
+    """Return the PR's source commit short SHA, if available."""
+    last = pr.get("lastMergeCommit") or pr.get("lastMergeSourceCommit")
+    if isinstance(last, dict):
+        cid = last.get("commitId")
+        if isinstance(cid, str) and cid:
+            return cid[:8]
+    return None
 
 
 __all__ = [

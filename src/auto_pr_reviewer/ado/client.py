@@ -187,6 +187,23 @@ class AdoClient:
     def create_thread(self, pr_id: int | str, body: dict[str, Any]) -> Any:
         return self._request("POST", self.base + self.pr_path(pr_id, "/threads"), body)
 
+    def add_comment(
+        self, pr_id: int | str, thread_id: int | str, content: str
+    ) -> Any:
+        """Append a text comment to an existing thread.
+
+        Used by the stale-comment reconciliation pass: when a finding
+        posted in a prior run no longer anchors to a line that exists
+        in the current diff, the bot appends a comment to the existing
+        thread so reviewers know the finding is stale rather than
+        silently leaving an outdated inline comment on the PR.
+        """
+        return self._request(
+            "POST",
+            self.base + self.pr_path(pr_id, f"/threads/{thread_id}/comments"),
+            {"content": content, "commentType": "text"},
+        )
+
     def vote(self, pr_id: int | str, reviewer_id: str, vote: int) -> Any:
         return self._request(
             "PUT",

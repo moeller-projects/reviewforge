@@ -241,6 +241,30 @@ class DiffLineMapper:
             position=position,
         )
 
+    def line_set(self, file_path: str) -> set[int]:
+        """Return all new-file line numbers touched in any hunk for ``file_path``.
+
+        Used by the stale-comment reconciliation pass: a bot thread
+        anchored at ``(file, line)`` is considered current when
+        ``line in line_set(file)``. Empty set when the file is not in
+        the diff at all (i.e. the file was removed entirely → every
+        prior anchor on it is stale).
+        """
+        normalized = _normalize_path(file_path)
+        out: set[int] = set()
+        for f in self._files:
+            if _normalize_path(f.path) != normalized:
+                continue
+            for hunk in f.hunks:
+                line = hunk["new_start"]
+                for kind, _content in hunk["lines"]:
+                    if kind in {" ", "+"}:
+                        out.add(line)
+                        line += 1
+                    # "-" lines do not advance the new-file line counter.
+            break
+        return out
+
     def file_level_context(self, file_path: str) -> AdoThreadContext | None:
         """Return a file-level thread context for ``file_path`` if the file appears in the diff.
 
@@ -324,6 +348,16 @@ def collect_changed_files(diff_text: str) -> list[str]:
     return [f.path for f in parse_unified_diff(diff_text)]
 
 
+def line_set_for_file(diff_text: str, file_path: str) -> set[int]:
+    """Return the set of new-file line numbers touched in ``file_path``'s diff.
+
+    Convenience wrapper around :meth:`DiffLineMapper.line_set` for
+    callers that have only the diff text and a single file to query
+    (e.g. the stale-comment reconciliation pass).
+    """
+    return DiffLineMapper.from_text(diff_text).line_set(file_path)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -343,6 +377,7 @@ __all__ = [
     "AdoThreadContext",
     "DiffLineMapper",
     "collect_changed_files",
+    "line_set_for_file",
     "map_file_line_to_diff_position",
     "map_file_to_fallback",
     "parse_unified_diff",

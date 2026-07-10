@@ -76,7 +76,15 @@ class ReviewDiffStage(Stage):
             return read_json(out_path) or {}
 
         diff_bytes = len(ctx.state.diff_text.encode())
-        metadata = read_json(ctx.artifacts.metadata) or {}
+        metadata: dict[str, Any] = {}
+        if ctx.artifacts.metadata.exists():
+            try:
+                metadata = read_json(ctx.artifacts.metadata) or {}
+            except Exception:
+                # Corrupt metadata should not break the review. The cache
+                # key falls back to "" for the missing fields, which is
+                # still deterministic per run.
+                metadata = {}
         review_cache_key = cache_key([
             "review_diff",
             cfg.review_prompt_path.as_posix(),

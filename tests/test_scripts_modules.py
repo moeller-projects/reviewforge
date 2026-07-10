@@ -1337,6 +1337,7 @@ class TestDefaultPipeline:
             "review_diff",
             "verify_findings",
             "calibrate_severity",
+            "ac_coverage",
             "post_to_ado",
         ]
 
