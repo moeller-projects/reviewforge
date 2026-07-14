@@ -212,6 +212,16 @@ class TestCommandPostFindingsWorkItem:
                 }
             ],
         )
+        # A real pipeline run has diff.patch, so exercise the mapper-present
+        # path where general findings previously became no_line_mapping skips.
+        (tmp_path / "diff.patch").write_text(
+            "diff --git a/src/changed.ts b/src/changed.ts\n"
+            "--- a/src/changed.ts\n"
+            "+++ b/src/changed.ts\n"
+            "@@ -0,0 +1 @@\n"
+            "+changed\n",
+            encoding="utf-8",
+        )
 
         mock_client = _mock_client()
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")

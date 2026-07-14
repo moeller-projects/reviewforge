@@ -806,6 +806,44 @@ class TestPostToAdoStage:
         assert builder.read_json(artifacts.final) == self.DOC
         assert ctx.final is not None
 
+    def test_preserves_existing_final_findings(self, cfg, artifacts, monkeypatch):
+        cfg = replace(cfg, dry_run=False)
+        builder.write_json(artifacts.severity, {"summary": "ok", "findings": []})
+        builder.write_json(
+            artifacts.final,
+            {
+                "summary": "ok",
+                "findings": [
+                    {
+                        "severity": "major",
+                        "title": "AC coverage",
+                        "message": "uncovered AC",
+                        "file": None,
+                        "line": None,
+                    }
+                ],
+            },
+        )
+        artifacts.dir.joinpath("posted-findings.json").write_text(
+            json.dumps({"created": 1, "skipped": 0, "comments": []}),
+            encoding="utf-8",
+        )
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        called = []
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            lambda *a, **k: called.append((a, k)),
+        )
+        result = PostToAdoStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert len(called) == 1
+        assert result.details == {
+            "posted": {"created": 1, "skipped": 0, "comments": []},
+            "findings": 1,
+        }
+        final = builder.read_json(artifacts.final)
+        assert final["findings"][0]["title"] == "AC coverage"
+
     def test_posting_calls_helper_and_records(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=False)
         builder.write_json(artifacts.severity, self.DOC)

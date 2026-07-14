@@ -541,6 +541,11 @@ def command_post_findings(args: argparse.Namespace) -> int:
         ) is not None:
             thread_body["threadContext"] = fb.to_thread_context()
             result["skipped_reasons"]["file_fallback"] += 1
+        elif not f.get("file"):
+            # Findings without a file are intentional PR-level comments.
+            # They must not be treated as unmappable inline findings just
+            # because a diff mapper is available for other findings.
+            pass
         elif mapper is None:
             # No diff mapper available (legacy callers that ran this CLI
             # outside the full pipeline). Fall back to posting with a

@@ -34,9 +34,15 @@ class PostToAdoStage(Stage):
         cfg = ctx.cfg
         if ctx.severity is None and ctx.artifacts.severity.exists():
             ctx.severity = read_json(ctx.artifacts.severity) or {"summary": "", "findings": []}
-        # Persist the final review doc.
-        shutil.copyfile(ctx.artifacts.severity, ctx.artifacts.final)
-        ctx.final = read_json(ctx.artifacts.final) or {"summary": "", "findings": []}
+        # Preserve any existing final doc. Earlier stages may have already
+        # appended extra findings to ``final-findings.json`` (for example,
+        # AC coverage findings). Only fall back to severity when final is
+        # missing, which covers the post-only path and standalone use.
+        if ctx.artifacts.final.exists():
+            ctx.final = read_json(ctx.artifacts.final) or {"summary": "", "findings": []}
+        else:
+            shutil.copyfile(ctx.artifacts.severity, ctx.artifacts.final)
+            ctx.final = read_json(ctx.artifacts.final) or {"summary": "", "findings": []}
 
         if cfg.dry_run:
             _log("DRY_RUN=1; printing findings JSON (not posting)")
