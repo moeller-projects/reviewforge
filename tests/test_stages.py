@@ -605,6 +605,52 @@ class TestCalibrateSeverityStage:
         assert result.status == StageStatus.OK
         assert result.details == {"findings": 2}
         assert ctx.severity is not None
+    def test_parallel_workers_use_unique_pi_sessions(self, cfg, artifacts):
+        cfg = replace(cfg, pi_session_id="pr-42-review-run-1")
+        verified = {
+            "summary": "verified",
+            "findings": [
+                {"severity": "major", "title": "T1", "message": "M1"},
+                {"severity": "minor", "title": "T2", "message": "M2"},
+            ],
+        }
+        builder.write_json(artifacts.verified, verified)
+
+        class PiRunner:
+            session_ids: list[str | None] = []
+
+            def __init__(self, runner_cfg):
+                self.cfg = runner_cfg
+                self.session_id = runner_cfg.pi_session_id or "base"
+                self.last_tokens = {}
+
+            def run_json(self, prompt, stdin, out, stage):
+                self.session_ids.append(self.cfg.pi_session_id)
+                builder.write_json(
+                    out,
+                    {
+                        "summary": "calibrated",
+                        "findings": [
+                            {
+                                "severity": "major",
+                                "title": "calibrated",
+                                "message": "M",
+                            }
+                        ],
+                    },
+                )
+
+        pi = PiRunner(cfg)
+        state = SimpleNamespace(diff_text="d", target_branch="m", source_branch="f",
+                                target_commit="t", source_commit="s", base_commit="b")
+        ctx = _stage_context(cfg, artifacts, pi, state=state)
+        result = CalibrateSeverityStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert set(pi.session_ids) == {
+            "pr-42-review-run-1-severity-1",
+            "pr-42-review-run-1-severity-2",
+        }
 
     def test_fails_on_invalid_severity_doc(self, cfg, artifacts):
         bad = {"summary": "x", "findings": [{"severity": "critical", "title": "T", "message": "M"}]}
@@ -638,6 +684,53 @@ class TestVerifyFindingsStage:
         assert result.details == {"findings": 1}
         assert pi.run_json.called
         assert ctx.verified is not None
+    def test_parallel_workers_use_unique_pi_sessions(self, cfg, artifacts):
+        cfg = replace(cfg, pi_session_id="pr-42-review-run-1")
+        candidate = {
+            "summary": "candidates",
+            "findings": [
+                {"severity": "major", "title": "T1", "message": "M1"},
+                {"severity": "minor", "title": "T2", "message": "M2"},
+            ],
+        }
+        builder.write_json(artifacts.candidate, candidate)
+
+        class PiRunner:
+            session_ids: list[str | None] = []
+
+            def __init__(self, runner_cfg):
+                self.cfg = runner_cfg
+                self.session_id = runner_cfg.pi_session_id or "base"
+                self.last_tokens = {}
+
+            def run_json(self, prompt, stdin, out, stage):
+                self.session_ids.append(self.cfg.pi_session_id)
+                builder.write_json(
+                    out,
+                    {
+                        "summary": "verified",
+                        "findings": [
+                            {
+                                "severity": "major",
+                                "title": "verified",
+                                "message": "M",
+                            }
+                        ],
+                    },
+                )
+
+        pi = PiRunner(cfg)
+        state = SimpleNamespace(diff_text="d", target_branch="m", source_branch="f",
+                                target_commit="t", source_commit="s", base_commit="b")
+        ctx = _stage_context(cfg, artifacts, pi, state=state)
+        result = VerifyFindingsStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert set(pi.session_ids) == {
+            "pr-42-review-run-1-verify-1",
+            "pr-42-review-run-1-verify-2",
+        }
+
 
     def test_skips_pi_when_verify_findings_disabled(self, cfg, artifacts):
         cfg = replace(cfg, verify_findings=False)
@@ -753,6 +846,49 @@ class TestReviewDiffStage:
         doc = builder.read_json(artifacts.candidate)
         assert len(doc["findings"]) == 1  # dedup'd across chunks
         assert "(across 2 diff chunks)" in doc["summary"]
+    def test_chunk_workers_use_unique_pi_sessions(self, cfg, artifacts, monkeypatch):
+        cfg = replace(cfg, chunk_trigger_diff_bytes=1, max_diff_bytes=1,
+                      pi_session_id="pr-42-review-run-1")
+
+        class PiRunner:
+            session_ids: list[str | None] = []
+
+            def __init__(self, runner_cfg):
+                self.cfg = runner_cfg
+                self.session_id = runner_cfg.pi_session_id or "base"
+                self.last_tokens = {}
+
+            def run_json(self, prompt, stdin, out, stage):
+                self.session_ids.append(self.cfg.pi_session_id)
+                builder.write_json(out, self.DOC)
+
+            DOC = {
+                "summary": "chunk review",
+                "findings": [
+                    {"severity": "major", "title": "T", "message": "M"},
+                ],
+            }
+
+        pi = PiRunner(cfg)
+        state = self._state("big diff with many files", ["a.py", "b.py"])
+        monkeypatch.setattr(
+            "auto_pr_reviewer.pipeline.stages.review_diff.build_chunks",
+            lambda _state, _max: ([
+                SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
+                SimpleNamespace(diff_text="d2", files_text="b.py\n", truncated=False),
+            ], False),
+        )
+        ctx = _stage_context(cfg, artifacts, pi, state=state)
+        ctx.files_text = "a.py\nb.py\n"
+        ctx.extras["system_prompt"] = "sys"
+        result = ReviewDiffStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert set(pi.session_ids) == {
+            "pr-42-review-run-1-chunk-1",
+            "pr-42-review-run-1-chunk-2",
+        }
+
 
     def test_chunked_review_empty_summaries_uses_default(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, chunk_trigger_diff_bytes=1, max_diff_bytes=1)

@@ -83,7 +83,14 @@ class VerifyFindingsStage(Stage):
         def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
             out = ctx.artifacts.dir / "raw" / f"verify-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
-            runner = type(ctx.pi)(ctx.pi.cfg) if type(ctx.pi).__name__ == "PiRunner" else ctx.pi
+            if type(ctx.pi).__name__ == "PiRunner":
+                # Pi sessions are not safe for concurrent writes. Isolate
+                # each verification worker while retaining session reuse.
+                session_id = f"{ctx.pi.session_id}-verify-{idx}"
+                runner_cfg = ctx.pi.cfg.with_overrides(pi_session_id=session_id)
+                runner = type(ctx.pi)(runner_cfg)
+            else:
+                runner = ctx.pi
             runner.run_json(cfg.verify_prompt_path, payload, out, f"finding verification {idx}")
             return read_json(out) or {}
 

@@ -43,9 +43,13 @@ class ReviewDiffStage(Stage):
             ctx.extras.get("system_prompt", ""), encoding="utf-8"
         )
 
-        def _fork_runner():
+        def _fork_runner(worker_id: int):
             if type(ctx.pi).__name__ == "PiRunner" and hasattr(ctx.pi, "cfg"):
-                return type(ctx.pi)(ctx.pi.cfg)
+                # Chunk workers run concurrently; each needs an isolated Pi
+                # session to avoid concurrent writes to shared session state.
+                session_id = f"{ctx.pi.session_id}-chunk-{worker_id}"
+                runner_cfg = ctx.pi.cfg.with_overrides(pi_session_id=session_id)
+                return type(ctx.pi)(runner_cfg)
             return ctx.pi
 
         def run_one(
@@ -130,7 +134,7 @@ class ReviewDiffStage(Stage):
                 for i, ch in enumerate(chunks, 1):
                     out = ctx.artifacts.dir / "raw" / f"chunk-{i}.json"
                     out.parent.mkdir(parents=True, exist_ok=True)
-                    future = pool.submit(run_one, ch.diff_text, ch.files_text, out, f"chunk {i}/{len(chunks)}", ch.truncated, pi_runner=_fork_runner())
+                    future = pool.submit(run_one, ch.diff_text, ch.files_text, out, f"chunk {i}/{len(chunks)}", ch.truncated, pi_runner=_fork_runner(i))
                     future_map[future] = (i, out)
                 ordered_docs: list[dict[str, Any]] = [None] * len(chunks)  # type: ignore[list-item]
                 for future in as_completed(future_map):

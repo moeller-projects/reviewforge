@@ -68,7 +68,15 @@ class CalibrateSeverityStage(Stage):
         def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
             out = ctx.artifacts.dir / "raw" / f"severity-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
-            runner = type(ctx.pi)(ctx.pi.cfg) if type(ctx.pi).__name__ == "PiRunner" else ctx.pi
+            if type(ctx.pi).__name__ == "PiRunner":
+                # Pi sessions are not safe for concurrent writes. Keep the
+                # parallel workers independent while retaining session reuse
+                # within each worker's subprocess lifecycle.
+                session_id = f"{ctx.pi.session_id}-severity-{idx}"
+                runner_cfg = ctx.pi.cfg.with_overrides(pi_session_id=session_id)
+                runner = type(ctx.pi)(runner_cfg)
+            else:
+                runner = ctx.pi
             runner.run_json(cfg.severity_prompt_path, payload, out, f"severity calibration {idx}")
             return read_json(out) or {}
 

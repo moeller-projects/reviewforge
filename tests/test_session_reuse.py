@@ -490,9 +490,9 @@ class TestPathBasedBriefing:
 
 
 class TestChunkedReviewSession:
-    """Phase C: all chunks of a large diff share the same session."""
+    """Phase C: all chunks of a large diff use isolated sessions."""
 
-    def test_every_chunk_uses_same_session_id(self, cfg, tmp_path, monkeypatch):
+    def test_each_chunk_uses_unique_session_id(self, cfg, tmp_path, monkeypatch):
         from auto_pr_reviewer.pipeline.stages import ReviewDiffStage
         from auto_pr_reviewer.pipeline.stage import StageContext
         from auto_pr_reviewer.artifacts import manager, builder
@@ -528,10 +528,16 @@ class TestChunkedReviewSession:
 
         ReviewDiffStage()(ctx)
         assert len(calls) == 3
+        session_ids = []
         for cmd in calls:
             assert "--session-id" in cmd
-            assert "pr-42-review-r1" in cmd
+            session_ids.append(cmd[cmd.index("--session-id") + 1])
             assert "--no-session" not in cmd
+        assert set(session_ids) == {
+            "pr-42-review-r1-chunk-1",
+            "pr-42-review-r1-chunk-2",
+            "pr-42-review-r1-chunk-3",
+        }
 
     def test_chunk_prompts_include_chunk_label(self, cfg, tmp_path, monkeypatch):
         from auto_pr_reviewer.pipeline.stages import ReviewDiffStage
