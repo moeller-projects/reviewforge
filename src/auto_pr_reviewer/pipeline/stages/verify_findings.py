@@ -4,6 +4,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import shutil
+import traceback
+
 from typing import Any
 
 from ...ai.prompts import stage_instruction
@@ -83,16 +85,25 @@ class VerifyFindingsStage(Stage):
         def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
             out = ctx.artifacts.dir / "raw" / f"verify-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
-            if type(ctx.pi).__name__ == "PiRunner":
-                # Pi sessions are not safe for concurrent writes. Isolate
-                # each verification worker while retaining session reuse.
-                session_id = f"{ctx.pi.session_id}-verify-{idx}"
-                runner_cfg = ctx.pi.cfg.with_overrides(pi_session_id=session_id)
-                runner = type(ctx.pi)(runner_cfg)
-            else:
-                runner = ctx.pi
-            runner.run_json(cfg.verify_prompt_path, payload, out, f"finding verification {idx}")
-            return read_json(out) or {}
+            try:
+                if type(ctx.pi).__name__ == "PiRunner":
+                    # Pi sessions are not safe for concurrent writes. Isolate
+                    # each verification worker while retaining session reuse.
+                    session_id = f"{ctx.pi.session_id}-verify-{idx}"
+                    runner_cfg = ctx.pi.cfg.with_overrides(pi_session_id=session_id)
+                    runner = type(ctx.pi)(runner_cfg)
+                else:
+                    runner = ctx.pi
+                runner.run_json(cfg.verify_prompt_path, payload, out, f"finding verification {idx}")
+                return read_json(out) or {}
+            except BaseException as exc:
+                _log(
+                    f"finding verification {idx} crashed "
+                    f"({type(exc).__name__}: {exc}); output={out}; "
+                    f"finding={json.dumps(finding, ensure_ascii=False, sort_keys=True)}\n"
+                    f"{traceback.format_exc().rstrip()}"
+                )
+                raise
 
         merged: list[dict[str, Any]] = []
         summary_parts: list[str] = []
@@ -101,12 +112,25 @@ class VerifyFindingsStage(Stage):
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(run_one, i, f): i for i, f in enumerate(candidate_findings, 1)}
             for fut in as_completed(futures):
-                doc = fut.result()
+                try:
+                    doc = fut.result()
+                except BaseException as exc:
+                    idx = futures[fut]
+                    _log(
+                        f"finding verification {idx} future failed "
+                        f"({type(exc).__name__}: {exc})\n"
+                        f"{traceback.format_exc().rstrip()}"
+                    )
+                    raise
                 if doc.get("summary"):
                     summary_parts.append(doc.get("summary", ""))
                 merged.extend(doc.get("findings", []))
         doc = {"summary": " ".join(summary_parts).strip(), "findings": merged}
-        validate_stage(doc, StageLabel.FINDING_VERIFICATION)
+        try:
+            validate_stage(doc, StageLabel.FINDING_VERIFICATION)
+        except BaseException:
+            _log(f"merged verification output failed validation: {json.dumps(doc, ensure_ascii=False, sort_keys=True)}")
+            raise
         write_json(ctx.artifacts.verified, doc)
         ctx.verified = doc
         store_cached_json(cfg, "verify_findings", cache, doc)

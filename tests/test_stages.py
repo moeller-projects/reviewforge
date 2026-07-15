@@ -1268,6 +1268,25 @@ class TestVerifyFindingsBatchedRegression:
         # Order is non-deterministic (ThreadPoolExecutor + as_completed).
         assert {f["title"] for f in merged["findings"]} == {"V1", "V2", "V3"}
 
+    def test_batched_validation_logs_invalid_finding(self, cfg, artifacts, capsys):
+        cfg = replace(cfg, verify_findings=True)
+        ctx = self._build_ctx(
+            cfg,
+            artifacts,
+            self._make_raw_pi([
+                {
+                    "summary": "bad",
+                    "findings": [{"severity": "major", "title": "bad", "message": ""}],
+                }
+            ]),
+        )
+
+        result = VerifyFindingsStage()(ctx)
+
+        stderr = capsys.readouterr().err
+        assert "merged verification output failed validation" in stderr
+        assert '"message": ""' in stderr
+
     def test_batched_run_creates_raw_dir_when_missing(self, cfg, artifacts):
         # Defence-in-depth: even if the artifacts tree is missing
         # ``raw/`` (hand-built run dir, deleted before re-run), the
