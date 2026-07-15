@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>PR Review Bot — Team Onboarding</title>
+<title>ReviewForge — Team Onboarding</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root { --fg:#1d1d1f; --mut:#6b6b70; --bg:#fbfbfd; --card:#fff; --acc:#0a5fff; --line:#e5e5ea; --ok:#0a7c2f; --warn:#a35c00; --err:#b3261e; --code-bg:#f4f4f7; --accent2:#7b2cbf; }
@@ -64,7 +64,7 @@
 <body>
 <div class="wrap">
 
-<h1>PR Review Bot — Team Onboarding</h1>
+<h1>ReviewForge — Team Onboarding</h1>
 <p class="lede">Map of the whole stack: where each concern lives, how data flows from <code>./run-open-prs.ps1</code> down to a posted ADO comment, what the stable contracts are, and where to change things safely. Read <code>AGENTS.md</code> first; this is the deep dive.</p>
 <p class="meta">Audience: engineers joining the platform team, or anyone making non-trivial changes to the bot. Owner: platform team. Source-of-truth: <code>AGENTS.md</code>, <code>docs/reference/*</code>, <code>docs/design/*</code>, this doc.</p>
 
@@ -94,8 +94,8 @@
 
 <div class="grid2">
   <div class="card"><h4>Trigger</h4>PowerShell 5.1 / 7+ on Windows host (or pwsh on Linux/macOS). Three scripts: <code>run-open-prs.ps1</code> (batch), <code>run.ps1</code> (single PR), <code>build.ps1</code> (image).</div>
-  <div class="card"><h4>Container</h4>OCI image <code>pr-review-bot:&lt;tag&gt;</code>. Base <code>node:24-bookworm-slim</code>. Pi (<code>@earendil-works/pi-coding-agent@&lt;PI_VERSION&gt;</code>) installed globally. Python 3.11 stdlib + <code>jinja2</code>. ENTRYPOINT = <code>/app/scripts/main.py</code>.</div>
-  <div class="card"><h4>Source of truth</h4>Python package <code>auto_pr_reviewer</code> under <code>src/</code>. Thin shims under <code>scripts/</code> exist only to keep the entrypoint contract and the legacy module name <code>ado_review</code>.</div>
+  <div class="card"><h4>Container</h4>OCI image <code>reviewforge:&lt;tag&gt;</code>. Base <code>node:24-bookworm-slim</code>. Pi (<code>@earendil-works/pi-coding-agent@&lt;PI_VERSION&gt;</code>) installed globally. Python 3.11 stdlib + <code>jinja2</code>. ENTRYPOINT = <code>python3 -m reviewforge</code>.</div>
+  <div class="card"><h4>Source of truth</h4>Python package <code>reviewforge</code> under <code>src/</code>. The package provides the primary CLI and isolated ADO helper module.</div>
   <div class="card"><h4>External surfaces</h4>Azure DevOps REST (Bearer PAT), <code>pi</code> CLI (subprocess, read-only), <code>git</code> over ADO credentials (via <code>GIT_ASKPASS_SCRIPT</code>), <code>az</code> CLI (host side only, for <code>run-open-prs.ps1</code> PR discovery).</div>
   <div class="card"><h4>Idempotency</h4><code>prb:&lt;sha1(file|line|severity|title|message)[:12]&gt;</code> marker, last line of comment. Stable contract; do not change without a CHANGELOG entry.</div>
   <div class="card"><h4>Tests</h4>pytest. Coverage gate: <code>--cov-fail-under=95</code>. PowerShell scripts are NOT unit-tested — they orchestrate; the Python side owns behavior.</div>
@@ -103,10 +103,10 @@
 
 <h2 id="repo">2. Repository layout</h2>
 
-<div class="filetree"><span class="dir">src/auto_pr_reviewer/</span>          # all real logic
+<div class="filetree"><span class="dir">src/reviewforge/</span>          # all real logic
   <span class="dir">cli.py</span>                    # argparse: review / post / open-prs / validate-config / discover
   <span class="dir">config.py</span>                 # Config dataclass, env/.env/CLI layering, alias resolution
-  <span class="dir">__main__.py</span>               # python -m auto_pr_reviewer → cli.main
+  <span class="dir">__main__.py</span>               # python -m reviewforge → cli.main
   <span class="dir">__init__.py</span>
   <span class="dir">ado/</span>                     # AdoClient, posting (idempotent), diff_mapper, comment_format, models, legacy
   <span class="dir">git/</span>                     # RepoState, ops (clone/branch resolution via ADO), chunker
@@ -128,10 +128,9 @@
     <span class="dir">builder.py</span>               # JSON read/write helpers
     <span class="dir">summary.py</span>               # RunSummary, secret redaction
 
-<span class="dir">scripts/</span>                   # THIN shims — see AGENTS.md §4
-  <span class="dir">main.py</span>                   # ENTRYPOINT shim → auto_pr_reviewer.cli
-  <span class="dir">ado_review.py</span>             # compat shim → auto_pr_reviewer.ado.legacy
-  <span class="dir">review.py</span>                 # compat shim
+<span class="dir">src/reviewforge/</span>                   # application package
+  <span class="dir">__main__.py</span>                 # python -m reviewforge
+  <span class="dir">ado/cli.py</span>             # isolated ADO helper module
 
 <span class="dir">prompts/</span>                   # markdown system-prompt fragments, concatenated per stage
 <span class="dir">standards/</span>                 # default review standard (markdown)
@@ -158,8 +157,8 @@
   <span class="node">interactive pick</span><span class="arrow">→</span>
   <span class="node">run.ps1 × N</span><span class="arrow">→</span>
   <span class="node">docker run -d IMAGE</span><span class="arrow">→</span>
-  <span class="node">scripts/main.py</span><span class="arrow">→</span>
-  <span class="node">auto_pr_reviewer.cli</span><span class="arrow">→</span>
+  <span class="node">python -m reviewforge</span><span class="arrow">→</span>
+  <span class="node">reviewforge.cli</span><span class="arrow">→</span>
   <span class="node">12 stages</span><span class="arrow">→</span>
   <span class="node">ADO comments</span>
 </div>
@@ -211,13 +210,13 @@
   <text class="mut" x="60" y="330">named volume or ARTIFACT_PATH</text>
   <line x1="60" y1="342" x2="260" y2="342" stroke="#cdcdd3"/>
   <text class="text" x="60" y="368">Artifact volume</text>
-  <text class="mut" x="60" y="388">pr-review-bot-artifacts</text>
+  <text class="mut" x="60" y="388">reviewforge-artifacts</text>
   <text class="mut" x="60" y="404">artifacts/pr-&lt;id&gt;/runs/&lt;run&gt;/</text>
 
-  <text class="lbl" x="320" y="32">CONTAINER · pr-review-bot:tag</text>
+  <text class="lbl" x="320" y="32">CONTAINER · reviewforge:tag</text>
   <rect class="colh" x="320" y="44" width="320" height="380" rx="10"/>
-  <text class="text" x="340" y="74">scripts/main.py (entrypoint)</text>
-  <text class="mut" x="340" y="96">→ auto_pr_reviewer.cli.main</text>
+  <text class="text" x="340" y="74">python -m reviewforge (entrypoint)</text>
+  <text class="mut" x="340" y="96">→ reviewforge.cli.main</text>
   <line x1="340" y1="108" x2="620" y2="108" stroke="#cdcdd3"/>
   <text class="text" x="340" y="134">Orchestrator</text>
   <text class="mut" x="340" y="154">run_full() · run_stages()</text>
@@ -449,8 +448,8 @@
     ENV["process env · .env · auth.json"]
     VOL["named volume · ARTIFACT_PATH"]
   end
-  subgraph Container["pr-review-bot container"]
-    MAIN["scripts/main.py"]
+  subgraph Container["reviewforge container"]
+    MAIN["python -m reviewforge"]
     ORCH["Orchestrator · 12 stages"]
     PI["PiRunner subprocess"]
     ADO["AdoClient"]
@@ -511,8 +510,8 @@
   <li><strong>Dedupe</strong> by <code>(project|repoId|prId)</code> so cross-project repos with the same name don't collide.</li>
   <li><strong>Interactive prompt</strong> auto-enables when <code>[Console]::IsInputRedirected</code> is false. CI / scheduled runs disable it implicitly.</li>
   <li><strong>Container runs detached</strong> (<code>-d --rm</code>) by design. The spawn exit code is what the wrapper reports; the review's own success is observable only via the artifact tree.</li>
-  <li><strong>Per-PR container name</strong>: <code>pr-review-bot-pr-&lt;PR_ID&gt;</code> (when <code>CONTAINER_NAME</code> unset). Pass <code>-KeepContainer</code> to inspect it after the run.</li>
-  <li><strong>Artifact storage</strong>: <code>ARTIFACT_PATH</code> env → bind-mounted local directory. Otherwise a named volume <code>pr-review-bot-artifacts</code> is created and reused.</li>
+  <li><strong>Per-PR container name</strong>: <code>review-pr-&lt;PR_ID&gt;</code> (when <code>CONTAINER_NAME</code> unset). Pass <code>-KeepContainer</code> to inspect it after the run.</li>
+  <li><strong>Artifact storage</strong>: <code>ARTIFACT_PATH</code> env → bind-mounted local directory. Otherwise a named volume <code>reviewforge-artifacts</code> is created and reused.</li>
 </ul>
 
 <h2 id="container">6. Container &amp; Python entrypoint</h2>
@@ -524,19 +523,19 @@
   <li>Pi: installed globally via npm with <code>--ignore-scripts</code>. Pin via <code>PI_VERSION</code> build-arg (default <code>0.79.1</code>).</li>
   <li><strong>CRLF strip</strong>: <code>find ./scripts ./src -name '*.py' -exec sed -i 's/\r$//' {} +</code>. A trailing <code>\r</code> on the shebang turns <code>python3</code> into <code>python3\r</code> and fails at exec with 127.</li>
   <li>Env: <code>PYTHONPATH=/app/src</code>, <code>WORKSPACE=/workspace</code>, <code>PI_SKIP_VERSION_CHECK=1</code>, <code>PI_TELEMETRY=0</code>.</li>
-  <li>ENTRYPOINT: <code>/app/scripts/main.py</code>. CMD: <code>["review"]</code>.</li>
+  <li>ENTRYPOINT: <code>python3 -m reviewforge</code>. CMD: <code>["review"]</code>.</li>
 </ul>
 
 <h3>Entry sequence</h3>
 <ol>
-  <li><code>scripts/main.py</code> is a one-liner that adds <code>src/</code> to <code>sys.path</code> and calls <code>auto_pr_reviewer.cli.main</code>.</li>
+  <li><code>python -m reviewforge</code> is a one-liner that adds <code>src/</code> to <code>sys.path</code> and calls <code>reviewforge.cli.main</code>.</li>
   <li><code>cli.main</code> defaults to <code>review</code> when no argv. <code>run.ps1</code> never passes subcommand args (just env), so the container always lands on the full pipeline.</li>
   <li><code>cmd_review</code> builds a <code>Config</code> from env (no CLI args inside the container), validates it, then <code>run_full(cfg)</code>.</li>
 </ol>
 
 <h2 id="pipeline">7. Pipeline stage contract</h2>
 
-<p><code>auto_pr_reviewer.pipeline.stages.DEFAULT_PIPELINE</code> is a fixed list. <code>orchestrator.run_stages</code> walks it; each stage is a <code>Stage</code> subclass with two methods:</p>
+<p><code>reviewforge.pipeline.stages.DEFAULT_PIPELINE</code> is a fixed list. <code>orchestrator.run_stages</code> walks it; each stage is a <code>Stage</code> subclass with two methods:</p>
 
 <pre><code>class Stage:
     name: str
@@ -604,7 +603,7 @@
 
 <h2 id="ado">9. ADO integration &amp; posting</h2>
 
-<p>All ADO side effects live under <code>src/auto_pr_reviewer/ado/</code>. The only stage that calls them in production is <code>PostToAdoStage</code>.</p>
+<p>All ADO side effects live under <code>src/reviewforge/ado/</code>. The only stage that calls them in production is <code>PostToAdoStage</code>.</p>
 
 <h3>Modules</h3>
 <table>
@@ -615,7 +614,7 @@
 <tr><td><code>diff_mapper.py</code></td><td>Map model line numbers onto ADO diff anchors.</td></tr>
 <tr><td><code>comment_format.py</code></td><td>Comment layout. Jinja2-driven when <code>COMMENT_TEMPLATE_PATH</code> is set; default layout otherwise.</td></tr>
 <tr><td><code>models.py</code></td><td>Thread, comment, PR metadata models.</td></tr>
-<tr><td><code>legacy.py</code></td><td>Back-compat with the original <code>scripts/ado_review.py</code> posting path.</td></tr>
+<tr><td><code>cli.py</code></td><td>Back-compat with the original <code>reviewforge.ado.cli</code> posting path.</td></tr>
 </tbody>
 </table>
 
@@ -662,7 +661,7 @@ review-system.combined.md, work-items.json, threads.json</code></pre>
 
 <h2 id="config">11. Configuration &amp; precedence</h2>
 
-<p>Single source of truth: <code>Config</code> dataclass in <code>src/auto_pr_reviewer/config.py</code>. Two constructors:</p>
+<p>Single source of truth: <code>Config</code> dataclass in <code>src/reviewforge/config.py</code>. Two constructors:</p>
 <ul>
   <li><code>Config.from_env()</code> — legacy, used by tests.</li>
   <li><code>Config.from_sources(cli, env=os.environ)</code> — preferred. Layers CLI overrides on top of env with alias resolution.</li>
@@ -706,23 +705,23 @@ review-system.combined.md, work-items.json, threads.json</code></pre>
 
 <h2 id="hardrules">13. Hard rules (do not break)</h2>
 
-<div class="hardrule"><div class="lbl">Rule 1</div> <code>scripts/*.py</code> are thin shims. No business logic in <code>scripts/main.py</code> or <code>scripts/ado_review.py</code>. New behavior goes in <code>src/auto_pr_reviewer/</code>.</div>
-<div class="hardrule"><div class="lbl">Rule 2</div> The LLM must not call Azure DevOps directly. Pi runs read-only. All ADO side effects live in <code>auto_pr_reviewer.ado.*</code> and are reachable only from <code>PostToAdoStage</code>.</div>
+<div class="hardrule"><div class="lbl">Rule 1</div> <code>The package owns all runtime behavior. The container invokes <code>python3 -m reviewforge</code>; the isolated ADO helper is <code>python3 -m reviewforge.ado.cli</code>. New behavior lives in <code>src/reviewforge/</code>.</div>
+<div class="hardrule"><div class="lbl">Rule 2</div> The LLM must not call Azure DevOps directly. Pi runs read-only. All ADO side effects live in <code>reviewforge.ado.*</code> and are reachable only from <code>PostToAdoStage</code>.</div>
 <div class="hardrule"><div class="lbl">Rule 3</div> Posting is idempotent. Every comment carries the <code>prb:&lt;key&gt;</code> marker. <code>existing_bot_markers()</code> is scanned before posting. Never disable dedupe to "make it work".</div>
 <div class="hardrule"><div class="lbl">Rule 4</div> <code>ARTIFACT_NAMES</code> is append-only. Never rename or remove an entry.</div>
 <div class="hardrule"><div class="lbl">Rule 5</div> Marker regex <code>^prb:([a-zA-Z0-9]{6,32})$</code> must be the last line of the comment body, on its own.</div>
-<div class="hardrule"><div class="lbl">Rule 6</div> Coverage gate is 95%. New code in <code>src/auto_pr_reviewer/</code> must come with tests. <code>./test.ps1 -CoverageMin 0</code> only for throwaway experiments.</div>
+<div class="hardrule"><div class="lbl">Rule 6</div> Coverage gate is 95%. New code in <code>src/reviewforge/</code> must come with tests. <code>./test.ps1 -CoverageMin 0</code> only for throwaway experiments.</div>
 <div class="hardrule"><div class="lbl">Rule 7</div> <code>open-prs</code> from the Python CLI is intentionally unsupported. It fails fast with a pointer to <code>./run-open-prs.ps1</code>. One container per PR — do not change without a spec.</div>
 <div class="hardrule"><div class="lbl">Rule 8</div> No repo-level Node package. The Docker image installs Pi via npm globally. Hosts do not need to pre-fetch PR branches when <code>-PrUrl</code> is used.</div>
 
 <h2 id="testing">14. Testing, coverage, CI</h2>
 
 <ul>
-  <li><strong>Host</strong>: <code>pytest tests/ --cov=auto_pr_reviewer --cov-fail-under=95</code>. Gate enforced.</li>
+  <li><strong>Host</strong>: <code>pytest tests/ --cov=reviewforge --cov-fail-under=95</code>. Gate enforced.</li>
   <li><strong>Container</strong>: <code>./test.ps1</code> builds <code>Dockerfile.tests</code> and runs the suite inside the same base image. Same gate.</li>
   <li><strong>Override</strong>: <code>./test.ps1 -CoverageMin 0</code> only for throwaway experiments.</li>
   <li><strong>Wrapper scripts</strong>: not unit-tested. They're thin orchestration; their behavior is exercised through the end-to-end CI pipeline <code>azure-pipelines-pr-review.yml</code>.</li>
-  <li><strong>Validation</strong>: <code>python scripts/main.py validate-config --pr 12345</code> surfaces missing env vars with a clear hint before you spend container time.</li>
+  <li><strong>Validation</strong>: <code>python -m reviewforge validate-config --pr 12345</code> surfaces missing env vars with a clear hint before you spend container time.</li>
 </ul>
 
 <h2 id="debug">15. Debugging recipes</h2>
@@ -755,21 +754,21 @@ review-system.combined.md, work-items.json, threads.json</code></pre>
   <li><strong>Very-large single-file diff truncation</strong> — partial mitigation only via <code>CHUNK_TRIGGER_DIFF_BYTES</code> / <code>DISABLE_CHUNK_REVIEW</code>.</li>
   <li><strong>Auto-discovery of active PRs from the Python CLI</strong> — <code>open-prs</code> exists but intentionally is a no-op pointer to PowerShell.</li>
   <li><strong>Inline diagram of stage data flow</strong> — currently only in <code>docs/design/architecture.md</code>.</li>
-  <li><strong><code>pre-commit</code> rule</strong> forbidding new top-level <code>def</code>s in <code>scripts/main.py</code> / <code>scripts/ado_review.py</code> — not yet implemented.</li>
+  <li><strong><code>pre-commit</code> rule</strong> forbidding new top-level <code>def</code>s in <code>python -m reviewforge</code> / <code>reviewforge.ado.cli</code> — not yet implemented.</li>
 </ul>
 
 <h3>Where to look next (mapped to AGENTS.md §11)</h3>
 <ul>
   <li>New to the codebase → <code>docs/reference/package-guide.md</code>, then <code>docs/design/architecture.md</code>.</li>
-  <li>Touching ADO code → <code>docs/reference/ado-integration.md</code>, then <code>src/auto_pr_reviewer/ado/posting.py</code>.</li>
-  <li>Touching the pipeline → <code>docs/reference/pipeline.md</code>, then <code>src/auto_pr_reviewer/pipeline/stage.py</code>.</li>
-  <li>Touching Pi invocation → <code>docs/reference/ai-runner.md</code>, then <code>src/auto_pr_reviewer/ai/runner.py</code>.</li>
-  <li>Touching config / env vars → <code>docs/reference/configuration.md</code>, then <code>src/auto_pr_reviewer/config.py</code>.</li>
+  <li>Touching ADO code → <code>docs/reference/ado-integration.md</code>, then <code>src/reviewforge/ado/posting.py</code>.</li>
+  <li>Touching the pipeline → <code>docs/reference/pipeline.md</code>, then <code>src/reviewforge/pipeline/stage.py</code>.</li>
+  <li>Touching Pi invocation → <code>docs/reference/ai-runner.md</code>, then <code>src/reviewforge/ai/runner.py</code>.</li>
+  <li>Touching config / env vars → <code>docs/reference/configuration.md</code>, then <code>src/reviewforge/config.py</code>.</li>
   <li>Touching the prompt → <code>docs/archive/ado-integration-triage.md</code> (historical), then <code>prompts/review-system.md</code>.</li>
 </ul>
 
 <div class="footer">
-  Generated against the current <code>main</code> branch. Source: <code>AGENTS.md</code>, <code>docs/reference/*</code>, <code>docs/design/*</code>, <code>src/auto_pr_reviewer/*</code>.
+  Generated against the current <code>main</code> branch. Source: <code>AGENTS.md</code>, <code>docs/reference/*</code>, <code>docs/design/*</code>, <code>src/reviewforge/*</code>.
   When the pipeline changes (stage order, new artifact, dedupe key, new env var), update this doc in the same PR.
 </div>
 

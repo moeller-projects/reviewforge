@@ -1,12 +1,12 @@
 # `docs/reference/` — current implemented behavior
 
-These docs describe what `auto_pr_reviewer` does **today**. They are kept in
+These docs describe what `reviewforge` does **today**. They are kept in
 sync with the code; if you change a public interface, update the matching doc
 in the same PR.
 
 | Doc | Covers |
 | --- | --- |
-| [`package-guide.md`](package-guide.md) | Start-here index for the `auto_pr_reviewer` package: layout, audiences, and pointers to the right deep-dive. |
+| [`package-guide.md`](package-guide.md) | Start-here index for the `reviewforge` package: layout, audiences, and pointers to the right deep-dive. |
 | [`cli.md`](cli.md) | Subcommands (`review`, `post`, `open-prs`, `validate-config`, `discover`), flags, exit codes. |
 | [`configuration.md`](configuration.md) | `Config` dataclass, env-var precedence, alias map, `.env` loading. |
 | [`ado-integration.md`](ado-integration.md) | `AdoClient` REST wrapper, idempotent posting (`dedupe_key`, `existing_bot_markers`), diff → `threadContext` mapping, legacy shim. |

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Reference for the `auto_pr_reviewer` command-line interface. The CLI is what the Docker container actually runs. PowerShell wrappers (`run.ps1`, `run-open-prs.ps1`) call into the same subcommands.
+Reference for the `reviewforge` command-line interface. The CLI is what the Docker container actually runs. PowerShell wrappers (`run.ps1`, `run-open-prs.ps1`) call into the same subcommands.
 
 ## Audience
 
@@ -11,20 +11,17 @@ Reference for the `auto_pr_reviewer` command-line interface. The CLI is what the
 
 ## Entry points
 
-| Command | Use case |
-|---|---|
-| `python -m auto_pr_reviewer <subcommand>` | Canonical. Used inside the Docker container. |
-| `python scripts/main.py <subcommand>` | Identical, for hosts where the package is on `PYTHONPATH` but not installed. |
-| `python scripts/review.py` | Thin shim that delegates to `python scripts/main.py review`. Exists for back-compat with older docs. |
+| `python -m reviewforge <subcommand>` | Canonical entrypoint inside or outside the container. |
 
-All three call the same `cli.main()` function.
+All commands call the same `cli.main()` function.
+
 
 ## Subcommands
 
 ### `review` — generate findings (and post by default)
 
 ```bash
-python -m auto_pr_reviewer review \
+python -m reviewforge review \
   --pr 1234 --org contoso --project Pay --repo api
 ```
 
@@ -47,7 +44,7 @@ Exit codes:
 ### `post` — post a previously generated review
 
 ```bash
-python -m auto_pr_reviewer post --input /path/to/final-findings.json
+python -m reviewforge post --input /path/to/final-findings.json
 ```
 
 What it does:
@@ -67,7 +64,7 @@ The CLI flag `--no-post` (review-only) is the inverse: generates findings, print
 ### `open-prs` — list active PRs awaiting review
 
 ```bash
-python -m auto_pr_reviewer open-prs
+python -m reviewforge open-prs
 ```
 
 Returns exit 2 with a hint pointing at `./run-open-prs.ps1`. The full discovery logic lives in PowerShell (which can use `az repos pr list`); the Python package does not implement it. Use the PowerShell wrapper for batch processing.
@@ -75,7 +72,7 @@ Returns exit 2 with a hint pointing at `./run-open-prs.ps1`. The full discovery 
 ### `discover` — list active PRs (no `az` required)
 
 ```bash
-python -m auto_pr_reviewer discover \
+python -m reviewforge discover \
   --project Pay \
   --target-branches main,develop \
   --max 10
@@ -117,7 +114,7 @@ Exit codes:
 ### `validate-config` — dry-run the configuration
 
 ```bash
-python -m auto_pr_reviewer validate-config
+python -m reviewforge validate-config
 ```
 
 What it does:
@@ -158,8 +155,8 @@ These are added by `_build_common_parser` and inherited by `review`, `post`, `va
 You can call the orchestrator directly from another Python program:
 
 ```python
-from auto_pr_reviewer.config import Config
-from auto_pr_reviewer.pipeline.orchestrator import run_full
+from reviewforge.config import Config
+from reviewforge.pipeline.orchestrator import run_full
 
 cfg = Config.from_env()  # or from_sources({...})
 outcome = run_full(cfg)
@@ -187,4 +184,6 @@ print(outcome.summary.to_dict())  # {'pr_id': ..., 'stages': [...], ...}
 
 ## Backwards compatibility
 
-The CLI surface is considered stable. Adding a new flag is non-breaking. Removing a flag or renaming it requires a deprecation cycle. The thin shims under `scripts/` (e.g. `scripts/review.py`, `scripts/ado_review.py`) are kept for callers that invoke them by path; they have no additional logic and can be removed only if the Docker image and CI are updated in the same release.
+The CLI surface is stable. The Docker image invokes `python -m reviewforge`
+directly, and the isolated ADO helper is available as
+`python -m reviewforge.ado.cli`.

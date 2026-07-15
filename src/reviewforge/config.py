@@ -211,7 +211,7 @@ class Config:
     def from_env(cls) -> "Config":
         """Legacy constructor: build a :class:`Config` from environment variables.
 
-        Mirrors the behavior of the original ``scripts/config.py`` for tests
+        Mirrors the behavior of the original ``src/reviewforge/config.py`` for tests
         and existing PowerShell wrappers. New callers should use
         :meth:`from_sources` for CLI-override semantics.
         """
@@ -233,7 +233,7 @@ class Config:
         pi_session_enabled = (os.getenv("PI_SESSION_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
         pi_session_clear = (os.getenv("PI_SESSION_CLEAR", "0").lower() in {"1", "true", "yes", "on"})
 
-        # Posting thresholds (used by scripts/ado_review.py legacy posting).
+        # Posting thresholds (used by reviewforge.ado.cli legacy posting).
         post_min_severity = os.getenv("POST_MIN_SEVERITY", "none")
         drop_low_confidence = is_true(os.getenv("DROP_LOW_CONFIDENCE"))
         require_context_for = os.getenv("REQUIRE_CONTEXT_FOR", "")

@@ -24,7 +24,6 @@ from .diff_mapper import (
     DiffLineMapper,
     map_file_line_to_diff_position,
 )
-from . import legacy  # noqa: F401  (re-exported for legacy compat shim)
 
 __all__ = [
     "AdoClient",
@@ -38,7 +37,6 @@ __all__ = [
     "dedupe_key",
     "existing_bot_markers",
     "get_pr",
-    "legacy",
     "map_file_line_to_diff_position",
     "normalize_ado_segment",
     "normalize_branch_name",

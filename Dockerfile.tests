@@ -18,11 +18,11 @@ COPY pytest.ini ./pytest.ini
 # PowerShell wrappers live at the repo root. The structural tests in
 # tests/test_cli.py::TestPowerShellWrapperStructure read these files
 # by relative path, so they must be present at the test root too.
-COPY common.psm1 ./common.psm1
-COPY run.ps1 ./run.ps1
-COPY run-open-prs.ps1 ./run-open-prs.ps1
-COPY run-local.ps1 ./run-local.ps1
-COPY build.ps1 ./build.ps1
+# COPY common.psm1 ./common.psm1
+# COPY run.ps1 ./run.ps1
+# COPY run-open-prs.ps1 ./run-open-prs.ps1
+# COPY run-local.ps1 ./run-local.ps1
+# COPY build.ps1 ./build.ps1
 
-CMD ["python", "-m", "pytest", "--cov=auto_pr_reviewer", "--cov-report=term-missing"]
+CMD ["python", "-m", "pytest", "--cov=reviewforge", "--cov-report=term-missing"]
 

@@ -200,7 +200,7 @@ def uncovered_findings(results: list[AcCoverageResult]) -> list[dict]:
     """Convert uncovered results into the finding shape the post stage expects.
 
     Each finding has ``file: None, line: None`` so it posts as a
-    general PR comment (see ``legacy.py`` — the post path adds no
+    general PR comment (see ``cli.py`` — the post path adds no
     ``threadContext`` when ``file`` is missing). The title starts with
     ``Work item #N`` so the existing work-item stripping rule
     (``is_work_item_finding`` in ``posting.py``) keeps the finding as

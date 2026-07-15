@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from auto_pr_reviewer.ado.client import (  # noqa: E402
+from reviewforge.ado.client import (  # noqa: E402
     AdoClient,
     _normalize_org,
     call_helper,
@@ -48,7 +48,7 @@ def _http_response(payload):
 
 def _patch_urlopen(payload=None, error=None):
     """Return a ``patch`` object for ``urllib.request.urlopen``."""
-    target = "auto_pr_reviewer.ado.client.urllib.request.urlopen"
+    target = "reviewforge.ado.client.urllib.request.urlopen"
 
     if error is not None:
         return patch(target, side_effect=error)
@@ -314,7 +314,7 @@ class TestHttpMethods:
 
 class TestModuleHelpers:
     def test_get_pr_uses_config(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         cfg = Config(
             ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="1",
             ado_token="t", source_branch="", target_branch="",
@@ -334,7 +334,7 @@ class TestModuleHelpers:
         assert out["pullRequestId"] == 1
 
     def test_resolve_branches_uses_config(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         cfg = Config(
             ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="1",
             ado_token="t", source_branch="refs/heads/feature", target_branch="refs/heads/main",
@@ -352,7 +352,7 @@ class TestModuleHelpers:
         assert resolve_branches(cfg) == ("feature", "main")
 
     def test_resolve_branches_falls_back_to_api(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         cfg = Config(
             ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="1",
             ado_token="t", source_branch="", target_branch="",
@@ -368,13 +368,13 @@ class TestModuleHelpers:
             review_artifact_dir=None, review_artifact_root=tmp_path, review_run_id=None,
         )
         monkeypatch.setattr(
-            "auto_pr_reviewer.ado.client.get_pr",
+            "reviewforge.ado.client.get_pr",
             lambda c: {"sourceRefName": "refs/heads/s", "targetRefName": "refs/heads/t"},
         )
         assert resolve_branches(cfg) == ("s", "t")
 
     def test_resolve_branches_raises_when_api_incomplete(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         cfg = Config(
             ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="1",
             ado_token="t", source_branch="", target_branch="",
@@ -390,7 +390,7 @@ class TestModuleHelpers:
             review_artifact_dir=None, review_artifact_root=tmp_path, review_run_id=None,
         )
         monkeypatch.setattr(
-            "auto_pr_reviewer.ado.client.get_pr",
+            "reviewforge.ado.client.get_pr",
             lambda c: {"sourceRefName": "refs/heads/s"},  # missing target
         )
         with pytest.raises(SystemExit):
@@ -404,7 +404,7 @@ class TestModuleHelpers:
 
 class TestCallHelper:
     def test_call_helper_builds_fetch_context_command(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         cfg = Config(
             ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="42",
             ado_token="t", source_branch="s", target_branch="t",
@@ -426,15 +426,15 @@ class TestCallHelper:
             captured.append(args)
             return _sp.CompletedProcess(args, 0, b"", b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ado.client.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ado.client.subprocess.run", fake_run)
         call_helper(cfg, "fetch-context", tmp_path)
         # The last two args are --out <path>.
         assert captured[0][-2:] == ["--out", str(tmp_path)]
         # The third positional is the subcommand.
-        assert captured[0][2] == "fetch-context"
+        assert captured[0][3] == "fetch-context"
 
     def test_call_helper_builds_post_findings_command(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         cfg = Config(
             ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="42",
             ado_token="t", source_branch="s", target_branch="t",
@@ -456,17 +456,17 @@ class TestCallHelper:
             captured.append(args)
             return _sp.CompletedProcess(args, 0, b"", b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ado.client.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ado.client.subprocess.run", fake_run)
         findings = tmp_path / "findings.json"
         findings.write_text("{}", encoding="utf-8")
         call_helper(cfg, "post-findings", tmp_path, findings=findings)
         # --findings + --out point at the right files.
         assert "--findings" in captured[0]
         assert str(findings) in captured[0]
-        assert captured[0][2] == "post-findings"
+        assert captured[0][3] == "post-findings"
 
     def test_call_helper_raises_on_failure(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         cfg = Config(
             ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="42",
             ado_token="t", source_branch="s", target_branch="t",
@@ -483,7 +483,7 @@ class TestCallHelper:
         )
         import subprocess as _sp
         monkeypatch.setattr(
-            "auto_pr_reviewer.ado.client.subprocess.run",
+            "reviewforge.ado.client.subprocess.run",
             lambda *a, **k: _sp.CompletedProcess(a, 2, b"", b"boom"),
         )
         with pytest.raises(SystemExit):
@@ -497,7 +497,7 @@ class TestCallHelper:
 
 class TestListActivePullRequests:
     def _cfg(self, **overrides):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         defaults = dict(
             ado_org="contoso", ado_project="Pay", ado_repo_id="api", pr_id="1",
             ado_token="t", source_branch="s", target_branch="main",
@@ -510,11 +510,11 @@ class TestListActivePullRequests:
             review_artifact_dir=None, review_run_id=None,
         )
         defaults.update(overrides)
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         return Config(**defaults)
 
     def test_returns_empty_when_no_prs(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        from reviewforge.ado.client import list_active_pull_requests
         cfg = self._cfg(
             workspace=tmp_path, clone_root=tmp_path,
             review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
@@ -528,7 +528,7 @@ class TestListActivePullRequests:
         assert out == []
 
     def test_returns_all_prs(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        from reviewforge.ado.client import list_active_pull_requests
         cfg = self._cfg(
             workspace=tmp_path, clone_root=tmp_path,
             review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
@@ -549,7 +549,7 @@ class TestListActivePullRequests:
         assert all(p["project"] == "Pay" for p in out)
 
     def test_filters_by_target_branches(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        from reviewforge.ado.client import list_active_pull_requests
         cfg = self._cfg(
             workspace=tmp_path, clone_root=tmp_path,
             review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
@@ -571,7 +571,7 @@ class TestListActivePullRequests:
         assert [p["pullRequestId"] for p in out] == [1]
 
     def test_respects_max_results_cap(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        from reviewforge.ado.client import list_active_pull_requests
         cfg = self._cfg(
             workspace=tmp_path, clone_root=tmp_path,
             review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
@@ -591,7 +591,7 @@ class TestListActivePullRequests:
         assert len(out) == 2
 
     def test_paginates(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.ado.client import list_active_pull_requests
+        from reviewforge.ado.client import list_active_pull_requests
         cfg = self._cfg(
             workspace=tmp_path, clone_root=tmp_path,
             review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",

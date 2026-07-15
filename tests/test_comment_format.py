@@ -18,13 +18,13 @@ from textwrap import dedent
 
 import pytest
 
-from auto_pr_reviewer.ado import comment_format as cf
-from auto_pr_reviewer.ado.comment_format import (
+from reviewforge.ado import comment_format as cf
+from reviewforge.ado.comment_format import (
     DefaultCommentFormatter,
     TemplateCommentFormatter,
     build_formatter,
 )
-from auto_pr_reviewer.config import ConfigError
+from reviewforge.config import ConfigError
 
 
 # --- Fixtures ---------------------------------------------------------------

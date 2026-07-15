@@ -1,8 +1,7 @@
 """Stage: fetch PR metadata and write ``metadata.json``.
 
-Wraps the legacy ``ado_review.py fetch-context`` subprocess into a
-:class:`Stage`. The actual ADO REST call lives in the subprocess for
-historical reasons; this stage just delegates and parses the result.
+Invokes the isolated ``python -m reviewforge.ado.cli fetch-context`` subprocess from a
+:class:`Stage`. The ADO REST call remains isolated in the subprocess; this stage delegates and parses the result.
 
 This stage is also responsible for **loading the fetched context back
 into the in-memory stage context** so downstream stages (intent, plan,
@@ -43,7 +42,7 @@ def _load_fetched_context(artifacts: Any) -> dict[str, Any]:
     metadata, or a fetch failure).
 
     Note: ``work-item-comments.json`` is not declared in
-    :data:`auto_pr_reviewer.artifacts.manager.ARTIFACT_NAMES` and therefore
+    :data:`reviewforge.artifacts.manager.ARTIFACT_NAMES` and therefore
     not on the :class:`Artifacts` dataclass. It is derived from the
     ``work_items`` path here. If the artifact contract is later updated
     to declare the comments file, replace this with

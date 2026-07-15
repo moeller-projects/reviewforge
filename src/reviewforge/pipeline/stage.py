@@ -5,7 +5,7 @@ name, accepts a :class:`StageContext`, and returns a :class:`StageResult`.
 The runner records durations and surfaces failures with clear context.
 
 This module is intentionally minimal so individual stages can stay small and
-testable. Each stage is implemented in :mod:`auto_pr_reviewer.pipeline.stages`.
+testable. Each stage is implemented in :mod:`reviewforge.pipeline.stages`.
 """
 from __future__ import annotations
 

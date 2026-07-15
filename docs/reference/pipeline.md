@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Document the `Stage` interface, the 11 default stages, the data they exchange, and how to add a new stage. This is the **explanation + reference** for `auto_pr_reviewer.pipeline`.
+Document the `Stage` interface, the 11 default stages, the data they exchange, and how to add a new stage. This is the **explanation + reference** for `reviewforge.pipeline`.
 
 ## Audience
 
@@ -11,7 +11,7 @@ Document the `Stage` interface, the 11 default stages, the data they exchange, a
 
 ## The `Stage` interface
 
-Every stage is a subclass of `auto_pr_reviewer.pipeline.stage.Stage`:
+Every stage is a subclass of `reviewforge.pipeline.stage.Stage`:
 
 ```python
 class Stage:
@@ -62,7 +62,7 @@ Convention:
 
 ## The 11 default stages (in order)
 
-`auto_pr_reviewer.pipeline.stages.DEFAULT_PIPELINE` is the canonical review pipeline. From `stages/__init__.py`:
+`reviewforge.pipeline.stages.DEFAULT_PIPELINE` is the canonical review pipeline. From `stages/__init__.py`:
 
 | # | Stage | Reads from ctx | Writes to ctx | Artifacts written |
 |---|---|---|---|---|
@@ -175,7 +175,7 @@ This is the right tool for "I already have a review, just post it".
 
 ## Orchestrator
 
-`auto_pr_reviewer.pipeline.orchestrator` exposes three top-level entrypoints:
+`reviewforge.pipeline.orchestrator` exposes three top-level entrypoints:
 
 ```python
 def run_full(cfg) -> RunOutcome
@@ -196,7 +196,7 @@ The exit code is `0` if all stages ran successfully (including the dry-run / ski
 
 ## Schemas
 
-`auto_pr_reviewer.pipeline.schemas` defines pydantic models for each stage's JSON output. The pattern:
+`reviewforge.pipeline.schemas` defines pydantic models for each stage's JSON output. The pattern:
 
 - `_Base` config: tolerate extra keys (`extra="ignore"`) and forbid coercion.
 - `Literal` enums for severity / confidence / context-basis.
@@ -208,7 +208,7 @@ Stages use `Model.model_validate(payload)` immediately after `pi` returns. If va
 
 ### Add a stage
 
-1. Create `auto_pr_reviewer/pipeline/stages/<name>.py`:
+1. Create `reviewforge/pipeline/stages/<name>.py`:
    ```python
    class MyStage(Stage):
        name = "my_stage"
@@ -218,7 +218,7 @@ Stages use `Model.model_validate(payload)` immediately after `pi` returns. If va
            # ... do work ...
            return {"details_key": ...}
    ```
-2. Re-export it from `auto_pr_reviewer/pipeline/stages/__init__.py` and add an instance to `DEFAULT_PIPELINE` at the right position.
+2. Re-export it from `reviewforge/pipeline/stages/__init__.py` and add an instance to `DEFAULT_PIPELINE` at the right position.
 3. Add a corresponding field to `StageContext` if it produces a structured output (or use `extras` for scratch).
 4. Add a pydantic schema in `schemas.py` if the output is consumed by a later stage.
 5. Add tests in `tests/test_stages.py`.

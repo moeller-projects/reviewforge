@@ -15,7 +15,7 @@ def _log(message: str) -> None:
 class ReviewContext:
     """Per-run context shared between stages (legacy interface).
 
-    New code should prefer :class:`auto_pr_reviewer.pipeline.stage.StageContext`.
+    New code should prefer :class:`reviewforge.pipeline.stage.StageContext`.
     This class is kept so the existing tests keep working and so callers that
     have a long-lived reference to ``ctx.state``, ``ctx.artifacts`` etc. can
     still rely on those attributes being set.

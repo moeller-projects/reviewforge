@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Document `auto_pr_reviewer.ai` — the `PiRunner` subprocess wrapper, session reuse, JSON repair, and prompt assembly. This is the **explanation + reference** for how the package talks to the LLM.
+Document `reviewforge.ai` — the `PiRunner` subprocess wrapper, session reuse, JSON repair, and prompt assembly. This is the **explanation + reference** for how the package talks to the LLM.
 
 ## Audience
 

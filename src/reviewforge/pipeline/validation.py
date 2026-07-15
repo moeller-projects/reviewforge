@@ -2,7 +2,7 @@
 
 Stage-level validation is intentionally simple: a type check on a few
 key fields. Schema-level validation (e.g. pydantic models) lives in
-:mod:`auto_pr_reviewer.pipeline.schemas` and is used when stricter
+:mod:`reviewforge.pipeline.schemas` and is used when stricter
 contracts are needed (final review doc, posted findings).
 """
 from __future__ import annotations

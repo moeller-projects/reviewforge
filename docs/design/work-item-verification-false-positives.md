@@ -5,7 +5,7 @@
 > work-item step in the review pipeline produce false positives, and is the
 > pipeline's data flow actually capable of supporting what the prompts describe?
 >
-> **Method.** Read every stage in `src/auto_pr_reviewer/pipeline/stages/` that
+> **Method.** Read every stage in `src/reviewforge/pipeline/stages/` that
 > consumes work-item / thread data; traced how the orchestrator populates
 > `StageContext`; verified with `git grep` that no other code path fills the
 > in-memory context; reviewed every prompt that depends on it.
@@ -17,7 +17,7 @@
 The bot **does** fetch the data. The orchestrator just doesn't use it.
 
 1. `FetchPrMetadataStage` (stage 1) calls the `ado_review` `fetch-context`
-   helper (`src/auto_pr_reviewer/ado/legacy.py:370-371`) which writes **four**
+   helper (`src/reviewforge/ado/cli.py:370-371`) which writes **four**
    files into the run dir:
    - `metadata.json`
    - `work-items.json`
@@ -26,8 +26,8 @@ The bot **does** fetch the data. The orchestrator just doesn't use it.
 
    Plus a combined `context.json`. All four are listed in `ARTIFACT_NAMES` and
    declared on the `Artifacts` dataclass
-   (`src/auto_pr_reviewer/ado/legacy.py:394-396`;
-   `src/auto_pr_reviewer/artifacts/manager.py:18-36`).
+   (`src/reviewforge/ado/cli.py:394-396`;
+   `src/reviewforge/artifacts/manager.py:18-36`).
 
 2. **Nothing reads those files back into the in-memory `StageContext`.** This
    was verified exhaustively:
@@ -41,7 +41,7 @@ The bot **does** fetch the data. The orchestrator just doesn't use it.
    ```
 
 3. The orchestrator's `_make_stage_context`
-   (`src/auto_pr_reviewer/pipeline/orchestrator.py:121-148`) populates only
+   (`src/reviewforge/pipeline/orchestrator.py:121-148`) populates only
    `extras["paths"]` — the dict of file paths. It never reads the contents
    of `work-items.json`, `work-item-comments.json`, or `threads.json` into
    memory.
@@ -124,9 +124,9 @@ and nothing in the model session forces the model to load it.**
 
 ## Why session mode does not rescue this
 
-`pi_session_enabled=True` (the default — `src/auto_pr_reviewer/config.py:198,
+`pi_session_enabled=True` (the default — `src/reviewforge/config.py:198,
 231`) shrinks the per-stage prompt to a one-paragraph briefing that names the
-on-disk files (`src/auto_pr_reviewer/ai/prompts.py:112-137`,
+on-disk files (`src/reviewforge/ai/prompts.py:112-137`,
 `_briefing_session`). The model **can** in principle `read` `work-items.json`
 on its own. In practice:
 
@@ -238,14 +238,14 @@ code-level findings:
 The current posting path already does the right thing **when the model
 follows the prompt and sets `file: null`** — it posts as a PR-level
 general comment with no `threadContext`
-(`src/auto_pr_reviewer/ado/legacy.py:514-535`). But two things go wrong in
+(`src/reviewforge/ado/cli.py:514-535`). But two things go wrong in
 practice:
 
 1. **The model often "helps" by filling in a guessed file / line.** When
    that happens, the posting path tries to map the file to a diff position.
    If mapping fails, the finding is **silently dropped** rather than being
    posted as a general comment
-   (`src/auto_pr_reviewer/ado/legacy.py:541-545`).
+   (`src/reviewforge/ado/cli.py:541-545`).
 2. **There is no explicit rule in the code that distinguishes work item
    findings from code findings.** The system relies on the model following
    the prompt's `file: null, line: null` instruction, and a single bad
@@ -256,7 +256,7 @@ practice:
 what `file` / `line` the model produced:
 
 ```text
-In src/auto_pr_reviewer/ado/legacy.py (or the new PostToAdoStage
+In src/reviewforge/ado/cli.py (or the new PostToAdoStage
 implementation), in the post loop:
 
   is_work_item_finding = str(f.get("title", "")).startswith("Work item #")
@@ -334,22 +334,22 @@ positive more social weight than it deserves.
 
 ## Evidence trail (all verified on `main`)
 
-- `src/auto_pr_reviewer/pipeline/orchestrator.py:121-148` — `_make_stage_context` only sets `extras["paths"]`.
-- `src/auto_pr_reviewer/pipeline/stages/fetch_pr_metadata.py:31-46` — calls `call_helper("fetch-context", …)`, writes only `ctx.metadata` to memory.
-- `src/auto_pr_reviewer/ado/legacy.py:193-240` — `fetch_work_items` writes four files; nothing in `src/` reads them back.
-- `src/auto_pr_reviewer/ado/legacy.py:350-396` — `command_fetch_context`.
-- `src/auto_pr_reviewer/pipeline/stages/review_diff.py:42-58` — reads `wi_context`, `wi_comments_context`, `thread_context` from `ctx.extras`.
-- `src/auto_pr_reviewer/pipeline/stages/verify_findings.py:32-48` — same.
-- `src/auto_pr_reviewer/pipeline/stages/reconstruct_intent.py:18-40`, `plan_context.py:18-32`, `collect_context.py:28-72`, `context_digest.py:18-40`, `calibrate_severity.py:19-43` — all read the same `ctx.extras` keys.
-- `src/auto_pr_reviewer/ai/prompts.py:108-167` — `_briefing_session`, `stage_instruction`, `review_instruction`.
-- `src/auto_pr_reviewer/artifacts/manager.py:18-36` — `ARTIFACT_NAMES`.
+- `src/reviewforge/pipeline/orchestrator.py:121-148` — `_make_stage_context` only sets `extras["paths"]`.
+- `src/reviewforge/pipeline/stages/fetch_pr_metadata.py:31-46` — calls `call_helper("fetch-context", …)`, writes only `ctx.metadata` to memory.
+- `src/reviewforge/ado/cli.py:193-240` — `fetch_work_items` writes four files; nothing in `src/` reads them back.
+- `src/reviewforge/ado/cli.py:350-396` — `command_fetch_context`.
+- `src/reviewforge/pipeline/stages/review_diff.py:42-58` — reads `wi_context`, `wi_comments_context`, `thread_context` from `ctx.extras`.
+- `src/reviewforge/pipeline/stages/verify_findings.py:32-48` — same.
+- `src/reviewforge/pipeline/stages/reconstruct_intent.py:18-40`, `plan_context.py:18-32`, `collect_context.py:28-72`, `context_digest.py:18-40`, `calibrate_severity.py:19-43` — all read the same `ctx.extras` keys.
+- `src/reviewforge/ai/prompts.py:108-167` — `_briefing_session`, `stage_instruction`, `review_instruction`.
+- `src/reviewforge/artifacts/manager.py:18-36` — `ARTIFACT_NAMES`.
 - `prompts/review-system.md` — "Work item verification" section.
 - `prompts/verify-findings.md` — "Defend the PR author" rule.
 - `prompts/intent.md` — "linked work items, existing PR discussion" input.
 - `prompts/context-digest.md` — `possible_intentional_choices` output.
 - `comment.md.example` — `evidence` fields rendered verbatim in the post.
 - `tests/test_stages.py:148-150` — fixture sets `[]`; tests the broken contract.
-- `src/auto_pr_reviewer/config.py:168, 289, 569` — `verify_findings` default = `True`.
+- `src/reviewforge/config.py:168, 289, 569` — `verify_findings` default = `True`.
 
 ---
 
@@ -364,7 +364,7 @@ positive more social weight than it deserves.
   "Work item verification" section should be **conditional on whether work
   items were provided** AND should explicitly require `file: null, line: null`
   for every work item finding (no guessed file / line). In
-  `src/auto_pr_reviewer/ado/legacy.py` (or `PostToAdoStage`), detect work
+  `src/reviewforge/ado/cli.py` (or `PostToAdoStage`), detect work
   item findings by title prefix `Work item #` and **force-post as a general
   PR comment** — strip `file` / `line`, never enter the diff-mapper path,
   never silently drop on `no_line_mapping`. This protects against a model

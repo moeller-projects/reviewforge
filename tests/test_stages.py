@@ -31,14 +31,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from auto_pr_reviewer.artifacts import builder, manager  # noqa: E402
-from auto_pr_reviewer.config import Config  # noqa: E402
-from auto_pr_reviewer.pipeline.cache import cache_key  # noqa: E402
-from auto_pr_reviewer.pipeline.stage import (  # noqa: E402
+from reviewforge.artifacts import builder, manager  # noqa: E402
+from reviewforge.config import Config  # noqa: E402
+from reviewforge.pipeline.cache import cache_key  # noqa: E402
+from reviewforge.pipeline.stage import (  # noqa: E402
     StageContext,
     StageStatus,
 )
-from auto_pr_reviewer.pipeline.stages import (  # noqa: E402
+from reviewforge.pipeline.stages import (  # noqa: E402
     BuildArtifactsStage,
     CalibrateSeverityStage,
     CollectContextStage,
@@ -186,7 +186,7 @@ class TestFetchPrMetadataStage:
         pi = MagicMock()
         ctx = _stage_context(cfg, artifacts, pi)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper",
+            "reviewforge.pipeline.stages.fetch_pr_metadata.call_helper",
             lambda *a, **k: None,
         )
         result = FetchPrMetadataStage()(ctx)
@@ -258,7 +258,7 @@ class TestFetchPrMetadataStage:
 
         ctx = _stage_context(cfg, artifacts, MagicMock())
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper",
+            "reviewforge.pipeline.stages.fetch_pr_metadata.call_helper",
             lambda *a, **k: None,
         )
 
@@ -298,7 +298,7 @@ class TestFetchPrMetadataStage:
         # Should not be called.
         called = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper",
+            "reviewforge.pipeline.stages.fetch_pr_metadata.call_helper",
             lambda *a, **k: called.append((a, k)),
         )
         result = FetchPrMetadataStage()(ctx)
@@ -321,7 +321,7 @@ class TestFetchPrMetadataStage:
         # threads and work-item-comments intentionally not written.
         ctx = _stage_context(cfg, artifacts, MagicMock())
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper",
+            "reviewforge.pipeline.stages.fetch_pr_metadata.call_helper",
             lambda *a, **k: None,
         )
         result = FetchPrMetadataStage()(ctx)
@@ -343,7 +343,7 @@ class TestFetchPrMetadataStage:
         ctx = _stage_context(cfg, artifacts, MagicMock())
         monkeypatch.setattr(
             "auto_pr_pr_reviewer.pipeline.stages.fetch_pr_metadata.call_helper".replace(
-                "auto_pr_pr_reviewer", "auto_pr_reviewer"
+                "auto_pr_pr_reviewer", "reviewforge"
             ),
             lambda *a, **k: None,
         )
@@ -360,7 +360,7 @@ class TestFetchPrMetadataStage:
 
 class TestLoadFetchedContext:
     def test_loads_all_three_files(self, artifacts):
-        from auto_pr_reviewer.pipeline.stages.fetch_pr_metadata import (
+        from reviewforge.pipeline.stages.fetch_pr_metadata import (
             _load_fetched_context,
         )
 
@@ -384,7 +384,7 @@ class TestLoadFetchedContext:
         assert result["thread_context"][0]["id"] == 2
 
     def test_missing_files_returns_empty_dict(self, artifacts):
-        from auto_pr_reviewer.pipeline.stages.fetch_pr_metadata import (
+        from reviewforge.pipeline.stages.fetch_pr_metadata import (
             _load_fetched_context,
         )
 
@@ -392,7 +392,7 @@ class TestLoadFetchedContext:
         assert result == {}
 
     def test_malformed_json_skipped(self, artifacts):
-        from auto_pr_reviewer.pipeline.stages.fetch_pr_metadata import (
+        from reviewforge.pipeline.stages.fetch_pr_metadata import (
             _load_fetched_context,
         )
 
@@ -429,15 +429,15 @@ class TestPrepareRepositoryStage:
         ctx = _stage_context(cfg, artifacts, pi)
         fake_state = self._fake_state(artifacts.dir, "diff --git a/x", ["x.py"])
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.prepare_repository.resolve_branches",
+            "reviewforge.pipeline.stages.prepare_repository.resolve_branches",
             lambda c: ("feature", "main"),
         )
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.prepare_repository.git_ops.prepare_repo",
+            "reviewforge.pipeline.stages.prepare_repository.git_ops.prepare_repo",
             lambda c, s, t: fake_state,
         )
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.prepare_repository.git_ops.run_git",
+            "reviewforge.pipeline.stages.prepare_repository.git_ops.run_git",
             lambda *a, **k: "abc1234 commit message\n",
         )
         result = PrepareRepositoryStage()(ctx)
@@ -830,7 +830,7 @@ class TestReviewDiffStage:
         pi.run_json.side_effect = fake_run_json
         state = self._state("big diff with many files", ["a.py", "b.py"])
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.review_diff.build_chunks",
+            "reviewforge.pipeline.stages.review_diff.build_chunks",
             lambda _state, _max: ([
                 SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
                 SimpleNamespace(diff_text="d2", files_text="b.py\n", truncated=False),
@@ -872,7 +872,7 @@ class TestReviewDiffStage:
         pi = PiRunner(cfg)
         state = self._state("big diff with many files", ["a.py", "b.py"])
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.review_diff.build_chunks",
+            "reviewforge.pipeline.stages.review_diff.build_chunks",
             lambda _state, _max: ([
                 SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
                 SimpleNamespace(diff_text="d2", files_text="b.py\n", truncated=False),
@@ -900,7 +900,7 @@ class TestReviewDiffStage:
         pi.run_json.side_effect = fake_run_json
         state = self._state("big", ["a.py", "b.py"])
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.review_diff.build_chunks",
+            "reviewforge.pipeline.stages.review_diff.build_chunks",
             lambda _state, _max: ([
                 SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
                 SimpleNamespace(diff_text="d2", files_text="b.py\n", truncated=False),
@@ -929,7 +929,7 @@ class TestPostToAdoStage:
         ctx = _stage_context(cfg, artifacts, MagicMock())
         called = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            "reviewforge.pipeline.stages.post_to_ado.call_helper",
             lambda *a, **k: called.append((a, k)),
         )
         result = PostToAdoStage()(ctx)
@@ -967,7 +967,7 @@ class TestPostToAdoStage:
         ctx = _stage_context(cfg, artifacts, MagicMock())
         called = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            "reviewforge.pipeline.stages.post_to_ado.call_helper",
             lambda *a, **k: called.append((a, k)),
         )
         result = PostToAdoStage()(ctx)
@@ -990,7 +990,7 @@ class TestPostToAdoStage:
         ctx = _stage_context(cfg, artifacts, MagicMock())
         called = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            "reviewforge.pipeline.stages.post_to_ado.call_helper",
             lambda *a, **k: called.append((a, k)),
         )
         result = PostToAdoStage()(ctx)
@@ -1006,7 +1006,7 @@ class TestPostToAdoStage:
         ctx = _stage_context(cfg, artifacts, MagicMock())
         ctx.severity = None  # Force stage to read from artifact
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            "reviewforge.pipeline.stages.post_to_ado.call_helper",
             lambda *a, **k: None,
         )
         result = PostToAdoStage()(ctx)
@@ -1085,7 +1085,7 @@ class TestCollectContextExtras:
         ctx = _stage_context(cfg, artifacts, MagicMock(), state=state)
         ctx.plan = builder.read_json(artifacts.plan)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.collect_context.subprocess.run",
+            "reviewforge.pipeline.stages.collect_context.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b"", b""),
         )
         result = CollectContextStage()(ctx)
@@ -1113,7 +1113,7 @@ class TestCollectContextExtras:
             return subprocess.CompletedProcess(cmd, 0, b"file:1:foo\n", b"")
 
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.collect_context.subprocess.run",
+            "reviewforge.pipeline.stages.collect_context.subprocess.run",
             fake_run,
         )
         result = CollectContextStage()(ctx)
@@ -1135,7 +1135,7 @@ class TestCollectContextExtras:
         ctx = _stage_context(cfg, artifacts, MagicMock(), state=state)
         ctx.plan = builder.read_json(artifacts.plan)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.collect_context.subprocess.run",
+            "reviewforge.pipeline.stages.collect_context.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b"", b""),
         )
         result = CollectContextStage()(ctx)
@@ -1173,9 +1173,9 @@ class TestCollectContextExtras:
                         return fn(*args, **kwargs)
                 return F()
 
-        monkeypatch.setattr("auto_pr_reviewer.pipeline.stages.collect_context.ThreadPoolExecutor", DummyPool)
+        monkeypatch.setattr("reviewforge.pipeline.stages.collect_context.ThreadPoolExecutor", DummyPool)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.collect_context.subprocess.run",
+            "reviewforge.pipeline.stages.collect_context.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b"", b""),
         )
         CollectContextStage()(ctx)

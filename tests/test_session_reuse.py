@@ -30,11 +30,11 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from auto_pr_reviewer.ai.runner import PiRunner  # noqa: E402
-from auto_pr_reviewer.artifacts import builder, manager  # noqa: E402
-from auto_pr_reviewer.config import Config  # noqa: E402
-from auto_pr_reviewer.pipeline import orchestrator  # noqa: E402
-from auto_pr_reviewer.pipeline.stage import (  # noqa: E402
+from reviewforge.ai.runner import PiRunner  # noqa: E402
+from reviewforge.artifacts import builder, manager  # noqa: E402
+from reviewforge.config import Config  # noqa: E402
+from reviewforge.pipeline import orchestrator  # noqa: E402
+from reviewforge.pipeline.stage import (  # noqa: E402
     StageContext,
 )
 
@@ -126,7 +126,7 @@ class TestSubprocessCommandShape:
             calls.append(list(cmd))
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', stderr_with_tokens)
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         runner = PiRunner(cfg)
         # Simulate two stage calls in the same session.
         runner.run_json(tmp_path / "p1.md", "first call", tmp_path / "o1.json", "intent")
@@ -140,7 +140,7 @@ class TestSubprocessCommandShape:
     def test_session_clear_flag(self, cfg, tmp_path, monkeypatch):
         calls: list[list[str]] = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda cmd, **k: (
                 calls.append(list(cmd))
                 or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
@@ -155,7 +155,7 @@ class TestSubprocessCommandShape:
     def test_session_disabled_uses_no_session_flag(self, cfg, tmp_path, monkeypatch):
         calls: list[list[str]] = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda cmd, **k: (
                 calls.append(list(cmd))
                 or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
@@ -174,7 +174,7 @@ class TestSubsequentStageShorterInput:
 
     def test_legacy_prompts_embed_full_context(self, cfg, tmp_path):
         # Without sessions, prompts include all context. Sanity baseline.
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=False)
         metadata = tmp_path / "metadata.json"
         metadata.write_text('{"title":"Big PR","description":"long"}', encoding="utf-8")
@@ -189,7 +189,7 @@ class TestSubsequentStageShorterInput:
         assert "Repository/project metadata" in text
 
     def test_session_prompts_only_reference_paths(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         metadata = tmp_path / "metadata.json"
         metadata.write_text('{"title":"Big PR","description":"long"}', encoding="utf-8")
@@ -213,7 +213,7 @@ class TestSubsequentStageShorterInput:
         assert str(paths["diff"]) in text
 
     def test_session_prompts_are_much_shorter(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         # Build a big context: 50 work items, long existing comments.
         big_wi = [{"id": i, "title": f"Work item {i}", "description": "x" * 200} for i in range(50)]
         big_threads = [{"author": f"u{i}", "firstComment": "y" * 200} for i in range(50)]
@@ -244,7 +244,7 @@ class TestRepairStaysInSession:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         runner = PiRunner(cfg)
         runner.run_json(tmp_path / "p.md", "original context", tmp_path / "out.json", "stage")
         assert len(calls) == 2
@@ -260,7 +260,7 @@ class TestRepairStaysInSession:
 
 class TestSessionIdInRunSummary:
     def test_run_summary_records_session_fields(self, cfg, monkeypatch):
-        from auto_pr_reviewer.pipeline.stage import Stage
+        from reviewforge.pipeline.stage import Stage
         from datetime import datetime, timezone
 
         def _stub(name):
@@ -283,7 +283,7 @@ class TestSessionIdInRunSummary:
         assert outcome.summary.pi_session_cleared is False
 
     def test_run_summary_records_session_clear(self, cfg, monkeypatch):
-        from auto_pr_reviewer.pipeline.stage import Stage
+        from reviewforge.pipeline.stage import Stage
 
         def _stub(name):
             class _S(Stage):
@@ -315,7 +315,7 @@ class TestPathBasedBriefing:
     """
 
     def test_briefing_lists_all_context_paths(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         metadata = tmp_path / "metadata.json"
         metadata.write_text("{}", encoding="utf-8")
@@ -328,7 +328,7 @@ class TestPathBasedBriefing:
             assert str(path) in text
 
     def test_briefing_includes_session_id(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True, pi_session_id="custom-x")
         metadata = tmp_path / "metadata.json"
         metadata.write_text("{}", encoding="utf-8")
@@ -338,7 +338,7 @@ class TestPathBasedBriefing:
         assert "custom-x" in text
 
     def test_briefing_includes_changed_files_list(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         metadata = tmp_path / "metadata.json"
         metadata.write_text("{}", encoding="utf-8")
@@ -350,7 +350,7 @@ class TestPathBasedBriefing:
         assert "src/b.py" in text
 
     def test_briefing_omits_changed_files_when_empty(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         metadata = tmp_path / "metadata.json"
         metadata.write_text("{}", encoding="utf-8")
@@ -360,7 +360,7 @@ class TestPathBasedBriefing:
         assert "no changed files" in text.lower()
 
     def test_review_instruction_references_intent_and_digest_paths(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         intent = tmp_path / "intent.json"
         intent.write_text("{}", encoding="utf-8")
@@ -381,7 +381,7 @@ class TestPathBasedBriefing:
         assert "Existing PR comments" not in text
 
     def test_review_instruction_omits_missing_intent_digest(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         intent = tmp_path / "missing-intent.json"
         digest = tmp_path / "missing-digest.json"
@@ -398,7 +398,7 @@ class TestPathBasedBriefing:
         assert "Optional pre-digested" not in text
 
     def test_review_instruction_includes_truncation_note(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         intent = tmp_path / "missing-intent.json"
         digest = tmp_path / "missing-digest.json"
@@ -412,7 +412,7 @@ class TestPathBasedBriefing:
         assert "truncated" in text.lower()
 
     def test_review_instruction_includes_chunk_label(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         intent = tmp_path / "missing-intent.json"
         digest = tmp_path / "missing-digest.json"
@@ -426,7 +426,7 @@ class TestPathBasedBriefing:
         assert "CHUNK LABEL: chunk 3/7" in text
 
     def test_legacy_prompt_embeds_intent_and_digest_text(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=False)
         intent = tmp_path / "intent.json"
         intent.write_text("INTENT CONTENT", encoding="utf-8")
@@ -444,7 +444,7 @@ class TestPathBasedBriefing:
         assert "DIGEST CONTENT" in text
 
     def test_legacy_prompt_embeds_existing_comments(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=False)
         metadata = tmp_path / "metadata.json"
         metadata.write_text("{}", encoding="utf-8")
@@ -456,7 +456,7 @@ class TestPathBasedBriefing:
         assert "Bob" in text
 
     def test_session_prompt_does_not_embed_existing_comments(self, cfg, tmp_path):
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         metadata = tmp_path / "metadata.json"
         metadata.write_text("{}", encoding="utf-8")
@@ -468,7 +468,7 @@ class TestPathBasedBriefing:
 
     def test_briefing_size_independent_of_context(self, cfg, tmp_path):
         """Phase B's biggest win: the briefing is constant-size."""
-        from auto_pr_reviewer.ai import prompts
+        from reviewforge.ai import prompts
         cfg = replace(cfg, pi_session_enabled=True)
         metadata = tmp_path / "metadata.json"
         metadata.write_text("{}", encoding="utf-8")
@@ -493,10 +493,10 @@ class TestChunkedReviewSession:
     """Phase C: all chunks of a large diff use isolated sessions."""
 
     def test_each_chunk_uses_unique_session_id(self, cfg, tmp_path, monkeypatch):
-        from auto_pr_reviewer.pipeline.stages import ReviewDiffStage
-        from auto_pr_reviewer.pipeline.stage import StageContext
-        from auto_pr_reviewer.artifacts import manager, builder
-        from auto_pr_reviewer.git import chunker as git_chunker
+        from reviewforge.pipeline.stages import ReviewDiffStage
+        from reviewforge.pipeline.stage import StageContext
+        from reviewforge.artifacts import manager, builder
+        from reviewforge.git import chunker as git_chunker
         from types import SimpleNamespace
 
         # Build two real chunks via a mocked git.
@@ -505,9 +505,9 @@ class TestChunkedReviewSession:
             calls.append(list(cmd))
             return subprocess.CompletedProcess(cmd, 0, b'{"summary":"", "findings":[]}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.review_diff.build_chunks",
+            "reviewforge.pipeline.stages.review_diff.build_chunks",
             lambda _state, _max: ([
                 SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
                 SimpleNamespace(diff_text="d2", files_text="b.py\n", truncated=False),
@@ -540,9 +540,9 @@ class TestChunkedReviewSession:
         }
 
     def test_chunk_prompts_include_chunk_label(self, cfg, tmp_path, monkeypatch):
-        from auto_pr_reviewer.pipeline.stages import ReviewDiffStage
-        from auto_pr_reviewer.pipeline.stage import StageContext
-        from auto_pr_reviewer.artifacts import manager
+        from reviewforge.pipeline.stages import ReviewDiffStage
+        from reviewforge.pipeline.stage import StageContext
+        from reviewforge.artifacts import manager
         from types import SimpleNamespace
 
         prompts_sent: list[str] = []
@@ -550,9 +550,9 @@ class TestChunkedReviewSession:
             prompts_sent.append(input.decode() if isinstance(input, bytes) else input)
             return subprocess.CompletedProcess(cmd, 0, b'{"summary":"", "findings":[]}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.review_diff.build_chunks",
+            "reviewforge.pipeline.stages.review_diff.build_chunks",
             lambda _state, _max: ([
                 SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
                 SimpleNamespace(diff_text="d2", files_text="b.py\n", truncated=False),
@@ -573,9 +573,9 @@ class TestChunkedReviewSession:
         assert any("chunk 2/2" in p for p in prompts_sent)
 
     def test_session_disabled_chunks_use_no_session(self, cfg, tmp_path, monkeypatch):
-        from auto_pr_reviewer.pipeline.stages import ReviewDiffStage
-        from auto_pr_reviewer.pipeline.stage import StageContext
-        from auto_pr_reviewer.artifacts import manager
+        from reviewforge.pipeline.stages import ReviewDiffStage
+        from reviewforge.pipeline.stage import StageContext
+        from reviewforge.artifacts import manager
         from types import SimpleNamespace
 
         calls: list[list[str]] = []
@@ -583,9 +583,9 @@ class TestChunkedReviewSession:
             calls.append(list(cmd))
             return subprocess.CompletedProcess(cmd, 0, b'{"summary":"", "findings":[]}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.review_diff.build_chunks",
+            "reviewforge.pipeline.stages.review_diff.build_chunks",
             lambda _state, _max: ([
                 SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
             ], False),
@@ -622,7 +622,7 @@ class TestRepairStaysInSession:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         PiRunner(cfg).run_json(tmp_path / "p.md", "original", tmp_path / "out.json", "stage")
         assert len(calls) == 2
         for c in calls:
@@ -638,7 +638,7 @@ class TestRepairStaysInSession:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
         PiRunner(cfg).run_json(tmp_path / "p.md", "x", tmp_path / "out.json", "stage")
         for env in envs:
@@ -654,7 +654,7 @@ class TestRepairStaysInSession:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         PiRunner(cfg).run_json(
             tmp_path / "p.md",
             "this is a huge first-stage payload with lots of context",
@@ -673,7 +673,7 @@ class TestRepairStaysInSession:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         cfg = replace(cfg, pi_session_enabled=False)
         PiRunner(cfg).run_json(
             tmp_path / "p.md",
@@ -692,7 +692,7 @@ class TestRepairStaysInSession:
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
         captured = []
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         PiRunner(cfg).run_json(tmp_path / "p.md", "x", tmp_path / "out.json", "stage")
         err = capsys.readouterr().err
         assert "repair (in session)" in err
@@ -707,7 +707,7 @@ class TestSessionLifecycle:
     """Phase E: session clear, env config, CLI flags."""
 
     def test_clear_session_appears_in_run_summary(self, cfg, monkeypatch):
-        from auto_pr_reviewer.pipeline.stage import Stage
+        from reviewforge.pipeline.stage import Stage
 
         def _stub(name):
             class _S(Stage):
@@ -724,7 +724,7 @@ class TestSessionLifecycle:
         assert outcome.summary.pi_session_cleared is True
 
     def test_session_disabled_in_run_summary(self, cfg, monkeypatch):
-        from auto_pr_reviewer.pipeline.stage import Stage
+        from reviewforge.pipeline.stage import Stage
 
         def _stub(name):
             class _S(Stage):
@@ -743,7 +743,7 @@ class TestSessionLifecycle:
         assert outcome.summary.pi_session_id == "pr-42-review-r1"
 
     def test_session_id_in_run_summary_artifact(self, cfg, monkeypatch):
-        from auto_pr_reviewer.pipeline.stage import Stage
+        from reviewforge.pipeline.stage import Stage
         import json
 
         def _stub(name):
@@ -807,9 +807,9 @@ class TestSessionLifecycle:
         monkeypatch.setenv("ADO_PROJECT", "P")
         monkeypatch.setenv("ADO_REPO_ID", "R")
         monkeypatch.setenv("PR_ID", "1")
-        from auto_pr_reviewer.cli import main
+        from reviewforge.cli import main
         # Validate-config: doesn't post, but does configure. Capture cfg.
-        from auto_pr_reviewer.cli import _build_config, build_parser
+        from reviewforge.cli import _build_config, build_parser
         # Just exercise the parser for the new flag:
         args = build_parser().parse_args(["validate-config", "--pi-session-clear", "--pi-session-id", "xyz"])
         cfg = _build_config(args)
@@ -817,7 +817,7 @@ class TestSessionLifecycle:
         assert cfg.pi_session_id == "xyz"
 
     def test_cli_flag_no_pi_session(self, monkeypatch, tmp_path):
-        from auto_pr_reviewer.cli import _build_config, build_parser
+        from reviewforge.cli import _build_config, build_parser
         for n in ["review", "intent", "plan", "digest", "verify", "severity", "standards"]:
             (tmp_path / f"{n}.md").write_text("p", encoding="utf-8")
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
@@ -863,7 +863,7 @@ class TestTokenUsageObservability:
         )
         stderr = b"info: tokens 1500 in / 800 out\n"
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', stderr),
         )
         runner = PiRunner(cfg)
@@ -883,7 +883,7 @@ class TestTokenUsageObservability:
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
         )
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', b"some other log line"),
         )
         runner = PiRunner(cfg)
@@ -903,7 +903,7 @@ class TestTokenUsageObservability:
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
         )
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', b""),
         )
         runner = PiRunner(cfg)
@@ -929,14 +929,14 @@ class TestTokenUsageObservability:
                 return subprocess.CompletedProcess(a, 0, b"not json", b"tokens 100 in / 50 out")
             calls.append("repair")
             return subprocess.CompletedProcess(a, 0, b'{"ok": true}', b"tokens 200 in / 80 out")
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         runner = PiRunner(cfg)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         # The most recent call's tokens are what's stored.
         assert runner.last_tokens == {"in": 200, "out": 80, "total": 280}
 
     def test_stage_result_carries_token_usage(self, tmp_path):
-        from auto_pr_reviewer.pipeline.stage import StageResult, StageStatus
+        from reviewforge.pipeline.stage import StageResult, StageStatus
         from datetime import datetime, timezone
         result = StageResult(
             name="intent",
@@ -951,19 +951,19 @@ class TestTokenUsageObservability:
         assert d["token_usage"] == {"in": 100, "out": 50, "total": 150}
 
     def test_stage_context_last_token_usage_defaults(self):
-        from auto_pr_reviewer.pipeline.stage import StageContext
-        from auto_pr_reviewer.ai.runner import PiRunner
+        from reviewforge.pipeline.stage import StageContext
+        from reviewforge.ai.runner import PiRunner
         ctx = StageContext(cfg=MagicMock(), artifacts=MagicMock(), state=None, pi=MagicMock())
         assert ctx.last_token_usage == {}
 
     def test_stage_records_token_usage_after_pi_call(self, cfg, tmp_path, monkeypatch):
         """Verify a real stage copies pi.last_tokens into ctx.last_token_usage."""
-        from auto_pr_reviewer.pipeline.stages import ReconstructIntentStage
-        from auto_pr_reviewer.pipeline.stage import StageContext
-        from auto_pr_reviewer.artifacts import manager, builder
+        from reviewforge.pipeline.stages import ReconstructIntentStage
+        from reviewforge.pipeline.stage import StageContext
+        from reviewforge.artifacts import manager, builder
 
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(
                 a, 0, b'{"pr_intent":"Fix X","changed_behaviors":[],"risk_areas":[]}',
                 b"tokens 250 in / 100 out",
@@ -987,7 +987,7 @@ class TestTokenUsageObservability:
 
     def test_run_summary_aggregates_token_usage(self, cfg, monkeypatch):
         """The run-summary contains aggregate token usage across stages."""
-        from auto_pr_reviewer.pipeline.stage import Stage
+        from reviewforge.pipeline.stage import Stage
 
         # Three stages: each reports different token usage.
         usages = [{"in": 100, "out": 50, "total": 150},
@@ -1020,7 +1020,7 @@ class TestTokenUsageObservability:
 
     def test_token_usage_serializable_in_run_summary(self, cfg, monkeypatch):
         """Token usage data must be JSON-serializable in run-summary.json."""
-        from auto_pr_reviewer.pipeline.stage import Stage
+        from reviewforge.pipeline.stage import Stage
         import json
 
         def make_stub(name, usage):

@@ -2,8 +2,7 @@
 
 This stage is a no-op when ``cfg.dry_run`` is true: it records the intent
 in the run summary but never makes an ADO call. When posting, the stage
-uses the existing ``ado_review.py`` subprocess helper for backwards
-compatibility (the script also runs as a standalone CLI).
+uses the isolated ``python -m reviewforge.ado.cli`` subprocess helper.
 """
 from __future__ import annotations
 

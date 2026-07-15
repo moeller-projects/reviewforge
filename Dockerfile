@@ -1,4 +1,4 @@
-# target path: pr-review-bot/Dockerfile
+# target path: reviewforge/Dockerfile
 # Reviewer container: runs Pi read-only to produce findings, then posts them to
 # the PR through direct Azure DevOps REST calls. Build once, run per PR.
 FROM node:24-bookworm-slim
@@ -13,7 +13,7 @@ RUN apt-get update \
 # Pin the third-party Python runtime deps. Keep this list small — most
 # logic uses the standard library. ``jinja2`` powers the optional
 # custom PR-comment template (see
-# ``auto_pr_reviewer.ado.comment_format.TemplateCommentFormatter``).
+# ``reviewforge.ado.comment_format.TemplateCommentFormatter``).
 RUN pip install --no-cache-dir --break-system-packages "jinja2>=3.1"
 
 # Global CLI: the Pi coding agent. Azure DevOps integration uses direct REST via Python.
@@ -21,28 +21,20 @@ RUN npm install -g --ignore-scripts \
       "@earendil-works/pi-coding-agent@${PI_VERSION}"
 
 WORKDIR /app
-COPY scripts/ ./scripts/
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY standards/ ./standards/
 
-# Strip Windows CRLF line endings from executable scripts. Editors on
-# Windows hosts can write CRLF into .py files even when the repo's
-# .gitattributes specifies eol=lf. The shebang on scripts/main.py is
-# parsed by the kernel (not Python), so a trailing \r turns
-# ``python3`` into ``python3\r`` and the container fails at exec time
-# with exit 127. Idempotent on already-LF files.
-RUN find ./scripts ./src -type f \( -name '*.py' -o -name '*.sh' \) -exec sed -i 's/\r$//' {} +
+# Strip Windows CRLF line endings from Python files.
+RUN find ./src -type f -name '*.py' -exec sed -i 's/\r$//' {} +
 
-RUN chmod +x ./scripts/main.py ./scripts/review.py ./scripts/ado_review.py
-
-# The repo is cloned here by the Python runner; main.py orchestrates review.
+# The repo is cloned here by the Python runner; the package CLI orchestrates review.
 ENV PYTHONPATH=/app/src
 ENV WORKSPACE=/workspace
 ENV PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 WORKDIR /workspace
 
-ENTRYPOINT ["/app/scripts/main.py"]
+ENTRYPOINT ["python3", "-m", "reviewforge"]
 # Default subcommand when the image is run with no extra args. Overridden
 # by ``podman run image <subcommand> ...`` to dispatch to other commands
 # like ``post`` or ``discover``. Mirrors the no-argv default in

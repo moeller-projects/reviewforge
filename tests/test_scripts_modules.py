@@ -1,4 +1,4 @@
-"""Focused unit tests for the auto-pr-reviewer package.
+"""Focused unit tests for the reviewforge package.
 
 Covers:
 - Config loading, env aliases, and CLI precedence
@@ -15,7 +15,6 @@ Covers:
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
 import sys
@@ -28,60 +27,45 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
-SCRIPTS = ROOT / "scripts"
-sys.path.insert(0, str(SRC))
-sys.path.insert(0, str(SCRIPTS))
 
-from auto_pr_reviewer.ado import client as ado_client  # noqa: E402
-from auto_pr_reviewer.ado import diff_mapper  # noqa: E402
-from auto_pr_reviewer.ado import posting as ad_posting  # noqa: E402
-from auto_pr_reviewer.ai import prompts  # noqa: E402
-from auto_pr_reviewer.ai.runner import PiRunner, strip_json_fences  # noqa: E402
-from auto_pr_reviewer.artifacts import builder, manager  # noqa: E402
-from auto_pr_reviewer.config import Config, ConfigError, env, is_true, require_uint  # noqa: E402
-from auto_pr_reviewer.git import chunker  # noqa: E402
-from auto_pr_reviewer.git import ops as git_ops  # noqa: E402
-from auto_pr_reviewer.pipeline import orchestrator  # noqa: E402
-from auto_pr_reviewer.pipeline import schemas as pipeline_schemas  # noqa: E402
-from auto_pr_reviewer.pipeline.schemas import (  # noqa: E402
+from reviewforge.ado import client as ado_client  # noqa: E402
+from reviewforge.ado import diff_mapper  # noqa: E402
+from reviewforge.ado import posting as ad_posting  # noqa: E402
+from reviewforge.ai import prompts  # noqa: E402
+from reviewforge.ai.runner import PiRunner, strip_json_fences  # noqa: E402
+from reviewforge.artifacts import builder, manager  # noqa: E402
+from reviewforge.config import Config, ConfigError, env, is_true, require_uint  # noqa: E402
+from reviewforge.git import chunker  # noqa: E402
+from reviewforge.git import ops as git_ops  # noqa: E402
+from reviewforge.pipeline import orchestrator  # noqa: E402
+from reviewforge.pipeline import schemas as pipeline_schemas  # noqa: E402
+from reviewforge.pipeline.schemas import (  # noqa: E402
     ContextDigest,
     ContextPlan,
     Finding,
     Intent,
     ReviewDoc,
 )
-from auto_pr_reviewer.pipeline.stage import (  # noqa: E402
+from reviewforge.pipeline.stage import (  # noqa: E402
     Stage,
     StageContext,
     StageStatus,
     run_stages,
 )
-from auto_pr_reviewer.pipeline.stages import (  # noqa: E402
+from reviewforge.pipeline.stages import (  # noqa: E402
     DEFAULT_PIPELINE,
     REVIEW_ONLY_PIPELINE,
     CollectContextStage,
     PostToAdoStage,
     ReviewDiffStage,
 )
-from auto_pr_reviewer.pipeline.validation import (  # noqa: E402
+from reviewforge.pipeline.validation import (  # noqa: E402
     StageLabel,
     validate_review_doc,
     validate_stage,
 )
 
 
-def load(name: str, path: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-# Legacy shim: scripts/main.py delegates to the package CLI.
-main_mod = load("main_mod", "scripts/main.py")
-review_shim = load("review_shim", "scripts/review.py")
 
 
 def make_cfg(tmp_path: Path, **overrides) -> Config:
@@ -240,13 +224,13 @@ class TestConfig:
     def test_read_env_with_aliases_returns_none_for_unknown_key(self, monkeypatch):
         # No alias entry for this key; the function falls back to KEY.upper().
         monkeypatch.delenv("UNKNOWN_KEY", raising=False)
-        from auto_pr_reviewer.config import _read_env_with_aliases
+        from reviewforge.config import _read_env_with_aliases
         assert _read_env_with_aliases("unknown_key") is None
 
     def test_read_env_with_aliases_uses_callable_env_map(self):
         # When an env map is passed, it is used instead of os.environ.
         env_map = {"MY_ALIAS": "value"}
-        from auto_pr_reviewer.config import _read_env_with_aliases
+        from reviewforge.config import _read_env_with_aliases
         assert _read_env_with_aliases("ado_token", env=env_map) is None
         # For the "ado_token" key, the function walks the alias list and
         # returns the first hit. Pass a map with one of those names.
@@ -261,26 +245,26 @@ class TestConfig:
 
     def test_resolve_prompt_path_returns_default_when_unset(self, monkeypatch):
         monkeypatch.delenv("REVIEW_PROMPT_PATH", raising=False)
-        from auto_pr_reviewer.config import _resolve_prompt_path
+        from reviewforge.config import _resolve_prompt_path
         result = _resolve_prompt_path("REVIEW_PROMPT_PATH", "/default/path.md")
         assert str(result) == "/default/path.md"
 
     def test_resolve_prompt_path_uses_env_value(self, monkeypatch):
         monkeypatch.setenv("REVIEW_PROMPT_PATH", "/custom/p.md")
-        from auto_pr_reviewer.config import _resolve_prompt_path
+        from reviewforge.config import _resolve_prompt_path
         result = _resolve_prompt_path("REVIEW_PROMPT_PATH", "/default/p.md")
         assert str(result) == "/custom/p.md"
 
     def test_extract_pr_id_from_url_empty(self):
-        from auto_pr_reviewer.config import _extract_pr_id_from_url
+        from reviewforge.config import _extract_pr_id_from_url
         assert _extract_pr_id_from_url("") == ""
 
     def test_extract_pr_id_from_url_no_pullrequest(self):
-        from auto_pr_reviewer.config import _extract_pr_id_from_url
+        from reviewforge.config import _extract_pr_id_from_url
         assert _extract_pr_id_from_url("https://example.com/no-match") == ""
 
     def test_coerce_cli_value_handles_bool_int_float(self):
-        from auto_pr_reviewer.config import _coerce_cli_value
+        from reviewforge.config import _coerce_cli_value
         assert _coerce_cli_value("dry_run", True) is True
         assert _coerce_cli_value("max_diff_bytes", 100) == 100
         assert _coerce_cli_value("max_diff_bytes", 100.5) == 100.5
@@ -337,35 +321,35 @@ class TestConfig:
 
 class TestParseDotenv:
     def test_returns_empty_dict_for_missing_file(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         assert parse_dotenv(tmp_path / "missing.env") == {}
 
     def test_simple_key_value(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("FOO=bar\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar"}
 
     def test_skips_blank_lines(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("\n\nFOO=bar\n\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar"}
 
     def test_skips_comments(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("# this is a comment\nFOO=bar\n# another comment\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar"}
 
     def test_strips_double_quotes(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text('FOO="bar baz"\n', encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar baz"}
 
     def test_strips_single_quotes(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("FOO='bar baz'\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar baz"}
@@ -373,37 +357,37 @@ class TestParseDotenv:
     def test_preserves_unmatched_quotes(self, tmp_path):
         # Only matching quotes are stripped; this matches the PowerShell
         # behavior and is intentional to keep the parser trivial.
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text('FOO="bar\n', encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": '"bar'}
 
     def test_strips_whitespace_around_value(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("FOO=  bar  \n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar"}
 
     def test_value_can_contain_equals(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("FOO=a=b=c\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "a=b=c"}
 
     def test_value_with_spaces_no_quotes(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("FOO=bar baz\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar baz"}
 
     def test_ignores_lines_without_equals(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("JUST_A_KEY\nFOO=bar\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "bar"}
 
     def test_handles_multiple_keys(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text(
             "ADO_AUTH_TOKEN=secret\n"
@@ -419,7 +403,7 @@ class TestParseDotenv:
         }
 
     def test_last_value_wins_for_duplicate_key(self, tmp_path):
-        from auto_pr_reviewer.config import parse_dotenv
+        from reviewforge.config import parse_dotenv
         p = tmp_path / ".env"
         p.write_text("FOO=first\nFOO=second\n", encoding="utf-8")
         assert parse_dotenv(p) == {"FOO": "second"}
@@ -435,7 +419,7 @@ class TestParseDotenv:
 
 class TestConfigFromEnvFile:
     def test_loads_file_values(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         p = tmp_path / ".env"
         p.write_text("ADO_AUTH_TOKEN=tok\nADO_ORG=org\n", encoding="utf-8")
         # Other values come from process env or defaults.
@@ -447,7 +431,7 @@ class TestConfigFromEnvFile:
         assert cfg.ado_org == "org"
 
     def test_process_env_overrides_file(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         p = tmp_path / ".env"
         p.write_text("ADO_ORG=from-file\n", encoding="utf-8")
         monkeypatch.setenv("ADO_ORG", "from-env")
@@ -457,7 +441,7 @@ class TestConfigFromEnvFile:
         assert cfg.ado_org == "from-env"
 
     def test_cli_overrides_everything(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
         p = tmp_path / ".env"
         p.write_text("ADO_ORG=from-file\n", encoding="utf-8")
@@ -465,13 +449,13 @@ class TestConfigFromEnvFile:
         assert cfg.ado_org == "from-cli"
 
     def test_missing_file_falls_back_to_env(self, tmp_path, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         monkeypatch.setenv("ADO_AUTH_TOKEN", "env-tok")
         cfg = Config.from_env_file(tmp_path / "missing.env")
         assert cfg.ado_token == "env-tok"
 
     def test_default_path_is_dotenv_in_cwd(self, tmp_path, monkeypatch, capsys):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         # The CLI's default for ``--env-file`` is ``.env`` in cwd. We
         # don't actually change cwd here (pytest doesn't let us easily);
         # just verify the parameter is wired and accepts a Path.
@@ -512,8 +496,8 @@ class TestAdoClient:
 
         monkeypatch.setattr(ado_client.subprocess, "run", fake_run)
         ado_client.call_helper(cfg, "fetch-context", tmp_path)
-        assert calls[0][1].endswith("ado_review.py")
-        assert calls[0][2] == "fetch-context"
+        assert calls[0][1:3] == ["-m", "reviewforge.ado.cli"]
+        assert calls[0][3] == "fetch-context"
         assert calls[0][-2:] == ["--out", str(tmp_path)]
 
     def test_call_helper_raises_on_failure(self, tmp_path, monkeypatch):
@@ -758,7 +742,7 @@ class TestPiRunner:
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"warn\n")
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
@@ -777,7 +761,7 @@ class TestPiRunner:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"repaired": true}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
@@ -788,7 +772,7 @@ class TestPiRunner:
     def test_run_json_raises_on_nonzero(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path)
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess([], 9, b"", b"bad"),
         )
         prompt = tmp_path / "prompt.md"
@@ -1133,7 +1117,7 @@ class TestStageRunner:
         ctx = StageContext(cfg=cfg, artifacts=artifacts, state=state, pi=MagicMock())
         ctx.plan = builder.read_json(artifacts.plan)
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.collect_context.subprocess.run",
+            "reviewforge.pipeline.stages.collect_context.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b"a.py:1:hello\n", b""),
         )
         result = CollectContextStage()(ctx)
@@ -1162,7 +1146,7 @@ class TestStageRunner:
         ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
         called = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            "reviewforge.pipeline.stages.post_to_ado.call_helper",
             lambda *a, **k: called.append((a, k)),
         )
         result = PostToAdoStage()(ctx)
@@ -1177,7 +1161,7 @@ class TestStageRunner:
         ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
         called = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.stages.post_to_ado.call_helper",
+            "reviewforge.pipeline.stages.post_to_ado.call_helper",
             lambda *a, **k: called.append((a, k)),
         )
         result = PostToAdoStage()(ctx)
@@ -1193,14 +1177,14 @@ class TestStageRunner:
 
 class TestCli:
     def test_review_parses_minimum(self):
-        from auto_pr_reviewer.cli import build_parser
+        from reviewforge.cli import build_parser
         args = build_parser().parse_args(["review", "--pr", "42", "--org", "x"])
         assert args.command == "review"
         assert args.pr_id == "42"
         assert args.ado_org == "x"
 
     def test_post_requires_input(self, monkeypatch, capsys):
-        from auto_pr_reviewer.cli import build_parser, main
+        from reviewforge.cli import build_parser, main
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
         monkeypatch.setenv("ADO_ORG", "x")
         monkeypatch.setenv("ADO_PROJECT", "P")
@@ -1211,7 +1195,7 @@ class TestCli:
         assert "--input" in capsys.readouterr().err
 
     def test_open_prs_returns_error_with_powershell_hint(self, capsys):
-        from auto_pr_reviewer.cli import main
+        from reviewforge.cli import main
         rc = main(["open-prs"])
         assert rc == 2
         err = capsys.readouterr().err
@@ -1240,7 +1224,7 @@ class TestCli:
         monkeypatch.setenv("VERIFY_PROMPT_PATH", str(tmp_path / "verify.md"))
         monkeypatch.setenv("SEVERITY_PROMPT_PATH", str(tmp_path / "severity.md"))
         monkeypatch.setenv("REVIEW_STANDARDS_PATH", str(tmp_path / "standards.md"))
-        from auto_pr_reviewer.cli import main
+        from reviewforge.cli import main
         rc = main(["validate-config"])
         assert rc == 0, capsys.readouterr()
         out = capsys.readouterr().out
@@ -1252,25 +1236,12 @@ class TestCli:
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
-        from auto_pr_reviewer.cli import main
+        from reviewforge.cli import main
         rc = main(["validate-config"])
         assert rc == 1
         err = capsys.readouterr().err
         assert "ADO_ORG" in err
 
-
-# ---------------------------------------------------------------------------
-# Top-level entry points
-# ---------------------------------------------------------------------------
-
-
-class TestTopLevelEntryPoints:
-    def test_main_delegates_to_cli(self, monkeypatch, tmp_path):
-        from auto_pr_reviewer.cli import main as cli_main
-        monkeypatch.setattr(cli_main, "__call__", lambda: 0)
-        # The shim is `python scripts/main.py`; verify it imports the package CLI.
-        assert hasattr(main_mod, "main")
-        assert hasattr(review_shim, "main")
 
 
 # ---------------------------------------------------------------------------

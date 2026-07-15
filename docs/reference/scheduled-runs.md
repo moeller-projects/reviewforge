@@ -155,7 +155,7 @@ Real VM, $0/month for the smallest ARM shape (4 OCPU, 24 GB RAM), no minute cap.
 6. Add a cron job:
 
    ```cron
-   30 9,15 * * *  cd /home/ubuntu/auto-pr-reviewer && ./run-open-prs-scheduled.ps1 -EnvFile /home/ubuntu/.env >> /home/ubuntu/logs/cron.log 2>&1
+   30 9,15 * * *  cd /home/ubuntu/reviewforge && ./run-open-prs-scheduled.ps1 -EnvFile /home/ubuntu/.env >> /home/ubuntu/logs/cron.log 2>&1
    ```
 
 Trade-offs vs. GitHub Actions: persistent state and no minute cap, but you own the uptime, the OS patching, and the firewall.
@@ -173,7 +173,7 @@ You already have it:
 ./setup-open-prs-schedule.ps1
 ```
 
-What it does and how to inspect / remove the job: see the script's header block and `Get-ScheduledTask -TaskName pr-review-bot-open-prs`. Override times with `-Times @( '09:00', '17:00' )`.
+What it does and how to inspect / remove the job: see the script's header block and `Get-ScheduledTask -TaskName reviewforge-open-prs`. Override times with `-Times @( '09:00', '17:00' )`.
 
 This requires the workstation to be awake at the trigger time. It does not work for a laptop you close at 17:00.
 
@@ -190,5 +190,5 @@ This requires the workstation to be awake at the trigger time. It does not work 
 - [`run-open-prs-scheduled.ps1`](../../run-open-prs-scheduled.ps1) — the wrapper all three hosted recipes above call.
 - [`run-open-prs.ps1`](../../run-open-prs.ps1) — what the wrapper actually does.
 - [`setup-open-prs-schedule.ps1`](../../setup-open-prs-schedule.ps1) — local-Windows equivalent.
-- [`docs/reference/cli.md`](cli.md) — `auto-pr-reviewer` subcommands and exit codes.
+- [`docs/reference/cli.md`](cli.md) — `reviewforge` subcommands and exit codes.
 - [`docs/reference/configuration.md`](configuration.md) — full env var reference; precedence rules.

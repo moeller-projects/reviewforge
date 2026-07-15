@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Explain the major components of `auto_pr_reviewer`, how data flows between them on a single review run, and the invariants the system maintains. This is the explanation-mode companion to the [`package-guide.md`](../reference/package-guide.md) index.
+Explain the major components of `reviewforge`, how data flows between them on a single review run, and the invariants the system maintains. This is the explanation-mode companion to the [`package-guide.md`](../reference/package-guide.md) index.
 
 ## Audience
 
@@ -14,9 +14,9 @@ The package has three layers, separated by purpose:
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Operator layer (PowerShell wrappers + scripts/*.py shims)               │
+│  Operator layer (PowerShell wrappers + src/reviewforge/*.py shims)               │
 │  - run.ps1, run-open-prs.ps1 (common.psm1, build.ps1, run-local.ps1)   │
-│  - scripts/main.py, scripts/review.py, scripts/ado_review.py             │
+│  - python -m reviewforge, python -m reviewforge, reviewforge.ado.cli             │
 │  - Responsibility: Docker orchestration, env forwarding, secrets in      │
 │    --env-file .env. No application logic. run-local.ps1 is a thin        │
 │    deprecation shim that forwards to run.ps1 -Build.                      │
@@ -24,7 +24,7 @@ The package has three layers, separated by purpose:
                                 │ docker run / python -m
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  CLI layer (auto_pr_reviewer.cli)                                        │
+│  CLI layer (reviewforge.cli)                                        │
 │  - argparse, subcommands (review, post, open-prs, validate-config,       │
 │    discover)                                                              │
 │  - Translates ConfigError into a friendly stderr message.                │
@@ -32,7 +32,7 @@ The package has three layers, separated by purpose:
                                 │ cli.<subcommand>(args) → cfg
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Orchestration layer (auto_pr_reviewer.pipeline.orchestrator)             │
+│  Orchestration layer (reviewforge.pipeline.orchestrator)             │
 │  - run_full / run_review_only / run_post_only                            │
 │  - Wires Config + Artifacts + PiRunner into a StageContext.              │
 │  - Runs the Stage list, records outcomes, writes run-summary.json.       │
@@ -40,7 +40,7 @@ The package has three layers, separated by purpose:
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Stage layer (auto_pr_reviewer.pipeline.stages.*)                        │
+│  Stage layer (reviewforge.pipeline.stages.*)                        │
 │  - 11 explicit Stage subclasses (see pipeline.md)                        │
 │  - Each reads/writes to StageContext, returns a dict of details.         │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -105,7 +105,7 @@ For `run_full`, the canonical path is:
 
 ### `Config` (immutable)
 
-`auto_pr_reviewer.config.Config` is a `@dataclass(frozen=True)` containing every tunable: org, project, repo, pr_id, the ADO token, the model, the artifact paths, the language, the session flags, the dry-run flag, the severity thresholds, etc.
+`reviewforge.config.Config` is a `@dataclass(frozen=True)` containing every tunable: org, project, repo, pr_id, the ADO token, the model, the artifact paths, the language, the session flags, the dry-run flag, the severity thresholds, etc.
 
 Two constructors:
 
@@ -130,7 +130,7 @@ A stage owns a name, decides whether to run, runs, and returns a dict of details
 
 ### `Artifacts` (per-run output paths)
 
-`auto_pr_reviewer.artifacts.manager.Artifacts` is a frozen dataclass with one field per output file. The set of fields is fixed (`ARTIFACT_NAMES` is a module-level tuple); the orchestrator and stages treat it as a stable contract. See [`artifacts.md`](../reference/artifacts.md).
+`reviewforge.artifacts.manager.Artifacts` is a frozen dataclass with one field per output file. The set of fields is fixed (`ARTIFACT_NAMES` is a module-level tuple); the orchestrator and stages treat it as a stable contract. See [`artifacts.md`](../reference/artifacts.md).
 
 ### `PiRunner` (LLM subprocess wrapper)
 
@@ -138,13 +138,13 @@ Owns one concern: launch `pi` as a subprocess, capture JSON output, repair on fa
 
 ### `AdoClient` (thin REST wrapper)
 
-`auto_pr_reviewer.ado.client.AdoClient` is a minimal bearer-token REST client. It exposes only the verbs the reviewer needs (`get_pr`, `get_threads`, `create_thread`, `vote`, plus generic `get`/`post`/`put` for the work-items and connection-data endpoints). No retry, no rate-limit logic, no SDK dependencies — just `urllib.request` with a JSON body and a 60-second timeout. See [`ado-integration.md`](../reference/ado-integration.md).
+`reviewforge.ado.client.AdoClient` is a minimal bearer-token REST client. It exposes only the verbs the reviewer needs (`get_pr`, `get_threads`, `create_thread`, `vote`, plus generic `get`/`post`/`put` for the work-items and connection-data endpoints). No retry, no rate-limit logic, no SDK dependencies — just `urllib.request` with a JSON body and a 60-second timeout. See [`ado-integration.md`](../reference/ado-integration.md).
 
 ## Why these design choices
 
 A few decisions are not obvious from reading the code. They live here so future maintainers don't undo them.
 
-- **Why a separate `legacy.py` module?** The Docker image and CI still invoke `scripts/ado_review.py` as a subprocess. The script cannot import the package without path manipulation, so we keep a thin subprocess-friendly shim. The shim's job is purely the CLI surface; all logic is in the package. See [`ado-integration.md`](../reference/ado-integration.md#legacy-shim).
+- **Why a separate `cli.py` module?** The Docker image and CI still invoke `reviewforge.ado.cli` as a subprocess. The script cannot import the package without path manipulation, so we keep a thin subprocess-friendly shim. The shim's job is purely the CLI surface; all logic is in the package. See [`ado-integration.md`](../reference/ado-integration.md#legacy-shim).
 
 - **Why pydantic for stage outputs?** The model occasionally produces malformed JSON (missing fields, wrong severity strings). Pydantic gives clear, actionable validation errors immediately, instead of letting bad values silently propagate. See [`pipeline.md`](../reference/pipeline.md#schemas).
 

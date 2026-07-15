@@ -2,7 +2,7 @@ trigger: none
 pr: none
 
 variables:
-  IMAGE_NAME: pr-review-bot:$(Build.BuildId)
+  IMAGE_NAME: reviewforge:$(Build.BuildId)
   REVIEW_LANGUAGE: English
   PI_MODEL: openai/gpt-5.5
   PI_VERSION: 0.79.1

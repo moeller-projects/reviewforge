@@ -15,18 +15,18 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from auto_pr_reviewer.ai.runner import PiRunner  # noqa: E402
-from auto_pr_reviewer.artifacts import builder, manager, summary as art_summary  # noqa: E402
-from auto_pr_reviewer.config import Config  # noqa: E402
-from auto_pr_reviewer.pipeline import stage as pstage  # noqa: E402
-from auto_pr_reviewer.pipeline import validation as pvalidation  # noqa: E402
-from auto_pr_reviewer.pipeline.stage import (  # noqa: E402
+from reviewforge.ai.runner import PiRunner  # noqa: E402
+from reviewforge.artifacts import builder, manager, summary as art_summary  # noqa: E402
+from reviewforge.config import Config  # noqa: E402
+from reviewforge.pipeline import stage as pstage  # noqa: E402
+from reviewforge.pipeline import validation as pvalidation  # noqa: E402
+from reviewforge.pipeline.stage import (  # noqa: E402
     Stage,
     StageContext,
     StageStatus,
     run_stages,
 )
-from auto_pr_reviewer.pipeline.schemas import (  # noqa: E402
+from reviewforge.pipeline.schemas import (  # noqa: E402
     Confidence,
     ContextBasis,
     ContextDigest,
@@ -80,7 +80,7 @@ class TestPiRunnerEdgeCases:
         def fake_run(*a, **k):
             raise subprocess.TimeoutExpired(cmd=a[0] if a else "", timeout=5)
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         with pytest.raises(SystemExit) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "timed out" in str(exc.value)
@@ -88,7 +88,7 @@ class TestPiRunnerEdgeCases:
     def test_nonzero_returncode_raises(self, tmp_path, monkeypatch):
         runner = PiRunner(self._cfg())
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 7, b"", b"err"),
         )
         with pytest.raises(SystemExit) as exc:
@@ -98,7 +98,7 @@ class TestPiRunnerEdgeCases:
     def test_empty_output_raises(self, tmp_path, monkeypatch):
         runner = PiRunner(self._cfg())
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b"", b""),
         )
         with pytest.raises(SystemExit) as exc:
@@ -115,7 +115,7 @@ class TestPiRunnerEdgeCases:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 9, b"", b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         with pytest.raises(SystemExit) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "repair call failed" in str(exc.value)
@@ -131,7 +131,7 @@ class TestPiRunnerEdgeCases:
             # Repair also returns invalid JSON.
             return subprocess.CompletedProcess(cmd, 0, b"still not json", b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         with pytest.raises(SystemExit) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "invalid JSON" in str(exc.value)
@@ -145,7 +145,7 @@ class TestPiRunnerEdgeCases:
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
         monkeypatch.setenv("ADO_API_KEY", "secret")
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
             assert k not in seen_env
@@ -171,7 +171,7 @@ class TestPiRunnerEdgeCases:
             seen_cmd.append(list(cmd))
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
 
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         PiRunner(cfg).run_json(source, "in", tmp_path / "out.json", "stage")
         # The prompt path handed to Pi must be the augmented file, not the
         # original source. The augmented file lives in the runner's private
@@ -188,7 +188,7 @@ class TestPiRunnerEdgeCases:
     def test_stderr_lines_are_logged(self, tmp_path, monkeypatch, capsys):
         runner = PiRunner(self._cfg())
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', b"line1\nline2"),
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
@@ -212,7 +212,7 @@ class TestPiRunnerEdgeCases:
         runner = PiRunner(cfg)
         captured = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda cmd, **k: (
                 captured.append(cmd)
                 or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
@@ -240,7 +240,7 @@ class TestPiRunnerEdgeCases:
         runner = PiRunner(cfg)
         captured = []
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda cmd, **k: (
                 captured.append(cmd)
                 or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
@@ -296,7 +296,7 @@ class TestPiRunnerEdgeCases:
         runner = PiRunner(cfg)
         stderr = b"[pi] tokens: 1234 in / 567 out\n"
         monkeypatch.setattr(
-            "auto_pr_reviewer.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', stderr),
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
@@ -322,7 +322,7 @@ class TestPiRunnerEdgeCases:
             if len(calls) == 1:
                 return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
             return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
-        monkeypatch.setattr("auto_pr_reviewer.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         # Repair call: same --session, empty stdin (no re-send).
         repair_cmd, repair_input = calls[1]
@@ -644,7 +644,7 @@ class TestArtifactsEdges:
 
 class TestChunkerEdges:
     def test_no_files_returns_empty(self, tmp_path):
-        from auto_pr_reviewer.git import chunker
+        from reviewforge.git import chunker
         state = SimpleNamespace(repo_dir=tmp_path, files=[], range_spec="x..y")
         chunks, truncated = chunker.build_chunks(state, 100)
         assert chunks == []
@@ -658,7 +658,7 @@ class TestChunkerEdges:
 
 class TestPipelineContext:
     def test_paths_returns_all_artifact_keys(self, tmp_path):
-        from auto_pr_reviewer.pipeline.context import ReviewContext
+        from reviewforge.pipeline.context import ReviewContext
         cfg = _cfg(tmp_path)
         artifacts = manager.create(cfg)
         ctx = ReviewContext(cfg=cfg, artifacts=artifacts, pi=MagicMock())
@@ -668,7 +668,7 @@ class TestPipelineContext:
         assert paths["intent"] == artifacts.intent
 
     def test_log_writes_to_stderr(self, capsys):
-        from auto_pr_reviewer.pipeline.context import ReviewContext
+        from reviewforge.pipeline.context import ReviewContext
         cfg = MagicMock()
         artifacts = MagicMock()
         ctx = ReviewContext(cfg=cfg, artifacts=artifacts, pi=MagicMock())

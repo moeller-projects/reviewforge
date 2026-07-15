@@ -58,7 +58,7 @@ export OPENAI_API_KEY=…
 Inside the container, the equivalent direct CLI is:
 
 ```bash
-python -m auto_pr_reviewer review \
+python -m reviewforge review \
   --pr 1234 --org contoso --project Pay --repo api \
   --ado-token "..." --openai-api-key "..." --dry-run
 ```
@@ -123,12 +123,12 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 |---|---|---|
 | `REVIEW_ARTIFACT_ROOT` | `"/workspace/artifacts"` | Root for the per-PR directory tree. |
 | `REVIEW_ARTIFACT_DIR` | _(unset)_ | If set, the runner uses this directory verbatim (no `pr-<id>/runs/<run_id>/` subdir). Useful for local debugging. |
-| `REVIEW_ARTIFACT_VOLUME_NAME` | `"pr-review-bot-artifacts"` | Docker named volume for artifacts. |
+| `REVIEW_ARTIFACT_VOLUME_NAME` | `"reviewforge-artifacts"` | Docker named volume for artifacts. |
 | `REVIEW_RUN_ID` | _(auto)_ | Overrides the timestamp-based run id. Set for deterministic re-runs. |
 | `WORKSPACE` | `"/workspace"` | Working dir inside the container. |
 | `CLONE_ROOT` | `"/workspace/repo"` | Where the PR's source is cloned. |
-| `IMAGE_NAME` | `"pr-review-bot:latest"` | Image tag. Alias: `IMAGE`. |
-| `CONTAINER_NAME` | _(auto: `pr-review-bot-pr-<id>`)_ | Optional explicit container name. |
+| `IMAGE_NAME` | `"reviewforge:latest"` | Image tag. Alias: `IMAGE`. |
+| `CONTAINER_NAME` | _(auto: `review-pr-<id>`)_ | Optional explicit container name. |
 | `REVIEW_PROMPT_PATH` | _(required)_ | Path to the system prompt. |
 | `INTENT_PROMPT_PATH` | _(required)_ | Path to the intent-stage prompt. |
 | `CONTEXT_PLAN_PROMPT_PATH` | _(required)_ | Path to the plan-context-stage prompt. |
@@ -139,7 +139,7 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 
 ## Alias map (the canonical source)
 
-`auto_pr_reviewer.config._ENV_ALIASES` is a single dict that maps logical field names to a tuple of acceptable env-var names. The first name in the tuple wins when multiple are set.
+`reviewforge.config._ENV_ALIASES` is a single dict that maps logical field names to a tuple of acceptable env-var names. The first name in the tuple wins when multiple are set.
 
 ```python
 _ENV_ALIASES: dict[str, tuple[str, ...]] = {
@@ -182,7 +182,7 @@ explicitly; `Config.from_env_file(path)` uses it and merges the file values
 
 Three places need a coordinated edit when you add a new env var:
 
-1. **`Config` dataclass in `src/auto_pr_reviewer/config.py`** — add the field with a default and a comment. Make it a `field(default=…, compare=False)` if it should not participate in dataclass equality.
+1. **`Config` dataclass in `src/reviewforge/config.py`** — add the field with a default and a comment. Make it a `field(default=…, compare=False)` if it should not participate in dataclass equality.
 2. **Resolution in `Config.from_env` / `Config.from_sources`** — read the var, parse / validate, and pass it to the `cls(...)` constructor.
 3. **CLI flag in `cli._build_common_parser`** — add `p.add_argument("--foo", dest="foo", …)` so users can override from the command line. Make sure `_apply_common` includes the new field in its tuple of override fields.
 

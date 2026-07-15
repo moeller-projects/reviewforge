@@ -1,4 +1,4 @@
-<!-- target path: pr-review-bot/standards/clean-code.md -->
+<!-- target path: reviewforge/standards/clean-code.md -->
 
 # Coding standards
 

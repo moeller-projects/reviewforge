@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from auto_pr_reviewer.ado import diff_mapper, legacy, posting
+from reviewforge.ado import cli, diff_mapper, posting
 
 
 DIFF_V1 = (
@@ -222,7 +222,7 @@ class TestStaleCommentBody:
 
 class TestAdoClientAddComment:
     def test_add_comment_posts_to_thread_comments(self):
-        from auto_pr_reviewer.ado.client import AdoClient
+        from reviewforge.ado.client import AdoClient
         c = AdoClient(org="https://dev.azure.com/x", project="p", repo="r", token="t")
         # Patch the underlying _request so we don't hit the network.
         c._request = MagicMock(return_value={"id": 99})  # noqa: SLF001
@@ -290,8 +290,8 @@ class TestCommandPostFindingsStalePass:
         monkeypatch.delenv("FAIL_ON", raising=False)
         monkeypatch.delenv("ANNOTATE_STALE", raising=False)  # default-on
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=client):
-            rc = legacy.command_post_findings(_args(findings_file, out_file))
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
         assert rc == 0
         client.add_comment.assert_called_once()
         call_args = client.add_comment.call_args
@@ -319,8 +319,8 @@ class TestCommandPostFindingsStalePass:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=client):
-            rc = legacy.command_post_findings(_args(findings_file, out_file))
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
         assert rc == 0
         client.add_comment.assert_not_called()
         result = __import__("json").loads(out_file.read_text())
@@ -341,8 +341,8 @@ class TestCommandPostFindingsStalePass:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=client):
-            rc = legacy.command_post_findings(_args(findings_file, out_file))
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
         assert rc == 0
         client.add_comment.assert_not_called()
 
@@ -374,8 +374,8 @@ class TestCommandPostFindingsStalePass:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=client):
-            rc = legacy.command_post_findings(_args(findings_file, out_file))
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
         assert rc == 0
         client.create_thread.assert_called_once()
         # Critical: the bot did not annotate its own brand-new thread.
@@ -396,8 +396,8 @@ class TestCommandPostFindingsStalePass:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=client):
-            rc = legacy.command_post_findings(_args(findings_file, out_file))
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
         # The run still succeeds; stale annotation is best-effort.
         assert rc == 0
         client.add_comment.assert_called_once()

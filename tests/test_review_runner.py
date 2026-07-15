@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-from auto_pr_reviewer.ado import client as ado_client  # noqa: E402
-from auto_pr_reviewer.artifacts import builder as artifact_builder  # noqa: E402
-from auto_pr_reviewer.pipeline.validation import validate_review_doc  # noqa: E402
+from reviewforge.ado import client as ado_client  # noqa: E402
+from reviewforge.artifacts import builder as artifact_builder  # noqa: E402
+from reviewforge.pipeline.validation import validate_review_doc  # noqa: E402
 
 
 def test_parse_dev_azure_pr_url():

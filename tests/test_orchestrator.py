@@ -19,10 +19,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from auto_pr_reviewer.artifacts import builder, manager  # noqa: E402
-from auto_pr_reviewer.config import Config  # noqa: E402
-from auto_pr_reviewer.pipeline import orchestrator  # noqa: E402
-from auto_pr_reviewer.pipeline.orchestrator import (  # noqa: E402
+from reviewforge.artifacts import builder, manager  # noqa: E402
+from reviewforge.config import Config  # noqa: E402
+from reviewforge.pipeline import orchestrator  # noqa: E402
+from reviewforge.pipeline.orchestrator import (  # noqa: E402
     ensure_tools,
     run_full,
     run_post_only,
@@ -85,14 +85,14 @@ def cfg(tmp_path: Path) -> Config:
 class TestEnsureTools:
     def test_raises_when_tool_missing(self, monkeypatch):
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.orchestrator.shutil.which", lambda t: None
+            "reviewforge.pipeline.orchestrator.shutil.which", lambda t: None
         )
         with pytest.raises(SystemExit):
             ensure_tools()
 
     def test_returns_when_all_tools_present(self, monkeypatch):
         monkeypatch.setattr(
-            "auto_pr_reviewer.pipeline.orchestrator.shutil.which", lambda t: "/usr/bin/" + t
+            "reviewforge.pipeline.orchestrator.shutil.which", lambda t: "/usr/bin/" + t
         )
         ensure_tools()  # no raise
 
@@ -144,7 +144,7 @@ class TestShouldSkip:
 
 def _make_stub(name, next_status="ok", details=None):
     """Build a Stage subclass on the fly with the desired behavior."""
-    from auto_pr_reviewer.pipeline.stage import Stage
+    from reviewforge.pipeline.stage import Stage
 
     class _Stub(Stage):
         pass
@@ -228,7 +228,7 @@ class TestRunFull:
 
 class TestRunReviewOnly:
     def test_uses_review_only_pipeline(self, cfg, monkeypatch):
-        from auto_pr_reviewer.pipeline import stages
+        from reviewforge.pipeline import stages
         recorded = []
 
         def fake_run(stages_list, ctx):

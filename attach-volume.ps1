@@ -1,1 +1,1 @@
-podman run -it --rm --volume pr-review-bot-artifacts:/workspace/artifacts:ro --workdir /workspace/artifacts busybox:latest
+podman run -it --rm --volume reviewforge-artifacts:/workspace/artifacts:ro --workdir /workspace/artifacts busybox:latest

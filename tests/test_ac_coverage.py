@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from auto_pr_reviewer.ado import ac_coverage
-from auto_pr_reviewer.ado.ac_coverage import (
+from reviewforge.ado import ac_coverage
+from reviewforge.ado.ac_coverage import (
     AcCoverageResult,
     check_ac_coverage,
     extract_identifiers,
@@ -20,9 +20,9 @@ from auto_pr_reviewer.ado.ac_coverage import (
     strip_html,
     uncovered_findings,
 )
-from auto_pr_reviewer.artifacts import builder, manager
-from auto_pr_reviewer.pipeline.stage import StageContext
-from auto_pr_reviewer.pipeline.stages import AcceptanceCriteriaCoverageStage
+from reviewforge.artifacts import builder, manager
+from reviewforge.pipeline.stage import StageContext
+from reviewforge.pipeline.stages import AcceptanceCriteriaCoverageStage
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ class TestUncoveredFindings:
 
 def _stage_ctx(tmp_path, *, dry_run=False, work_items=None, diff_text=""):
     """Build a StageContext with a minimal artifact tree."""
-    from auto_pr_reviewer.config import Config
+    from reviewforge.config import Config
 
     # Minimal prompt files to satisfy validate_files().
     prompt_files = {}
@@ -370,7 +370,7 @@ class TestAcceptanceCriteriaCoverageStage:
         monkeypatch.setenv("AC_COVERAGE_CHECK", "0")
         wi = {"id": 7, "title": "x", "acceptanceCriteria": "Update src/missing.py"}
         ctx = _stage_ctx(tmp_path, work_items=[wi], diff_text="+ x\n")
-        from auto_pr_reviewer.pipeline.stage import StageStatus
+        from reviewforge.pipeline.stage import StageStatus
         # Stage returns SKIPPED (status) via should_run returning False.
         # But the stage itself short-circuits via should_run before run().
         # We test via should_run.

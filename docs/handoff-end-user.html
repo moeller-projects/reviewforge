@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>PR Review Bot — End-User Handoff</title>
+<title>ReviewForge — End-User Handoff</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root { --fg:#1d1d1f; --mut:#6b6b70; --bg:#fbfbfd; --card:#fff; --acc:#0a5fff; --line:#e5e5ea; --ok:#0a7c2f; --warn:#a35c00; --err:#b3261e; --code-bg:#f4f4f7; }
@@ -62,7 +62,7 @@
 <body>
 <div class="wrap">
 
-<h1>PR Review Bot — End-User Handoff</h1>
+<h1>ReviewForge — End-User Handoff</h1>
 <p class="lede">Plain-language guide for engineers and reviewers who trigger the bot and need to know what to expect in the PR, what the output means, and what to do when it misbehaves.</p>
 <p class="meta">Audience: anyone reviewing a PR that the bot touched. Owner: platform team. Source-of-truth: <code>AGENTS.md</code>, <code>docs/reference/*</code>.</p>
 
@@ -161,7 +161,7 @@
   <rect class="bg" width="720" height="320"/>
   <text class="lbl" x="32" y="34">POSTED COMMENT</text>
   <rect class="card" x="32" y="48" width="656" height="170" rx="8"/>
-  <text class="meta" x="56" y="76">🤖 pr-review-bot · severity: major · confidence: 0.8</text>
+  <text class="meta" x="56" y="76">🤖 reviewforge · severity: major · confidence: 0.8</text>
   <text class="body" x="56" y="108">**Unused parameter `cfg.dry_run` never referenced**</text>
   <text class="body" x="56" y="130">The flag is parsed in `_build_common_parser` but the downstream</text>
   <text class="body" x="56" y="148">`_build_config` does not propagate it into the Config dataclass.</text>
@@ -188,7 +188,7 @@
 
 <h2 id="lifecycle">2. Per-PR lifecycle, end to end</h2>
 
-<p>Inside the container (<code>/app/scripts/main.py</code> → <code>auto_pr_reviewer.cli.main</code>), the pipeline runs <strong>12 fixed stages</strong> in order. Each stage writes a JSON artifact; failures short-circuit the run.</p>
+<p>Inside the container (<code>python3 -m reviewforge</code> → <code>reviewforge.cli.main</code>), the pipeline runs <strong>12 fixed stages</strong> in order. Each stage writes a JSON artifact; failures short-circuit the run.</p>
 
 <table>
 <thead><tr><th>#</th><th>Stage</th><th>Does</th><th>Writes</th></tr></thead>
@@ -208,7 +208,7 @@
 </tbody>
 </table>
 
-<p>Stages 4–10 each invoke the <code>pi</code> CLI as a subprocess. ADO credentials are <strong>stripped from the Pi subprocess env</strong> by <code>ai/runner.py</code> so the model cannot call ADO directly. All ADO traffic lives in <code>auto_pr_reviewer.ado.*</code> and is reachable only from stage 12.</p>
+<p>Stages 4–10 each invoke the <code>pi</code> CLI as a subprocess. ADO credentials are <strong>stripped from the Pi subprocess env</strong> by <code>ai/runner.py</code> so the model cannot call ADO directly. All ADO traffic lives in <code>reviewforge.ado.*</code> and is reachable only from stage 12.</p>
 
 <h2 id="pr-output">3. What you'll see in the PR</h2>
 
@@ -267,7 +267,7 @@
 <tr><td><span class="ok">0</span></td><td>Python orchestrator</td><td>All stages <code>OK</code> or <code>SKIPPED</code>. Post either succeeded or was skipped (<code>DRY_RUN</code>).</td></tr>
 <tr><td><span class="warn">1</span></td><td>Python orchestrator</td><td>At least one stage returned <code>FAILED</code>. Read <code>run-summary.json</code> for which one.</td></tr>
 <tr><td><span class="err">2</span></td><td>CLI</td><td>Config error — missing required env var (token, org, project, repo, pr_id). <code>validate-config</code> surfaces the exact key.</td></tr>
-<tr><td><span class="err">127</span></td><td>Container runtime</td><td>Container didn't start (image missing, CRLF on <code>scripts/main.py</code>, port, etc.). Check the spawn output.</td></tr>
+<tr><td><span class="err">127</span></td><td>Container runtime</td><td>Container didn't start (image missing, CRLF on <code>python -m reviewforge</code>, port, etc.). Check the spawn output.</td></tr>
 </tbody>
 </table>
 
@@ -279,7 +279,7 @@
 <ol>
   <li>Open <code>final-findings.json</code> for that PR. Read the finding's <code>message</code> and <code>contextBasis</code>.</li>
   <li>Cross-check against <code>intent.json</code> and <code>context-digest.json</code> to see what the model had in scope.</li>
-  <li>If the finding is correct but the title/severity is off, edit the JSON and re-run <code>python -m auto_pr_reviewer post --input final-findings.json --pr &lt;PR&gt;</code> to re-post. Same dedupe key = same marker = no duplication.</li>
+  <li>If the finding is correct but the title/severity is off, edit the JSON and re-run <code>python -m reviewforge post --input final-findings.json --pr &lt;PR&gt;</code> to re-post. Same dedupe key = same marker = no duplication.</li>
   <li>If the finding is wrong, reply on the PR with reasoning. The bot does not currently delete or resolve its comments on rerun — see <em>Known limits</em> below.</li>
 </ol>
 
@@ -288,8 +288,8 @@
 
 <h3>Container never starts</h3>
 <ol>
-  <li><code>docker images | grep pr-review-bot</code> — did <code>build.ps1</code> actually run?</li>
-  <li>Look for <code>python3\r</code> in the error — a Windows CRLF on <code>scripts/main.py</code> shebang. The Dockerfile strips CRLF; if you build outside Docker, run <code>find ./scripts ./src -type f -name '*.py' -exec sed -i 's/\r$//' {} +</code>.</li>
+  <li><code>docker images | grep reviewforge</code> — did <code>build.ps1</code> actually run?</li>
+  <li>Look for <code>python3\r</code> in the error — a Windows CRLF on <code>python -m reviewforge</code> shebang. The Dockerfile strips CRLF; if you build outside Docker, run <code>find ./scripts ./src -type f -name '*.py' -exec sed -i 's/\r$//' {} +</code>.</li>
   <li>Pull <code>az extension list</code> and verify <code>azure-devops</code> is installed.</li>
 </ol>
 
@@ -318,12 +318,12 @@
 <tr><td>Run id</td><td><code>YYYYMMDDTHHMMSSZ-&lt;pid&gt;</code> by default; override with <code>REVIEW_RUN_ID</code>.</td></tr>
 <tr><td>Session id</td><td><code>pr-&lt;id&gt;-review-&lt;run_id&gt;</code>. Pi's reuse key so the second-stage call doesn't resend the diff.</td></tr>
 <tr><td>Artifact dir</td><td><code>artifacts/pr-&lt;PR_ID&gt;/runs/&lt;RUN_ID&gt;/</code>. The mounted output.</td></tr>
-<tr><td>Volume / local path</td><td>Where artifacts land. <code>ARTIFACT_PATH</code> for local; named volume <code>pr-review-bot-artifacts</code> otherwise.</td></tr>
+<tr><td>Volume / local path</td><td>Where artifacts land. <code>ARTIFACT_PATH</code> for local; named volume <code>reviewforge-artifacts</code> otherwise.</td></tr>
 </tbody>
 </table>
 
 <div class="footer">
-  Generated against the current <code>main</code> branch. Source: <code>AGENTS.md</code>, <code>docs/reference/*</code>, <code>src/auto_pr_reviewer/*</code>.
+  Generated against the current <code>main</code> branch. Source: <code>AGENTS.md</code>, <code>docs/reference/*</code>, <code>src/reviewforge/*</code>.
   If the pipeline changes (stage order, new artifact, dedupe key), update this doc in the same PR.
 </div>
 

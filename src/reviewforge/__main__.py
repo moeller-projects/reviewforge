@@ -1,4 +1,4 @@
-"""Allow ``python -m auto_pr_reviewer`` to invoke the CLI."""
+"""Allow ``python -m reviewforge`` to invoke the CLI."""
 from __future__ import annotations
 
 import sys

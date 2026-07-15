@@ -1,4 +1,4 @@
-"""Command-line interface for the auto-pr-reviewer.
+"""Command-line interface for the reviewforge.
 
 Subcommands:
 
@@ -167,7 +167,7 @@ def cmd_post(args: argparse.Namespace) -> int:
 def cmd_open_prs(args: argparse.Namespace) -> int:
     """Always fail with a clear pointer to the PowerShell entrypoint.
 
-    The review bot is designed to run one container per pull request, not
+    ReviewForge is designed to run one container per pull request, not
     one container processing many. The PowerShell script
     ``run-open-prs.ps1`` is the only supported entrypoint for batch
     processing: it discovers active PRs and spawns a fresh container for
@@ -176,7 +176,7 @@ def cmd_open_prs(args: argparse.Namespace) -> int:
     """
     print(
         "[review][ERROR] 'open-prs' is not supported in the Python CLI.\n"
-        "  The review bot runs one container per pull request. For batch\n"
+        "  ReviewForge runs one container per pull request. For batch\n"
         "  processing, use the PowerShell script at the repo root:\n"
         "    ./run-open-prs.ps1 [-Organization <url>] [-Projects <names>] ...",
         file=sys.stderr,
@@ -283,8 +283,8 @@ def cmd_validate_config(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="auto-pr-reviewer",
-        description="Azure DevOps PR review bot",
+        prog="reviewforge",
+        description="Azure DevOps ReviewForge",
     )
     sub = parser.add_subparsers(dest="command", required=False)
 
@@ -321,7 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help=(
             "Unsupported: use ./run-open-prs.ps1 for batch processing. "
-            "The review bot runs one container per PR."
+            "ReviewForge runs one container per PR."
         ),
     )
     open_prs.set_defaults(func=cmd_open_prs, _command="open-prs")
@@ -368,7 +368,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # Default to ``review`` when no subcommand is given. The container
     # ENTRYPOINT invokes this entrypoint with no args, and
-    # ``python -m auto_pr_reviewer`` (no subcommand) should also land
+    # ``python -m reviewforge`` (no subcommand) should also land
     # on the primary use case. Callers wanting help should pass ``-h``.
     if not argv:
         argv = ["review"]

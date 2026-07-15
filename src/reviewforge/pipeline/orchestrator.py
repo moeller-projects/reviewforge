@@ -11,8 +11,8 @@ Three public entrypoints:
 * :func:`run_review_only` — review only, no posting.
 * :func:`run_post_only` — post a previously generated review.
 
-A few legacy helpers (``should_skip``, ``ensure_tools``) are preserved for
-backward compatibility with the original ``scripts/pipeline/orchestrator.py``.
+A few legacy helpers (``should_skip``, ``ensure_tools``) remain for older
+callers that imported them directly.
 """
 from __future__ import annotations
 

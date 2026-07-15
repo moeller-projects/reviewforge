@@ -11,10 +11,10 @@
 #>
 [CmdletBinding()]
 param(
-    [string]   $TaskName = "pr-review-bot-open-prs",
+    [string]   $TaskName = "reviewforge-open-prs",
     [string]   $ScriptPath = (Join-Path $PSScriptRoot 'run-open-prs-scheduled.ps1'),
     [string[]] $Times = @('09:30', '15:00'),
-    [string]   $Description = "Run open PR reviewer twice per day",
+    [string]   $Description = "Run ReviewForge twice per day",
     [switch]   $Force,
     [string]   $Organization,
     [string[]] $Projects,

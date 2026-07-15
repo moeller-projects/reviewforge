@@ -63,7 +63,7 @@ def augment_prompt_file(source: Path, cfg: Config, dest: Path | None = None) -> 
     """Return a copy of ``source`` with the language directive appended.
 
     Pi loads the system prompt from a file (see
-    :func:`auto_pr_reviewer.ai.runner.PiRunner._build_cmd`), and the
+    :func:`reviewforge.ai.runner.PiRunner._build_cmd`), and the
     per-stage prompt files (``review-system.md``, ``verify-findings.md``,
     ``severity.md`` …) are generic templates that don't know the runtime
     language. This helper writes a side-by-side copy with the runtime

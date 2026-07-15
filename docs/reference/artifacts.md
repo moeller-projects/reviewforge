@@ -44,7 +44,7 @@ When `REVIEW_ARTIFACT_DIR` is set, the runner uses that directory verbatim (no `
 
 ## The `ARTIFACT_NAMES` contract
 
-`auto_pr_reviewer.artifacts.manager.ARTIFACT_NAMES` is a module-level tuple of 17 names. Every well-formed run produces (or attempts to produce) all 17. The tuple order is the same as the order in which the pipeline writes them.
+`reviewforge.artifacts.manager.ARTIFACT_NAMES` is a module-level tuple of 17 names. Every well-formed run produces (or attempts to produce) all 17. The tuple order is the same as the order in which the pipeline writes them.
 
 ```python
 ARTIFACT_NAMES = (
@@ -242,7 +242,7 @@ Stages that need to capture raw `pi` output for debugging (e.g. when a parse fai
 
 ## Cleaning up
 
-The Docker named volume `pr-review-bot-artifacts` persists across container runs. Operators should occasionally prune old runs:
+The Docker named volume `reviewforge-artifacts` persists across container runs. Operators should occasionally prune old runs:
 
 ```bash
 # Inside the container

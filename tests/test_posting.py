@@ -1,4 +1,4 @@
-"""Unit tests for ``auto_pr_reviewer.ado.posting`` helpers.
+"""Unit tests for ``reviewforge.ado.posting`` helpers.
 
 These tests cover the work-item finding detection and transformation
 helpers added as defense in depth: even if the review prompt says
@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from auto_pr_reviewer.ado import posting
+from reviewforge.ado import posting
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +176,9 @@ class TestCommandPostFindingsWorkItem:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        from auto_pr_reviewer.ado import legacy as m
+        from reviewforge.ado import cli as m
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(_args(findings_file, out_file))
 
         assert rc == 0
@@ -228,9 +228,9 @@ class TestCommandPostFindingsWorkItem:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        from auto_pr_reviewer.ado import legacy as m
+        from reviewforge.ado import cli as m
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(_args(findings_file, out_file))
 
         assert rc == 0
@@ -263,9 +263,9 @@ class TestCommandPostFindingsWorkItem:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        from auto_pr_reviewer.ado import legacy as m
+        from reviewforge.ado import cli as m
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(_args(findings_file, out_file))
 
         assert rc == 0
@@ -300,9 +300,9 @@ class TestCommandPostFindingsWorkItem:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        from auto_pr_reviewer.ado import legacy as m
+        from reviewforge.ado import cli as m
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(_args(findings_file, out_file))
 
         assert rc == 0
@@ -325,7 +325,7 @@ class TestCommandPostFindingsWorkItem:
         # Pre-compute the dedupe key both forms will share. The posting
         # path strips file/line on the way in, so the canonical key is
         # the one computed against (file=None, line=None).
-        from auto_pr_reviewer.ado.posting import dedupe_key
+        from reviewforge.ado.posting import dedupe_key
 
         canonical = {
             "file": None,
@@ -362,9 +362,9 @@ class TestCommandPostFindingsWorkItem:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        from auto_pr_reviewer.ado import legacy as m
+        from reviewforge.ado import cli as m
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
             rc = m.command_post_findings(_args(findings_file_b, out_file_b))
         assert rc == 0
         client.create_thread.assert_not_called()
@@ -387,7 +387,7 @@ class TestCommandPostFindingsWorkItem:
                 }
             ],
         )
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
             rc = m.command_post_findings(_args(findings_file_a, out_file_a))
         assert rc == 0
         # The guessed-file form also dedupes against the same marker.

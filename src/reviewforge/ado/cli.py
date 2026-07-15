@@ -1,15 +1,7 @@
-"""Legacy ADO review integration helpers (fetch-context / post-findings).
+"""Isolated ADO review helpers (fetch-context / post-findings).
 
-This module owns the two CLI subcommands that the original
-``scripts/ado_review.py`` script used to expose directly. The thin
-script in ``scripts/ado_review.py`` is a compatibility shim that
-delegates to :func:`main` below.
-
-The posting logic is also exposed via the orchestrator as
-``pipeline.stages.post_to_ado.PostToAdoStage``. This module is the
-subprocess-friendly entrypoint used by ``call_helper`` so the
-existing PowerShell wrappers and Docker image keep working without
-spinning up an in-process orchestrator.
+The module is invoked with ``python -m reviewforge.ado.cli`` so ADO
+side effects remain in a subprocess while implementation stays in the package.
 """
 from __future__ import annotations
 
@@ -22,8 +14,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-# Re-exports for compatibility with older test suites and external
-# consumers (the original scripts/ado_review.py exposed these names).
+# Re-exports retained for older test suites and external consumers.
 from .client import (  # noqa: F401  (re-exports)
     AdoClient,
     get_pr,
@@ -72,7 +63,7 @@ VOTE_WAITING: int = -5
 MARKER: str = "prb"
 
 
-# --- Compatibility shims (originally in scripts/ado_review.py) ----------
+# --- Compatibility helpers retained for external consumers ----------
 
 
 def enc(value: str) -> str:
@@ -82,8 +73,8 @@ def enc(value: str) -> str:
 
 
 # Aliases for env-driven config (see config.Config for the canonical source).
-# These exist so scripts/ado_review.py callers that imported ``token`` /
-# ``org`` / ``project`` / ``repo`` from the legacy module keep working.
+# These aliases preserve callers that import ``token`` /
+# ``org`` / ``project`` / ``repo`` from this module.
 # Order matches ``config._ENV_ALIASES["ado_token"]``: Azure Pipelines
 # provides ``SYSTEM_ACCESSTOKEN`` first, so that wins when present.
 _TOKEN_ENV_KEYS = (
@@ -97,7 +88,7 @@ _TOKEN_ENV_KEYS = (
 def token() -> str:
     """Return the ADO bearer token from env, or :func:`fail` with a clear error.
 
-    Compatibility shim for the original ``scripts/ado_review.py`` API.
+    Compatibility helper retained for external consumers.
     """
     value = ""
     for key in _TOKEN_ENV_KEYS:
@@ -353,7 +344,7 @@ def should_threshold(findings: list[dict[str, Any]], threshold: str) -> bool:
     return worst_rank(findings) >= SEV_RANK[threshold]
 
 
-# Backward-compat alias: the original scripts/ado_review.py exposed
+# Backward-compatible alias: older consumers exposed
 # ``key_of`` rather than ``dedupe_key``. Keep the alias so existing
 # test imports keep working.
 key_of = dedupe_key
@@ -481,7 +472,7 @@ def command_post_findings(args: argparse.Namespace) -> int:
 
     # Helper: build a minimal file/line thread context when the diff mapper
     # is unavailable (no diff.patch on disk). Matches the original
-    # scripts/ado_review.py behavior so callers that ran the legacy CLI
+    # ADO CLI behavior so callers that ran the legacy CLI
     # outside the full pipeline still get a posted thread.
     def _legacy_file_line_context(finding: dict[str, Any]) -> dict[str, Any] | None:
         if not (finding.get("file") and finding.get("line")):
@@ -550,7 +541,7 @@ def command_post_findings(args: argparse.Namespace) -> int:
             # No diff mapper available (legacy callers that ran this CLI
             # outside the full pipeline). Fall back to posting with a
             # minimal file/line context, matching the original
-            # scripts/ado_review.py behavior.
+            # ADO CLI behavior.
             legacy_ctx = _legacy_file_line_context(f)
             if legacy_ctx is not None:
                 thread_body["threadContext"] = legacy_ctx
@@ -646,7 +637,7 @@ def command_post_findings(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the legacy argparse parser for ``fetch-context`` / ``post-findings``."""
-    parser = argparse.ArgumentParser(description="Azure DevOps PR review helper")
+    parser = argparse.ArgumentParser(description="ReviewForge Azure DevOps helper")
     sub = parser.add_subparsers(dest="command", required=True)
 
     common = argparse.ArgumentParser(add_help=False)
@@ -730,3 +721,5 @@ __all__ = [
     "validate_findings",
     "worst_rank",
 ]
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

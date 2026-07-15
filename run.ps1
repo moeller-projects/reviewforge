@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Run the PR review bot against an Azure DevOps pull request.
+    Run the ReviewForge against an Azure DevOps pull request.
 
 .DESCRIPTION
     Thin Docker orchestrator. All ADO logic, token resolution, branch
     normalization, PR URL parsing, and REST calls live in the Python
-    package ``auto_pr_reviewer`` and are executed inside the container.
+    package ``reviewforge`` and are executed inside the container.
     This script only:
 
       * reads CLI args / env vars via Resolve-ScriptConfig,
@@ -122,7 +122,7 @@ if ($PSBoundParameters.ContainsKey('DryRun') -and $DryRun) {
 $Runtime = Get-ContainerRuntime
 $Image = $cfg['IMAGE_NAME']
 if (-not $Image) { $Image = $cfg['IMAGE'] }
-if (-not $Image) { $Image = 'pr-review-bot:latest' }
+if (-not $Image) { $Image = 'reviewforge:latest' }
 
 # Artifact storage. Local path takes priority (set in .env as
 # ARTIFACT_PATH). Otherwise we use a named volume shared across runs.
@@ -131,7 +131,7 @@ $useNamedVolume = [string]::IsNullOrWhiteSpace($ArtifactPath)
 $ArtifactVolumeName = $null
 if ($useNamedVolume) {
     $ArtifactVolumeName = $cfg['REVIEW_ARTIFACT_VOLUME_NAME']
-    if (-not $ArtifactVolumeName) { $ArtifactVolumeName = 'pr-review-bot-artifacts' }
+    if (-not $ArtifactVolumeName) { $ArtifactVolumeName = 'reviewforge-artifacts' }
     Write-Step "Ensuring artifact volume '$ArtifactVolumeName' exists"
     & $Runtime volume create $ArtifactVolumeName 2>&1 | Out-Null
     Write-Step "Artifact volume '$ArtifactVolumeName' ready"
@@ -166,7 +166,7 @@ if ($envFileInfo.IsTemp) {
 
 $ContainerName = $cfg['CONTAINER_NAME']
 if (-not $ContainerName -and $cfg['PR_ID']) {
-    $ContainerName = "pr-review-bot-pr-$($cfg['PR_ID'])"
+    $ContainerName = "review-pr-$($cfg['PR_ID'])"
 }
 
 $runLabel = if ($cfg['PR_URL']) {

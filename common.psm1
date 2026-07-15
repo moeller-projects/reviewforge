@@ -1,8 +1,8 @@
-# Shared functions for pr-review-bot PowerShell scripts.
+# Shared functions for reviewforge PowerShell scripts.
 #
 # This module is a *thin wrapper utility* only. All ADO logic (REST,
 # pagination, branch resolution, reviewer lookup, etc.) lives in the
-# Python package ``auto_pr_reviewer`` and is executed inside the
+# Python package ``reviewforge`` and is executed inside the
 # container. The PowerShell scripts just orchestrate the Docker /
 # local Python invocation and forward environment variables to the
 # container.
@@ -281,7 +281,7 @@ function Write-EnvFile {
         [Parameter(Mandatory)][hashtable]$Vars
     )
 
-    $envFile = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-bot-{0}.env" -f ([guid]::NewGuid()))
+    $envFile = Join-Path ([System.IO.Path]::GetTempPath()) ("reviewforge-{0}.env" -f ([guid]::NewGuid()))
     $sb = [System.Text.StringBuilder]::new()
     foreach ($key in $Vars.Keys) {
         $value = $Vars[$key]

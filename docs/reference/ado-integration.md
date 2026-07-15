@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Document how `auto_pr_reviewer` talks to Azure DevOps: the REST client, idempotent posting, the diff-line mapper, and the legacy subprocess shim. This is **explanation + reference** for the `auto_pr_reviewer.ado` subpackage.
+Document how `reviewforge` talks to Azure DevOps: the REST client, idempotent posting, the diff-line mapper, and the legacy subprocess shim. This is **explanation + reference** for the `reviewforge.ado` subpackage.
 
 ## Audience
 
@@ -12,15 +12,15 @@ Document how `auto_pr_reviewer` talks to Azure DevOps: the REST client, idempote
 ## Module map
 
 ```text
-auto_pr_reviewer.ado/
+reviewforge.ado/
 ├── client.py     # AdoClient (REST), URL parsing, list_active_pull_requests, call_helper
 ├── posting.py    # dedupe_key, existing_bot_markers, should_post, make_marker
 ├── diff_mapper.py # DiffLineMapper, AdoThreadContext, parse_unified_diff
 ├── models.py     # PrIdentity, JsonObject
-└── legacy.py     # scripts/ado_review.py shim (fetch-context, post-findings)
+└── cli.py     # reviewforge.ado.cli shim (fetch-context, post-findings)
 ```
 
-`client.py` and `posting.py` are independent and pure (no shared state). `diff_mapper.py` is used by `legacy.py` and by `post_to_ado` to anchor inline comments. `legacy.py` is the subprocess-friendly CLI surface preserved for back-compat.
+`client.py` and `posting.py` are independent and pure (no shared state). `diff_mapper.py` is used by `cli.py` and by `post_to_ado` to anchor inline comments. `cli.py` is the subprocess-friendly CLI surface preserved for back-compat.
 
 ## `AdoClient` (the REST wrapper)
 
@@ -122,7 +122,7 @@ A higher-level helper that combines the dedupe check with the file-mapping check
 }
 ```
 
-`auto_pr_reviewer.ado.diff_mapper` builds an in-memory index of the unified diff that maps each changed line in the new file to its hunk's start position.
+`reviewforge.ado.diff_mapper` builds an in-memory index of the unified diff that maps each changed line in the new file to its hunk's start position.
 
 ### `DiffLineMapper`
 
@@ -161,51 +161,23 @@ When git needs credentials, it invokes a small Python helper via `GIT_ASKPASS`. 
 
 The token is read from the **subprocess env** at the moment git calls the helper. Because the orchestrator's `RunSummary` strips the token from the summary, and because the Git subprocess inherits the orchestrator's env (which has the token set), this works transparently.
 
-## Legacy shim (`scripts/ado_review.py` → `auto_pr_reviewer.ado.legacy`)
+## Isolated ADO helper (`reviewforge.ado.cli`)
 
-The Docker image and CI scripts still shell out to `scripts/ado_review.py` for the `fetch-context` and `post-findings` subcommands. The script is a 30-line shim:
+The pipeline invokes `python -m reviewforge.ado.cli` as a subprocess for
+the `fetch-context` and `post-findings` commands. This keeps ADO side effects
+isolated from the in-process orchestrator while keeping all implementation in
+the package.
 
-```python
-# scripts/ado_review.py
-import sys
-from auto_pr_reviewer.ado.legacy import main as legacy_main
-sys.exit(legacy_main(sys.argv[1:]))
-```
-
-The shim adds the `src/` directory to `sys.path` so the package import works on hosts where the package is not installed.
-
-### The `legacy.py` module
-
-All the actual logic lives in `auto_pr_reviewer.ado.legacy`. It exposes two CLI subcommands:
+The module exposes:
 
 | Subcommand | Purpose |
 |---|---|
-| `fetch-context` | Fetch the PR's metadata, work items, and existing threads; write to `<artifact_dir>/{metadata,work-items,threads}.json` and `diff.patch`. |
-| `post-findings` | Validate the input findings JSON, apply the env-driven filters (POST_MIN_SEVERITY, DROP_LOW_CONFIDENCE, REQUIRE_CONTEXT_FOR, MAX_FINDINGS), diff-map each finding's file/line, and post via the `AdoClient` with idempotent marker-based dedup. |
+| `fetch-context` | Fetch PR metadata, work items, existing threads, and the diff into the artifact directory. |
+| `post-findings` | Validate, filter, diff-map, deduplicate, and post findings through `AdoClient`. |
 
-The module also re-exports a few compatibility shims that older test suites and external consumers expect:
-
-- `enc(value)` — URL-encode a value (was a one-liner in the original script).
-- `token()` / `org()` / `project()` / `repo()` — env-var readers that raise `SystemExit` on missing values, matching the original `scripts/ado_review.py` API.
-- `validate_findings(doc)`, `worst_rank(findings)`, `should_threshold(findings, threshold)` — small helpers that the original script had.
-- `dedupe_key` is also re-exported under the alias `key_of`.
-
-### Why is the shim still around?
-
-Two reasons:
-
-1. The Docker image is built around the script. Removing the script would require updating the image's `CMD`/`ENTRYPOINT` and re-validating the CI matrix.
-2. `PostToAdoStage` uses `call_helper` to invoke the script as a subprocess, which keeps the in-process orchestrator out of the posting code path. This is a deliberate boundary: a malformed finding cannot crash the orchestrator; it crashes the subprocess, which the orchestrator reports as a stage failure.
-
-### When to remove it
-
-When the Docker image is next refactored, the right migration is:
-
-1. Inline the `post-findings` logic into `PostToAdoStage.run` (calling `AdoClient` directly instead of via subprocess).
-2. Inline the `fetch-context` logic into `FetchPrMetadataStage`.
-3. Drop `call_helper`, `scripts/ado_review.py`, and the `auto_pr_reviewer.ado.legacy` module.
-
-For now, the shim is a stable back-compat surface. Tests assert its presence (`tests/test_entry_points.py::test_shim_main_delegates`).
+It also retains the small helper aliases used by older consumers:
+`enc`, `token`, `org`, `project`, `repo`, `validate_findings`, `worst_rank`,
+`should_threshold`, and `key_of`.
 
 ## Posting format (reference)
 
@@ -233,7 +205,7 @@ The marker is always the last line of the comment body, on its own line, so the 
 ## Customizing the comment format
 
 The default layout (the markdown rendered by the original `commentBody()`)
-ships in `auto_pr_reviewer.ado.comment_format.DefaultCommentFormatter` and
+ships in `reviewforge.ado.comment_format.DefaultCommentFormatter` and
 is selected when no override is configured. To use a different layout,
 point `COMMENT_TEMPLATE_PATH` at a Jinja2 template file:
 

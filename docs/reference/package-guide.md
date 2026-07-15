@@ -1,10 +1,10 @@
-# `auto_pr_reviewer` package guide
+# `reviewforge` package guide
 
 ## Purpose
 
-This is the **start-here** index for the `src/auto_pr_reviewer/` Python package — the application that runs inside the Docker container and reviews Azure DevOps pull requests. It orients a new reader in five minutes and points them to the right deep-dive doc for whatever they're trying to do.
+This is the **start-here** index for the `src/reviewforge/` Python package — the application that runs inside the Docker container and reviews Azure DevOps pull requests. It orients a new reader in five minutes and points them to the right deep-dive doc for whatever they're trying to do.
 
-The package is the **single source of truth for application logic**. PowerShell wrappers under `common.psm1`, `run.ps1`, `run-open-prs.ps1`, and the thin `scripts/*.py` shims only orchestrate the Docker invocation and forward env vars; everything else lives here.
+The package is the **single source of truth for application logic**. PowerShell wrappers under `common.psm1`, `run.ps1`, `run-open-prs.ps1`, and the thin `src/reviewforge/*.py` shims only orchestrate the Docker invocation and forward env vars; everything else lives here.
 
 ## Audience
 
@@ -17,14 +17,14 @@ The package is the **single source of truth for application logic**. PowerShell 
 
 ## What the package does, in one paragraph
 
-`auto_pr_reviewer` reviews an Azure DevOps PR by running a configurable **pipeline of stages** (fetch metadata → prepare repo → collect context → review diff in chunks → verify → calibrate severity → post to ADO). It uses the `pi` CLI as a JSON-producing subprocess for the LLM calls, talks to Azure DevOps via a small REST client, and writes a fixed set of JSON / text artifacts to `artifacts/pr-<id>/runs/<run_id>/` for every run. Configuration is loaded from CLI flags → env vars / `.env` → defaults, with an alias map so legacy env var names keep working.
+`reviewforge` reviews an Azure DevOps PR by running a configurable **pipeline of stages** (fetch metadata → prepare repo → collect context → review diff in chunks → verify → calibrate severity → post to ADO). It uses the `pi` CLI as a JSON-producing subprocess for the LLM calls, talks to Azure DevOps via a small REST client, and writes a fixed set of JSON / text artifacts to `artifacts/pr-<id>/runs/<run_id>/` for every run. Configuration is loaded from CLI flags → env vars / `.env` → defaults, with an alias map so legacy env var names keep working.
 
 ## Package layout
 
 ```text
-src/auto_pr_reviewer/
+src/reviewforge/
 ├── __init__.py              # version constant only
-├── __main__.py              # `python -m auto_pr_reviewer` → cli.main()
+├── __main__.py              # `python -m reviewforge` → cli.main()
 ├── cli.py                   # argparse, subcommands, _build_common_parser
 ├── config.py                # Config dataclass, env alias map, parse_dotenv
 │
@@ -33,7 +33,7 @@ src/auto_pr_reviewer/
 │   ├── posting.py           # dedupe_key, existing_bot_markers, should_post
 │   ├── diff_mapper.py       # unified diff → ADO threadContext positions
 │   ├── models.py            # PrIdentity, JsonObject
-│   └── legacy.py            # scripts/ado_review.py shim (fetch-context, post-findings)
+│   └── cli.py            # reviewforge.ado.cli shim (fetch-context, post-findings)
 │
 ├── ai/                      # LLM subprocess wrapper + prompts
 │   ├── runner.py            # PiRunner: pi --session-id, JSON repair
@@ -84,9 +84,9 @@ src/auto_pr_reviewer/
 
 | Caller | Entry | Use case |
 |---|---|---|
-| Operator | `./run.ps1 -PrUrl <url>` | Docker orchestration. Forwards env to a container that runs `python -m auto_pr_reviewer review`. |
-| Operator | `python -m auto_pr_reviewer review` | Direct CLI. The container's actual command. |
-| Programmatic | `from auto_pr_reviewer.pipeline.orchestrator import run_full` | Library use. The orchestrator returns a `RunOutcome` with exit code and stage records. |
+| Operator | `./run.ps1 -PrUrl <url>` | Docker orchestration. Forwards env to a container that runs `python -m reviewforge review`. |
+| Operator | `python -m reviewforge review` | Direct CLI. The container's actual command. |
+| Programmatic | `from reviewforge.pipeline.orchestrator import run_full` | Library use. The orchestrator returns a `RunOutcome` with exit code and stage records. |
 
 ## Key invariants
 

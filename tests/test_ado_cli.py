@@ -1,11 +1,6 @@
-"""pytest suite for the legacy ``ado_review`` CLI.
+"""pytest suite for the isolated ``reviewforge.ado.cli`` CLI.
 
-These tests exercise the same public surface that the original
-``scripts/ado_review.py`` used to expose directly, but they import from
-the canonical package location (``auto_pr_reviewer.ado.legacy``) so the
-test suite is independent of the script's location on disk. The script
-itself is now a thin shim; its delegation is verified by
-``tests/test_entry_points.py``.
+These tests cover the public helper surface retained for external consumers.
 """
 
 from __future__ import annotations
@@ -22,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Import the canonical implementation from the package.
-from auto_pr_reviewer.ado import legacy as m  # noqa: E402  (legacy CLI surface)
+from reviewforge.ado import cli as m  # noqa: E402  (ADO CLI surface)
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +424,7 @@ class TestCommandPostFindings:
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -465,7 +460,7 @@ class TestCommandPostFindings:
         monkeypatch.delenv("FAIL_ON", raising=False)
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -506,7 +501,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -536,7 +531,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("FAIL_ON", "blocker")
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 1
@@ -566,7 +561,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("VOTE_WAITING_ON", "none")
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -599,7 +594,7 @@ class TestCommandPostFindings:
         monkeypatch.setenv("VOTE_WAITING_ON", "major")
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_post_findings(self._args(findings_file, out_file))
 
         assert rc == 0
@@ -642,7 +637,7 @@ class TestCommandFetchContext:
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.command_fetch_context(self._args(tmp_path))
 
         assert rc == 0
@@ -668,7 +663,7 @@ class TestCommandFetchContext:
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             m.command_fetch_context(self._args(tmp_path))
 
         metadata = json.loads((tmp_path / "metadata.json").read_text())
@@ -705,7 +700,7 @@ class TestCli:
         mock_client.get_threads.return_value = []
         mock_client.org_name = "contoso"
 
-        with patch("auto_pr_reviewer.ado.legacy.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
             rc = m.main(
                 [
                     "fetch-context",
@@ -867,14 +862,11 @@ class TestFilterFindings:
 
 
 class TestEnvShims:
-    """Compatibility shims for callers that imported ``token()`` /
-    ``org()`` / ``project()`` / ``repo()`` from the original
-    ``scripts/ado_review.py``."""
+    """Compatibility helpers retained for external consumers."""
+
 
     def test_token_resolves_canonical(self, monkeypatch):
         monkeypatch.setenv("ADO_AUTH_TOKEN", "primary")
-        monkeypatch.setenv("ADO_MCP_AUTH_TOKEN", "mcp")
-        monkeypatch.setenv("ADO_API_KEY", "api")
         monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
         assert m.token() == "primary"
 

@@ -1,5 +1,5 @@
-<!-- target path: pr-review-bot/README.md -->
-# PR review bot (Azure DevOps + Pi)
+<!-- target path: reviewforge/README.md -->
+# ReviewForge (Azure DevOps + Pi)
 
 On PR creation, a container checks out the PR branch, computes the minimal diff
 against the target branch, reviews it against coding standards with the Pi coding
@@ -35,40 +35,31 @@ PowerShell wrappers do not auto-load `.env`. Load it once per session with
 everywhere: **CLI flag > env var > `.env`**.
 
 For the Python CLI inside the container or on a host with the package
-installed, use the same arguments through `python scripts/main.py review ...`
+installed, use the same arguments through `python -m reviewforge review ...`
 — see [Run locally (Windows / PowerShell)](#run-locally-windows--powershell)
 below, and [`docs/reference/cli.md`](docs/reference/cli.md) for the full
 subcommand reference.
 
 ## Design (why it's split in two)
 
-The model does **judgment**; a script does **side effects**.
+The model does **judgment**; the Python package owns **side effects**.
 
-1. `scripts/main.py` is the container entrypoint. It is a thin shim that
-   delegates to the `auto_pr_reviewer` Python package under `src/`. The
-   package owns config loading, the explicit pipeline stages, the
-   idempotent ADO posting module, and the diff line mapper. The
-   `scripts/main.py` shim exists for backward compatibility with the
-   Dockerfile `ENTRYPOINT` and existing PowerShell wrappers.
-2. `scripts/ado_review.py` validates the review JSON, then creates one
-   comment thread per finding via the Azure DevOps REST API. Every comment
-   carries a hidden marker, and existing threads are scanned first, so
-   **re-running the pipeline never double-posts**. The same script is
-   invoked as a subprocess by the in-process pipeline (the
-   `auto_pr_reviewer.ado.client.call_helper` helper) so the posting path
-   stays out of the model call chain.
+1. `python -m reviewforge` is the container entrypoint and owns config loading,
+   pipeline stages, ADO posting, and diff mapping.
+2. `reviewforge.ado.cli` provides the isolated `fetch-context` and
+   `post-findings` subprocess commands. It validates findings and posts
+   idempotently through Azure DevOps.
 
-Pi produces pure findings JSON; a dedicated Python helper owns all Azure DevOps
-interactions. This keeps the model side-effect-free and the posting path fully
-deterministic and idempotent.
+Pi produces pure findings JSON; Python owns all Azure DevOps interactions. This
+keeps the model side-effect-free and the posting path deterministic.
 
 ## Python package layout
 
 ```
 src/
-  auto_pr_reviewer/
+  reviewforge/
     __init__.py
-    __main__.py        # python -m auto_pr_reviewer
+    __main__.py        # python -m reviewforge
     cli.py             # argparse entrypoint: review / post / validate-config (open-prs unsupported)
     config.py          # Config dataclass, env/.env/CLI layering, alias resolution, Pi session controls
     ado/
@@ -104,20 +95,14 @@ src/
       manager.py       # Artifacts, create(), ARTIFACT_NAMES contract
       builder.py       # write_json, read_json, changed_files
       summary.py       # RunSummary, StageRecord, finalize_run_summary
-scripts/
-  main.py              # thin entrypoint (delegates to auto_pr_reviewer.cli)
-  review.py            # compat shim
-  ado_review.py        # thin CLI for fetch-context / post-findings
 tests/                 # pytest suite
 prompts/               # reviewer prompt fragments
 standards/             # review standards
 pyproject.toml         # minimal packaging config
 ```
 
-The Docker image copies both `src/` and `scripts/` and sets
-`PYTHONPATH=/app/src`. The `scripts/main.py` shim works as the container
-`ENTRYPOINT` and matches the previous interface 1:1, so existing
-PowerShell wrappers and the Azure pipeline definition need no changes.
+The Docker image copies `src/`, `prompts/`, and `standards/`, sets
+`PYTHONPATH=/app/src`, and uses `python -m reviewforge` as its entrypoint.
 
 ## Documentation
 
@@ -147,17 +132,17 @@ environment variable > ``.env``**.
 
 ```bash
 # Generate findings and post them (the default combined flow).
-python scripts/main.py review --pr 12345
+python -m reviewforge review --pr 12345
 
 # Generate findings only (no posting). Writes final-findings.json to --output.
-python scripts/main.py review --pr 12345 --no-post --output artifacts/pr-12345/review.json
+python -m reviewforge review --pr 12345 --no-post --output artifacts/pr-12345/review.json
 
 # Post a previously generated review.
-python scripts/main.py post --pr 12345 --input artifacts/pr-12345/review.json
+python -m reviewforge post --pr 12345 --input artifacts/pr-12345/review.json
 
 # Validate the configuration for a given command and exit.
-python scripts/main.py validate-config
-python scripts/main.py validate-config --pr 12345
+python -m reviewforge validate-config
+python -m reviewforge validate-config --pr 12345
 
 # List active PRs awaiting your review. The Python CLI does not support
 # this — the architecture runs one container per pull request. Use the
@@ -167,13 +152,12 @@ python scripts/main.py validate-config --pr 12345
 # the PowerShell script.
 
 # Get help on any subcommand.
-python scripts/main.py review --help
+python -m reviewforge review --help
 ```
 
-The container still works the same way: ``ENTRYPOINT
-["/app/scripts/main.py"]``. Pass the same CLI shape as arguments to
-``run.ps1`` or invoke ``python scripts/main.py review`` from inside
-the container.
+The container uses `ENTRYPOINT ["python3", "-m", "reviewforge"]`. Pass the
+same CLI shape as arguments to `run.ps1`, or invoke `python -m reviewforge`
+from inside the container.
 
 ## Run locally (Windows / PowerShell)
 
@@ -309,7 +293,7 @@ The PowerShell scripts are intentionally minimal. They only:
 
 All Azure DevOps logic — REST calls, PR URL parsing, branch normalization,
 reviewer lookup, branch resolution, JSON validation, severity calibration,
-vote / post — lives in the Python package `auto_pr_reviewer` and runs inside
+vote / post — lives in the Python package `reviewforge` and runs inside
 the container. The local `common.psm1` only contains:
 
 * `Write-Step`, `Fail` (output helpers)
@@ -327,14 +311,14 @@ wrappers with ADO logic.
 ### Run tests
 
 The test suite enforces a 95% minimum coverage threshold on the
-`auto_pr_reviewer` package.
+`reviewforge` package.
 
 ```bash
 # Locally (no coverage gate):
 pytest tests/
 
 # Locally with the coverage gate:
-pytest tests/ --cov=auto_pr_reviewer --cov-fail-under=95
+pytest tests/ --cov=reviewforge --cov-fail-under=95
 
 # In Docker via the PowerShell helper (default gate = 95%):
 ./test.ps1
@@ -394,7 +378,7 @@ installs the Pi CLI via npm globally.
 | `FAIL_ON` | no | `none` | Fail the check at/above `nit\|minor\|major\|blocker` |
 | `VOTE_WAITING_ON` | no | `major` | Vote “waiting for author” at/above `nit\|minor\|major\|blocker`, or `none` |
 
-Artifacts are persisted in the named Docker/Podman volume `pr-review-bot-artifacts` mounted at `/workspace/artifacts`. Each invocation writes to a run-scoped directory: `pr-<id>/runs/<run-id>/`, and `pr-<id>/latest.txt` points to the most recent run.
+Artifacts are persisted in the named Docker/Podman volume `reviewforge-artifacts` mounted at `/workspace/artifacts`. Each invocation writes to a run-scoped directory: `pr-<id>/runs/<run-id>/`, and `pr-<id>/latest.txt` points to the most recent run.
 
 ## Version pinning
 
@@ -418,7 +402,7 @@ keep the JSON output contract intact (see `prompts/review-system.md`).
 
 Every run writes its output to ``artifacts/pr-<PR_ID>/runs/<RUN_ID>/``.
 The set of files is a stable contract; see
-:data:`auto_pr_reviewer.artifacts.ARTIFACT_NAMES`.
+:data:`reviewforge.artifacts.ARTIFACT_NAMES`.
 
 | File                          | Meaning                                                    |
 |-------------------------------|------------------------------------------------------------|
@@ -446,7 +430,7 @@ run for that PR.
 ## Pipeline stages
 
 The pipeline is composed of explicit :class:`Stage` instances in
-:data:`auto_pr_reviewer.pipeline.stages.DEFAULT_PIPELINE`:
+:data:`reviewforge.pipeline.stages.DEFAULT_PIPELINE`:
 
 1. ``FetchPrMetadataStage`` — call the ADO helper to populate
    ``metadata.json``, ``work-items.json``, ``work-item-comments.json``,
@@ -455,7 +439,7 @@ The pipeline is composed of explicit :class:`Stage` instances in
    ``diff.patch``, ``changed-files.json``, ``commits.txt``.
 3. ``BuildArtifactsStage`` — write the combined system prompt.
 4. ``ReconstructIntentStage`` — ask Pi for ``intent.json`` (validated as
-   :class:`auto_pr_reviewer.pipeline.schemas.Intent`).
+   :class:`reviewforge.pipeline.schemas.Intent`).
 5. ``PlanContextStage`` — ask Pi for ``context-plan.json`` (validated as
    :class:`ContextPlan`).
 6. ``CollectContextStage`` — read files / tests / searches from the
@@ -469,7 +453,7 @@ The pipeline is composed of explicit :class:`Stage` instances in
 10. ``CalibrateSeverityStage`` — ask Pi to recalibrate severities;
     emit ``severity-findings.json`` and ``final-findings.json``.
 11. ``PostToAdoStage`` — post the final findings. No-op when
-    ``DRY_RUN=1``; otherwise calls the legacy helper. Writes
+    ``DRY_RUN=1``; otherwise calls the ADO CLI helper. Writes
     ``posted-comments.json``.
 
 The :class:`Stage` interface (``run(ctx) -> StageResult``) makes every
@@ -478,7 +462,7 @@ records timings, status, and high-level counts in ``run-summary.json``.
 
 ## Idempotent posting
 
-Posting decisions live in :mod:`auto_pr_reviewer.ado.posting`:
+Posting decisions live in :mod:`reviewforge.ado.posting`:
 
 * :func:`dedupe_key` returns a stable 12-char hex key for a finding,
   derived from its file, line, severity, title, and message. Confidence
@@ -499,7 +483,7 @@ Posting decisions live in :mod:`auto_pr_reviewer.ado.posting`:
 ## Diff line mapping
 
 Mapping a finding to an inline ADO thread is handled by
-:mod:`auto_pr_reviewer.ado.diff_mapper`. The public entrypoint is
+:mod:`reviewforge.ado.diff_mapper`. The public entrypoint is
 :func:`map_file_line_to_diff_position`:
 
 ```python

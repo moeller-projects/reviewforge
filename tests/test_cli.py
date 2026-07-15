@@ -21,8 +21,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from auto_pr_reviewer import cli  # noqa: E402
-from auto_pr_reviewer.cli import (  # noqa: E402
+from reviewforge import cli  # noqa: E402
+from reviewforge.cli import (  # noqa: E402
     _apply_common,
     _build_config,
     build_parser,
@@ -115,7 +115,7 @@ class TestParserWiring:
 
 class TestApplyCommon:
     def _cfg(self):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         return Config(
             ado_org="o", ado_project="P", ado_repo_id="R", pr_id="1", ado_token="t",
             source_branch="feature", target_branch="main",
@@ -203,7 +203,7 @@ class TestBuildConfig:
         assert cfg.max_diff_bytes == 200000
 
     def test_collect_context_workers_from_env(self, clean_env, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
         monkeypatch.setenv("COLLECT_CONTEXT_WORKERS", "12")
@@ -211,7 +211,7 @@ class TestBuildConfig:
         assert cfg.collect_context_workers == 12
 
     def test_collect_context_workers_from_sources(self, clean_env, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
         cfg = Config.from_sources({"command": "review"}, env={"ADO_AUTH_TOKEN": "t", "COLLECT_CONTEXT_WORKERS": "9"})
@@ -372,7 +372,7 @@ class TestMain:
     def test_no_args_defaults_to_review(self, monkeypatch, tmp_path, capsys):
         # main() with no argv should dispatch to cmd_review, not print
         # help. This matches the Dockerfile ENTRYPOINT invocation and
-        # ``python -m auto_pr_reviewer`` (no subcommand) semantics.
+        # ``python -m reviewforge`` (no subcommand) semantics.
         _set_min_env(monkeypatch, tmp_path)
 
         class FakeOutcome:
@@ -418,7 +418,7 @@ class TestPowerShellForwardingContract:
     """
 
     def test_token_aliases_resolve_to_ado_token(self, clean_env, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         # PowerShell forwards whichever of these is set.
         monkeypatch.delenv("ADO_AUTH_TOKEN", raising=False)
         monkeypatch.setenv("ADO_MCP_AUTH_TOKEN", "mcp-tok")
@@ -430,7 +430,7 @@ class TestPowerShellForwardingContract:
         assert cfg.ado_token == "mcp-tok"
 
     def test_image_alias_resolves_to_image_name(self, clean_env, monkeypatch):
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         # PowerShell sets ``IMAGE_NAME`` (canonical) or accepts ``IMAGE``.
         monkeypatch.setenv("IMAGE", "legacy-image:tag")
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
@@ -445,8 +445,8 @@ class TestPowerShellForwardingContract:
         assert os.getenv("IMAGE") == "legacy-image:tag"
 
     def test_no_token_yields_clear_error(self, clean_env, monkeypatch, capsys):
-        from auto_pr_reviewer.config import Config
-        from auto_pr_reviewer.cli import main
+        from reviewforge.config import Config
+        from reviewforge.cli import main
         # No token at all in env.
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
             monkeypatch.delenv(k, raising=False)
@@ -460,7 +460,7 @@ class TestPowerShellForwardingContract:
 
     def test_pr_url_parsing_unified(self, clean_env, monkeypatch):
         # PowerShell forwards PR_URL verbatim; Python parses it.
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
         # No individual ADO_* keys set.
         monkeypatch.delenv("ADO_ORG", raising=False)
@@ -477,7 +477,7 @@ class TestPowerShellForwardingContract:
     def test_branch_normalization_in_ado_client(self, clean_env):
         # The branch normalization helper that PowerShell used to do
         # locally is now in the Python package.
-        from auto_pr_reviewer.ado.client import normalize_branch_name
+        from reviewforge.ado.client import normalize_branch_name
         assert normalize_branch_name("refs/heads/main") == "main"
         assert normalize_branch_name("main") == "main"
 
@@ -486,7 +486,7 @@ class TestPowerShellForwardingContract:
         # Config.from_env_file. The PowerShell wrappers do NOT do
         # this; they read the live process env and expect the user
         # to have loaded the file themselves.
-        from auto_pr_reviewer.config import Config
+        from reviewforge.config import Config
         p = tmp_path / ".env"
         p.write_text("ADO_AUTH_TOKEN=t\nADO_ORG=o\n", encoding="utf-8")
         cfg = Config.from_env_file(p)
@@ -517,8 +517,8 @@ class TestPowerShellForwardingContract:
         assert called == [("review_only", None)]
 
     def test_emit_config_error_writes_friendly_message(self, capsys):
-        from auto_pr_reviewer.cli import _emit_config_error
-        from auto_pr_reviewer.config import ConfigError
+        from reviewforge.cli import _emit_config_error
+        from reviewforge.config import ConfigError
         _emit_config_error(ConfigError("Missing required config: FOO"), command="review")
         out = capsys.readouterr().err
         assert "Missing required config: FOO" in out
@@ -547,7 +547,7 @@ class TestPowerShellForwardingContract:
 
 class TestCmdDiscover:
     def test_emits_json_listing(self, clean_env, monkeypatch, capsys):
-        from auto_pr_reviewer.cli import cmd_discover
+        from reviewforge.cli import cmd_discover
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
         monkeypatch.setenv("ADO_ORG", "o")
         prs = [
@@ -559,7 +559,7 @@ class TestCmdDiscover:
             }
         ]
         with patch(
-            "auto_pr_reviewer.ado.client.list_active_pull_requests",
+            "reviewforge.ado.client.list_active_pull_requests",
             return_value=prs,
         ):
             ns = build_parser().parse_args(["discover", "--project", "Pay"])
@@ -571,7 +571,7 @@ class TestCmdDiscover:
         assert data[0]["pullRequestId"] == 1
 
     def test_target_branches_passed_through(self, clean_env, monkeypatch, capsys):
-        from auto_pr_reviewer.cli import cmd_discover
+        from reviewforge.cli import cmd_discover
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
         monkeypatch.setenv("ADO_ORG", "o")
         captured = {}
@@ -583,7 +583,7 @@ class TestCmdDiscover:
             return []
 
         with patch(
-            "auto_pr_reviewer.ado.client.list_active_pull_requests",
+            "reviewforge.ado.client.list_active_pull_requests",
             side_effect=fake_list,
         ):
             ns = build_parser().parse_args(
@@ -598,7 +598,7 @@ class TestCmdDiscover:
         assert captured["max_results"] == 5
 
     def test_missing_token_returns_2(self, clean_env, monkeypatch, capsys):
-        from auto_pr_reviewer.cli import cmd_discover
+        from reviewforge.cli import cmd_discover
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
             monkeypatch.delenv(k, raising=False)
         ns = build_parser().parse_args(["discover", "--project", "Pay"])
@@ -607,11 +607,11 @@ class TestCmdDiscover:
         assert "ADO_AUTH_TOKEN" in capsys.readouterr().err
 
     def test_cli_token_override(self, clean_env, monkeypatch, capsys):
-        from auto_pr_reviewer.cli import cmd_discover
+        from reviewforge.cli import cmd_discover
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
             monkeypatch.delenv(k, raising=False)
         with patch(
-            "auto_pr_reviewer.ado.client.list_active_pull_requests",
+            "reviewforge.ado.client.list_active_pull_requests",
             return_value=[],
         ):
             ns = build_parser().parse_args(

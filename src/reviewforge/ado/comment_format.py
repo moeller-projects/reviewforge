@@ -1,6 +1,6 @@
 """Pluggable PR-comment formatter.
 
-The original ``comment_body()`` in :mod:`auto_pr_reviewer.ado.legacy`
+The original ``comment_body()`` in :mod:`reviewforge.ado.cli`
 hardcoded the Markdown layout of every posted finding. This module
 extracts that layout into a small abstraction so users can override it
 with a custom Jinja2 template without touching code.
@@ -16,7 +16,7 @@ Two formatters ship out of the box:
 
 The dedupe marker (``<!-- prb:<key> -->``) is always the last line of
 the rendered body, on its own line, regardless of template content.
-This is what :func:`auto_pr_reviewer.ado.posting.existing_bot_markers`
+This is what :func:`reviewforge.ado.posting.existing_bot_markers`
 scans for — see ``_MARKER_RE`` in that module. Templates that inline
 ``{{ marker }}`` for display are fine; the canonical dedupe line is
 appended automatically so the regex keeps finding it.
@@ -50,7 +50,7 @@ SEVERITY_LABEL: dict[str, str] = {
 }
 
 #: The dedupe-marker prefix. Kept in sync with
-#: :data:`auto_pr_reviewer.ado.posting.MARKER_PREFIX`.
+#: :data:`reviewforge.ado.posting.MARKER_PREFIX`.
 _MARKER_PREFIX = "prb"
 
 #: Regex matching a marker line on its own. Used to strip any

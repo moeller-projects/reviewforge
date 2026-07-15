@@ -317,15 +317,15 @@ def call_helper(
     *,
     findings: Path | None = None,
 ) -> None:
-    """Invoke the legacy ``scripts/ado_review.py`` helper as a subprocess.
+    """Invoke the package's isolated ADO CLI as a subprocess.
 
-    Used to post findings to ADO without sharing the in-process state. The
-    helper script is a thin wrapper that re-exports the new package's CLI.
+    The subprocess keeps ADO side effects isolated while avoiding a
+    repository-relative helper script.
     """
-    helper = _find_helper_script()
     args = [
         sys.executable,
-        str(helper),
+        "-m",
+        "reviewforge.ado.cli",
         command,
         "--org",
         cfg.ado_org,
@@ -347,27 +347,8 @@ def call_helper(
             print(f"[review][ado {command}] {line}", file=sys.stderr)
     if cp.returncode:
         raise SystemExit(
-            f"[review][ERROR] ado_review {command} failed: {cp.stderr.decode(errors='replace')}"
+            f"[review][ERROR] ADO CLI {command} failed: {cp.stderr.decode(errors='replace')}"
         )
-
-
-def _find_helper_script() -> Path:
-    """Locate the legacy ``ado_review.py`` script relative to this package.
-
-    Looks first for a ``scripts/ado_review.py`` next to ``src/``, then falls
-    back to the package's own CLI module.
-    """
-    # In source tree: src/auto_pr_reviewer/ado/client.py → ../../scripts/ado_review.py
-    here = Path(__file__).resolve()
-    candidates = [
-        here.parents[3] / "scripts" / "ado_review.py",
-        here.parents[2] / "scripts" / "ado_review.py",
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    # Fallback: run the module's CLI directly via -m.
-    return Path(sys.executable)  # placeholder; the subprocess will still need a script
 
 
 __all__ = [

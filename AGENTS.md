@@ -8,8 +8,8 @@ audience: AI coding agents (Pi, Claude Code, etc.) and human contributors
 
 # AGENTS.md
 
-> **Scope.** PR review bot for Azure DevOps. Model produces findings; Python owns
-> all ADO side effects. Pi is invoked read-only; the `auto_pr_reviewer` package
+> **Scope.** ReviewForge for Azure DevOps. Model produces findings; Python owns
+> all ADO side effects. Pi is invoked read-only; the `reviewforge` package
 > is the source of truth for behavior.
 
 ---
@@ -22,8 +22,8 @@ audience: AI coding agents (Pi, Claude Code, etc.) and human contributors
 | Build target | OCI container (`Dockerfile`) — Docker **or** Podman (auto-detected) |
 | External CLI | Pi coding agent, pinned version `0.79.1` (override via `./build.ps1 -PiVersion`) |
 | LLM model pattern | e.g. `openai/gpt-5.4-mini` (set `PI_MODEL`) |
-| Default test gate | `pytest --cov=auto_pr_reviewer --cov-fail-under=95` |
-| LLM side effects | **None.** All Azure DevOps calls are in `auto_pr_reviewer.ado.*` |
+| Default test gate | `pytest --cov=reviewforge --cov-fail-under=95` |
+| LLM side effects | **None.** All Azure DevOps calls are in `reviewforge.ado.*` |
 | Idempotency contract | Every posted comment carries `prb:<key>` marker (see §6) |
 
 ---
@@ -35,10 +35,10 @@ audience: AI coding agents (Pi, Claude Code, etc.) and human contributors
 pip install -e ".[dev]"
 
 # 2. Run the test suite locally
-pytest tests/ --cov=auto_pr_reviewer --cov-fail-under=95
+pytest tests/ --cov=reviewforge --cov-fail-under=95
 
 # 3. Validate a configuration without invoking Pi
-python scripts/main.py validate-config --pr 12345
+python -m reviewforge validate-config --pr 12345
 ```
 
 ```powershell
@@ -68,7 +68,7 @@ Precedence everywhere: **CLI flag > env var > `.env`**.
 ## 3. Repository layout [reference]
 
 ```
-src/auto_pr_reviewer/        # all real logic lives here
+src/reviewforge/        # all real logic lives here
   cli.py                     # argparse entry: review / post / validate-config / discover
   config.py                  # Config dataclass, env/.env/CLI layering, alias resolution
   ado/                       # AdoClient, posting (idempotency), diff_mapper, models
@@ -77,14 +77,10 @@ src/auto_pr_reviewer/        # all real logic lives here
   pipeline/                  # Stage interface + orchestrator + 11 default stages
     stages/                  # fetch_pr_metadata … post_to_ado
   artifacts/                 # ARTIFACT_NAMES contract, RunSummary, file writers
-scripts/                     # THIN shims — see §4
-  main.py                    # ENTRYPOINT shim → auto_pr_reviewer.cli
-  ado_review.py              # compat shim → auto_pr_reviewer.ado.legacy
-  review.py                  # compat shim
-prompts/                     # reviewer prompt fragments (markdown)
-standards/clean-code.md      # default review standard
-docs/                        # per-module deep dives — start with package-guide.md
-tests/                       # pytest suite (gate 95%)
+  prompts/                   # reviewer prompt fragments (markdown)
+  standards/clean-code.md    # default review standard
+  docs/                       # per-module deep dives — start with package-guide.md
+  tests/                      # pytest suite (gate 95%)
 azure-pipelines-pr-review.yml
 build.ps1 / run.ps1 / run-open-prs.ps1 / test.ps1
 Dockerfile / Dockerfile.tests
@@ -96,14 +92,12 @@ Dockerfile / Dockerfile.tests
 
 These exist for real reasons. Treat as **acceptance gates**, not style suggestions.
 
-1. **`scripts/*.py` must remain thin shims.** No business logic in
-   `scripts/main.py` or `scripts/ado_review.py`. New behavior goes in
-   `src/auto_pr_reviewer/`. The shims exist only to preserve the
-   `ENTRYPOINT` contract and the `ado_review` module name for legacy
-   PowerShell wrappers and `tests/test_ado_review.py`.
-
+1. **The package owns all runtime behavior.** The container entrypoint is
+   `python -m reviewforge`; the legacy ADO subprocess is
+   `python -m reviewforge.ado.cli`. New behavior goes in
+   `src/reviewforge/`.
 2. **The LLM must not call Azure DevOps directly.** Pi runs read-only. All
-   `requests`/`httpx`/subprocess calls to ADO live in `auto_pr_reviewer.ado.*`
+   `requests`/`httpx`/subprocess calls to ADO live in `reviewforge.ado.*`
    and are reachable only from the `PostToAdoStage` (or its helper subprocess).
 
 3. **Posting is idempotent.** Every comment gets a `prb:<key>` marker
@@ -115,11 +109,11 @@ These exist for real reasons. Treat as **acceptance gates**, not style suggestio
    never rename or remove an entry.
 
 5. **Marker regex is anchored to a whole line.** `^prb:([a-zA-Z0-9]{6,32})$`
-   in `src/auto_pr_reviewer/ado/posting.py`. The marker must be the **last
+   in `src/reviewforge/ado/posting.py`. The marker must be the **last
    line** of the comment body, on its own. Other reviewers do not have a
    `prb:` line — that's how we filter them out.
 
-6. **Coverage gate is 95%.** New code in `src/auto_pr_reviewer/` must come
+6. **Coverage gate is 95%.** New code in `src/reviewforge/` must come
    with tests. PRs that drop below the gate fail the test stage. Override
    only with `./test.ps1 -CoverageMin 0` for throwaway experiments.
 
@@ -135,7 +129,7 @@ These exist for real reasons. Treat as **acceptance gates**, not style suggestio
 
 ## 5. The 12-stage pipeline [explanation]
 
-`auto_pr_reviewer.pipeline.stages.DEFAULT_PIPELINE` runs in this order. Each
+`reviewforge.pipeline.stages.DEFAULT_PIPELINE` runs in this order. Each
 stage receives a mutable `StageContext`; stages may read prior outputs and
 **must** write their declared artifact(s).
 
@@ -166,7 +160,7 @@ diff get a `"🤖 stale — ..."` follow-up comment. Disabled via `ANNOTATE_STAL
 
 ## 6. Idempotent posting contract [reference]
 
-Source of truth: `src/auto_pr_reviewer/ado/posting.py` and
+Source of truth: `src/reviewforge/ado/posting.py` and
 [`docs/reference/ado-integration.md`](docs/reference/ado-integration.md).
 
 **Dedupe key (`dedupe_key`) is `sha1(file|line|severity|title|message)[:12]`.**
@@ -193,7 +187,7 @@ change in `CHANGELOG.md` and call it out in the PR description.
 ## 7. Adding a pipeline stage [how-to]
 
 ```python
-# src/auto_pr_reviewer/pipeline/stages/my_stage.py
+# src/reviewforge/pipeline/stages/my_stage.py
 from ..stage import Stage, StageContext, StageResult
 
 class MyStage(Stage):
@@ -211,7 +205,7 @@ class MyStage(Stage):
 ```
 
 ```python
-# src/auto_pr_reviewer/pipeline/stages/__init__.py
+# src/reviewforge/pipeline/stages/__init__.py
 DEFAULT_PIPELINE: list[Stage] = [
     ...,
     MyStage(),     # append; do not reorder existing entries
@@ -219,7 +213,7 @@ DEFAULT_PIPELINE: list[Stage] = [
 ```
 
 ```python
-# src/auto_pr_reviewer/artifacts/manager.py  — add to ARTIFACT_NAMES (end of tuple)
+# src/reviewforge/artifacts/manager.py  — add to ARTIFACT_NAMES (end of tuple)
 ARTIFACT_NAMES: tuple[str, ...] = (
     ...,
     "my-artifact.json",
@@ -227,7 +221,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
 ```
 
 ```python
-# src/auto_pr_reviewer/artifacts/manager.py  — add the slot to @dataclass Artifacts
+# src/reviewforge/artifacts/manager.py  — add the slot to @dataclass Artifacts
 @dataclass(frozen=True)
 class Artifacts:
     ...
@@ -244,7 +238,7 @@ and asserts the artifact exists. Run `./test.ps1` to verify the coverage gate.
 
 ## 8. Configuration [reference]
 
-Loaded by `Config` in `src/auto_pr_reviewer/config.py`. Precedence:
+Loaded by `Config` in `src/reviewforge/config.py`. Precedence:
 **CLI flag > env var > `.env` > hard-coded default**. Common knobs:
 
 | Env var | Default | Effect |
@@ -284,7 +278,7 @@ JSON output contract — see `prompts/review-system.md`.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Comments duplicate on every rerun | Marker regex broken or marker not on its own line | Confirm last line of comment is `prb:xxxxxxxxxxxx`; verify `^prb:([a-zA-Z0-9]{6,32})$` matches |
-| `ModuleNotFoundError: auto_pr_reviewer` | `src/` not on `sys.path` | `pip install -e .` or use `scripts/main.py` (it adds `src/` automatically) |
+| `ModuleNotFoundError: reviewforge` | `src/` not on `sys.path` | `pip install -e .` or use `python -m reviewforge` (it adds `src/` automatically) |
 | Build succeeds but container can't post | Build identity lacks "Contribute to pull requests" | Project Settings → Repos → Security → `<Project> Build Service` → grant Allow |
 | `open-prs` errors from Python CLI | Unsupported by design | Use `./run-open-prs.ps1` |
 | `FAIL_ON`/`VOTE_WAITING_ON` ignored | Wrong value | Allowed: `none`, `nit`, `minor`, `major`, `blocker` |
@@ -311,13 +305,13 @@ JSON output contract — see `prompts/review-system.md`.
 
 - New to the codebase → [`docs/reference/package-guide.md`](docs/reference/package-guide.md), then [`docs/design/architecture.md`](docs/design/architecture.md).
 - Touching ADO code → [`docs/reference/ado-integration.md`](docs/reference/ado-integration.md), then
-  `src/auto_pr_reviewer/ado/posting.py`.
+  `src/reviewforge/ado/posting.py`.
 - Touching the pipeline → [`docs/reference/pipeline.md`](docs/reference/pipeline.md), then
-  `src/auto_pr_reviewer/pipeline/stage.py`.
+  `src/reviewforge/pipeline/stage.py`.
 - Touching Pi invocation → [`docs/reference/ai-runner.md`](docs/reference/ai-runner.md), then
-  `src/auto_pr_reviewer/ai/runner.py`.
+  `src/reviewforge/ai/runner.py`.
 - Touching config / env vars → [`docs/reference/configuration.md`](docs/reference/configuration.md), then
-  `src/auto_pr_reviewer/config.py`.
+  `src/reviewforge/config.py`.
 - Touching the prompt → [`docs/archive/ado-integration-triage.md`](docs/archive/ado-integration-triage.md) (historical), then
   `prompts/review-system.md`.
 
@@ -327,5 +321,4 @@ JSON output contract — see `prompts/review-system.md`.
 
 - Inline diagram of the stage data flow (currently only in [`docs/design/architecture.md`](docs/design/architecture.md)).
 - CHANGELOG entry to require when changing `ARTIFACT_NAMES` or `dedupe_key`.
-- `pre-commit` config: enforce `scripts/*.py` stays a shim (forbid new
-  top-level `def`s in `scripts/main.py` and `scripts/ado_review.py`).
+- No Python compatibility shims remain under a top-level `scripts/` directory.
