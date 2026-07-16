@@ -71,7 +71,11 @@ class VerifyFindingsStage(Stage):
             ctx.pi.run_json(cfg.verify_prompt_path, text, ctx.artifacts.verified, "finding verification")
             ctx.last_token_usage = ctx.pi.last_tokens
             doc = read_json(ctx.artifacts.verified) or {"summary": "", "findings": []}
-            validate_stage(doc, StageLabel.FINDING_VERIFICATION)
+            try:
+                validate_stage(doc, StageLabel.FINDING_VERIFICATION)
+            except BaseException:
+                _log(f"verification output failed validation: {json.dumps(doc, ensure_ascii=False, sort_keys=True)}")
+                raise
             ctx.verified = doc
             store_cached_json(cfg, "verify_findings", cache, doc)
             return {"findings": len(doc.get("findings", []))}

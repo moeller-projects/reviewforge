@@ -781,6 +781,23 @@ class TestVerifyFindingsStage:
         assert ctx.verified == self.DOC
         assert builder.read_json(artifacts.verified) == self.DOC
 
+    def test_single_validation_logs_invalid_finding(self, cfg, artifacts, capsys):
+        cfg = replace(cfg, verify_findings=True)
+        bad = {"summary": "x", "findings": [{"severity": "major", "title": "T", "message": ""}]}
+        pi = _make_pi({"verified": artifacts.verified}, bad)
+        builder.write_json(artifacts.candidate, {
+            "summary": "candidates",
+            "findings": [{"severity": "major", "title": "T", "message": "M"}],
+        })
+        state = SimpleNamespace(diff_text="d", target_branch="m", source_branch="f",
+                                target_commit="t", source_commit="s", base_commit="b")
+        ctx = _stage_context(cfg, artifacts, pi, state=state)
+        result = VerifyFindingsStage()(ctx)
+        assert result.status == StageStatus.FAILED
+        stderr = capsys.readouterr().err
+        assert "verification output failed validation" in stderr
+        assert '"message": ""' in stderr
+
     def test_fails_on_invalid_verified_doc(self, cfg, artifacts):
         cfg = replace(cfg, verify_findings=True)
         bad = {"summary": "x", "findings": [{"severity": "critical", "title": "T", "message": "M"}]}

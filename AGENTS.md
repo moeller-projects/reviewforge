@@ -20,6 +20,7 @@ audience: AI coding agents (Pi, Claude Code, etc.) and human contributors
 | --- | --- |
 | Language | Python ≥ 3.11 |
 | Build target | OCI container (`Dockerfile`) — Docker **or** Podman (auto-detected) |
+| Package manager | `uv` (lockfile: `uv.lock`) |
 | External CLI | Pi coding agent, pinned version `0.79.1` (override via `./build.ps1 -PiVersion`) |
 | LLM model pattern | e.g. `openai/gpt-5.4-mini` (set `PI_MODEL`) |
 | Default test gate | `pytest --cov=reviewforge --cov-fail-under=95` |
@@ -31,14 +32,16 @@ audience: AI coding agents (Pi, Claude Code, etc.) and human contributors
 ## 2. Quickstart (host machine) [how-to]
 
 ```bash
-# 1. Install dev deps
-pip install -e ".[dev]"
+# 1. Install dev deps (uses uv; lockfile: uv.lock)
+uv sync --extra dev
+# Fallback if uv is not available:
+# pip install -e ".[dev]"
 
 # 2. Run the test suite locally
-pytest tests/ --cov=reviewforge --cov-fail-under=95
+uv run pytest tests/ --cov=reviewforge --cov-fail-under=95
 
 # 3. Validate a configuration without invoking Pi
-python -m reviewforge validate-config --pr 12345
+uv run python -m reviewforge validate-config --pr 12345
 ```
 
 ```powershell

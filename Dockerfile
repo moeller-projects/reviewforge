@@ -4,23 +4,28 @@
 FROM node:24-bookworm-slim
 
 # Pin tool versions for reproducible reviews. Bump deliberately.
-ARG PI_VERSION=0.79.1
+ARG PI_VERSION=0.80.7
 
+# The installer requires curl (and certificates) to download the release archive.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git python3 python3-pip ripgrep \
+ && apt-get install -y --no-install-recommends curl ca-certificates git python3 ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
-# Pin the third-party Python runtime deps. Keep this list small — most
-# logic uses the standard library. ``jinja2`` powers the optional
-# custom PR-comment template (see
-# ``reviewforge.ado.comment_format.TemplateCommentFormatter``).
-RUN pip install --no-cache-dir --break-system-packages "jinja2>=3.1"
+# Download the latest installer
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+
+# Run the installer then remove it
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+
+# Ensure the installed binary is on the `PATH`
+ENV PATH="/root/.local/bin/:$PATH"
 
 # Global CLI: the Pi coding agent. Azure DevOps integration uses direct REST via Python.
 RUN npm install -g --ignore-scripts \
       "@earendil-works/pi-coding-agent@${PI_VERSION}"
 
 WORKDIR /app
+COPY pyproject.toml ./
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 COPY standards/ ./standards/
@@ -28,13 +33,18 @@ COPY standards/ ./standards/
 # Strip Windows CRLF line endings from Python files.
 RUN find ./src -type f -name '*.py' -exec sed -i 's/\r$//' {} +
 
+# Install the package's Python dependencies from the source of truth. Using uv
+# instead of pip prevents the ``pydantic``/``jinja2`` drift that caused the old
+# hand-maintained install line to miss dependencies declared in pyproject.toml.
+RUN uv pip install --system --no-cache --break-system-packages -r pyproject.toml
+
 # The repo is cloned here by the Python runner; the package CLI orchestrates review.
 ENV PYTHONPATH=/app/src
 ENV WORKSPACE=/workspace
 ENV PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 WORKDIR /workspace
 
-ENTRYPOINT ["python3", "-m", "reviewforge"]
+ENTRYPOINT ["uv", "run", "--no-project", "python3", "-m", "reviewforge"]
 # Default subcommand when the image is run with no extra args. Overridden
 # by ``podman run image <subcommand> ...`` to dispatch to other commands
 # like ``post`` or ``discover``. Mirrors the no-argv default in
