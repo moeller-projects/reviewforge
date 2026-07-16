@@ -19,3 +19,26 @@ Dockerfile
 
 # Local run wrapper
 run-local.ps1
+
+# Python / uv runtime artifacts
+.env
+.env.*
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+
+# Test / coverage / build artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+
+# Local workspace / tooling caches
+.codegraph/
+.omp/
+logs/
+tests/
+docs/
+
+# Git attributes (host-only, not used at runtime)
+.gitattributes

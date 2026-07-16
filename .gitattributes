@@ -1,3 +1,15 @@
-*.sh text eol=lf
+# Force Unix line endings on files that are copied into the container so the
+# Docker image does not need a CRLF-stripping step.
 *.py text eol=lf
 *.md text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+
+# Windows PowerShell scripts may keep CRLF on the host, but they are not copied
+# into the image anyway.
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
