@@ -652,6 +652,41 @@ class TestCalibrateSeverityStage:
             "pr-42-review-run-1-severity-2",
         }
 
+    def test_preserves_verified_finding_when_worker_output_is_malformed(self, cfg, artifacts):
+        verified = {
+            "summary": "verified",
+            "findings": [
+                {"severity": "major", "title": "Original 1", "message": "M1"},
+                {"severity": "minor", "title": "Original 2", "message": "M2"},
+            ],
+        }
+        builder.write_json(artifacts.verified, verified)
+
+        class Pi:
+            def run_json(self, prompt, stdin, out, stage):
+                builder.write_json(
+                    out,
+                    {
+                        "summary": "calibrated",
+                        "findings": [
+                            {"severity": "major", "message": "M1"}
+                            if out.name == "severity-1.json"
+                            else {"severity": "blocker", "title": "Calibrated 2", "message": "M2"}
+                        ],
+                    },
+                )
+
+        state = SimpleNamespace(diff_text="d", target_branch="m", source_branch="f",
+                                target_commit="t", source_commit="s", base_commit="b")
+        ctx = _stage_context(cfg, artifacts, Pi(), state=state)
+        result = CalibrateSeverityStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert {f["title"]: f["severity"] for f in ctx.severity["findings"]} == {
+            "Original 1": "major",
+            "Calibrated 2": "blocker",
+        }
+
     def test_fails_on_invalid_severity_doc(self, cfg, artifacts):
         bad = {"summary": "x", "findings": [{"severity": "critical", "title": "T", "message": "M"}]}
         pi = _make_pi({"severity": artifacts.severity}, bad)

@@ -16,6 +16,23 @@ def _log(message: str) -> None:
     print(f"[review] {message}", file=__import__("sys").stderr)
 
 
+def _validated_calibration(doc: Any, original: dict[str, Any]) -> dict[str, Any]:
+    """Keep the verified finding when Pi returns malformed calibration JSON."""
+    findings = doc.get("findings") if isinstance(doc, dict) else None
+    if not isinstance(findings, list) or len(findings) != 1:
+        _log("malformed calibration output; preserving verified finding")
+        return original
+    try:
+        validate_stage(
+            {"summary": doc.get("summary", ""), "findings": findings},
+            StageLabel.SEVERITY_CALIBRATION,
+        )
+    except SystemExit:
+        _log("malformed calibration finding; preserving verified finding")
+        return original
+    return findings[0]
+
+
 class CalibrateSeverityStage(Stage):
     name = "calibrate_severity"
 
@@ -58,8 +75,18 @@ class CalibrateSeverityStage(Stage):
         if len(verified_findings) <= 1:
             ctx.pi.run_json(cfg.severity_prompt_path, text, ctx.artifacts.severity, "severity calibration")
             ctx.last_token_usage = ctx.pi.last_tokens
-            doc = read_json(ctx.artifacts.severity) or {"summary": "", "findings": []}
+            raw_doc = read_json(ctx.artifacts.severity) or {"summary": "", "findings": []}
+            if len(verified_findings) == 1:
+                doc = {
+                    "summary": raw_doc.get("summary", "") if isinstance(raw_doc, dict) else "",
+                    "findings": [
+                        _validated_calibration(raw_doc, verified_findings[0])
+                    ],
+                }
+            else:
+                doc = raw_doc
             validate_stage(doc, StageLabel.SEVERITY_CALIBRATION)
+            write_json(ctx.artifacts.severity, doc)
             ctx.severity = doc
             store_cached_json(cfg, "severity_calibration", cache, doc)
             return {"findings": len(doc.get("findings", []))}
@@ -87,10 +114,12 @@ class CalibrateSeverityStage(Stage):
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(run_one, i, f): i for i, f in enumerate(verified_findings, 1)}
             for fut in as_completed(futures):
-                doc = fut.result()
+                idx = futures[fut]
+                raw_doc = fut.result()
+                doc = raw_doc if isinstance(raw_doc, dict) else {}
                 if doc.get("summary"):
-                    summary_parts.append(doc.get("summary", ""))
-                merged.extend(doc.get("findings", []))
+                    summary_parts.append(doc["summary"])
+                merged.append(_validated_calibration(doc, verified_findings[idx - 1]))
         doc = {"summary": " ".join(summary_parts).strip(), "findings": merged}
         validate_stage(doc, StageLabel.SEVERITY_CALIBRATION)
         write_json(ctx.artifacts.severity, doc)
