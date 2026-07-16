@@ -60,12 +60,12 @@ Convention:
 - `extras` is for stage-specific scratch that does not fit the canonical fields.
 - `last_token_usage` is updated by stages that call `PiRunner.run_json` and aggregated into the run summary.
 
-## The 11 default stages (in order)
+## The 12 default stages (in order)
 
 `reviewforge.pipeline.stages.DEFAULT_PIPELINE` is the canonical review pipeline. From `stages/__init__.py`:
 
 | # | Stage | Reads from ctx | Writes to ctx | Artifacts written |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | 1 | `FetchPrMetadataStage` | — | `metadata` | `metadata.json` |
 | 2 | `PrepareRepositoryStage` | `metadata` | `state` | `commits.txt`, `raw/` |
 | 3 | `BuildArtifactsStage` | `state`, `metadata` | — | `diff.patch`, `changed-files.json` |
@@ -76,7 +76,8 @@ Convention:
 | 8 | `ReviewDiffStage` | `digest`, `state` | `candidate` | `candidate-findings.json` |
 | 9 | `VerifyFindingsStage` | `candidate`, `state` | `verified` | `verified-findings.json` |
 | 10 | `CalibrateSeverityStage` | `verified` | `severity` | `severity-findings.json` |
-| 11 | `PostToAdoStage` | `severity` | `posted` | `final-findings.json`, `posted-comments.json` |
+| 11 | `AcceptanceCriteriaCoverageStage` | `severity` | `final` | appends to `final-findings.json` |
+| 12 | `PostToAdoStage` | `severity` | `posted` | `final-findings.json`, `posted-comments.json` |
 
 The orchestrator also calls `finalize_run_summary(...)` after the last stage, which writes `run-summary.json`.
 
@@ -126,7 +127,11 @@ For each candidate finding, asks `pi` to re-evaluate against the digest + the ch
 
 For each verified finding, asks `pi` to recalibrate the severity (`nit` / `minor` / `major` / `blocker`) given the PR's intent and the digest. Findings with mismatched severity are updated, not dropped. Output: `ctx.severity` and `severity-findings.json`.
 
-#### 11. `PostToAdoStage`
+#### 11. `AcceptanceCriteriaCoverageStage`
+
+Checks whether the PR diff covers the acceptance criteria of linked work items. The first pass extracts identifiers from each AC and looks for them in the changed files or diff. When `AC_COVERAGE_LLM=1` is set, an optional LLM second-pass re-checks uncovered ACs to suppress false positives. Uncovered ACs are appended to `final-findings.json` as general-thread findings.
+
+#### 12. `PostToAdoStage`
 
 Copies `severity-findings.json` to `final-findings.json`. In dry-run mode, prints the final doc to stdout and records `ctx.posted = {"created": 0, "skipped": 0, "dry_run": 1}`. Otherwise calls `call_helper(cfg, "post-findings", artifacts.dir, findings=artifacts.final)` to invoke the legacy subprocess, which handles dedup, file/line mapping, and posting.
 

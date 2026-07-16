@@ -251,6 +251,21 @@ class TestUncoveredFindings:
         assert "Update charge flow with new validation" in out[0]["message"]
         assert "Identifiers extracted" in out[0]["message"]
 
+    def test_message_includes_llm_reason_when_reassessed(self):
+        results = [
+            AcCoverageResult(
+                work_item_id=1,
+                ac_text="Update charge flow with new validation",
+                identifiers=("charge",),
+                is_covered=False,
+                reason="no_identifier_in_diff",
+                llm_reassessed=True,
+                llm_reason="LLM still did not find evidence",
+            ),
+        ]
+        out = uncovered_findings(results)
+        assert "LLM re-check: LLM still did not find evidence" in out[0]["message"]
+
     def test_message_handles_empty_ac_text(self):
         results = [
             AcCoverageResult(work_item_id=1, ac_text="", is_covered=False, reason="r"),
@@ -260,17 +275,41 @@ class TestUncoveredFindings:
 
 
 # ---------------------------------------------------------------------------
+# AcCoverageLlmResult schema
+# ---------------------------------------------------------------------------
+
+
+class TestAcCoverageLlmResult:
+    def test_accepts_covered_with_reason(self):
+        from reviewforge.pipeline.schemas import AcCoverageLlmResult
+        result = AcCoverageLlmResult.model_validate({"covered": True, "reason": "diff adds charge"})
+        assert result.covered is True
+        assert result.reason == "diff adds charge"
+
+    def test_defaults_reason_to_empty_string(self):
+        from reviewforge.pipeline.schemas import AcCoverageLlmResult
+        result = AcCoverageLlmResult.model_validate({"covered": False})
+        assert result.covered is False
+        assert result.reason == ""
+
+    def test_rejects_missing_covered(self):
+        from reviewforge.pipeline.schemas import AcCoverageLlmResult
+        with pytest.raises(Exception):
+            AcCoverageLlmResult.model_validate({"reason": "missing covered"})
+
+
+# ---------------------------------------------------------------------------
 # AcceptanceCriteriaCoverageStage (end-to-end)
 # ---------------------------------------------------------------------------
 
 
-def _stage_ctx(tmp_path, *, dry_run=False, work_items=None, diff_text=""):
+def _stage_ctx(tmp_path, *, dry_run=False, work_items=None, diff_text="", ac_coverage_llm=False, ac_coverage_llm_max_acs=10):
     """Build a StageContext with a minimal artifact tree."""
     from reviewforge.config import Config
 
     # Minimal prompt files to satisfy validate_files().
     prompt_files = {}
-    for n in ("review", "intent", "plan", "digest", "verify", "severity", "standards"):
+    for n in ("review", "intent", "plan", "digest", "verify", "severity", "standards", "ac_coverage"):
         p = tmp_path / f"{n}.md"
         p.write_text(f"{n}", encoding="utf-8")
         prompt_files[n] = p
@@ -285,6 +324,9 @@ def _stage_ctx(tmp_path, *, dry_run=False, work_items=None, diff_text=""):
         verify_prompt_path=prompt_files["verify"],
         severity_prompt_path=prompt_files["severity"],
         standards_path=prompt_files["standards"],
+        ac_coverage_prompt_path=prompt_files["ac_coverage"],
+        ac_coverage_llm=ac_coverage_llm,
+        ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
         pi_model="m", max_diff_bytes=200000, chunk_trigger_diff_bytes=200000,
         disable_chunk_review=False, pi_timeout_secs=5, dry_run=dry_run,
         include_work_items=True, include_existing_comments=True,
@@ -304,7 +346,24 @@ def _stage_ctx(tmp_path, *, dry_run=False, work_items=None, diff_text=""):
     # Seed final-findings so the stage has something to append to.
     builder.write_json(artifacts.final, {"summary": "ok", "findings": []})
     ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+    ctx.files_text = "src/foo.py\n"
     return ctx
+
+
+def _make_pi_runner(responses: list[dict]) -> MagicMock:
+    """Return a MagicMock that writes the given JSON responses to ``run_json`` out_path."""
+    responses_iter = iter(responses)
+
+    def run_json(prompt_path, text, out_path, label):
+        out_path.write_text(
+            __import__("json").dumps(next(responses_iter)),
+            encoding="utf-8",
+        )
+
+    pi = MagicMock()
+    pi.run_json.side_effect = run_json
+    pi.last_tokens = {"in": 10, "out": 2, "total": 12}
+    return pi
 
 
 class TestAcceptanceCriteriaCoverageStage:
@@ -416,3 +475,149 @@ class TestAcceptanceCriteriaCoverageStage:
         # Original finding preserved + AC coverage finding appended.
         final = builder.read_json(ctx.artifacts.final)
         assert len(final["findings"]) == 2
+
+    def test_llm_second_pass_clears_false_positive(self, tmp_path):
+        wi = {
+            "id": 7,
+            "type": "User Story",
+            "title": "Charge flow",
+            "description": "...",
+            "acceptanceCriteria": "User can click the button to charge a card",
+        }
+        ctx = _stage_ctx(
+            tmp_path,
+            work_items=[wi],
+            diff_text="+ def charge_card():\n+    pass\n",
+            ac_coverage_llm=True,
+        )
+        ctx.pi = _make_pi_runner([{"covered": True, "reason": "diff adds charge_card"}])
+        result = AcceptanceCriteriaCoverageStage()(ctx)
+        assert result.status == "ok"
+        assert result.details["uncovered"] == 0
+        assert result.details["llm_reassessed"] is True
+        assert ctx.pi.run_json.called
+        final = builder.read_json(ctx.artifacts.final)
+        assert final["findings"] == []
+
+    def test_llm_second_pass_keeps_real_gap(self, tmp_path):
+        wi = {
+            "id": 7,
+            "type": "User Story",
+            "title": "Charge flow",
+            "description": "...",
+            "acceptanceCriteria": "Update src/payments/refund.ts to validate input",
+        }
+        ctx = _stage_ctx(
+            tmp_path,
+            work_items=[wi],
+            diff_text="+ x = 1\n",
+            ac_coverage_llm=True,
+        )
+        ctx.pi = _make_pi_runner([{"covered": False, "reason": "refund.ts not touched"}])
+        result = AcceptanceCriteriaCoverageStage()(ctx)
+        assert result.status == "ok"
+        assert result.details["uncovered"] == 1
+        assert result.details["appended"] == 1
+        final = builder.read_json(ctx.artifacts.final)
+        assert len(final["findings"]) == 1
+        assert "LLM re-check: refund.ts not touched" in final["findings"][0]["message"]
+
+    def test_llm_failure_treated_as_uncovered(self, tmp_path):
+        wi = {
+            "id": 7,
+            "type": "User Story",
+            "title": "Charge flow",
+            "description": "...",
+            "acceptanceCriteria": "Update src/payments/refund.ts to validate input",
+        }
+        ctx = _stage_ctx(
+            tmp_path,
+            work_items=[wi],
+            diff_text="+ x = 1\n",
+            ac_coverage_llm=True,
+        )
+        ctx.pi = MagicMock()
+        ctx.pi.run_json.side_effect = RuntimeError("pi crashed")
+        result = AcceptanceCriteriaCoverageStage()(ctx)
+        assert result.status == "ok"
+        assert result.details["uncovered"] == 1
+        final = builder.read_json(ctx.artifacts.final)
+        assert len(final["findings"]) == 1
+
+    def test_llm_max_acs_caps_calls(self, tmp_path):
+        work_items = [
+            {"id": i, "title": f"wi{i}", "acceptanceCriteria": f"AC {i}"}
+            for i in range(5)
+        ]
+        ctx = _stage_ctx(
+            tmp_path,
+            work_items=work_items,
+            diff_text="+ x = 1\n",
+            ac_coverage_llm=True,
+            ac_coverage_llm_max_acs=2,
+        )
+        # First two ACs are cleared; the rest remain uncovered.
+        ctx.pi = _make_pi_runner(
+            [{"covered": True, "reason": "covered"}, {"covered": True, "reason": "covered"}]
+        )
+        result = AcceptanceCriteriaCoverageStage()(ctx)
+        assert result.status == "ok"
+        assert ctx.pi.run_json.call_count == 2
+        assert result.details["uncovered"] == 3
+        final = builder.read_json(ctx.artifacts.final)
+        assert len(final["findings"]) == 3
+
+    def test_llm_disabled_by_default(self, tmp_path):
+        wi = {
+            "id": 7,
+            "type": "User Story",
+            "title": "Charge flow",
+            "description": "...",
+            "acceptanceCriteria": "User can click the button to charge a card",
+        }
+        ctx = _stage_ctx(tmp_path, work_items=[wi], diff_text="+ x = 1\n")
+        result = AcceptanceCriteriaCoverageStage()(ctx)
+        assert result.status == "ok"
+        assert result.details["uncovered"] == 1
+        assert not ctx.pi.run_json.called
+        final = builder.read_json(ctx.artifacts.final)
+        assert len(final["findings"]) == 1
+
+    def test_no_llm_calls_when_all_covered(self, tmp_path):
+        wi = {
+            "id": 7,
+            "type": "User Story",
+            "title": "Charge flow",
+            "description": "...",
+            "acceptanceCriteria": "Update src/foo.py to handle the new field",
+        }
+        ctx = _stage_ctx(
+            tmp_path,
+            work_items=[wi],
+            diff_text="+ x = 1\n",
+            ac_coverage_llm=True,
+        )
+        result = AcceptanceCriteriaCoverageStage()(ctx)
+        assert result.status == "ok"
+        assert result.details["uncovered"] == 0
+        assert not ctx.pi.run_json.called
+
+    def test_llm_reason_included_when_uncovered(self, tmp_path):
+        wi = {
+            "id": 7,
+            "type": "User Story",
+            "title": "Charge flow",
+            "description": "...",
+            "acceptanceCriteria": "Update src/payments/refund.ts to validate input",
+        }
+        ctx = _stage_ctx(
+            tmp_path,
+            work_items=[wi],
+            diff_text="+ x = 1\n",
+            ac_coverage_llm=True,
+        )
+        ctx.pi = _make_pi_runner([{"covered": False, "reason": "missing refund changes"}])
+        result = AcceptanceCriteriaCoverageStage()(ctx)
+        assert result.status == "ok"
+        final = builder.read_json(ctx.artifacts.final)
+        assert "LLM re-check: missing refund changes" in final["findings"][0]["message"]

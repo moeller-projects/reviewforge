@@ -89,6 +89,18 @@ class ContextDigest(_Base):
 
 
 # ---------------------------------------------------------------------------
+# AC coverage LLM re-check
+# ---------------------------------------------------------------------------
+
+
+class AcCoverageLlmResult(_Base):
+    """LLM re-assessment of a single acceptance criterion."""
+
+    covered: bool
+    reason: str = ""
+
+
+# ---------------------------------------------------------------------------
 # Findings (candidate, verified, severity, final)
 # ---------------------------------------------------------------------------
 
@@ -159,6 +171,7 @@ def load_and_validate(path: Path, schema: type[_Base]) -> _Base:
 
 
 __all__ = [
+    "AcCoverageLlmResult",
     "Confidence",
     "ContextBasis",
     "ContextDigest",

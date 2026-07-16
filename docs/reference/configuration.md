@@ -135,7 +135,17 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 | `CONTEXT_DIGEST_PROMPT_PATH` | _(required)_ | Path to the context-digest-stage prompt. |
 | `VERIFY_PROMPT_PATH` | _(required)_ | Path to the verify-stage prompt. |
 | `SEVERITY_PROMPT_PATH` | _(required)_ | Path to the calibrate-severity-stage prompt. |
+| `AC_COVERAGE_PROMPT_PATH` | `"/app/prompts/ac-coverage.md"` | Path to the optional AC-coverage LLM prompt. |
 | `STANDARDS_PATH` | _(required)_ | Path to the engineering-standards markdown. |
+
+### AC coverage
+
+| Env var | Default | Notes |
+|---|---|---|
+| `AC_COVERAGE_CHECK` | `"1"` | Set to `0` to skip the acceptance-criteria coverage stage entirely. |
+| `AC_COVERAGE_DRY_RUN` | `"1"` | Set to `0` to skip AC coverage annotations in dry-run mode. |
+| `AC_COVERAGE_LLM` | `"0"` | Set to `1` to enable an LLM second-pass that re-checks uncovered ACs and suppresses false positives. |
+| `AC_COVERAGE_LLM_MAX_ACS` | `"10"` | Max uncovered ACs to send to the LLM per run. |
 
 ## Alias map (the canonical source)
 

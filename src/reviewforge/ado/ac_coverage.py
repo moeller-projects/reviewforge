@@ -11,9 +11,9 @@ because there are no identifiers to find.
 This is a deterministic, no-LLM heuristic. False positives
 (uncovered when the PR actually does the work) are the safe failure
 mode: the bot prefers to flag a missing AC and let a human dismiss
-it than to silently swallow a real gap. Per the project's
-"ponytail: lazy" doctrine this is the minimum viable check; an LLM
-re-assesment can layer on top later if precision becomes an issue.
+it than to silently swallow a real gap. An optional LLM second-pass
+(``AC_COVERAGE_LLM=1``) can re-check uncovered ACs and suppress false
+positives while preserving this safe failure mode.
 
 The check is invoked by :class:`AcceptanceCriteriaCoverageStage` between
 ``CalibrateSeverityStage`` and ``PostToAdoStage``; uncovered ACs are
@@ -138,6 +138,8 @@ class AcCoverageResult:
     is_covered: bool = False
     matched: tuple[str, ...] = ()
     reason: str = ""
+    llm_reassessed: bool = False
+    llm_reason: str = ""
 
     @property
     def short_text(self) -> str:
@@ -212,20 +214,23 @@ def uncovered_findings(results: list[AcCoverageResult]) -> list[dict]:
             continue
         wi = r.work_item_id
         title_prefix = f"Work item #{wi} acceptance criterion not covered"
+        message_parts = [
+            f"Linked work item #{wi} declares an acceptance criterion that "
+            f"is not visibly addressed by the PR diff.\n\n"
+            f"Acceptance criterion:\n> {strip_html(r.ac_text).strip() or '(empty)'}\n\n"
+            f"Identifiers extracted from the AC and looked up in the diff: "
+            f"{', '.join(f'`{i}`' for i in r.identifiers) or '(none — AC text contains no identifiable references)'}.",
+            f"Reason: {r.reason or 'no_identifier_in_diff'}.",
+        ]
+        if r.llm_reassessed and r.llm_reason:
+            message_parts.append(f"LLM re-check: {r.llm_reason}")
         findings.append(
             {
                 "file": None,
                 "line": None,
                 "severity": "major",
                 "title": f"{title_prefix}: {r.short_text}",
-                "message": (
-                    f"Linked work item #{wi} declares an acceptance criterion that "
-                    f"is not visibly addressed by the PR diff.\n\n"
-                    f"Acceptance criterion:\n> {strip_html(r.ac_text).strip() or '(empty)'}\n\n"
-                    f"Identifiers extracted from the AC and looked up in the diff: "
-                    f"{', '.join(f'`{i}`' for i in r.identifiers) or '(none — AC text contains no identifiable references)'}.\n"
-                    f"Reason: {r.reason or 'no_identifier_in_diff'}."
-                ),
+                "message": "\n".join(message_parts),
             }
         )
     return findings

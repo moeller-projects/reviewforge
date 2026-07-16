@@ -70,7 +70,7 @@ from reviewforge.pipeline.validation import (  # noqa: E402
 
 def make_cfg(tmp_path: Path, **overrides) -> Config:
     files = {}
-    for name in ["review", "intent", "plan", "digest", "verify", "severity", "standards"]:
+    for name in ["review", "intent", "plan", "digest", "verify", "severity", "standards", "ac_coverage"]:
         path = tmp_path / f"{name}.md"
         path.write_text(f"{name} prompt", encoding="utf-8")
         files[name] = path
@@ -92,6 +92,7 @@ def make_cfg(tmp_path: Path, **overrides) -> Config:
         verify_prompt_path=files["verify"],
         severity_prompt_path=files["severity"],
         standards_path=files["standards"],
+        ac_coverage_prompt_path=files["ac_coverage"],
         pi_model="test/model",
         max_diff_bytes=100,
         chunk_trigger_diff_bytes=100,
@@ -180,6 +181,26 @@ class TestConfig:
         assert cfg.ado_org == "cli-org"
         assert cfg.review_language == "German"
         assert cfg.ado_project == "P"
+
+    def test_from_sources_ac_coverage_llm_settings(self):
+        env_map = {
+            "ADO_AUTH_TOKEN": "t",
+            "ADO_ORG": "o", "ADO_PROJECT": "P", "ADO_REPO_ID": "R", "PR_ID": "1",
+            "AC_COVERAGE_LLM": "1",
+            "AC_COVERAGE_LLM_MAX_ACS": "5",
+        }
+        cfg = Config.from_sources({}, env=env_map)
+        assert cfg.ac_coverage_llm is True
+        assert cfg.ac_coverage_llm_max_acs == 5
+
+    def test_from_sources_ac_coverage_llm_disabled_by_default(self):
+        env_map = {
+            "ADO_AUTH_TOKEN": "t",
+            "ADO_ORG": "o", "ADO_PROJECT": "P", "ADO_REPO_ID": "R", "PR_ID": "1",
+        }
+        cfg = Config.from_sources({}, env=env_map)
+        assert cfg.ac_coverage_llm is False
+        assert cfg.ac_coverage_llm_max_acs == 10
 
     def test_from_sources_resolves_token_aliases(self):
         env_map = {"ADO_MCP_AUTH_TOKEN": "mcp-tok", "ADO_ORG": "x", "ADO_PROJECT": "P", "ADO_REPO_ID": "R", "PR_ID": "1"}
@@ -270,9 +291,13 @@ class TestConfig:
         assert _coerce_cli_value("max_diff_bytes", 100.5) == 100.5
         assert _coerce_cli_value("dry_run", "1") is True
         assert _coerce_cli_value("dry_run", "0") is False
+        assert _coerce_cli_value("ac_coverage_llm", "1") is True
+        assert _coerce_cli_value("ac_coverage_llm", "0") is False
+        assert _coerce_cli_value("ac_coverage_llm_max_acs", "20") == 20
         assert _coerce_cli_value("review_artifact_root", "/tmp/art") == Path("/tmp/art")
         # Path fields end with _path.
         assert _coerce_cli_value("review_prompt_path", "/tmp/r.md") == Path("/tmp/r.md")
+        assert _coerce_cli_value("ac_coverage_prompt_path", "/tmp/ac.md") == Path("/tmp/ac.md")
         # Non-matching string falls through unchanged.
         assert _coerce_cli_value("ado_org", "contoso") == "contoso"
         # None passes through.

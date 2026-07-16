@@ -13,7 +13,8 @@ The orchestrator imports them and runs them in a fixed order:
     8. :class:`ReviewDiffStage`
     9. :class:`VerifyFindingsStage`
     10. :class:`CalibrateSeverityStage`
-    11. :class:`PostToAdoStage`
+    11. :class:`AcceptanceCriteriaCoverageStage`
+    12. :class:`PostToAdoStage`
 """
 from __future__ import annotations
 

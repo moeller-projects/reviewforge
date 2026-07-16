@@ -193,6 +193,14 @@ class Config:
     context_search_max_matches: int = field(default=40, compare=False)
     #: Max worker threads used by context collection.
     collect_context_workers: int = field(default=8, compare=False)
+    # --- AC coverage LLM re-check (optional second-pass) ------------
+    #: When ``True``, run an LLM re-check on ACs flagged uncovered by
+    #: the deterministic string search. Default off to keep cost down.
+    ac_coverage_llm: bool = field(default=False, compare=False)
+    #: Maximum number of uncovered ACs to send to the LLM per run.
+    ac_coverage_llm_max_acs: int = field(default=10, compare=False)
+    #: System prompt for the AC coverage LLM re-check.
+    ac_coverage_prompt_path: Path = field(default=Path("/app/prompts/ac-coverage.md"), compare=False)
     # --- Pi session reuse (Phases A + E) -------------------------------
     #: When ``True`` (default), the runner uses ``--session`` to keep state
     #: between stages and chunks. Disable for deterministic reruns or when
@@ -265,6 +273,15 @@ class Config:
         except ValueError:
             collect_context_workers = 8
 
+        # AC coverage LLM re-check.
+        ac_coverage_llm = is_true(os.getenv("AC_COVERAGE_LLM"))
+        ac_coverage_llm_max_acs = require_uint(
+            "AC_COVERAGE_LLM_MAX_ACS", os.getenv("AC_COVERAGE_LLM_MAX_ACS", "10")
+        )
+        ac_coverage_prompt_path = _resolve_prompt_path(
+            "AC_COVERAGE_PROMPT_PATH", "/app/prompts/ac-coverage.md"
+        )
+
         cfg = cls(
             ado_org=os.getenv("ADO_ORG", ""),
             ado_project=os.getenv("ADO_PROJECT", ""),
@@ -312,6 +329,9 @@ class Config:
             context_file_max_lines=context_file_max_lines,
             context_search_max_matches=context_search_max_matches,
             collect_context_workers=collect_context_workers,
+            ac_coverage_llm=ac_coverage_llm,
+            ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
+            ac_coverage_prompt_path=ac_coverage_prompt_path,
         )
         return cfg
 
@@ -361,7 +381,7 @@ class Config:
 
     def validate_files(self) -> None:
         """Ensure all required prompt/standards files exist."""
-        for path in (
+        paths = [
             self.review_prompt_path,
             self.intent_prompt_path,
             self.context_plan_prompt_path,
@@ -369,7 +389,10 @@ class Config:
             self.verify_prompt_path,
             self.severity_prompt_path,
             self.standards_path,
-        ):
+        ]
+        if self.ac_coverage_llm:
+            paths.append(self.ac_coverage_prompt_path)
+        for path in paths:
             if not path.exists():
                 raise ConfigError(f"Required file not found: {path}")
 
@@ -450,9 +473,11 @@ def _coerce_cli_value(field_name: str, value: Any) -> Any:
         return value
     raw = value.strip()
     if field_name in {"dry_run", "disable_chunk_review", "include_work_items",
-                      "include_existing_comments", "verify_findings", "force_review"}:
+                      "include_existing_comments", "verify_findings", "force_review",
+                      "ac_coverage_llm"}:
         return is_true(raw)
-    if field_name in {"max_diff_bytes", "chunk_trigger_diff_bytes", "pi_timeout_secs"}:
+    if field_name in {"max_diff_bytes", "chunk_trigger_diff_bytes", "pi_timeout_secs",
+                      "ac_coverage_llm_max_acs"}:
         return require_uint(field_name.upper(), raw)
     if field_name.endswith("_path") or field_name in {"workspace", "clone_root",
                                                       "review_artifact_root", "standards_path"}:
@@ -535,6 +560,10 @@ def _build_from_sources(
     collect_context_workers = require_uint(
         "COLLECT_CONTEXT_WORKERS", cli_or_env("collect_context_workers", "COLLECT_CONTEXT_WORKERS", "8")
     )
+    ac_coverage_llm = is_true(cli_or_env("ac_coverage_llm", "AC_COVERAGE_LLM"))
+    ac_coverage_llm_max_acs = require_uint(
+        "AC_COVERAGE_LLM_MAX_ACS", cli_or_env("ac_coverage_llm_max_acs", "AC_COVERAGE_LLM_MAX_ACS", "10")
+    )
 
     def to_path(value: str, default: str) -> Path:
         return Path(value) if value else Path(default)
@@ -592,6 +621,11 @@ def _build_from_sources(
         context_file_max_lines=context_file_max_lines,
         context_search_max_matches=context_search_max_matches,
         collect_context_workers=collect_context_workers,
+        ac_coverage_llm=ac_coverage_llm,
+        ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
+        ac_coverage_prompt_path=to_path(
+            cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), "/app/prompts/ac-coverage.md"
+        ),
         pr_url=pr_url,
         pi_session_id=pi_session_id,
         pi_session_enabled=pi_session_enabled,
