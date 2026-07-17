@@ -21,9 +21,6 @@ RUN npm install -g --ignore-scripts --no-audit --no-fund \
       "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && npm cache clean --force
 
-# Create a non-root runtime user. UID 1000 is already taken by the base image's node user.
-RUN useradd -m -u 1001 reviewforge
-
 WORKDIR /app
 
 # Install the package's locked Python dependencies from the source of truth.
@@ -44,11 +41,7 @@ ENV PYTHONPATH=/app/src
 ENV WORKSPACE=/workspace
 ENV PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 
-# Make the workspace writable for the non-root user.
-RUN mkdir -p /workspace && chown reviewforge:reviewforge /workspace
-
 WORKDIR /workspace
-USER reviewforge
 
 ENTRYPOINT ["uv", "run", "--no-project", "python3", "-m", "reviewforge"]
 # Default subcommand when the image is run with no extra args. Overridden
