@@ -103,8 +103,8 @@ class Artifacts:
 |---|---|---|
 | `run-id.txt` | `Artifacts.create` | The run id (single line). |
 | `metadata.json` | `FetchPrMetadataStage` | The ADO PR JSON (including work-item refs and reviewers). |
-| `diff.patch` | `BuildArtifactsStage` | The unified diff from base commit to source commit. |
-| `changed-files.json` | `BuildArtifactsStage` | A list of `{file, language, isTest}` for each changed file. |
+| `diff.patch` | `PrepareRepositoryStage` | The unified diff from base commit to source commit. |
+| `changed-files.json` | `PrepareRepositoryStage` | A list of `{file, language, isTest}` for each changed file. |
 | `commits.txt` | `PrepareRepositoryStage` | The commits included in the PR, one per line. |
 | `intent.json` | `ReconstructIntentStage` | The reconstructed `Intent` (pydantic schema). |
 | `context-plan.json` | `PlanContextStage` | The `ContextPlan` (files to read, tests to run, searches to perform). |
@@ -116,7 +116,7 @@ class Artifacts:
 | `final-findings.json` | `PostToAdoStage` | The exact doc posted (or, in dry-run, printed to stdout). |
 | `posted-comments.json` | `PostToAdoStage` | The posting result: `{created, skipped, votedWaitingForAuthor, ...}`. |
 | `run-summary.json` | Orchestrator | The aggregated `RunSummary` (see below). |
-| `review-system.combined.md` | (system prompt assembly) | The combined system prompt (reviewer prompt + language hint + standards file). |
+| `review-system.combined.md` | `BuildArtifactsStage` | The combined system prompt (reviewer prompt + language hint + standards file). |
 | `work-items.json` | Legacy `fetch-context` | Linked work items. |
 | `threads.json` | Legacy `fetch-context` | Existing PR threads (used for the dedupe scan). |
 | `raw/<stage>.txt` | Stages (debugging) | Raw Pi output for a stage. Not always written. |
@@ -142,8 +142,8 @@ class Artifacts:
   "finding_counts": {
     "candidate": 12,
     "verified": 8,
-    "posted": 6,
-    "skipped": 2
+    "severity": 8,
+    "final": 6
   },
   "posted": {
     "created": 6,

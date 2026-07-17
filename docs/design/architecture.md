@@ -15,11 +15,10 @@ The package has three layers, separated by purpose:
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  Operator layer (PowerShell wrappers + src/reviewforge/*.py shims)               │
-│  - run.ps1, run-open-prs.ps1 (common.psm1, build.ps1, run-local.ps1)   │
+│  - run.ps1, run-open-prs.ps1 (common.psm1, build.ps1)                    │
 │  - python -m reviewforge, python -m reviewforge, reviewforge.ado.cli             │
-│  - Responsibility: Docker orchestration, env forwarding, secrets in      │
-│    --env-file .env. No application logic. run-local.ps1 is a thin        │
-│    deprecation shim that forwards to run.ps1 -Build.                      │
+│    - Responsibility: Docker orchestration, env forwarding, secrets in      │
+│      --env-file. No application logic.                                      │
 └──────────────────────────────────────────────────────────────────────────┘
                                 │ docker run / python -m
                                 ▼
@@ -41,7 +40,7 @@ The package has three layers, separated by purpose:
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  Stage layer (reviewforge.pipeline.stages.*)                        │
-│  - 11 explicit Stage subclasses (see pipeline.md)                        │
+│  - 12 explicit Stage subclasses (see pipeline.md)                        │
 │  - Each reads/writes to StageContext, returns a dict of details.         │
 └──────────────────────────────────────────────────────────────────────────┘
                                 │ subprocess.run(...)
@@ -75,12 +74,12 @@ For `run_full`, the canonical path is:
    → Artifacts = artifacts.create(cfg)    # mkdir pr-<id>/runs/<run_id>/
    → PiRunner(cfg)                        # not yet invoked
    → StageContext(cfg, artifacts, pi)
-   → run_stages(DEFAULT_PIPELINE, ctx)    # 11 stages, short-circuit on first failure
+   - run_stages(DEFAULT_PIPELINE, ctx)    # 12 stages, short-circuit on first failure
 
 4. Each Stage reads from ctx and writes to ctx. Typical inputs/outputs:
    - FetchPrMetadata      → ctx.metadata  (PR JSON from ADO)
    - PrepareRepository    → ctx.state     (RepoState: clone, fetch, base/source commits, diff)
-   - BuildArtifacts       → ctx.artifacts.diff / .changed_files / .commits
+   - BuildArtifacts       → ctx.artifacts.system_prompt / `review-system.combined.md`
    - ReconstructIntent    → ctx.intent    (Intent schema)
    - PlanContext          → ctx.plan      (context plan)
    - CollectContext       → ctx.collected (collected-context.json)

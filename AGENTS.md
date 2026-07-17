@@ -77,7 +77,7 @@ src/reviewforge/        # all real logic lives here
   ado/                       # AdoClient, posting (idempotency), diff_mapper, models
   git/                       # RepoState, prepare_repo, chunker
   ai/                        # PiRunner (subprocess wrapper) + prompt assembly
-  pipeline/                  # Stage interface + orchestrator + 11 default stages
+  pipeline/                  # Stage interface + orchestrator + 12 default stages
     stages/                  # fetch_pr_metadata … post_to_ado
   artifacts/                 # ARTIFACT_NAMES contract, RunSummary, file writers
   prompts/                   # reviewer prompt fragments (markdown)

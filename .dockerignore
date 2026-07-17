@@ -17,9 +17,6 @@ README.md
 Dockerfile
 .dockerignore
 
-# Local run wrapper
-run-local.ps1
-
 # Python / uv runtime artifacts
 .env
 .env.*

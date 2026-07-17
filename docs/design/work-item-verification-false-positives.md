@@ -1,7 +1,7 @@
 # Work item verification — false positive root cause
 
 > **Scope.** Investigation of why work-item verification produces false positives
-> in the current 11-stage pipeline. Question: under what conditions does the
+> in the current 12-stage pipeline. Question: under what conditions does the
 > work-item step in the review pipeline produce false positives, and is the
 > pipeline's data flow actually capable of supporting what the prompts describe?
 >

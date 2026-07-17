@@ -119,7 +119,7 @@ Start here:
 - [`docs/reference/configuration.md`](docs/reference/configuration.md) — `Config` dataclass, env-var precedence, alias map, every supported env var.
 - [`docs/reference/cli.md`](docs/reference/cli.md) — subcommands, flags, exit codes, programmatic entry.
 - [`docs/reference/ado-integration.md`](docs/reference/ado-integration.md) — `AdoClient` REST wrapper, idempotent posting, diff → threadContext mapping, legacy shim.
-- [`docs/reference/pipeline.md`](docs/reference/pipeline.md) — the `Stage` interface, the 11 default stages, how to add a new one.
+- [`docs/reference/pipeline.md`](docs/reference/pipeline.md) — the `Stage` interface, the 12 default stages, how to add a new one.
 - [`docs/reference/ai-runner.md`](docs/reference/ai-runner.md) — `PiRunner` subprocess wrapper, session reuse, JSON repair, prompt assembly.
 - [`docs/reference/artifacts.md`](docs/reference/artifacts.md) — artifact directory layout, `ARTIFACT_NAMES` contract, `RunSummary` shape.
 
@@ -169,7 +169,7 @@ on reviews without rebuilding:
 | `build.ps1` | Build the container image |
 | `run.ps1` | Run the reviewer against a PR |
 | `run-open-prs.ps1` | Discover active PRs and review each one |
-| `run-local.ps1` | **Deprecated.** Use `run.ps1 -Build` instead |
+| `run-local.ps1` | Removed. Use `run.ps1 -Build` or `run-open-prs.ps1 -Build` instead |
 
 ### Quick start — just pass the PR URL
 
@@ -236,7 +236,7 @@ PR_ID=<int>
 
 # Optional
 REVIEW_LANGUAGE=English
-PI_MODEL=openai/gpt-5.4-mini
+PI_MODEL=openai/gpt-5.5
 DRY_RUN=0
 ```
 
@@ -376,7 +376,7 @@ installs the Pi CLI via npm globally.
 | `DISABLE_CHUNK_REVIEW` | no | `0` | Set to `1`/`true` to keep large diffs in one pass instead of chunking |
 | `PI_TIMEOUT_SECS` | no | `600` | Max seconds the Pi reviewer may run (prevents hangs) |
 | `FAIL_ON` | no | `none` | Fail the check at/above `nit\|minor\|major\|blocker` |
-| `VOTE_WAITING_ON` | no | `major` | Vote “waiting for author” at/above `nit\|minor\|major\|blocker`, or `none` |
+|| `VOTE_WAITING_ON` | no | `none` | Vote “waiting for author” at/above `nit\|minor\|major\|blocker`, or `none` |
 
 Artifacts are persisted in the named Docker/Podman volume `reviewforge-artifacts` mounted at `/workspace/artifacts`. Each invocation writes to a run-scoped directory: `pr-<id>/runs/<run-id>/`, and `pr-<id>/latest.txt` points to the most recent run.
 

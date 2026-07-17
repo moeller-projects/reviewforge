@@ -30,7 +30,7 @@ What it does:
 1. Build a `Config` from CLI overrides + env.
 2. Validate required files (`*.prompt.md`, `standards.md`).
 3. Create the artifact directory tree under `artifacts/pr-<id>/runs/<run_id>/`.
-4. Run the **default 11-stage pipeline** (review + post).
+4. Run the **default 12-stage pipeline** (review + post).
 5. Write `run-summary.json` and return the exit code.
 
 Exit codes:

@@ -93,7 +93,7 @@ When session reuse is enabled, the prompts intentionally shrink. From `ai/prompt
 
 In legacy / deterministic mode (`pi_session_enabled=False`), every payload is embedded verbatim. The pipeline still works, just more expensively.
 
-The combination — session reuse on the `pi` side + minimal per-stage payloads on our side — is what keeps the token cost of a typical 11-stage review under 30k tokens, even for large diffs.
+The combination — session reuse on the `pi` side + minimal per-stage payloads on our side — is what keeps the token cost of a typical 12-stage review under 30k tokens, even for large diffs.
 
 ## JSON repair loop
 
@@ -148,7 +148,7 @@ The scrub is conservative: it removes all known aliases. If a new alias is added
 
 ## Timeouts and retries
 
-- `Config.pi_timeout_secs` (default 300s) bounds the subprocess call. On timeout, the runner raises `SystemExit` with a clear message. The orchestrator records this as a stage failure.
+- `Config.pi_timeout_secs` (default 600s) bounds the subprocess call. On timeout, the runner raises `SystemExit` with a clear message. The orchestrator records this as a stage failure.
 - There is **no** retry loop. A timeout means the model did not respond in time; re-running the same prompt is unlikely to help and would compound the cost. Operators should increase the timeout or split the prompt (e.g. enable chunked review).
 
 ## Common debugging questions

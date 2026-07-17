@@ -49,7 +49,7 @@ A scheduled workflow on `ubuntu-latest` that runs the same PowerShell wrappers y
   | `ADO_PROJECT` | ADO project name |
   | `ADO_REPO_ID` | repo id or name |
   | `ADO_PAT` | PAT with **Pull Request Contribute** scope. Passed to `run-open-prs-scheduled.ps1` as `-AdoToken`. |
-  | `OPENAI_API_KEY` | (or `ANTHROPIC_API_KEY`, depending on `PI_MODEL`) |
+  | `OPENAI_API_KEY` | Required by the `pi` CLI; not read directly by the Python package. |
   | `PI_MODEL` | optional override; defaults match `azure-pipelines-pr-review.yml` |
 
   Precedence ends up the same as on the host: **CLI flag > secret > default**.
@@ -82,7 +82,7 @@ jobs:
       PI_MODEL:          ${{ secrets.PI_MODEL }}
       REVIEW_LANGUAGE:   English
       FAIL_ON:           none
-      VOTE_WAITING_ON:   major
+      VOTE_WAITING_ON:   none
     steps:
       - uses: actions/checkout@v4
 
@@ -110,14 +110,14 @@ Notes on choices made above:
 
 - **`ubuntu-latest` + PowerShell.** The wrappers are PowerShell, but GitHub-hosted Ubuntu runners ship with `pwsh`. No Windows runner needed; you stay on the cheaper tier.
 - **`workflow_dispatch`** so you can fire the same workflow by hand from the Actions tab for the first run / debugging. No secrets different from schedule.
-- **Secrets to env, not to `.env`.** The script's `Import-DotenvFile` is a no-op when the file is absent. Forwarding each value as a job-level `env:` entry matches the precedence rules already documented in `configuration.md`.
+- **Secrets to env, not to `.env`.** Forwarding each value as a job-level `env:` entry matches the precedence rules already documented in `configuration.md`.
 - **`if: failure()` log upload.** Without it, the `logs/open-prs/` directory is wiped when the runner tears down. Pin to 30 days if you want to keep history.
 
 ### Tunables
 
 - **Cron expression** — `on.schedule[0].cron`. Format is standard 5-field cron in UTC. GitHub's docs recommend a wider window than you need because scheduled jobs may be delayed during heavy load (see Caveats).
 - **`timeout-minutes`** — job-level ceiling. Bump to 180 for very large PR sets; default 90 covers a single PR or a small batch.
-- **`VOTE_WAITING_ON`** — controls whether the bot casts the "waiting for author" vote at/above a given severity. Keep `none` if you do not want any vote; raise to `major` (default) to escalate cleanly.
+- **`VOTE_WAITING_ON`** — controls whether the bot casts the "waiting for author" vote at/above a given severity. Default is `none` (no vote); raise to `major` to escalate cleanly.
 - **`--MaxPullRequests 5`** on `run-open-prs-scheduled.ps1` — caps batch size per run so a backlog does not blow the timeout. `0` (default) means "all currently active".
 
 ### Caveats

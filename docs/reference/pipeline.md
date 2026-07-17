@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Document the `Stage` interface, the 11 default stages, the data they exchange, and how to add a new stage. This is the **explanation + reference** for `reviewforge.pipeline`.
+Document the `Stage` interface, the 12 default stages, the data they exchange, and how to add a new stage. This is the **explanation + reference** for `reviewforge.pipeline`.
 
 ## Audience
 
@@ -66,9 +66,9 @@ Convention:
 
 | # | Stage | Reads from ctx | Writes to ctx | Artifacts written |
 |---|---|---|---|---|---|
-| 1 | `FetchPrMetadataStage` | — | `metadata` | `metadata.json` |
-| 2 | `PrepareRepositoryStage` | `metadata` | `state` | `commits.txt`, `raw/` |
-| 3 | `BuildArtifactsStage` | `state`, `metadata` | — | `diff.patch`, `changed-files.json` |
+|| 1 | `FetchPrMetadataStage` | — | `metadata` | `metadata.json`, `work-items.json`, `work-item-comments.json`, `threads.json` | |
+|| 2 | `PrepareRepositoryStage` | `metadata` | `state` | `diff.patch`, `changed-files.json`, `commits.txt` | |
+|| 3 | `BuildArtifactsStage` | `state`, `metadata` | — | `review-system.combined.md` | |
 | 4 | `ReconstructIntentStage` | `state`, `metadata` | `intent` | `intent.json` |
 | 5 | `PlanContextStage` | `state`, `metadata`, `intent` | `plan` | `context-plan.json` |
 | 6 | `CollectContextStage` | `plan`, `state` | `collected` | `collected-context.json` |
@@ -77,7 +77,7 @@ Convention:
 | 9 | `VerifyFindingsStage` | `candidate`, `state` | `verified` | `verified-findings.json` |
 | 10 | `CalibrateSeverityStage` | `verified` | `severity` | `severity-findings.json` |
 | 11 | `AcceptanceCriteriaCoverageStage` | `severity` | `final` | appends to `final-findings.json` |
-| 12 | `PostToAdoStage` | `severity` | `posted` | `final-findings.json`, `posted-comments.json` |
+|| 12 | `PostToAdoStage` | `final`, `threads` | `posted` | `final-findings.json`, `posted-comments.json` | |
 
 The orchestrator also calls `finalize_run_summary(...)` after the last stage, which writes `run-summary.json`.
 
@@ -93,7 +93,7 @@ Clones (or fetches) the repo at the PR's source commit. Uses the `GIT_ASKPASS` s
 
 #### 3. `BuildArtifactsStage`
 
-Materializes the diff to `diff.patch` and the changed-file list to `changed-files.json`. The `changed_files()` helper from `artifacts/builder` classifies each file by language and `isTest` flag.
+Materialises the combined system prompt to `review-system.combined.md` (reviewer prompt + standards + language directive). The system prompt is reused by every subsequent Pi stage.
 
 #### 4. `ReconstructIntentStage`
 
@@ -133,7 +133,7 @@ Checks whether the PR diff covers the acceptance criteria of linked work items. 
 
 #### 12. `PostToAdoStage`
 
-Copies `severity-findings.json` to `final-findings.json`. In dry-run mode, prints the final doc to stdout and records `ctx.posted = {"created": 0, "skipped": 0, "dry_run": 1}`. Otherwise calls `call_helper(cfg, "post-findings", artifacts.dir, findings=artifacts.final)` to invoke the legacy subprocess, which handles dedup, file/line mapping, and posting.
+Copies `severity-findings.json` to `final-findings.json` only when `final-findings.json` does not already exist (earlier stages, such as `AcceptanceCriteriaCoverageStage`, may have appended findings to it). In dry-run mode, prints the final doc to stdout and records `ctx.posted = {"created": 0, "skipped": 0, "dry_run": 1}`. Otherwise calls `call_helper(cfg, "post-findings", artifacts.dir, findings=artifacts.final)` to invoke the legacy subprocess, which handles dedup, file/line mapping, and posting.
 
 The stage always runs (even in dry-run) so the summary captures the outcome.
 
@@ -153,6 +153,7 @@ REVIEW_ONLY_PIPELINE = [
     ReviewDiffStage(),
     VerifyFindingsStage(),
     CalibrateSeverityStage(),
+    AcceptanceCriteriaCoverageStage(),
     # No PostToAdoStage
 ]
 

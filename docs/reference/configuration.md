@@ -85,9 +85,9 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 
 | Env var | Default | Notes |
 |---|---|---|
-| `OPENAI_API_KEY` | _(required)_ | Forwarded to `pi` only after `ADO_AUTH_TOKEN` is scrubbed from the subprocess env. |
+| `OPENAI_API_KEY` | _(required by `pi`)_ | Provider API key. The Python package does not read this directly; it is forwarded to the `pi` subprocess env after ADO tokens are scrubbed. |
 | `PI_MODEL` | `"openai/gpt-5.5"` | Model pattern. |
-| `PI_TIMEOUT_SECS` | `300` | Per-stage `pi` subprocess timeout. |
+| `PI_TIMEOUT_SECS` | `600` | Per-stage `pi` subprocess timeout. |
 | `PI_SESSION_ENABLED` | `"1"` | Set to `0` / `false` / `no` / `off` to disable session reuse (each stage gets a fresh `pi` call). |
 | `PI_SESSION_ID` | _(auto)_ | Session id. Default: `pr-<pr_id>-review-<run_id>`. |
 | `PI_SESSION_CLEAR` | `"0"` | Set to `1` to start a fresh session under the same id. |
@@ -98,8 +98,8 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 |---|---|---|
 | `REVIEW_LANGUAGE` | `"English"` | Comment language. |
 | `FAIL_ON` | `"none"` | `none` / `nit` / `minor` / `major` / `blocker`. The run fails (exit 2) when a finding at or above this threshold survives verification. |
-| `VOTE_WAITING_ON` | `"major"` | Same set. The reviewer casts a "waiting for author" vote when findings meet the threshold. |
-| `POST_MIN_SEVERITY` | `"minor"` | Same set. Findings below this are dropped before posting. |
+| `VOTE_WAITING_ON` | `"none"` | Same set. The reviewer casts a "waiting for author" vote when findings meet the threshold. Default is `none` (no vote). |
+| `POST_MIN_SEVERITY` | `"minor"` | Same set. Findings below this are dropped before posting. Set to `none` to disable. |
 | `DROP_LOW_CONFIDENCE` | `"0"` | `1` to drop findings with `confidence == "low"`. |
 | `REQUIRE_CONTEXT_FOR` | `""` | Comma-separated severities. Findings at these levels must have read context files (or a non-diff-only basis) or they are dropped. |
 | `MAX_FINDINGS` | _(unset)_ | Cap on the number of findings, after filtering, sorted by severity. |
