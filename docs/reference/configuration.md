@@ -60,7 +60,7 @@ Inside the container, the equivalent direct CLI is:
 ```bash
 python -m reviewforge review \
   --pr 1234 --org contoso --project Pay --repo api \
-  --ado-token "..." --openai-api-key "..." --dry-run
+  --ado-token "..." --openai-api-key "..." --dry-run --fast-review
 ```
 
 ## Reference: every supported env var
@@ -106,6 +106,7 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 | `REVIEW_LANGUAGE` | `"English"` | Comment language hint. |
 | `FORCE_REVIEW` | `"0"` | Set to `1` to review draft / closed / non-policy-branch PRs anyway. |
 | `DRY_RUN` | `"0"` | Set to `1` to skip posting; the final review JSON is printed to stdout. |
+| `FAST_REVIEW` | `"0"` | Set to `1` to run the entire Pi-driven review in a single call. See [pipeline.md](pipeline.md#fast-review-mode). |
 
 ### Diff + context caps
 
@@ -136,6 +137,7 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 | `VERIFY_PROMPT_PATH` | _(required)_ | Path to the verify-stage prompt. |
 | `SEVERITY_PROMPT_PATH` | _(required)_ | Path to the calibrate-severity-stage prompt. |
 | `AC_COVERAGE_PROMPT_PATH` | `"/app/prompts/ac-coverage.md"` | Path to the optional AC-coverage LLM prompt. |
+| `FAST_REVIEW_PROMPT_PATH` | `"/app/prompts/fast-review-system.md"` | Path to the fast-review system prompt. Required when `FAST_REVIEW=1`. |
 | `STANDARDS_PATH` | _(required)_ | Path to the engineering-standards markdown. |
 
 ### AC coverage

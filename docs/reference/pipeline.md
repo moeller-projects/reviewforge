@@ -65,18 +65,18 @@ Convention:
 `reviewforge.pipeline.stages.DEFAULT_PIPELINE` is the canonical review pipeline. From `stages/__init__.py`:
 
 | # | Stage | Reads from ctx | Writes to ctx | Artifacts written |
-|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 || 1 | `FetchPrMetadataStage` | — | `metadata` | `metadata.json`, `work-items.json`, `work-item-comments.json`, `threads.json` | |
 || 2 | `PrepareRepositoryStage` | `metadata` | `state` | `diff.patch`, `changed-files.json`, `commits.txt` | |
 || 3 | `BuildArtifactsStage` | `state`, `metadata` | — | `review-system.combined.md` | |
-| 4 | `ReconstructIntentStage` | `state`, `metadata` | `intent` | `intent.json` |
-| 5 | `PlanContextStage` | `state`, `metadata`, `intent` | `plan` | `context-plan.json` |
-| 6 | `CollectContextStage` | `plan`, `state` | `collected` | `collected-context.json` |
-| 7 | `ContextDigestStage` | `collected`, `state` | `digest` | `context-digest.json` |
-| 8 | `ReviewDiffStage` | `digest`, `state` | `candidate` | `candidate-findings.json` |
-| 9 | `VerifyFindingsStage` | `candidate`, `state` | `verified` | `verified-findings.json` |
-| 10 | `CalibrateSeverityStage` | `verified` | `severity` | `severity-findings.json` |
-| 11 | `AcceptanceCriteriaCoverageStage` | `severity` | `final` | appends to `final-findings.json` |
+|| 4 | `ReconstructIntentStage` | `state`, `metadata` | `intent` | `intent.json` |
+|| 5 | `PlanContextStage` | `state`, `metadata`, `intent` | `plan` | `context-plan.json` |
+|| 6 | `CollectContextStage` | `plan`, `state` | `collected` | `collected-context.json` |
+|| 7 | `ContextDigestStage` | `collected`, `state` | `digest` | `context-digest.json` |
+|| 8 | `ReviewDiffStage` | `digest`, `state` | `candidate` | `candidate-findings.json` |
+|| 9 | `VerifyFindingsStage` | `candidate`, `state` | `verified` | `verified-findings.json` |
+|| 10 | `CalibrateSeverityStage` | `verified` | `severity` | `severity-findings.json` |
+|| 11 | `AcceptanceCriteriaCoverageStage` | `severity` | `final` | appends to `final-findings.json` |
 || 12 | `PostToAdoStage` | `final`, `threads` | `posted` | `final-findings.json`, `posted-comments.json` | |
 
 The orchestrator also calls `finalize_run_summary(...)` after the last stage, which writes `run-summary.json`.
@@ -136,6 +136,40 @@ Checks whether the PR diff covers the acceptance criteria of linked work items. 
 Copies `severity-findings.json` to `final-findings.json` only when `final-findings.json` does not already exist (earlier stages, such as `AcceptanceCriteriaCoverageStage`, may have appended findings to it). In dry-run mode, prints the final doc to stdout and records `ctx.posted = {"created": 0, "skipped": 0, "dry_run": 1}`. Otherwise calls `call_helper(cfg, "post-findings", artifacts.dir, findings=artifacts.final)` to invoke the legacy subprocess, which handles dedup, file/line mapping, and posting.
 
 The stage always runs (even in dry-run) so the summary captures the outcome.
+
+## Fast review mode
+
+When `FAST_REVIEW=1` (or `--fast-review`), the orchestrator runs `FAST_REVIEW_PIPELINE` instead of `DEFAULT_PIPELINE`. This pipeline replaces stages 4–10 with a single `FastReviewStage` that makes exactly one Pi call. The model is expected to return a rich JSON document (`FastReviewResult`) containing the reconstructed intent, gathered context, review summary, verification summary, and calibrated findings.
+
+```python
+FAST_REVIEW_PIPELINE = [
+    FetchPrMetadataStage(),
+    PrepareRepositoryStage(),
+    BuildArtifactsStage(),
+    FastReviewStage(),          # single Pi call
+    AcceptanceCriteriaCoverageStage(),
+    PostToAdoStage(),
+]
+```
+
+`FastReviewStage` validates the response against `FastReviewResult` and synthesizes the canonical intermediate artifacts so the rest of the pipeline sees a normal layout:
+
+| Artifact | Source |
+|---|---|
+| `intent.json` | `response.intent` |
+| `context-plan.json` | `context_summary.files_read`, `searches_run`, `tests_inspected` |
+| `collected-context.json` | `context_summary` |
+| `context-digest.json` | `context_summary.notes` + `statistics` |
+| `candidate-findings.json` | `response.findings` + `review_summary.summary` |
+| `verified-findings.json` | `response.findings` + `verification_summary.summary` |
+| `severity-findings.json` | `response.findings` + `review_summary.summary` |
+| `final-findings.json` | `response.findings` + merged review + verification summaries |
+
+The raw response is also written to `artifacts/pr-<id>/runs/<run-id>/raw/fast-review.json` for debugging, but this is not part of the stable `ARTIFACT_NAMES` contract.
+
+Fast review mode is opt-in and does not change the default pipeline. There is no automatic fallback to the default pipeline if the single call fails. The response and artifacts are intentionally indistinguishable from a full-pipeline review — no `fast_path` flag is added to findings, comments, or the run summary.
+
+For `review --no-post`, the orchestrator uses `FAST_REVIEW_REVIEW_ONLY_PIPELINE`, which is the same sequence without `PostToAdoStage`.
 
 ## `REVIEW_ONLY_PIPELINE` and `POST_ONLY_PIPELINE`
 

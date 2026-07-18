@@ -23,6 +23,7 @@ from .build_artifacts import BuildArtifactsStage
 from .calibrate_severity import CalibrateSeverityStage
 from .collect_context import CollectContextStage
 from .context_digest import ContextDigestStage
+from .fast_review import FastReviewStage
 from .fetch_pr_metadata import FetchPrMetadataStage
 from .plan_context import PlanContextStage
 from .post_to_ado import PostToAdoStage
@@ -44,6 +45,25 @@ DEFAULT_PIPELINE: list = [
     CalibrateSeverityStage(),
     AcceptanceCriteriaCoverageStage(),
     PostToAdoStage(),
+]
+
+#: Single-call fast review pipeline.
+FAST_REVIEW_PIPELINE: list = [
+    FetchPrMetadataStage(),
+    PrepareRepositoryStage(),
+    BuildArtifactsStage(),
+    FastReviewStage(),
+    AcceptanceCriteriaCoverageStage(),
+    PostToAdoStage(),
+]
+
+#: Same as :data:`FAST_REVIEW_PIPELINE` minus the final posting stage.
+FAST_REVIEW_REVIEW_ONLY_PIPELINE: list = [
+    FetchPrMetadataStage(),
+    PrepareRepositoryStage(),
+    BuildArtifactsStage(),
+    FastReviewStage(),
+    AcceptanceCriteriaCoverageStage(),
 ]
 
 #: Same as :data:`DEFAULT_PIPELINE` minus the final posting stage. Use this
@@ -77,6 +97,8 @@ __all__ = [
     "CollectContextStage",
     "ContextDigestStage",
     "DEFAULT_PIPELINE",
+    "FAST_REVIEW_PIPELINE",
+    "FAST_REVIEW_REVIEW_ONLY_PIPELINE",
     "FetchPrMetadataStage",
     "POST_ONLY_PIPELINE",
     "PlanContextStage",

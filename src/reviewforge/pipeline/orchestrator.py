@@ -37,7 +37,13 @@ from ..config import Config
 from ..git import ops as git_ops
 from ..pipeline.context import ReviewContext
 from .stage import Stage, StageContext, run_stages
-from .stages import DEFAULT_PIPELINE, POST_ONLY_PIPELINE, REVIEW_ONLY_PIPELINE
+from .stages import (
+    DEFAULT_PIPELINE,
+    FAST_REVIEW_PIPELINE,
+    FAST_REVIEW_REVIEW_ONLY_PIPELINE,
+    POST_ONLY_PIPELINE,
+    REVIEW_ONLY_PIPELINE,
+)
 from .validation import validate_review_doc
 
 
@@ -154,7 +160,8 @@ def run_full(cfg: Config) -> RunOutcome:
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
-    results = run_stages(DEFAULT_PIPELINE, ctx)
+    pipeline = FAST_REVIEW_PIPELINE if cfg.fast_review else DEFAULT_PIPELINE
+    results = run_stages(pipeline, ctx)
     _record_results(summary, results)
     exit_code = _exit_code_for(results)
     finalize = finalize_run_summary(
@@ -180,7 +187,8 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
-    results = run_stages(REVIEW_ONLY_PIPELINE, ctx)
+    pipeline = FAST_REVIEW_REVIEW_ONLY_PIPELINE if cfg.fast_review else REVIEW_ONLY_PIPELINE
+    results = run_stages(pipeline, ctx)
     _record_results(summary, results)
     exit_code = _exit_code_for(results)
     finalize = finalize_run_summary(

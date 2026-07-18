@@ -89,6 +89,70 @@ class ContextDigest(_Base):
 
 
 # ---------------------------------------------------------------------------
+# Fast review mode
+# ---------------------------------------------------------------------------
+
+
+class ContextSummary(_Base):
+    files_read: list[dict[str, Any]] = Field(default_factory=list)
+    searches_run: list[dict[str, Any]] = Field(default_factory=list)
+    tests_inspected: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class ReviewSummary(_Base):
+    summary: str
+    notes: str = ""
+
+    @field_validator("summary")
+    @classmethod
+    def _summary_nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("summary must be a non-empty string")
+        return v
+
+
+class VerificationSummary(_Base):
+    summary: str
+    notes: str = ""
+
+    @field_validator("summary")
+    @classmethod
+    def _summary_nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("summary must be a non-empty string")
+        return v
+
+
+class ReviewStatistics(_Base):
+    findings_count: int = Field(default=0, ge=0)
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    files_read_count: int = Field(default=0, ge=0)
+    searches_run_count: int = Field(default=0, ge=0)
+    tests_inspected_count: int = Field(default=0, ge=0)
+
+    @field_validator("by_severity")
+    @classmethod
+    def _validate_by_severity(cls, v: dict[str, int]) -> dict[str, int]:
+        allowed = {"blocker", "major", "minor", "nit"}
+        for key in v:
+            if key not in allowed:
+                raise ValueError(f"unexpected severity key: {key}")
+        return v
+
+
+class FastReviewResult(_Base):
+    """Top-level rich response returned by the single-call fast review mode."""
+
+    intent: Intent
+    context_summary: ContextSummary = Field(default_factory=ContextSummary)
+    review_summary: ReviewSummary
+    verification_summary: VerificationSummary
+    findings: list[Finding] = Field(default_factory=list)
+    statistics: ReviewStatistics = Field(default_factory=ReviewStatistics)
+
+
+# ---------------------------------------------------------------------------
 # AC coverage LLM re-check
 # ---------------------------------------------------------------------------
 
@@ -176,11 +240,16 @@ __all__ = [
     "ContextBasis",
     "ContextDigest",
     "ContextPlan",
+    "ContextSummary",
     "Evidence",
+    "FastReviewResult",
     "Finding",
     "Intent",
     "ReviewDoc",
+    "ReviewStatistics",
+    "ReviewSummary",
     "Severity",
+    "VerificationSummary",
     "load_and_validate",
     "validate_payload",
 ]

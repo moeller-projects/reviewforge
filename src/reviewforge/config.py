@@ -201,6 +201,12 @@ class Config:
     ac_coverage_llm_max_acs: int = field(default=10, compare=False)
     #: System prompt for the AC coverage LLM re-check.
     ac_coverage_prompt_path: Path = field(default=Path("/app/prompts/ac-coverage.md"), compare=False)
+    # --- Fast review mode (single Pi call) -------------------------------
+    #: When ``True``, run intent, context, review, verify, and severity in a
+    #: single Pi call instead of the default multi-stage pipeline.
+    fast_review: bool = field(default=False, compare=False)
+    #: System prompt for the single-call fast review mode.
+    fast_review_prompt_path: Path = field(default=Path("/app/prompts/fast-review-system.md"), compare=False)
     # --- Pi session reuse (Phases A + E) -------------------------------
     #: When ``True`` (default), the runner uses ``--session`` to keep state
     #: between stages and chunks. Disable for deterministic reruns or when
@@ -281,6 +287,10 @@ class Config:
         ac_coverage_prompt_path = _resolve_prompt_path(
             "AC_COVERAGE_PROMPT_PATH", "/app/prompts/ac-coverage.md"
         )
+        fast_review = is_true(os.getenv("FAST_REVIEW"))
+        fast_review_prompt_path = _resolve_prompt_path(
+            "FAST_REVIEW_PROMPT_PATH", "/app/prompts/fast-review-system.md"
+        )
 
         cfg = cls(
             ado_org=os.getenv("ADO_ORG", ""),
@@ -332,6 +342,8 @@ class Config:
             ac_coverage_llm=ac_coverage_llm,
             ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
             ac_coverage_prompt_path=ac_coverage_prompt_path,
+            fast_review=fast_review,
+            fast_review_prompt_path=fast_review_prompt_path,
         )
         return cfg
 
@@ -390,6 +402,8 @@ class Config:
             self.severity_prompt_path,
             self.standards_path,
         ]
+        if self.fast_review:
+            paths.append(self.fast_review_prompt_path)
         if self.ac_coverage_llm:
             paths.append(self.ac_coverage_prompt_path)
         for path in paths:
@@ -564,6 +578,7 @@ def _build_from_sources(
     ac_coverage_llm_max_acs = require_uint(
         "AC_COVERAGE_LLM_MAX_ACS", cli_or_env("ac_coverage_llm_max_acs", "AC_COVERAGE_LLM_MAX_ACS", "10")
     )
+    fast_review = is_true(cli_or_env("fast_review", "FAST_REVIEW"))
 
     def to_path(value: str, default: str) -> Path:
         return Path(value) if value else Path(default)
@@ -625,6 +640,10 @@ def _build_from_sources(
         ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
         ac_coverage_prompt_path=to_path(
             cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), "/app/prompts/ac-coverage.md"
+        ),
+        fast_review=fast_review,
+        fast_review_prompt_path=to_path(
+            cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"), "/app/prompts/fast-review-system.md"
         ),
         pr_url=pr_url,
         pi_session_id=pi_session_id,

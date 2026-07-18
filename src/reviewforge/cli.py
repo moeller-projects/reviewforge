@@ -79,6 +79,10 @@ def _build_common_parser() -> argparse.ArgumentParser:
         "--pi-session-clear", dest="pi_session_clear", action="store_true", default=None,
         help="Start a fresh session under the same id (clear prior state)",
     )
+    p.add_argument(
+        "--fast-review", dest="fast_review", action="store_true", default=None,
+        help="Run intent, context, review, verify, and severity in a single Pi call (env: FAST_REVIEW)",
+    )
     return p
 
 
@@ -94,7 +98,7 @@ def _apply_common(cfg: Config, args: argparse.Namespace) -> Config:
         v = getattr(args, field, None)
         if v not in (None, ""):
             overrides[field] = v
-    for field in ("dry_run", "force_review", "pi_session_enabled", "pi_session_clear"):
+    for field in ("dry_run", "force_review", "pi_session_enabled", "pi_session_clear", "fast_review"):
         v = getattr(args, field, None)
         if v is not None:
             overrides[field] = v
@@ -113,7 +117,7 @@ def _build_config(args: argparse.Namespace) -> Config:
         "source_branch", "target_branch", "ado_token", "pi_model",
         "review_language", "review_artifact_dir", "review_run_id",
         "pi_session_id", "pi_session_enabled", "pi_session_clear",
-        "dry_run", "force_review",
+        "dry_run", "force_review", "fast_review",
     ):
         v = getattr(args, field, None)
         if v not in (None, ""):
