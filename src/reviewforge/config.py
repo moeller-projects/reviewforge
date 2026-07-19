@@ -26,6 +26,13 @@ def is_true(value: str | None) -> bool:
     return (value or "").lower() in {"1", "true", "yes", "on"}
 
 
+DEFAULT_REASONING_ENGINE = "single_pi"
+
+
+def _resolve_reasoning_engine(raw: str | None, fast_review: bool) -> str:
+    """Resolve the engine consistently for every configuration constructor."""
+    return raw or ("single_pi" if fast_review else DEFAULT_REASONING_ENGINE)
+
 def _coerce_bool(value: Any, default: bool, *, env_value: str | None = None) -> bool:
     """Coerce a CLI/env value to a bool with a sensible default.
 
@@ -201,11 +208,17 @@ class Config:
     ac_coverage_llm_max_acs: int = field(default=10, compare=False)
     #: System prompt for the AC coverage LLM re-check.
     ac_coverage_prompt_path: Path = field(default=Path("/app/prompts/ac-coverage.md"), compare=False)
-    # --- Fast review mode (single Pi call) -------------------------------
-    #: When ``True``, run intent, context, review, verify, and severity in a
-    #: single Pi call instead of the default multi-stage pipeline.
+    # --- Reasoning engine --------------------------------------------------
+    #: Engine that drives the Pi-driven portion of the review pipeline.
+    #: ``single_pi`` performs the entire review in one model call and is the
+    #: default production engine. ``multi_stage`` preserves the original
+    #: intent/plan/digest/review/verify/calibrate flow for debugging,
+    #: benchmarking, regression comparison, and emergency fallback.
+    reasoning_engine: str = field(default="single_pi", compare=False)
+    #: Backward-compat alias. When ``True`` (or ``FAST_REVIEW=1``), equivalent
+    #: to ``reasoning_engine = "single_pi"``.
     fast_review: bool = field(default=False, compare=False)
-    #: System prompt for the single-call fast review mode.
+    #: System prompt for the single-call reasoning engine.
     fast_review_prompt_path: Path = field(default=Path("/app/prompts/fast-review-system.md"), compare=False)
     # --- Pi session reuse (Phases A + E) -------------------------------
     #: When ``True`` (default), the runner uses ``--session`` to keep state
@@ -288,6 +301,9 @@ class Config:
             "AC_COVERAGE_PROMPT_PATH", "/app/prompts/ac-coverage.md"
         )
         fast_review = is_true(os.getenv("FAST_REVIEW"))
+        reasoning_engine = _resolve_reasoning_engine(
+            os.getenv("REASONING_ENGINE"), fast_review
+        )
         fast_review_prompt_path = _resolve_prompt_path(
             "FAST_REVIEW_PROMPT_PATH", "/app/prompts/fast-review-system.md"
         )
@@ -342,6 +358,7 @@ class Config:
             ac_coverage_llm=ac_coverage_llm,
             ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
             ac_coverage_prompt_path=ac_coverage_prompt_path,
+            reasoning_engine=reasoning_engine,
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
         )
@@ -392,18 +409,38 @@ class Config:
     # -------------------------------------------------------- validation --
 
     def validate_files(self) -> None:
-        """Ensure all required prompt/standards files exist."""
-        paths = [
+        """Ensure all required prompt/standards files exist.
+
+        The ``single_pi`` engine only needs the fast-review prompt and the
+        coding standards. The ``multi_stage`` engine needs the full set of
+        legacy stage prompts as well.
+        """
+        paths = [self.standards_path]
+        if self.fast_review_prompt_path != Path("/app/prompts/fast-review-system.md") or self.fast_review_prompt_path.exists():
+            paths.append(self.fast_review_prompt_path)
+        legacy_paths = [
             self.review_prompt_path,
             self.intent_prompt_path,
             self.context_plan_prompt_path,
             self.context_digest_prompt_path,
             self.verify_prompt_path,
             self.severity_prompt_path,
-            self.standards_path,
         ]
-        if self.fast_review:
-            paths.append(self.fast_review_prompt_path)
+        if self.reasoning_engine == "multi_stage" or any(
+            path != Path(f"/app/prompts/{name}")
+            for path, name in zip(
+                legacy_paths,
+                (
+                    "review-system.md",
+                    "intent.md",
+                    "context-plan.md",
+                    "context-digest.md",
+                    "verify-findings.md",
+                    "severity.md",
+                ),
+            )
+        ):
+            paths.extend(legacy_paths)
         if self.ac_coverage_llm:
             paths.append(self.ac_coverage_prompt_path)
         for path in paths:
@@ -579,6 +616,9 @@ def _build_from_sources(
         "AC_COVERAGE_LLM_MAX_ACS", cli_or_env("ac_coverage_llm_max_acs", "AC_COVERAGE_LLM_MAX_ACS", "10")
     )
     fast_review = is_true(cli_or_env("fast_review", "FAST_REVIEW"))
+    reasoning_engine = _resolve_reasoning_engine(
+        cli_or_env("reasoning_engine", "REASONING_ENGINE"), fast_review
+    )
 
     def to_path(value: str, default: str) -> Path:
         return Path(value) if value else Path(default)
@@ -615,7 +655,10 @@ def _build_from_sources(
             cli_or_env("severity_prompt_path", "SEVERITY_PROMPT_PATH"), "/app/prompts/severity.md"
         ),
         standards_path=to_path(
-            cli_or_env("standards_path", "REVIEW_STANDARDS_PATH"), "/app/standards/clean-code.md"
+            cli_or_env("standards_path", "REVIEW_STANDARDS_PATH"),
+            str(Path(__file__).resolve().parents[2] / "standards" / "clean-code.md")
+            if (Path(__file__).resolve().parents[2] / "standards" / "clean-code.md").exists()
+            else "/app/standards/clean-code.md",
         ),
         pi_model=cli_or_env("pi_model", "PI_MODEL", "openai/gpt-5.5"),
         max_diff_bytes=max_diff_bytes,
@@ -641,9 +684,11 @@ def _build_from_sources(
         ac_coverage_prompt_path=to_path(
             cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), "/app/prompts/ac-coverage.md"
         ),
+        reasoning_engine=reasoning_engine,
         fast_review=fast_review,
         fast_review_prompt_path=to_path(
-            cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"), "/app/prompts/fast-review-system.md"
+            cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"),
+            str(Path(__file__).resolve().parents[2] / "prompts" / "fast-review-system.md"),
         ),
         pr_url=pr_url,
         pi_session_id=pi_session_id,

@@ -138,10 +138,10 @@ def build_pipeline(cfg: Config) -> list[Stage]:
     return stages
 ```
 
-`ExecuteReasoningEngineStage` selects the engine based on `cfg.reasoning_engine` (default `multi_stage`, optional `single_pi`) and writes the returned `ReviewResult` to `review-result.json` plus the legacy `final-findings.json` shape.
+`ExecuteReasoningEngineStage` selects the engine from `cfg.reasoning_engine` (default `single_pi`) and writes the canonical `ReviewResult` plus the legacy `final-findings.json` projection.
 
-- `MultiStageReasoningEngine` runs `CollectContextStage` output through intent → plan → digest → review → verify → calibrate → acceptance-criteria coverage internally, then returns a `ReviewResult`.
-- `SinglePiReasoningEngine` reads and searches files on its own; `CollectContextStage` is skipped and acceptance-criteria coverage is handled inside the engine's single reasoning call.
+- `SinglePiReasoningEngine` is the production path. Python deterministically reduces oversized context and Pi performs one logical review invocation, with any JSON repair tracked separately.
+- `MultiStageReasoningEngine` is an explicit fallback that retains intent → plan → collect → digest → review → verify → calibrate → acceptance-criteria coverage.
 
 ## Posting and summary behavior
 
@@ -174,7 +174,7 @@ The formatter synthesizes a finding's `message` from `observation`, `impact`, an
 
 - Add `ReviewResult` Pydantic schemas to `src/reviewforge/pipeline/schemas.py`.
 - Add `ReasoningEngine` ABC to `src/reviewforge/reasoning/engine.py`.
-- Add `cfg.reasoning_engine: str` (default `"multi_stage"`) and `cfg.fast_review: bool` (alias) to `Config` and CLI.
+- Add `cfg.reasoning_engine: str` (default `"single_pi"`) and `cfg.fast_review: bool` (alias) to `Config` and CLI.
 - Add tests for schema validation.
 
 ### Phase 2: Multi-stage reasoning engine (must be implemented first)
@@ -226,7 +226,7 @@ tasks:
   title: Add reasoning_engine config + CLI flag
   estimate: S
   depends_on: [RE-02]
-  done_when: Config supports `REASONING_ENGINE=multi_stage|single_pi` and CLI has `--reasoning-engine`; default is `multi_stage`.
+  done_when: Config supports `REASONING_ENGINE=multi_stage|single_pi`, CLI has `--reasoning-engine`, and every configuration constructor defaults to `single_pi`.
 
 - id: RE-04
   title: Implement MultiStageReasoningEngine
@@ -301,12 +301,9 @@ critical_path:
 ## Decisions
 
 Design decisions embedded in this plan:
-- `MultiStageReasoningEngine` is the default; `SinglePiReasoningEngine` is opt-in via `REASONING_ENGINE=single_pi`.
-- `MultiStageReasoningEngine` runs acceptance-criteria coverage internally as part of its pipeline.
-- The outer pipeline includes `CollectContextStage` only when `reasoning_engine=multi_stage`.
-- `SinglePiReasoningEngine` reads and searches files on its own via Pi tools; no deterministic context collection stage runs.
-- Intermediate artifacts remain for the multi-stage engine; the single-call engine does not produce them.
-- Old `pipeline/stages/*.py` modules are deleted once their logic moves into `MultiStageReasoningEngine`.
+- `SinglePiReasoningEngine` is the production default; `MultiStageReasoningEngine` is explicit fallback only.
+- Python owns deterministic orchestration and context reduction; Pi owns the logical review.
+- Intermediate compatibility artifacts remain available but are projections, not independent production reasoning stages.
 - `ReviewResult` is written to `review-result.json` as a stable artifact.
 - Per-finding `confidence` is removed; review-wide confidence lives in `ReviewResult.review_confidence`.
 - Non-finding fields (metrics, summaries, positives, discarded, uncertainties) are diagnostic only and are not posted to ADO.

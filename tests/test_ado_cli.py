@@ -718,6 +718,8 @@ class TestAdditionalCoverage:
     def test_token_missing_raises(self, monkeypatch):
         monkeypatch.delenv('ADO_AUTH_TOKEN', raising=False)
         monkeypatch.delenv('ADO_MCP_AUTH_TOKEN', raising=False)
+        monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
+        monkeypatch.delenv("ADO_API_KEY", raising=False)
         with pytest.raises(SystemExit):
             m.token()
 

@@ -276,7 +276,21 @@ class TestRunPostOnly:
             run_post_only(cfg, input_path=tmp_path / "missing.json")
 
     def test_copies_input_to_severity_and_final(self, cfg, tmp_path, monkeypatch):
-        payload = {"summary": "ok", "findings": [{"severity": "major", "title": "T", "message": "M"}]}
+        payload = {
+            "summary": "ok",
+            "findings": [
+                {
+                    "severity": "major",
+                    "title": "T",
+                    "message": "M",
+                    "suggestion": "Fix it.",
+                    "evidence": {
+                        "changedLines": [1],
+                        "whyNewInThisPr": "Introduced by the change.",
+                    },
+                }
+            ],
+        }
         input_path = tmp_path / "review.json"
         input_path.write_text(json.dumps(payload), encoding="utf-8")
         recorded = []

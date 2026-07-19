@@ -86,6 +86,9 @@ class PiRunner:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._last_tokens: dict[str, int] = {}
+        self._token_usage = {"in": 0, "out": 0, "total": 0}
+        self._invocation_count = 0
+        self._repair_invocation_count = 0
         # Per-runner cache of source prompt path → augmented prompt path.
         # The augmented copy has the LANGUAGE directive appended so every
         # stage (review, verify, severity, intent, plan, digest) instructs
@@ -97,8 +100,27 @@ class PiRunner:
 
     @property
     def last_tokens(self) -> dict[str, int]:
-        """Tokens reported by the most recent Pi call (``in``/``out``/``total``)."""
+        """Tokens reported by the most recent Pi call."""
         return dict(self._last_tokens)
+
+    @property
+    def token_usage(self) -> dict[str, int]:
+        """Tokens accumulated across all calls made by this runner."""
+        return dict(self._token_usage)
+
+    @property
+    def invocation_count(self) -> int:
+        return self._invocation_count
+
+    @property
+    def repair_invocation_count(self) -> int:
+        return self._repair_invocation_count
+
+    def _record_tokens(self, tokens: dict[str, int]) -> None:
+        self._last_tokens = dict(tokens)
+        for key in ("in", "out", "total"):
+            self._token_usage[key] += int(tokens.get(key, 0) or 0)
+
 
     @property
     def session_id(self) -> str:
@@ -198,6 +220,7 @@ class PiRunner:
             f"running Pi {stage} (timeout: {self.cfg.pi_timeout_secs}s, "
             f"session: {sid}, clear: {self.cfg.pi_session_clear})"
         )
+        self._invocation_count += 1
         try:
             cp = subprocess.run(
                 cmd,
@@ -215,7 +238,7 @@ class PiRunner:
             stderr_text = cp.stderr.decode(errors="replace")
             for line in stderr_text.splitlines():
                 _log(f"[pi {stage}] {line}")
-            self._last_tokens = self._parse_token_usage(stderr_text)
+            self._record_tokens(self._parse_token_usage(stderr_text))
         else:
             self._last_tokens = {}
         if cp.returncode:
@@ -250,6 +273,8 @@ class PiRunner:
         _log(
             f"running Pi {stage} repair ({'in session' if self.cfg.pi_session_enabled else 'legacy mode'})"
         )
+        self._invocation_count += 1
+        self._repair_invocation_count += 1
         try:
             cp = subprocess.run(
                 repair,
@@ -267,10 +292,7 @@ class PiRunner:
             stderr_text = cp.stderr.decode(errors="replace")
             for line in stderr_text.splitlines():
                 _log(f"[pi {stage} repair] {line}")
-            # Update last_tokens from the repair call's stderr as well.
-            parsed = self._parse_token_usage(stderr_text)
-            if parsed:
-                self._last_tokens = parsed
+            self._record_tokens(self._parse_token_usage(stderr_text))
         if cp.returncode or not cp.stdout:
             raise SystemExit(f"[review][ERROR] Pi {stage} repair call failed")
         output_path.write_bytes(cp.stdout)

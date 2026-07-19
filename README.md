@@ -76,21 +76,17 @@ src/
     pipeline/
       orchestrator.py  # run_full, run_review_only, run_post_only, RunOutcome
       stage.py         # Stage, StageContext, StageResult, run_stages
-      schemas.py       # pydantic models for intent / plan / digest / findings
-      validation.py    # SEVERITIES, validate_stage, validate_review_doc
-      context.py       # legacy ReviewContext
+      schemas.py       # canonical ReviewResult and legacy stage schemas
+      validation.py    # response and postable-document validation
       stages/
         fetch_pr_metadata.py
         prepare_repository.py
-        build_artifacts.py
-        reconstruct_intent.py
-        plan_context.py
-        collect_context.py
-        context_digest.py
-        review_diff.py
-        verify_findings.py
-        calibrate_severity.py
+        execute_reasoning_engine.py
         post_to_ado.py
+    reasoning/
+      engine.py         # ReasoningEngine registry
+      single_pi.py      # default one-logical-invocation engine
+      multi_stage.py    # explicit legacy fallback
     artifacts/
       manager.py       # Artifacts, create(), ARTIFACT_NAMES contract
       builder.py       # write_json, read_json, changed_files
@@ -119,7 +115,7 @@ Start here:
 - [`docs/reference/configuration.md`](docs/reference/configuration.md) — `Config` dataclass, env-var precedence, alias map, every supported env var.
 - [`docs/reference/cli.md`](docs/reference/cli.md) — subcommands, flags, exit codes, programmatic entry.
 - [`docs/reference/ado-integration.md`](docs/reference/ado-integration.md) — `AdoClient` REST wrapper, idempotent posting, diff → threadContext mapping, legacy shim.
-- [`docs/reference/pipeline.md`](docs/reference/pipeline.md) — the `Stage` interface, the 12 default stages, how to add a new one.
+- [`docs/reference/pipeline.md`](docs/reference/pipeline.md) — the four-stage production pipeline, engine boundary, and explicit legacy fallback.
 - [`docs/reference/ai-runner.md`](docs/reference/ai-runner.md) — `PiRunner` subprocess wrapper, session reuse, JSON repair, prompt assembly.
 - [`docs/reference/artifacts.md`](docs/reference/artifacts.md) — artifact directory layout, `ARTIFACT_NAMES` contract, `RunSummary` shape.
 
@@ -410,17 +406,18 @@ The set of files is a stable contract; see
 | ``diff.patch``                | Unified diff for the merge-base range                      |
 | ``changed-files.json``        | Per-file language + ``isTest`` classification               |
 | ``commits.txt``               | ``git log --oneline`` for the PR range                     |
-| ``intent.json``               | Reconstructed PR intent (pydantic-validated)               |
-| ``context-plan.json``         | Pi's plan for what to read / search                        |
-| ``collected-context.json``    | Files/tests/search hits collected deterministically        |
-| ``context-digest.json``       | Pi's digest of the collected context                       |
-| ``candidate-findings.json``   | First-pass findings before verification                    |
-| ``verified-findings.json``    | Findings after adversarial verification                    |
-| ``severity-findings.json``    | Findings after severity calibration                        |
-| ``final-findings.json``       | The doc posted (or printed) to ADO                         |
+| ``review-result.json``        | Canonical validated ``ReviewResult`` from the engine |
+| ``intent.json``               | Synthesized compatibility projection (or legacy intent) |
+| ``context-plan.json``         | Synthesized compatibility projection (or legacy plan) |
+| ``collected-context.json``    | Synthesized compatibility projection (or deterministic legacy context) |
+| ``context-digest.json``       | Synthesized compatibility projection (or legacy digest) |
+| ``candidate-findings.json``   | Compatibility findings projection |
+| ``verified-findings.json``    | Compatibility findings projection |
+| ``severity-findings.json``    | Compatibility findings projection |
+| ``final-findings.json``       | Projected document posted (or printed) to ADO |
 | ``posted-comments.json``      | Counts of created/skipped/duplicate comments and vote info |
-| ``run-summary.json``          | High-level diagnostics (per-stage timing, exit code, etc.) |
-| ``review-system.combined.md`` | Concatenated system prompt fed to Pi                      |
+| ``run-summary.json``          | Runtime and engine metrics, timing, and exit code |
+| ``review-system.combined.md`` | Concatenated system prompt fed to Pi |
 
 Use ``--review-artifact-dir`` (or the env var ``REVIEW_ARTIFACT_DIR``) to
 override the per-run directory, or ``--review-run-id`` for deterministic
@@ -429,37 +426,23 @@ run for that PR.
 
 ## Pipeline stages
 
-The pipeline is composed of explicit :class:`Stage` instances in
-:data:`reviewforge.pipeline.stages.DEFAULT_PIPELINE`:
+The production pipeline is deterministic Python orchestration around one
+reasoning boundary:
 
-1. ``FetchPrMetadataStage`` — call the ADO helper to populate
-   ``metadata.json``, ``work-items.json``, ``work-item-comments.json``,
-   ``threads.json``.
-2. ``PrepareRepositoryStage`` — shallow-clone the PR branches and write
-   ``diff.patch``, ``changed-files.json``, ``commits.txt``.
-3. ``BuildArtifactsStage`` — write the combined system prompt.
-4. ``ReconstructIntentStage`` — ask Pi for ``intent.json`` (validated as
-   :class:`reviewforge.pipeline.schemas.Intent`).
-5. ``PlanContextStage`` — ask Pi for ``context-plan.json`` (validated as
-   :class:`ContextPlan`).
-6. ``CollectContextStage`` — read files / tests / searches from the
-   ``context-plan.json``; write ``collected-context.json``.
-7. ``ContextDigestStage`` — ask Pi to digest the collected context.
-8. ``ReviewDiffStage`` — produce ``candidate-findings.json``. Splits the
-   diff into file-based chunks when it exceeds
-   ``CHUNK_TRIGGER_DIFF_BYTES``.
-9. ``VerifyFindingsStage`` — ask Pi to adversarially verify the
-   candidate findings; emit ``verified-findings.json``.
-10. ``CalibrateSeverityStage`` — ask Pi to recalibrate severities;
-    emit ``severity-findings.json`` and ``final-findings.json``.
-11. ``PostToAdoStage`` — post the final findings. No-op when
-    ``DRY_RUN=1``; otherwise calls the ADO CLI helper. Writes
-    ``posted-comments.json``.
+1. ``FetchPrMetadataStage`` — fetch PR metadata, work items, and comments.
+2. ``PrepareRepositoryStage`` — prepare the repository and write the diff,
+   changed files, and commits.
+3. ``ExecuteReasoningEngineStage`` — run ``single_pi`` by default. Python
+   reduces oversized diff context deterministically; Pi performs one logical
+   review and returns the canonical ``ReviewResult``.
+4. ``PostToAdoStage`` — validate the projected findings and post them through
+   the Python ADO helper. ``DRY_RUN=1`` prints instead.
 
-The :class:`Stage` interface (``run(ctx) -> StageResult``) makes every
-stage individually testable; the runner stops on the first failure and
-records timings, status, and high-level counts in ``run-summary.json``.
-
+Set ``REASONING_ENGINE=multi_stage`` only for debugging, benchmarking,
+regression comparison, or explicit fallback. It runs the retained legacy
+intent → plan → collect → digest → review → verify → calibrate flow.
+The single engine may synthesize legacy intermediate artifacts for downstream
+compatibility, but those files are not independent reasoning stages.
 ## Idempotent posting
 
 Posting decisions live in :mod:`reviewforge.ado.posting`:

@@ -132,6 +132,9 @@ class TestSubprocessCommandShape:
         runner.run_json(tmp_path / "p1.md", "first call", tmp_path / "o1.json", "intent")
         runner.run_json(tmp_path / "p2.md", "second call", tmp_path / "o2.json", "plan")
         assert len(calls) == 2
+        assert runner.invocation_count == 2
+        assert runner.repair_invocation_count == 0
+        assert runner.token_usage == {"in": 200, "out": 100, "total": 300}
         for cmd in calls:
             assert "--session-id" in cmd
             assert "pr-42-review-r1" in cmd
@@ -247,6 +250,8 @@ class TestRepairStaysInSession:
         monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         runner = PiRunner(cfg)
         runner.run_json(tmp_path / "p.md", "original context", tmp_path / "out.json", "stage")
+        assert runner.invocation_count == 2
+        assert runner.repair_invocation_count == 1
         assert len(calls) == 2
         # Same session id in both calls.
         for c in calls:

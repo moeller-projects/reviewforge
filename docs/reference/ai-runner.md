@@ -30,7 +30,11 @@ class PiRunner:
     @property
     def last_tokens(self) -> dict[str, int]: ...
     @property
-    def session_id(self) -> str: ...
+    def token_usage(self) -> dict[str, int]: ...
+    @property
+    def invocation_count(self) -> int: ...
+    @property
+    def repair_invocation_count(self) -> int: ...
     def run_json(self, prompt_path, stdin_text, output_path, stage) -> None: ...
 ```
 
@@ -38,14 +42,16 @@ Construction is cheap — no I/O happens until `run_json` is called.
 
 `run_json` is the only public method that launches the subprocess. It:
 
-1. Builds the `pi` command (see below).
-2. Builds the subprocess env: copy of `os.environ` with `ADO_AUTH_TOKEN` / `ADO_MCP_AUTH_TOKEN` / `ADO_API_KEY` stripped.
-3. Calls `subprocess.run(cmd, input=stdin_text.encode(), stdout=PIPE, stderr=PIPE, timeout=cfg.pi_timeout_secs)`.
-4. Logs the Pi call to stderr.
-5. Parses `stderr` for token usage (regex on lines like `tokens: 100 in / 50 out`).
-6. Writes the JSON output to `output_path`.
-7. Strips Markdown code fences if the model wrapped the JSON in them.
-8. Parses the JSON. If it fails, retries once with a "return only JSON" repair prompt in the same session.
+1. Builds the `pi` command and scrubbed subprocess environment.
+2. Executes one reasoning subprocess.
+3. Parses token metadata and writes the output.
+4. Strips Markdown fences and parses JSON.
+5. If JSON remains invalid, executes one formatting-repair subprocess in the same session.
+
+The production contract is **one logical reasoning invocation with optional
+formatting repair**, not an unconditional one-process guarantee. The runner
+exposes `invocation_count` and `repair_invocation_count` so the distinction is
+visible in run metrics.
 
 The method raises `SystemExit` on timeout, non-zero exit, or unrecoverable JSON failure.
 
@@ -130,9 +136,9 @@ _TOKEN_RE = re.compile(
 )
 ```
 
-The match is best-effort: if Pi's output format changes, the regex silently misses and the token count is empty. The runner stores the parsed dict in `self._last_tokens` and exposes it as `runner.last_tokens`.
+The match is best-effort: if Pi's output format changes, the regex silently misses and the token count is empty. The runner exposes the most recent call as `last_tokens` and the accumulated run total as `token_usage`. Invocation and repair counts are tracked independently.
 
-Stages copy this into `ctx.last_token_usage` so the orchestrator can aggregate it into `RunSummary.stages[].token_usage` and into the top-level token total.
+Stages copy per-call usage into `ctx.last_token_usage`; the orchestrator aggregates stage totals and the reasoning engine records deterministic invocation and timing metrics.
 
 ## Defense in depth: scrubbing the subprocess env
 

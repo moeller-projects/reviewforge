@@ -60,7 +60,7 @@ class ReviewDiffStage(Stage):
             truncated: bool = False,
             *,
             pi_runner=None,
-        ) -> dict[str, Any]:
+        ) -> tuple[dict[str, Any], dict[str, int]]:
             text = review_instruction(
                 cfg,
                 files_text,
@@ -75,9 +75,15 @@ class ReviewDiffStage(Stage):
             ) + diff
             runner = pi_runner or ctx.pi
             runner.run_json(cfg.review_prompt_path, text, out_path, "reviewer")
+            usage = getattr(runner, "token_usage", None)
+            if not isinstance(usage, dict):
+                usage = getattr(runner, "last_tokens", {})
+            usage = usage if isinstance(usage, dict) else {}
             if runner is ctx.pi:
-                ctx.last_token_usage = ctx.pi.last_tokens
-            return read_json(out_path) or {}
+                ctx.last_token_usage = usage
+            return read_json(out_path) or {}, {
+                key: int(usage.get(key, 0) or 0) for key in ("in", "out", "total")
+            }
 
         diff_bytes = len(ctx.state.diff_text.encode())
         metadata: dict[str, Any] = {}
@@ -115,7 +121,7 @@ class ReviewDiffStage(Stage):
         if cfg.disable_chunk_review or diff_bytes <= cfg.chunk_trigger_diff_bytes:
             if cfg.disable_chunk_review and diff_bytes > cfg.chunk_trigger_diff_bytes:
                 _log("DISABLE_CHUNK_REVIEW enabled; reviewing large diff in single pass")
-            doc = run_one(ctx.state.diff_text, ctx.files_text, ctx.artifacts.candidate)
+            doc, _usage = run_one(ctx.state.diff_text, ctx.files_text, ctx.artifacts.candidate)
             payload = {"summary": doc.get("summary", ""), "findings": [_normalize_finding(f) for f in doc.get("findings", [])], "chunks": 0}
             write_json(ctx.artifacts.candidate, payload)
             store_cached_json(cfg, "review_diff", review_cache_key, payload)
@@ -136,11 +142,14 @@ class ReviewDiffStage(Stage):
                     out.parent.mkdir(parents=True, exist_ok=True)
                     future = pool.submit(run_one, ch.diff_text, ch.files_text, out, f"chunk {i}/{len(chunks)}", ch.truncated, pi_runner=_fork_runner(i))
                     future_map[future] = (i, out)
-                ordered_docs: list[dict[str, Any]] = [None] * len(chunks)  # type: ignore[list-item]
+                ordered_docs: list[tuple[dict[str, Any], dict[str, int]]] = [None] * len(chunks)  # type: ignore[list-item]
                 for future in as_completed(future_map):
                     idx, _out = future_map[future]
                     ordered_docs[idx - 1] = future.result()
-                for doc in ordered_docs:
+                worker_tokens = {"in": 0, "out": 0, "total": 0}
+                for doc, usage in ordered_docs:
+                    for key in worker_tokens:
+                        worker_tokens[key] += usage[key]
                     summaries.append(doc.get("summary", ""))
                     for f in doc.get("findings", []):
                         key = (
@@ -154,6 +163,7 @@ class ReviewDiffStage(Stage):
                             continue
                         seen.add(key)
                         findings_list.append(_normalize_finding(f))
+            ctx.extras["_worker_token_usage"] = worker_tokens
             summary = " ".join(s for s in summaries if s).strip()
             if not summary:
                 summary = f"Reviewed {len(chunks)} diff chunks."

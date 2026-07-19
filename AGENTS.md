@@ -130,7 +130,7 @@ These exist for real reasons. Treat as **acceptance gates**, not style suggestio
 
 ---
 
-## 5. The 12-stage pipeline [explanation]
+## 5. The pipeline [explanation]
 
 `reviewforge.pipeline.stages.DEFAULT_PIPELINE` runs in this order. Each
 stage receives a mutable `StageContext`; stages may read prior outputs and
@@ -140,22 +140,20 @@ stage receives a mutable `StageContext`; stages may read prior outputs and
 | --- | --- | --- | --- |
 | 1 | `FetchPrMetadataStage` | `metadata.json`, `work-items.json`, `work-item-comments.json`, `threads.json` | dry-run + `--no-fetch` mode |
 | 2 | `PrepareRepositoryStage` | `diff.patch`, `changed-files.json`, `commits.txt` | — |
-| 3 | `BuildArtifactsStage` | `review-system.combined.md` | — |
-| 4 | `ReconstructIntentStage` | `intent.json` (pydantic `Intent`) | — |
-| 5 | `PlanContextStage` | `context-plan.json` (pydantic `ContextPlan`) | — |
-| 6 | `CollectContextStage` | `collected-context.json` | — |
-| 7 | `ContextDigestStage` | `context-digest.json` | — |
-| 8 | `ReviewDiffStage` | `candidate-findings.json` | — |
-| 9 | `VerifyFindingsStage` | `verified-findings.json` | — |
-| 10 | `CalibrateSeverityStage` | `severity-findings.json`, `final-findings.json` | — |
-| 11 | `AcceptanceCriteriaCoverageStage` | appends to `final-findings.json` (general-thread findings for uncovered ACs) | no linked work items, no `diff.patch`, `AC_COVERAGE_CHECK=0`, or `DRY_RUN=1` + `AC_COVERAGE_DRY_RUN=0` |
-| 12 | `PostToAdoStage` | `posted-comments.json` | `DRY_RUN=1` |
+| 3 | `ExecuteReasoningEngineStage` | `review-result.json`, `final-findings.json` | — |
+| 4 | `PostToAdoStage` | `posted-comments.json` | `DRY_RUN=1` |
+
+`ExecuteReasoningEngineStage` selects a `ReasoningEngine` by `cfg.reasoning_engine`:
+`multi_stage` (default) runs the original intent → plan → collect → digest →
+review → verify → calibrate → acceptance-criteria coverage stages internally;
+`single_pi` performs the same Pi-driven work in a single model call. The legacy
+`FAST_REVIEW=1` flag is an alias for `REASONING_ENGINE=single_pi`.
 
 A stage returns `StageStatus.OK`, `SKIPPED`, or `FAILED`. FAILED short-circuits
 the run; SKIPPED writes nothing and continues. Override `should_run(ctx)` for
 conditional execution; never raise from inside `should_run`.
 
-Stage 12 also runs the **stale-comment reconciliation pass** after the create
+`PostToAdoStage` also runs the **stale-comment reconciliation pass** after the create
 loop: existing bot threads whose `(file, line)` is no longer in the current
 diff get a `"🤖 stale — ..."` follow-up comment. Disabled via `ANNOTATE_STALE=0`.
 

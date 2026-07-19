@@ -6,7 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Fast review mode** (`FAST_REVIEW=1` / `--fast-review`). Runs the entire Pi-driven portion of the review pipeline — intent reconstruction, context planning, context collection, context digest, diff review, finding verification, and severity calibration — in a single Pi call. Non-Pi stages (metadata fetch, repo preparation, AC coverage, posting) remain unchanged. See `docs/reference/pipeline.md` and `docs/reference/configuration.md` for details.
-- New prompt file `prompts/fast-review-system.md`.
-- New Pydantic schemas in `reviewforge.pipeline.schemas`: `FastReviewResult`, `ContextSummary`, `ReviewSummary`, `VerificationSummary`, `ReviewStatistics`.
-- New `FastReviewStage` and pipeline variants `FAST_REVIEW_PIPELINE` / `FAST_REVIEW_REVIEW_ONLY_PIPELINE`.
+- Reasoning engine abstraction with `single_pi` as the production default and `multi_stage` as an explicit legacy fallback.
+- Canonical `ReviewResult` response schema, projection layer, run metadata, and richer evidence/metrics artifacts.
+- `REASONING_ENGINE` configuration and `FAST_REVIEW` compatibility alias.
+- **Single Pi reasoning engine** (`REASONING_ENGINE=single_pi`). Runs the same Pi-driven work in one model call. Alias: `FAST_REVIEW=1` / `--fast-review`. See `docs/reference/pipeline.md#reasoning-engine` and `docs/reference/configuration.md` for details.
+- New prompt file `prompts/fast-review-system.md` used by the `single_pi` engine.
+- New Pydantic schemas in `reviewforge.pipeline.schemas`: `ReviewResult`, `PrSummary`, `RichFinding`, `RichEvidence`, `ReviewMetrics`, `ReviewConfidence`, plus the legacy `FastReviewResult`, `ContextSummary`, `ReviewSummary`, `VerificationSummary`, `ReviewStatistics`.
+- New artifact `review-result.json` (appended to `ARTIFACT_NAMES`).

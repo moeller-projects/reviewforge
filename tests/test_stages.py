@@ -973,7 +973,21 @@ class TestReviewDiffStage:
 
 
 class TestPostToAdoStage:
-    DOC = {"summary": "ok", "findings": [{"severity": "major", "title": "T", "message": "M"}]}
+    DOC = {
+        "summary": "ok",
+        "findings": [
+            {
+                "severity": "major",
+                "title": "T",
+                "message": "M",
+                "suggestion": "Fix the issue.",
+                "evidence": {
+                    "changedLines": [1],
+                    "whyNewInThisPr": "The changed line introduces it.",
+                },
+            }
+        ],
+    }
 
     def test_dry_run_short_circuits(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=True)
@@ -1006,8 +1020,12 @@ class TestPostToAdoStage:
                         "severity": "major",
                         "title": "AC coverage",
                         "message": "uncovered AC",
-                        "file": None,
-                        "line": None,
+                        "suggestion": "Address the acceptance criterion.",
+                        "evidence": {
+                            "workItems": ["#7"],
+                            "classification": "work-item",
+                            "whyNewInThisPr": "The criterion is not covered.",
+                        },
                     }
                 ],
             },

@@ -81,7 +81,11 @@ def _build_common_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--fast-review", dest="fast_review", action="store_true", default=None,
-        help="Run intent, context, review, verify, and severity in a single Pi call (env: FAST_REVIEW)",
+        help="Alias for --reasoning-engine single_pi (env: FAST_REVIEW)",
+    )
+    p.add_argument(
+        "--reasoning-engine", dest="reasoning_engine",
+        help="Reasoning engine: multi_stage|single_pi (env: REASONING_ENGINE)",
     )
     return p
 
@@ -93,7 +97,7 @@ def _apply_common(cfg: Config, args: argparse.Namespace) -> Config:
         "ado_org", "ado_project", "ado_repo_id", "pr_id", "pr_url",
         "source_branch", "target_branch", "ado_token", "pi_model",
         "review_language", "review_artifact_dir", "review_run_id",
-        "pi_session_id",
+        "pi_session_id", "reasoning_engine",
     ):
         v = getattr(args, field, None)
         if v not in (None, ""):
@@ -117,7 +121,7 @@ def _build_config(args: argparse.Namespace) -> Config:
         "source_branch", "target_branch", "ado_token", "pi_model",
         "review_language", "review_artifact_dir", "review_run_id",
         "pi_session_id", "pi_session_enabled", "pi_session_clear",
-        "dry_run", "force_review", "fast_review",
+        "dry_run", "force_review", "fast_review", "reasoning_engine",
     ):
         v = getattr(args, field, None)
         if v not in (None, ""):

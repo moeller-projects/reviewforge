@@ -101,10 +101,48 @@ def validate_review_doc(doc: Any) -> None:
             raise SystemExit("[review][ERROR] finding missing non-empty message")
 
 
+def validate_postable_review_doc(doc: Any) -> None:
+    """Validate the stricter contract required immediately before posting."""
+    validate_review_doc(doc)
+    for finding in doc["findings"]:
+        suggestion = finding.get("suggestion")
+        if not isinstance(suggestion, str) or not suggestion.strip():
+            raise SystemExit("[review][ERROR] finding missing non-empty recommendation")
+        evidence = finding.get("evidence")
+        if not isinstance(evidence, dict):
+            raise SystemExit("[review][ERROR] finding missing evidence")
+        references = (
+            evidence.get("changedLines")
+            or evidence.get("changed_lines")
+            or evidence.get("contextFilesRead")
+            or evidence.get("context_files_read")
+            or evidence.get("testsRead")
+            or evidence.get("tests_read")
+            or evidence.get("workItems")
+            or evidence.get("work_items")
+            or evidence.get("symbols")
+        )
+        classification = str(evidence.get("classification") or "").strip()
+        rationale = (
+            evidence.get("whyNewInThisPr")
+            or evidence.get("why_new_in_this_pr")
+            or evidence.get("whyNotIntentional")
+            or evidence.get("why_not_intentional")
+        )
+        if not references or (
+            not (evidence.get("changedLines") or evidence.get("changed_lines"))
+            and not classification
+        ):
+            raise SystemExit("[review][ERROR] finding evidence is incomplete")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise SystemExit("[review][ERROR] finding evidence missing rationale")
+
+
 __all__ = [
     "BASIS",
     "SEVERITIES",
     "StageLabel",
+    "validate_postable_review_doc",
     "validate_review_doc",
     "validate_stage",
 ]

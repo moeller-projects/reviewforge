@@ -76,7 +76,7 @@ src/reviewforge/
 | [`configuration.md`](configuration.md) | reference + how-to | `Config` dataclass, env var precedence, alias map, `.env` loading, validation. |
 | [`cli.md`](cli.md) | reference | Subcommands (`review`, `post`, `open-prs`, `validate-config`, `discover`), flags, exit codes. |
 | [`ado-integration.md`](ado-integration.md) | explanation + reference | `AdoClient` REST wrapper, idempotent posting (`dedupe_key`, `existing_bot_markers`), diff → threadContext mapping, legacy shim contract. |
-|| [`pipeline.md`](pipeline.md) | explanation + reference | The `Stage` interface, the 12 default stages, ordering, how to add a new stage. |
+| [`pipeline.md`](pipeline.md) | explanation + reference | The four-stage production pipeline, `ReasoningEngine` boundary, and explicit legacy fallback. |
 | [`ai-runner.md`](ai-runner.md) | explanation + reference | `PiRunner` subprocess wrapper, session reuse (`--session-id`), JSON repair, prompt assembly. |
 | [`artifacts.md`](artifacts.md) | reference | Artifact directory layout, `ARTIFACT_NAMES`, `RunSummary` shape, secret redaction. |
 

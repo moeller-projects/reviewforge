@@ -444,6 +444,10 @@ class TestParseDotenv:
 
 class TestConfigFromEnvFile:
     def test_loads_file_values(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
+        monkeypatch.delenv("ADO_API_KEY", raising=False)
+        monkeypatch.delenv("ADO_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ADO_MCP_AUTH_TOKEN", raising=False)
         from reviewforge.config import Config
         p = tmp_path / ".env"
         p.write_text("ADO_AUTH_TOKEN=tok\nADO_ORG=org\n", encoding="utf-8")
@@ -480,7 +484,11 @@ class TestConfigFromEnvFile:
         assert cfg.ado_token == "env-tok"
 
     def test_default_path_is_dotenv_in_cwd(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
+        monkeypatch.delenv("ADO_API_KEY", raising=False)
         from reviewforge.config import Config
+        monkeypatch.delenv("ADO_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ADO_MCP_AUTH_TOKEN", raising=False)
         # The CLI's default for ``--env-file`` is ``.env`` in cwd. We
         # don't actually change cwd here (pytest doesn't let us easily);
         # just verify the parameter is wired and accepts a Path.
@@ -1234,7 +1242,8 @@ class TestCli:
             "ADO_AUTH_TOKEN", "ADO_ORG", "ADO_PROJECT", "ADO_REPO_ID", "PR_ID",
             "REVIEW_PROMPT_PATH", "INTENT_PROMPT_PATH", "CONTEXT_PLAN_PROMPT_PATH",
             "CONTEXT_DIGEST_PROMPT_PATH", "VERIFY_PROMPT_PATH", "SEVERITY_PROMPT_PATH",
-            "REVIEW_STANDARDS_PATH", "REVIEW_RUN_ID",
+            "REVIEW_STANDARDS_PATH", "REVIEW_RUN_ID", "AC_COVERAGE_LLM",
+            "SYSTEM_ACCESSTOKEN",
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
@@ -1325,19 +1334,11 @@ class TestDefaultPipeline:
         assert names == [
             "fetch_pr_metadata",
             "prepare_repository",
-            "build_artifacts",
-            "reconstruct_intent",
-            "plan_context",
-            "collect_context",
-            "context_digest",
-            "review_diff",
-            "verify_findings",
-            "calibrate_severity",
-            "ac_coverage",
+            "execute_reasoning_engine",
             "post_to_ado",
         ]
 
     def test_review_only_pipeline_excludes_posting(self):
         names = [stage.name for stage in REVIEW_ONLY_PIPELINE]
         assert "post_to_ado" not in names
-        assert "review_diff" in names
+        assert "execute_reasoning_engine" in names

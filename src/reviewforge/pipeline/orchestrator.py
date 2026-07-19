@@ -39,12 +39,10 @@ from ..pipeline.context import ReviewContext
 from .stage import Stage, StageContext, run_stages
 from .stages import (
     DEFAULT_PIPELINE,
-    FAST_REVIEW_PIPELINE,
-    FAST_REVIEW_REVIEW_ONLY_PIPELINE,
     POST_ONLY_PIPELINE,
     REVIEW_ONLY_PIPELINE,
 )
-from .validation import validate_review_doc
+from .validation import validate_postable_review_doc
 
 
 def _log(message: str) -> None:
@@ -134,6 +132,7 @@ def _make_stage_context(
         "verified": artifacts.verified,
         "severity": artifacts.severity,
         "final": artifacts.final,
+        "review_result": artifacts.review_result,
         "metadata": artifacts.metadata,
         "diff": artifacts.diff,
         "work_items": artifacts.work_items,
@@ -160,8 +159,7 @@ def run_full(cfg: Config) -> RunOutcome:
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
-    pipeline = FAST_REVIEW_PIPELINE if cfg.fast_review else DEFAULT_PIPELINE
-    results = run_stages(pipeline, ctx)
+    results = run_stages(DEFAULT_PIPELINE, ctx)
     _record_results(summary, results)
     exit_code = _exit_code_for(results)
     finalize = finalize_run_summary(
@@ -187,8 +185,7 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
-    pipeline = FAST_REVIEW_REVIEW_ONLY_PIPELINE if cfg.fast_review else REVIEW_ONLY_PIPELINE
-    results = run_stages(pipeline, ctx)
+    results = run_stages(REVIEW_ONLY_PIPELINE, ctx)
     _record_results(summary, results)
     exit_code = _exit_code_for(results)
     finalize = finalize_run_summary(
@@ -222,7 +219,7 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
     # Persist the input as both the severity and final docs so PostToAdoStage
     # reads the same shape it expects from the full pipeline.
     payload = read_json(input_path) or {"summary": "", "findings": []}
-    validate_review_doc(payload)
+    validate_postable_review_doc(payload)
     write_json(artifacts.severity, payload)
     write_json(artifacts.final, payload)
     ctx.severity = payload

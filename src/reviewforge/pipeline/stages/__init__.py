@@ -5,16 +5,10 @@ The orchestrator imports them and runs them in a fixed order:
 
     1. :class:`FetchPrMetadataStage`
     2. :class:`PrepareRepositoryStage`
-    3. :class:`BuildArtifactsStage`
-    4. :class:`ReconstructIntentStage`
-    5. :class:`PlanContextStage`
-    6. :class:`CollectContextStage`
-    7. :class:`ContextDigestStage`
-    8. :class:`ReviewDiffStage`
-    9. :class:`VerifyFindingsStage`
-    10. :class:`CalibrateSeverityStage`
-    11. :class:`AcceptanceCriteriaCoverageStage`
-    12. :class:`PostToAdoStage`
+    3. :class:`ExecuteReasoningEngineStage`
+    4. :class:`PostToAdoStage`
+
+The Pi-driven review work itself lives in ``reviewforge.reasoning`` engines.
 """
 from __future__ import annotations
 
@@ -23,7 +17,7 @@ from .build_artifacts import BuildArtifactsStage
 from .calibrate_severity import CalibrateSeverityStage
 from .collect_context import CollectContextStage
 from .context_digest import ContextDigestStage
-from .fast_review import FastReviewStage
+from .execute_reasoning_engine import ExecuteReasoningEngineStage
 from .fetch_pr_metadata import FetchPrMetadataStage
 from .plan_context import PlanContextStage
 from .post_to_ado import PostToAdoStage
@@ -35,35 +29,8 @@ from .verify_findings import VerifyFindingsStage
 DEFAULT_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
-    BuildArtifactsStage(),
-    ReconstructIntentStage(),
-    PlanContextStage(),
-    CollectContextStage(),
-    ContextDigestStage(),
-    ReviewDiffStage(),
-    VerifyFindingsStage(),
-    CalibrateSeverityStage(),
-    AcceptanceCriteriaCoverageStage(),
+    ExecuteReasoningEngineStage(),
     PostToAdoStage(),
-]
-
-#: Single-call fast review pipeline.
-FAST_REVIEW_PIPELINE: list = [
-    FetchPrMetadataStage(),
-    PrepareRepositoryStage(),
-    BuildArtifactsStage(),
-    FastReviewStage(),
-    AcceptanceCriteriaCoverageStage(),
-    PostToAdoStage(),
-]
-
-#: Same as :data:`FAST_REVIEW_PIPELINE` minus the final posting stage.
-FAST_REVIEW_REVIEW_ONLY_PIPELINE: list = [
-    FetchPrMetadataStage(),
-    PrepareRepositoryStage(),
-    BuildArtifactsStage(),
-    FastReviewStage(),
-    AcceptanceCriteriaCoverageStage(),
 ]
 
 #: Same as :data:`DEFAULT_PIPELINE` minus the final posting stage. Use this
@@ -71,15 +38,7 @@ FAST_REVIEW_REVIEW_ONLY_PIPELINE: list = [
 REVIEW_ONLY_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
-    BuildArtifactsStage(),
-    ReconstructIntentStage(),
-    PlanContextStage(),
-    CollectContextStage(),
-    ContextDigestStage(),
-    ReviewDiffStage(),
-    VerifyFindingsStage(),
-    CalibrateSeverityStage(),
-    AcceptanceCriteriaCoverageStage(),
+    ExecuteReasoningEngineStage(),
 ]
 
 #: A minimal pipeline used by ``post`` to re-validate and post a previously
@@ -87,6 +46,20 @@ REVIEW_ONLY_PIPELINE: list = [
 POST_ONLY_PIPELINE: list = [
     FetchPrMetadataStage(),
     PostToAdoStage(),
+]
+
+#: Legacy alias kept for callers that import the old fast-review pipeline.
+FAST_REVIEW_PIPELINE: list = [
+    FetchPrMetadataStage(),
+    PrepareRepositoryStage(),
+    ExecuteReasoningEngineStage(),
+    PostToAdoStage(),
+]
+
+FAST_REVIEW_REVIEW_ONLY_PIPELINE: list = [
+    FetchPrMetadataStage(),
+    PrepareRepositoryStage(),
+    ExecuteReasoningEngineStage(),
 ]
 
 
@@ -97,6 +70,7 @@ __all__ = [
     "CollectContextStage",
     "ContextDigestStage",
     "DEFAULT_PIPELINE",
+    "ExecuteReasoningEngineStage",
     "FAST_REVIEW_PIPELINE",
     "FAST_REVIEW_REVIEW_ONLY_PIPELINE",
     "FetchPrMetadataStage",

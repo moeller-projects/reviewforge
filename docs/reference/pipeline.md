@@ -1,8 +1,7 @@
 # Pipeline
 
-## Purpose
-
-Document the `Stage` interface, the 12 default stages, the data they exchange, and how to add a new stage. This is the **explanation + reference** for `reviewforge.pipeline`.
+Document the deterministic four-stage production pipeline, the
+`ReasoningEngine` boundary, and the retained legacy fallback.
 
 ## Audience
 
@@ -39,6 +38,7 @@ class StageContext:
     artifacts: Artifacts
     state: RepoState | None
     pi: PiRunner
+    files_text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     intent: dict[str, Any] | None = None
     plan: dict[str, Any] | None = None
@@ -48,6 +48,7 @@ class StageContext:
     verified: dict[str, Any] | None = None
     severity: dict[str, Any] | None = None
     final: dict[str, Any] | None = None
+    review_result: ReviewResult | None = None
     posted: dict[str, int] = field(default_factory=dict)
     skip_reason: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
@@ -60,26 +61,20 @@ Convention:
 - `extras` is for stage-specific scratch that does not fit the canonical fields.
 - `last_token_usage` is updated by stages that call `PiRunner.run_json` and aggregated into the run summary.
 
-## The 12 default stages (in order)
+## The default pipeline (in order)
 
 `reviewforge.pipeline.stages.DEFAULT_PIPELINE` is the canonical review pipeline. From `stages/__init__.py`:
 
-| # | Stage | Reads from ctx | Writes to ctx | Artifacts written |
+|| # | Stage | Reads from ctx | Writes to ctx | Artifacts written |
 |---|---|---|---|---|---|---|
 || 1 | `FetchPrMetadataStage` | — | `metadata` | `metadata.json`, `work-items.json`, `work-item-comments.json`, `threads.json` | |
 || 2 | `PrepareRepositoryStage` | `metadata` | `state` | `diff.patch`, `changed-files.json`, `commits.txt` | |
-|| 3 | `BuildArtifactsStage` | `state`, `metadata` | — | `review-system.combined.md` | |
-|| 4 | `ReconstructIntentStage` | `state`, `metadata` | `intent` | `intent.json` |
-|| 5 | `PlanContextStage` | `state`, `metadata`, `intent` | `plan` | `context-plan.json` |
-|| 6 | `CollectContextStage` | `plan`, `state` | `collected` | `collected-context.json` |
-|| 7 | `ContextDigestStage` | `collected`, `state` | `digest` | `context-digest.json` |
-|| 8 | `ReviewDiffStage` | `digest`, `state` | `candidate` | `candidate-findings.json` |
-|| 9 | `VerifyFindingsStage` | `candidate`, `state` | `verified` | `verified-findings.json` |
-|| 10 | `CalibrateSeverityStage` | `verified` | `severity` | `severity-findings.json` |
-|| 11 | `AcceptanceCriteriaCoverageStage` | `severity` | `final` | appends to `final-findings.json` |
-|| 12 | `PostToAdoStage` | `final`, `threads` | `posted` | `final-findings.json`, `posted-comments.json` | |
+|| 3 | `ExecuteReasoningEngineStage` | `state`, `metadata` | `review_result`, `final` | `review-result.json`, `final-findings.json` | |
+|| 4 | `PostToAdoStage` | `final`, `threads` | `posted` | `final-findings.json`, `posted-comments.json` | |
 
 The orchestrator also calls `finalize_run_summary(...)` after the last stage, which writes `run-summary.json`.
+
+`ExecuteReasoningEngineStage` delegates the Pi-driven portion of the review to a `ReasoningEngine` selected by `cfg.reasoning_engine`. The default engine is `single_pi`, which performs one logical review invocation and returns the canonical `ReviewResult`. The runner may make one formatting-repair invocation when Pi emits invalid JSON; this is tracked separately. The legacy `multi_stage` engine remains available explicitly for debugging, benchmarking, regression comparison, and emergency fallback.
 
 ### Stage-by-stage summary
 
@@ -91,85 +86,30 @@ Fetches the PR JSON via `AdoClient.get_pr(include_work_item_refs=True)`. Validat
 
 Clones (or fetches) the repo at the PR's source commit. Uses the `GIT_ASKPASS` shim from `git/ops.py` to supply the ADO token without putting it in any visible command line. Stores the result in `ctx.state` (a `RepoState` dataclass with `repo_dir`, `base_commit`, `source_commit`, `target_commit`, `diff_text`, `files`, `range_spec`).
 
-#### 3. `BuildArtifactsStage`
+#### 3. `ExecuteReasoningEngineStage`
 
-Materialises the combined system prompt to `review-system.combined.md` (reviewer prompt + standards + language directive). The system prompt is reused by every subsequent Pi stage.
+Selects a `ReasoningEngine` via `reviewforge.reasoning.get_engine(cfg.reasoning_engine)` and calls `engine.execute(ctx)`. The engine is responsible for producing a `ReviewResult` (see [Reasoning engine](#reasoning-engine)). The stage writes `review-result.json` and `final-findings.json` from the result so `PostToAdoStage` sees the expected layout. If the engine raises, the stage records `failed` and the pipeline stops.
 
-#### 4. `ReconstructIntentStage`
+#### 4. `PostToAdoStage`
 
-Calls `pi` with the `Intent` schema. The model returns a structured intent: `pr_intent`, `changed_behaviors`, `risk_areas`. Validated by pydantic. Stored in `ctx.intent` and `intent.json`.
-
-#### 5. `PlanContextStage`
-
-Calls `pi` to produce a `context_plan`: which files to read, which tests to run, which searches to perform. The plan is the input to the deterministic context-collection stage. Stored in `ctx.plan` and `context-plan.json`.
-
-#### 6. `CollectContextStage`
-
-Reads the files and tests from the plan (using `cat` and a test-list scanner). Also runs the searches via `git grep`. Caps each file at `cfg.context_file_max_lines` (default 260) and each search at `cfg.context_search_max_matches` (default 40). Writes `collected-context.json`.
-
-The caps live on `Config` (single source of truth), not on the process env, so the orchestrator and any out-of-band caller stay in sync.
-
-#### 7. `ContextDigestStage`
-
-Asks `pi` to compress the collected context into a digest the model can re-read in a single prompt. Stored in `ctx.digest` and `context-digest.json`. Token savings are significant: subsequent stages see the digest, not the raw collected text.
-
-#### 8. `ReviewDiffStage`
-
-The main review. Splits the diff into file-based chunks via `git.chunker.build_chunks(state, max_bytes=cfg.max_diff_bytes)`. For each chunk, calls `pi` and asks for findings. Concatenates into `ctx.candidate` and `candidate-findings.json`.
-
-If the diff is small (under `cfg.chunk_trigger_diff_bytes`), the whole diff is sent in one call. If `cfg.disable_chunk_review` is true, the whole diff is always sent in one call.
-
-#### 9. `VerifyFindingsStage`
-
-For each candidate finding, asks `pi` to re-evaluate against the digest + the changed code. Findings that do not survive verification are dropped (with a `dropped` counter recorded in the stage's details). The survivors land in `ctx.verified` and `verified-findings.json`.
-
-#### 10. `CalibrateSeverityStage`
-
-For each verified finding, asks `pi` to recalibrate the severity (`nit` / `minor` / `major` / `blocker`) given the PR's intent and the digest. Findings with mismatched severity are updated, not dropped. Output: `ctx.severity` and `severity-findings.json`.
-
-#### 11. `AcceptanceCriteriaCoverageStage`
-
-Checks whether the PR diff covers the acceptance criteria of linked work items. The first pass extracts identifiers from each AC and looks for them in the changed files or diff. When `AC_COVERAGE_LLM=1` is set, an optional LLM second-pass re-checks uncovered ACs to suppress false positives. Uncovered ACs are appended to `final-findings.json` as general-thread findings.
-
-#### 12. `PostToAdoStage`
-
-Copies `severity-findings.json` to `final-findings.json` only when `final-findings.json` does not already exist (earlier stages, such as `AcceptanceCriteriaCoverageStage`, may have appended findings to it). In dry-run mode, prints the final doc to stdout and records `ctx.posted = {"created": 0, "skipped": 0, "dry_run": 1}`. Otherwise calls `call_helper(cfg, "post-findings", artifacts.dir, findings=artifacts.final)` to invoke the legacy subprocess, which handles dedup, file/line mapping, and posting.
+Posts `final-findings.json` to ADO. In dry-run mode, prints the final doc to stdout and records `ctx.posted = {"created": 0, "skipped": 0, "dry_run": 1}`. Otherwise calls `call_helper(cfg, "post-findings", artifacts.dir, findings=artifacts.final)` to invoke the legacy subprocess, which handles dedup, file/line mapping, and posting.
 
 The stage always runs (even in dry-run) so the summary captures the outcome.
 
-## Fast review mode
+## Reasoning engine
 
-When `FAST_REVIEW=1` (or `--fast-review`), the orchestrator runs `FAST_REVIEW_PIPELINE` instead of `DEFAULT_PIPELINE`. This pipeline replaces stages 4–10 with a single `FastReviewStage` that makes exactly one Pi call. The model is expected to return a rich JSON document (`FastReviewResult`) containing the reconstructed intent, gathered context, review summary, verification summary, and calibrated findings.
+ - `single_pi` (default) — Python prepares and deterministically reduces the repository context; Pi performs intent reconstruction, review, verification, and severity calibration in one logical invocation. Python enriches run metadata and synthesizes compatibility artifacts.
+ - `multi_stage` — explicit legacy fallback. Runs the original `intent → plan → collect → digest → review → verify → calibrate → acceptance-criteria coverage` stages internally and returns the same canonical `ReviewResult`.
 
-```python
-FAST_REVIEW_PIPELINE = [
-    FetchPrMetadataStage(),
-    PrepareRepositoryStage(),
-    BuildArtifactsStage(),
-    FastReviewStage(),          # single Pi call
-    AcceptanceCriteriaCoverageStage(),
-    PostToAdoStage(),
-]
-```
+`ReviewResult` is the only production AI response contract. It contains the review and verification summaries, PR summary, findings, evidence, confidence, quality notes, uncertainties, and deterministic runtime metrics. `final-findings.json` is produced by the presentation-layer projection in `reviewforge.pipeline.projection`, not by the domain model.
 
-`FastReviewStage` validates the response against `FastReviewResult` and synthesizes the canonical intermediate artifacts so the rest of the pipeline sees a normal layout:
+`FAST_REVIEW=1` (or `--fast-review`) remains a backwards-compatible alias for `REASONING_ENGINE=single_pi`. Both engines write `review-result.json` and `final-findings.json`; the single-call engine also writes synthesized compatibility artifacts. The raw response is not part of the stable `ARTIFACT_NAMES` contract.
 
-| Artifact | Source |
-|---|---|
-| `intent.json` | `response.intent` |
-| `context-plan.json` | `context_summary.files_read`, `searches_run`, `tests_inspected` |
-| `collected-context.json` | `context_summary` |
-| `context-digest.json` | `context_summary.notes` + `statistics` |
-| `candidate-findings.json` | `response.findings` + `review_summary.summary` |
-| `verified-findings.json` | `response.findings` + `verification_summary.summary` |
-| `severity-findings.json` | `response.findings` + `review_summary.summary` |
-| `final-findings.json` | `response.findings` + merged review + verification summaries |
+The engines are registered in `reviewforge.reasoning.engine`. A new engine can be added by subclassing `ReasoningEngine`, implementing `execute(ctx) -> ReviewResult`, and calling `register_engine(name, cls)`.
 
-The raw response is also written to `artifacts/pr-<id>/runs/<run-id>/raw/fast-review.json` for debugging, but this is not part of the stable `ARTIFACT_NAMES` contract.
+### Fast review mode
 
-Fast review mode is opt-in and does not change the default pipeline. There is no automatic fallback to the default pipeline if the single call fails. The response and artifacts are intentionally indistinguishable from a full-pipeline review — no `fast_path` flag is added to findings, comments, or the run summary.
-
-For `review --no-post`, the orchestrator uses `FAST_REVIEW_REVIEW_ONLY_PIPELINE`, which is the same sequence without `PostToAdoStage`.
+`FAST_REVIEW=1` / `--fast-review` selects `single_pi`. There is no automatic fallback to `multi_stage` if the single call fails. The output is indistinguishable from the default engine. For `review --no-post`, the orchestrator uses `REVIEW_ONLY_PIPELINE`, which is the same sequence without `PostToAdoStage`.
 
 ## `REVIEW_ONLY_PIPELINE` and `POST_ONLY_PIPELINE`
 
@@ -179,15 +119,7 @@ Two shorter pipelines are exposed for the CLI subcommands that do not need the f
 REVIEW_ONLY_PIPELINE = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
-    BuildArtifactsStage(),
-    ReconstructIntentStage(),
-    PlanContextStage(),
-    CollectContextStage(),
-    ContextDigestStage(),
-    ReviewDiffStage(),
-    VerifyFindingsStage(),
-    CalibrateSeverityStage(),
-    AcceptanceCriteriaCoverageStage(),
+    ExecuteReasoningEngineStage(),
     # No PostToAdoStage
 ]
 
@@ -261,7 +193,7 @@ Stages use `Model.model_validate(payload)` immediately after `pi` returns. If va
 2. Re-export it from `reviewforge/pipeline/stages/__init__.py` and add an instance to `DEFAULT_PIPELINE` at the right position.
 3. Add a corresponding field to `StageContext` if it produces a structured output (or use `extras` for scratch).
 4. Add a pydantic schema in `schemas.py` if the output is consumed by a later stage.
-5. Add tests in `tests/test_stages.py`.
+5. Add tests in `tests/test_stages.py` or `tests/test_reasoning.py`.
 
 ### Remove a stage
 

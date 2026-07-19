@@ -45,7 +45,14 @@ def clean_env(monkeypatch):
     for key in list(monkeypatch._envstore if hasattr(monkeypatch, "_envstore") else {}):
         pass
     import os
-    keys = [k for k in os.environ if k.startswith(("ADO_", "PR_", "PI_", "REVIEW_", "WORKSPACE", "CLONE_ROOT", "CHUNK_", "MAX_", "DISABLE_", "DRY_", "FORCE_", "INCLUDE_", "VERIFY_"))]
+    keys = [
+        k for k in os.environ
+        if k.startswith((
+            "ADO_", "PR_", "PI_", "REVIEW_", "WORKSPACE", "CLONE_ROOT",
+            "CHUNK_", "MAX_", "DISABLE_", "DRY_", "FORCE_", "INCLUDE_",
+            "VERIFY_", "AC_",
+        )) or k == "SYSTEM_ACCESSTOKEN"
+    ]
     for k in keys:
         monkeypatch.delenv(k, raising=False)
 
@@ -481,9 +488,62 @@ class TestPowerShellForwardingContract:
         assert normalize_branch_name("refs/heads/main") == "main"
         assert normalize_branch_name("main") == "main"
 
+    def test_all_config_constructors_default_to_single_pi(self, clean_env, monkeypatch):
+        from reviewforge.config import Config
+
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        monkeypatch.setenv("ADO_ORG", "o")
+        monkeypatch.delenv("REASONING_ENGINE", raising=False)
+        monkeypatch.delenv("FAST_REVIEW", raising=False)
+        assert Config.from_env().reasoning_engine == "single_pi"
+        assert Config.from_sources(
+            {},
+            env={
+                "ADO_AUTH_TOKEN": "t",
+                "ADO_ORG": "o",
+                "REASONING_ENGINE": "",
+            },
+        ).reasoning_engine == "single_pi"
+        assert Config(
+            ado_org="o",
+            ado_project="p",
+            ado_repo_id="r",
+            pr_id="1",
+            ado_token="t",
+            source_branch="",
+            target_branch="",
+            workspace=Path("/tmp"),
+            clone_root=Path("/tmp"),
+            review_language="English",
+            review_prompt_path=Path("review"),
+            intent_prompt_path=Path("intent"),
+            context_plan_prompt_path=Path("plan"),
+            context_digest_prompt_path=Path("digest"),
+            verify_prompt_path=Path("verify"),
+            severity_prompt_path=Path("severity"),
+            standards_path=Path("standards"),
+            pi_model="m",
+            max_diff_bytes=1,
+            chunk_trigger_diff_bytes=1,
+            disable_chunk_review=False,
+            pi_timeout_secs=1,
+            dry_run=False,
+            include_work_items=True,
+            include_existing_comments=True,
+            verify_findings=True,
+            force_review=False,
+            review_target_branches="",
+            review_artifact_dir=None,
+            review_artifact_root=Path("/tmp"),
+            review_run_id=None,
+        ).reasoning_engine == "single_pi"
     def test_env_file_path_supported(self, tmp_path, monkeypatch):
         # Direct Python callers can load a .env file explicitly via
         # Config.from_env_file. The PowerShell wrappers do NOT do
+        monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
+        monkeypatch.delenv("ADO_API_KEY", raising=False)
+        monkeypatch.delenv("ADO_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ADO_MCP_AUTH_TOKEN", raising=False)
         # this; they read the live process env and expect the user
         # to have loaded the file themselves.
         from reviewforge.config import Config

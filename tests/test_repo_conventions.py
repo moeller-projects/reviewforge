@@ -90,6 +90,7 @@ CANONICAL_ARTIFACT_NAMES: tuple[str, ...] = (
     "review-system.combined.md",
     "work-items.json",
     "threads.json",
+    "review-result.json",
 )
 
 

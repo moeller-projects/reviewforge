@@ -14,6 +14,7 @@ from ...ado.client import call_helper
 from ...artifacts.builder import read_json
 from ...artifacts.summary import finalize_run_summary
 from ..stage import Stage, StageContext
+from ..validation import validate_postable_review_doc
 
 
 def _log(message: str) -> None:
@@ -43,6 +44,7 @@ class PostToAdoStage(Stage):
             shutil.copyfile(ctx.artifacts.severity, ctx.artifacts.final)
             ctx.final = read_json(ctx.artifacts.final) or {"summary": "", "findings": []}
 
+        validate_postable_review_doc(ctx.final)
         if cfg.dry_run:
             _log("DRY_RUN=1; printing findings JSON (not posting)")
             print(json.dumps(ctx.final, ensure_ascii=False))

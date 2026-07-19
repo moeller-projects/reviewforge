@@ -33,6 +33,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "review-system.combined.md",
     "work-items.json",
     "threads.json",
+    "review-result.json",
 )
 
 
@@ -57,6 +58,7 @@ class Artifacts:
     verified: Path
     severity: Path
     final: Path
+    review_result: Path
     posted: Path
     summary: Path
     system_prompt: Path
@@ -85,6 +87,7 @@ class Artifacts:
             "verified-findings.json": str(self.verified),
             "severity-findings.json": str(self.severity),
             "final-findings.json": str(self.final),
+            "review-result.json": str(self.review_result),
             "posted-comments.json": str(self.posted),
             "run-summary.json": str(self.summary),
             "review-system.combined.md": str(self.system_prompt),
@@ -136,6 +139,7 @@ def create(cfg: Config) -> Artifacts:
         verified=root / "verified-findings.json",
         severity=root / "severity-findings.json",
         final=root / "final-findings.json",
+        review_result=root / "review-result.json",
         posted=root / "posted-comments.json",
         summary=root / "run-summary.json",
         system_prompt=root / "review-system.combined.md",

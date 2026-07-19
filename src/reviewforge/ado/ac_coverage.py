@@ -231,6 +231,13 @@ def uncovered_findings(results: list[AcCoverageResult]) -> list[dict]:
                 "severity": "major",
                 "title": f"{title_prefix}: {r.short_text}",
                 "message": "\n".join(message_parts),
+                "suggestion": "Address the acceptance criterion or update the work item.",
+                "evidence": {
+                    "workItems": [f"#{wi}"],
+                    "whyNewInThisPr": "The deterministic AC check found no matching changed-code identifier.",
+                    "whyNotIntentional": "The linked acceptance criterion remains explicitly unmet.",
+                    "classification": "work-item",
+                },
             }
         )
     return findings

@@ -38,6 +38,7 @@ class StageContext:
     artifacts: Any  # Artifacts
     state: Any  # RepoState | None
     pi: Any  # PiRunner
+    files_text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     intent: dict[str, Any] | None = None
     plan: dict[str, Any] | None = None
@@ -47,6 +48,7 @@ class StageContext:
     verified: dict[str, Any] | None = None
     severity: dict[str, Any] | None = None
     final: dict[str, Any] | None = None
+    review_result: Any | None = None
     posted: dict[str, int] = field(default_factory=dict)
     skip_reason: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
@@ -101,6 +103,7 @@ class Stage:
     def __call__(self, ctx: StageContext) -> StageResult:
         """Execute the stage with timing and error capture."""
         started_at = _now_iso()
+        ctx.last_token_usage = {}
         t0 = time.monotonic()
         try:
             if not self.should_run(ctx):

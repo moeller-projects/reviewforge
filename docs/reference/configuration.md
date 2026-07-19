@@ -105,16 +105,17 @@ The columns marked _Alias_ indicate that multiple env var names resolve to the s
 | `MAX_FINDINGS` | _(unset)_ | Cap on the number of findings, after filtering, sorted by severity. |
 | `REVIEW_LANGUAGE` | `"English"` | Comment language hint. |
 | `FORCE_REVIEW` | `"0"` | Set to `1` to review draft / closed / non-policy-branch PRs anyway. |
-| `DRY_RUN` | `"0"` | Set to `1` to skip posting; the final review JSON is printed to stdout. |
-| `FAST_REVIEW` | `"0"` | Set to `1` to run the entire Pi-driven review in a single call. See [pipeline.md](pipeline.md#fast-review-mode). |
+|| `DRY_RUN` | `"0"` | Set to `1` to skip posting; the final review JSON is printed to stdout. |
+|| `REASONING_ENGINE` | `"single_pi"` | `single_pi` is the production one-call engine. Set `multi_stage` explicitly for debugging, benchmarking, regression comparison, or emergency fallback. |
+|| `FAST_REVIEW` | `"0"` | Backwards-compatible alias that forces `REASONING_ENGINE=single_pi`. |
 
 ### Diff + context caps
 
 | Env var | Default | Notes |
 |---|---|---|
-| `MAX_DIFF_BYTES` | `200000` | Hard cap on a single-file diff for chunked review. |
-| `CHUNK_TRIGGER_DIFF_BYTES` | `MAX_DIFF_BYTES` | Total-diff size that triggers chunked review. |
-| `DISABLE_CHUNK_REVIEW` | `"0"` | Set to `1` to send the whole diff in one Pi call (may exceed context). |
+| `MAX_DIFF_BYTES` | `200000` | Maximum bytes retained by deterministic single-call diff reduction. |
+| `CHUNK_TRIGGER_DIFF_BYTES` | `MAX_DIFF_BYTES` | Legacy multi-stage compatibility setting; it does not split production single-call reasoning. |
+| `DISABLE_CHUNK_REVIEW` | `"0"` | Legacy compatibility setting. Production `single_pi` remains one logical review. |
 | `CONTEXT_FILE_MAX_LINES` | `260` | Max lines of any file surfaced in `collected-context.json`. |
 | `CONTEXT_SEARCH_MAX_MATCHES` | `40` | Max matches per `searches_to_run` query. |
 

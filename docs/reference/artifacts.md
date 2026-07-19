@@ -153,7 +153,13 @@ class Artifacts:
   "skipped_reason": null,
   "exit_code": 0,
   "artifact_dir": "/workspace/artifacts/pr-1234/runs/20260614T083000Z-1234",
-  "review_language": "English"
+  "review_language": "English",
+  "invocation_count": 1,
+  "repair_invocation_count": 0,
+  "reasoning_duration_ms": 39000,
+  "projection_duration_ms": 12,
+  "validation_duration_ms": 8,
+  "token_usage": {"in": 8421, "out": 912, "total": 9333}
 }
 ```
 

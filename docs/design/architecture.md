@@ -59,46 +59,32 @@ The package has three layers, separated by purpose:
 
 ## Data flow on a single review run
 
-For `run_full`, the canonical path is:
+For `run_full`, the production path is:
 
 ```text
-1. CLI: build_parser().parse_args(["review", "--pr-url", url])
-   → argparse.Namespace with all the common flags populated
-
-2. cli.cmd_review(args)
-   → calls _build_config(args) which yields a frozen Config dataclass.
-   → config precedence: CLI > env > .env > defaults.
-
-3. orchestrator.run_full(cfg)
-   → cfg.validate_files()                 # prompts/standards must exist
-   → Artifacts = artifacts.create(cfg)    # mkdir pr-<id>/runs/<run_id>/
-   → PiRunner(cfg)                        # not yet invoked
-   → StageContext(cfg, artifacts, pi)
-   - run_stages(DEFAULT_PIPELINE, ctx)    # 12 stages, short-circuit on first failure
-
-4. Each Stage reads from ctx and writes to ctx. Typical inputs/outputs:
-   - FetchPrMetadata      → ctx.metadata  (PR JSON from ADO)
-   - PrepareRepository    → ctx.state     (RepoState: clone, fetch, base/source commits, diff)
-   - BuildArtifacts       → ctx.artifacts.system_prompt / `review-system.combined.md`
-   - ReconstructIntent    → ctx.intent    (Intent schema)
-   - PlanContext          → ctx.plan      (context plan)
-   - CollectContext       → ctx.collected (collected-context.json)
-   - ContextDigest        → ctx.digest
-   - ReviewDiff           → ctx.candidate (chunked review, may be multiple Pi calls)
-   - VerifyFindings       → ctx.verified
-   - CalibrateSeverity    → ctx.severity
-   - PostToAdo            → ctx.posted + side effects in ADO
-
-5. orchestrator._record_results(summary, results)
-   → summary.add_stage(StageRecord(...)) for each StageResult
-
-6. finalize_run_summary(summary, cfg, artifacts, ctx.posted, exit_code)
-   → run-summary.json written to artifacts.summary
-
-7. RunOutcome(exit_code, summary, stages) returned to CLI.
-
-8. CLI returns the exit code to the shell.
+1. CLI builds Config with one shared engine resolver.
+2. orchestrator.run_full(cfg)
+   → validates required files
+   → creates the per-run artifact directory
+   → builds StageContext and PiRunner
+3. FetchPrMetadataStage
+   → deterministic ADO metadata, work items, comments, and threads
+4. PrepareRepositoryStage
+   → clone/fetches the PR, computes RepoState, diff, changed files, and commits
+5. ExecuteReasoningEngineStage
+   → selects single_pi by default
+   → deterministically reduces oversized diff context
+   → makes one logical Pi reasoning invocation
+   → validates ReviewResult and writes the canonical result plus compatibility projections
+6. PostToAdoStage
+   → validates the projected postable findings
+   → posts through the Python ADO helper, or prints on DRY_RUN
+7. The orchestrator records stage timing, tokens, invocation counts, and runtime metrics
+   in run-summary.json.
 ```
+
+`multi_stage` is not part of the default path. It remains an explicit engine
+selection for debugging, benchmarking, regression comparison, and fallback.
 
 ## Key abstractions
 

@@ -55,10 +55,15 @@ class RunSummary:
     exit_code: int = 0
     artifact_dir: str = ""
     review_language: str = ""
-    # Phase E + F: session tracking.
+    # Runtime metrics are distinct from model-authored review metrics.
     pi_session_id: str | None = None
     pi_session_enabled: bool = True
     pi_session_cleared: bool = False
+    invocation_count: int = 0
+    repair_invocation_count: int = 0
+    reasoning_duration_ms: int = 0
+    projection_duration_ms: int = 0
+    validation_duration_ms: int = 0
     token_usage: dict[str, int] = field(default_factory=dict)
 
     def add_stage(self, rec: StageRecord) -> None:
@@ -83,6 +88,11 @@ class RunSummary:
             "pi_session_id": self.pi_session_id,
             "pi_session_enabled": self.pi_session_enabled,
             "pi_session_cleared": self.pi_session_cleared,
+            "invocation_count": self.invocation_count,
+            "repair_invocation_count": self.repair_invocation_count,
+            "reasoning_duration_ms": self.reasoning_duration_ms,
+            "projection_duration_ms": self.projection_duration_ms,
+            "validation_duration_ms": self.validation_duration_ms,
             "token_usage": self.token_usage,
         }
 
@@ -167,6 +177,27 @@ def finalize_run_summary(
         if tu.get("out"):
             total_out += int(tu["out"])
             any_tokens = True
+    summary.invocation_count = 0
+    summary.repair_invocation_count = 0
+    summary.reasoning_duration_ms = 0
+    summary.projection_duration_ms = 0
+    summary.validation_duration_ms = 0
+    for rec in summary.stages:
+        metrics = rec.details.get("metrics") if isinstance(rec.details, dict) else None
+        if isinstance(metrics, dict):
+            summary.invocation_count += int(metrics.get("invocationCount", 0) or 0)
+            summary.repair_invocation_count += int(
+                metrics.get("repairInvocationCount", 0) or 0
+            )
+            summary.reasoning_duration_ms += int(
+                metrics.get("reasoningDurationMs", 0) or 0
+            )
+            summary.projection_duration_ms += int(
+                metrics.get("projectionDurationMs", 0) or 0
+            )
+            summary.validation_duration_ms += int(
+                metrics.get("validationDurationMs", 0) or 0
+            )
     if any_tokens:
         summary.token_usage = {
             "in": total_in,
