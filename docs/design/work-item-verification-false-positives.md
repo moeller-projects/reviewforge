@@ -1,9 +1,12 @@
 # Work item verification — false positive root cause
+> **Historical note.** This document analyzes the retired multi-stage review
+> pipeline. The current production path is the four-stage pipeline with
+> `single_pi` as the default reasoning engine.
 
 > **Scope.** Investigation of why work-item verification produces false positives
-> in the current 12-stage pipeline. Question: under what conditions does the
-> work-item step in the review pipeline produce false positives, and is the
-> pipeline's data flow actually capable of supporting what the prompts describe?
+> in the retired 12-stage pipeline. Question: under what conditions did the
+> historical work-item step produce false positives, and was the former
+> pipeline's data flow capable of supporting what its prompts described?
 >
 > **Method.** Read every stage in `src/reviewforge/pipeline/stages/` that
 > consumes work-item / thread data; traced how the orchestrator populates

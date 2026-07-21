@@ -182,15 +182,49 @@ class TestCanonicalReviewResultContract:
         with pytest.raises(Exception, match="reference"):
             ReviewResult.model_validate(payload)
 
-    def test_large_diff_reduction_keeps_each_file_header(self):
-        reduced, was_reduced = _reduce_diff(
-            "diff --git a/a.py b/a.py\n+a\n" * 20
-            + "diff --git a/b.py b/b.py\n+b\n" * 20,
-            100,
+    @pytest.mark.parametrize(
+        ("diff", "limit"),
+        [
+            ("", 0),
+            ("diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+é\n", 1),
+            ("diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+changed\n", 24),
+            (
+                "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+one\n"
+                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n+two\n",
+                20,
+            ),
+            (
+                "".join(
+                    f"diff --git a/file{i}.py b/file{i}.py\n@@ -1 +1 @@\n+change{i}\n"
+                    for i in range(100)
+                ),
+                17,
+            ),
+        ],
+    )
+    def test_diff_reduction_never_exceeds_limit(self, diff, limit):
+        reduced, _ = _reduce_diff(diff, limit)
+        assert len(reduced.encode("utf-8")) <= limit
+
+    def test_diff_reduction_preserves_headers_when_budget_allows(self):
+        diff = (
+            "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+a\n"
+            "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n+b\n"
         )
+        reduced, was_reduced = _reduce_diff(diff, 70)
         assert was_reduced is True
         assert "diff --git a/a.py b/a.py" in reduced
         assert "diff --git a/b.py b/b.py" in reduced
+
+    def test_diff_reduction_is_deterministic(self):
+        diff = "diff --git a/a.py b/a.py\n+é\n" * 20
+        assert _reduce_diff(diff, 31) == _reduce_diff(diff, 31)
+
+    def test_diff_at_exact_limit_is_unchanged(self):
+        diff = "diff --git a/a.py b/a.py\n+é\n"
+        reduced, was_reduced = _reduce_diff(diff, len(diff.encode("utf-8")))
+        assert reduced == diff
+        assert was_reduced is False
 
     def test_postable_projection_rejects_missing_evidence(self):
         with pytest.raises(SystemExit, match="evidence"):

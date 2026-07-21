@@ -77,7 +77,7 @@ src/reviewforge/        # all real logic lives here
   ado/                       # AdoClient, posting (idempotency), diff_mapper, models
   git/                       # RepoState, prepare_repo, chunker
   ai/                        # PiRunner (subprocess wrapper) + prompt assembly
-  pipeline/                  # Stage interface + orchestrator + 12 default stages
+  pipeline/                  # Stage interface + four-stage production pipeline
     stages/                  # fetch_pr_metadata … post_to_ado
   artifacts/                 # ARTIFACT_NAMES contract, RunSummary, file writers
   prompts/                   # reviewer prompt fragments (markdown)
@@ -143,11 +143,15 @@ stage receives a mutable `StageContext`; stages may read prior outputs and
 | 3 | `ExecuteReasoningEngineStage` | `review-result.json`, `final-findings.json` | — |
 | 4 | `PostToAdoStage` | `posted-comments.json` | `DRY_RUN=1` |
 
-`ExecuteReasoningEngineStage` selects a `ReasoningEngine` by `cfg.reasoning_engine`:
-`multi_stage` (default) runs the original intent → plan → collect → digest →
-review → verify → calibrate → acceptance-criteria coverage stages internally;
-`single_pi` performs the same Pi-driven work in a single model call. The legacy
-`FAST_REVIEW=1` flag is an alias for `REASONING_ENGINE=single_pi`.
+`ExecuteReasoningEngineStage` selects a `ReasoningEngine` by
+`cfg.reasoning_engine`. `single_pi` is the default production engine and
+performs one logical reasoning pass. `multi_stage` is an explicit fallback
+for debugging, benchmarking, regression comparison, and emergency recovery;
+it runs the retained intent → plan → collect → digest → review → verify →
+calibrate → acceptance-criteria flow internally. `ReviewResult` is the
+canonical engine contract; compatibility artifacts are projections from it.
+Pi formatting repair is tracked separately by `PiRunner` and is not another
+reasoning stage.
 
 A stage returns `StageStatus.OK`, `SKIPPED`, or `FAILED`. FAILED short-circuits
 the run; SKIPPED writes nothing and continues. Override `should_run(ctx)` for

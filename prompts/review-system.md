@@ -1,3 +1,4 @@
+<!-- Legacy multi_stage engine prompt; the production default uses fast-review-system.md. -->
 <!-- target path: reviewforge/prompts/review-system.md -->
 
 <!-- review.py appends a LANGUAGE directive and coding standards at runtime. -->

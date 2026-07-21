@@ -93,13 +93,17 @@ Set `PI_SESSION_ENABLED=0` or pass `--no-pi-session`. Each stage gets a fresh `p
 
 ## Token savings (Phase B)
 
-When session reuse is enabled, the prompts intentionally shrink. From `ai/prompts.py`'s docstring:
+When session reuse is enabled, Pi can retain context between its subprocess
+calls. The production `single_pi` path sends one logical reasoning request;
+`multi_stage` uses the same runner only when explicitly selected as a
+fallback. `ReviewResult` is the canonical response, and compatibility
+artifacts are projections written after reasoning.
 
-> When `cfg.pi_session_enabled` is true, the model retains the full context from previous stages in its Pi session. So we shrink the per-stage user message: instead of re-embedding the metadata, work items, threads, and previous-stage JSON, we pass file paths and let the model's `read,grep` tools load them on demand.
+## Token accounting
 
-In legacy / deterministic mode (`pi_session_enabled=False`), every payload is embedded verbatim. The pipeline still works, just more expensively.
-
-The combination — session reuse on the `pi` side + minimal per-stage payloads on our side — is what keeps the token cost of a typical 12-stage review under 30k tokens, even for large diffs.
+`PiRunner` records input, output, total, logical invocation, and formatting
+repair counts. Formatting repair is an exceptional JSON recovery step, not a
+second reasoning stage.
 
 ## JSON repair loop
 
@@ -114,16 +118,19 @@ In session mode, the repair call is cheap: it sends empty stdin and the model al
 
 ## Prompt assembly
 
-`ai/prompts.py` has three builders:
+`ai/prompts.py` provides the shared system-prompt builder and the legacy
+per-stage payload builders. The production `single_pi` engine uses
+`fast-review-system.md` plus one unified instruction; the per-stage builders
+are used only by the explicit `multi_stage` fallback.
 
-| Builder | Returns | Used by |
-|---|---|---|
-| `system_prompt(cfg)` | Combined system prompt (reviewer prompt + language hint + standards file) | every stage's `--append-system-prompt` |
-| `*_payload(cfg, ...)` per stage | The user-message text sent on stdin | the corresponding stage |
+| Prompt path | Used by |
+|---|---|
+| `FAST_REVIEW_PROMPT_PATH` | Default `single_pi` reasoning pass |
+| `REVIEW_PROMPT_PATH` and the intent/plan/digest/review/verify/severity prompts | Explicit `multi_stage` fallback |
 
-The system prompt is built once per run and reused for every stage. The per-stage payloads shrink in session mode (paths only) and stay full in non-session mode (embedded data).
-
-The system prompt path is `Config.review_prompt_path`, configurable per env. The per-stage prompts (`Intent` / `ContextPlan` / `ContextDigest` / `Review` / `Verify` / `Severity`) live alongside it.
+`PiRunner` builds the configured system prompt, executes the logical request,
+and optionally performs a separately counted formatting-repair call. The
+repair call is not another reasoning stage.
 
 ## Token usage tracking
 
@@ -155,7 +162,7 @@ The scrub is conservative: it removes all known aliases. If a new alias is added
 ## Timeouts and retries
 
 - `Config.pi_timeout_secs` (default 600s) bounds the subprocess call. On timeout, the runner raises `SystemExit` with a clear message. The orchestrator records this as a stage failure.
-- There is **no** retry loop. A timeout means the model did not respond in time; re-running the same prompt is unlikely to help and would compound the cost. Operators should increase the timeout or split the prompt (e.g. enable chunked review).
+- There is **no** retry loop. A timeout means the model did not respond in time; re-running the same prompt is unlikely to help and would compound the cost. Operators should increase the timeout or review the deterministic context reduction settings.
 
 ## Common debugging questions
 

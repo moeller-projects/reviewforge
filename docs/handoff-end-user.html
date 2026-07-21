@@ -140,9 +140,9 @@
 
   <text class="lbl" x="220" y="26">CONTAINER</text>
   <rect class="box-h" x="220" y="40" width="240" height="120" rx="8"/>
-  <text class="text" x="340" y="70" text-anchor="middle">12-stage pipeline</text>
-  <text class="mut" x="340" y="92" text-anchor="middle">fetch · prepare · build · intent · plan · collect</text>
-  <text class="mut" x="340" y="108" text-anchor="middle">digest · review · verify · severity · ac · post</text>
+  <text class="text" x="340" y="70" text-anchor="middle">Four-stage pipeline</text>
+  <text class="mut" x="340" y="92" text-anchor="middle">fetch · prepare · reason · post</text>
+  <text class="mut" x="340" y="108" text-anchor="middle">single_pi default · multi_stage fallback</text>
   <text class="mut" x="340" y="132" text-anchor="middle">Pi (read-only) + git + ADO REST write only at post</text>
   <text class="mut" x="340" y="148" text-anchor="middle">artifacts/pr-&lt;id&gt;/runs/&lt;run&gt;/*.json</text>
 
@@ -174,7 +174,7 @@
 
 <details class="fallback"><summary>Mermaid source (Figure 1)</summary>
 <pre><code>flowchart LR
-  PS[PowerShell script] --&gt;|docker run -d| Container[12-stage pipeline]
+  PS[PowerShell script] --&gt;|docker run -d| Container[Four-stage pipeline]
   Container --&gt;|write comments| ADO[Azure DevOps PR]
   Container --&gt;|artifacts| Volume[host artifact dir]
 </code></pre>
@@ -182,29 +182,23 @@
 
 <h2 id="lifecycle">3. Per-PR lifecycle, end to end <span class="mode">reference</span></h2>
 
-<p>For a single PR, the container runs these 12 stages in order:</p>
+<p>For a single PR, the container runs these four production stages in order:</p>
 
 <table>
 <thead><tr><th>Stage</th><th>What it does in plain language</th><th>You care because...</th></tr></thead>
 <tbody>
-<tr><td>1. Fetch PR metadata</td><td>Reads title, description, reviewers, linked work items, and existing comment threads from ADO.</td><td>...the bot knows whether the PR is linked to work items and can detect already-posted comments.</td></tr>
-<tr><td>2. Prepare repository</td><td>Clones the source branch and computes the diff against the target branch.</td><td>...the review is based on the actual diff, not just the PR description.</td></tr>
-<tr><td>3. Build artifacts</td><td>Assembles the reviewer's instructions, standards, and language directive into one system prompt file.</td><td>...this is the "personality" that will be loaded into Pi.</td></tr>
-<tr><td>4. Reconstruct intent</td><td>Asks the model: "What is this PR trying to do?"</td><td>...later stages judge the code against the author's intent, not against the diff alone.</td></tr>
-<tr><td>5. Plan context</td><td>Decides which other files to read and which tests to look for.</td><td>...the review can reference broader context (e.g., schema definitions, service interfaces) without being fed the entire repo.</td></tr>
-<tr><td>6. Collect context</td><td>Reads the planned files and runs the planned searches (e.g., ripgrep) inside the container.</td><td>...the model gets only the context it asked for, staying under token limits.</td></tr>
-<tr><td>7. Context digest</td><td>Summarises the collected context into a compact digest.</td><td>...the review stage has a focused, readable background instead of raw file dumps.</td></tr>
-<tr><td>8. Review diff</td><td>The main review. The model inspects the diff and outputs a JSON list of findings. Large diffs are split into chunks.</td><td>...this is where most of the comments come from.</td></tr>
-<tr><td>9. Verify findings</td><td>For each finding, asks the model to argue against itself and drop false positives.</td><td>...fewer noisy comments in your PR.</td></tr>
-<tr><td>10. Calibrate severity</td><td>Reclassifies each finding's severity (nit / minor / major / blocker).</td><td>...the comment thread shows a stable, comparable severity label.</td></tr>
-<tr><td>11. AC coverage</td><td>Scans linked work-item acceptance criteria to see if any are missing from the diff. Optionally asks the LLM for a second opinion.</td><td>...you may see a general PR comment listing uncovered acceptance criteria.</td></tr>
-<tr><td>12. Post to ADO</td><td>Posts or skips comments based on the dedupe marker, optionally casts a "waiting author" vote, and annotates stale comments from earlier pushes.</td><td>...this is the only visible outcome. It is skipped entirely in dry-run.</td></tr>
+<tr><td>1. Fetch PR metadata</td><td>Reads title, description, reviewers, linked work items, and existing comment threads from ADO.</td><td>...the bot has deterministic PR context and deduplication data.</td></tr>
+<tr><td>2. Prepare repository</td><td>Clones the source branch and computes the diff against the target branch.</td><td>...the review is based on the actual change set.</td></tr>
+<tr><td>3. Execute reasoning engine</td><td>Runs the default <code>single_pi</code> engine for one logical reasoning pass and returns canonical <code>ReviewResult</code> JSON.</td><td>...intent, verification, severity, evidence, and recommendations are produced together.</td></tr>
+<tr><td>4. Post to ADO</td><td>Projects <code>ReviewResult</code> into compatibility findings and posts or skips comments using the dedupe marker.</td><td>...this is the only visible write outcome and is skipped in dry-run.</td></tr>
 </tbody>
 </table>
 
 <div class="callout">
-  <div class="title">Pipeline mode shortcuts</div>
-  The default <code>./run.ps1</code> path runs all 12 stages. Two subcommands exist for special cases: <code>reviewforge review --review-only</code> (stages 1-11, no ADO write) and <code>reviewforge post --input final-findings.json --pr 12345</code> (only stage 12). You rarely need these directly; the PowerShell wrappers handle them.
+  <div class="title">Engine and repair notes</div>
+  <code>multi_stage</code> remains an explicit fallback for debugging and comparison.
+  <code>PiRunner</code> may make a separately counted formatting-repair call when
+  JSON is malformed; that is recovery, not a second reasoning stage.
 </div>
 
 <h2 id="pr">4. What you'll see in the PR <span class="mode">explanation</span></h2>

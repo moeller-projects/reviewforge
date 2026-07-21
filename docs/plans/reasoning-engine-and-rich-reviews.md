@@ -1,4 +1,8 @@
 # Plan: Reasoning Engine and Rich Review Output
+> **Historical implementation plan.** The refactor described here is complete.
+> Current production behavior is documented in `docs/reference/pipeline.md`:
+> four deterministic stages, `single_pi` by default, and `multi_stage` only as
+> an explicit fallback.
 
 ## Goal
 Refactor the Pi-driven portion of the review pipeline behind a single abstraction, the **Reasoning Engine**, and enrich the review result with diagnostics, metrics, uncertainty, evidence, and summary information. The pipeline collapses from many stage-oriented Pi calls to:

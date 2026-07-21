@@ -35,9 +35,9 @@ src/reviewforge/
 │   ├── models.py            # PrIdentity, JsonObject
 │   └── cli.py            # reviewforge.ado.cli shim (fetch-context, post-findings)
 │
-├── ai/                      # LLM subprocess wrapper + prompts
-│   ├── runner.py            # PiRunner: pi --session-id, JSON repair
-│   └── prompts.py           # system_prompt + per-stage payload builders
+├── ai/                      # PiRunner and production/legacy prompt assembly
+│   ├── runner.py            # PiRunner: JSON subprocess, repair accounting
+│   └── prompts.py           # unified single_pi prompt + legacy stage builders
 │
 ├── artifacts/               # per-run output layout
 │   ├── manager.py           # Artifacts dataclass, create(), ARTIFACT_NAMES

@@ -34,26 +34,54 @@ def _runner_count(runner: Any, name: str) -> int:
 
 
 def _reduce_diff(diff_text: str, max_bytes: int) -> tuple[str, bool]:
-    """Keep every changed-file header while bounding one-call context."""
-    if max_bytes <= 0 or len(diff_text.encode("utf-8")) <= max_bytes:
+    """Deterministically keep changed hunks within ``max_bytes``.
+
+    Each file receives an equal share of the byte budget. Changed lines are
+    preferred over ``diff --git`` metadata; headers are included whenever the
+    share can accommodate them. A final UTF-8-safe prefix is a defensive cap.
+    """
+    if max_bytes <= 0:
+        return "", bool(diff_text)
+    encoded = diff_text.encode("utf-8")
+    if len(encoded) <= max_bytes:
         return diff_text, False
-    sections = diff_text.split("diff --git ")
-    sections = [section for section in sections if section]
+
+    sections = [section for section in diff_text.split("diff --git ") if section]
     if not sections:
-        return diff_text.encode("utf-8")[:max_bytes].decode("utf-8", "ignore"), True
-    headers = [f"diff --git {section.splitlines()[0]}" for section in sections]
-    reserve = sum(len(header.encode("utf-8")) + 1 for header in headers)
-    remaining = max(0, max_bytes - reserve)
-    out: list[str] = []
+        return encoded[:max_bytes].decode("utf-8", "ignore"), True
+
+    pieces: list[str] = []
+    remaining = max_bytes
     for index, section in enumerate(sections):
-        header = headers[index]
-        body = section[len(section.splitlines()[0]):].lstrip("\n")
-        budget = remaining // (len(sections) - index) if remaining else 0
-        body_bytes = body.encode("utf-8")[:budget]
-        body_text = body_bytes.decode("utf-8", "ignore")
-        out.append(f"{header}\n{body_text}".rstrip())
-        remaining -= len(body_bytes)
-    return "\n".join(out), True
+        lines = section.splitlines()
+        if not lines:
+            continue
+        header = f"diff --git {lines[0]}"
+        changed_lines = [
+            line for line in lines[1:]
+            if (line.startswith("+") or line.startswith("-"))
+            and not line.startswith(("+++", "---"))
+        ]
+        body = "\n".join(changed_lines) or "\n".join(lines[1:])
+        sections_left = len(sections) - index
+        share = remaining // sections_left
+        header_bytes = len(header.encode("utf-8")) + 1
+        if body and share > header_bytes:
+            piece = header + "\n" + body.encode("utf-8")[: share - header_bytes].decode("utf-8", "ignore")
+        else:
+            piece = _utf8_prefix(body or header, share)
+        if piece:
+            pieces.append(piece.rstrip())
+            used = len(piece.encode("utf-8"))
+            remaining = max(0, remaining - used - 1)
+
+    result = _utf8_prefix("\n".join(pieces), max_bytes)
+    return result, True
+
+
+def _utf8_prefix(text: str, max_bytes: int) -> str:
+    """Return the longest UTF-8-safe prefix fitting ``max_bytes``."""
+    return text.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
 
 def _build_single_pi_instruction(ctx: StageContext) -> str:
     """Build the user message for the single-call reasoning engine."""

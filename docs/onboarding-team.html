@@ -219,10 +219,9 @@
   <text class="mut" x="340" y="154">run_full() · run_stages()</text>
   <text class="mut" x="340" y="170">RunSummary + token accounting</text>
   <line x1="340" y1="182" x2="620" y2="182" stroke="#cdcdd3"/>
-  <text class="text" x="340" y="208">12-stage pipeline</text>
-  <text class="mut" x="340" y="228">fetch · prepare · build · intent</text>
-  <text class="mut" x="340" y="244">plan · collect · digest · review</text>
-  <text class="mut" x="340" y="260">verify · severity · ac · post</text>
+  <text class="text" x="340" y="208">Four-stage production pipeline</text>
+  <text class="mut" x="340" y="228">fetch · prepare · execute reasoning</text>
+  <text class="mut" x="340" y="244">single_pi default · post to ADO</text>
   <line x1="340" y1="272" x2="620" y2="272" stroke="#cdcdd3"/>
   <text class="text" x="340" y="298">PiRunner (subprocess)</text>
   <text class="mut" x="340" y="318">pi CLI · read-only tools</text>
@@ -260,7 +259,7 @@
 
 <div class="diagram">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 360" role="img" aria-labelledby="d2t">
-  <title id="d2t">The 12-stage pipeline and what each writes</title>
+  <title id="d2t">The four-stage production pipeline and canonical result flow</title>
   <style>
     .bg{fill:#fbfbfd;} .stage{fill:#fff;stroke:#cdcdd3;stroke-width:1.2;}
     .stage-pi{fill:#eef3ff;stroke:#0a5fff;stroke-width:1.4;}
@@ -275,46 +274,27 @@
   <rect class="bg" width="1080" height="360"/>
   <text class="lbl" x="20" y="22">PIPELINE</text>
   <g font-family="-apple-system,Segoe UI,system-ui,sans-serif">
-    <g><rect class="stage" x="20" y="40" width="80" height="60" rx="6"/><text class="text" x="60" y="64" text-anchor="middle">1 fetch</text><text class="text" x="60" y="80" text-anchor="middle">pr_meta</text><text class="mut" x="60" y="96" text-anchor="middle">ADO REST</text></g>
-    <g><rect class="stage" x="104" y="40" width="80" height="60" rx="6"/><text class="text" x="144" y="64" text-anchor="middle">2 prepare</text><text class="text" x="144" y="80" text-anchor="middle">repo</text><text class="mut" x="144" y="96" text-anchor="middle">git clone</text></g>
-    <g><rect class="stage" x="188" y="40" width="80" height="60" rx="6"/><text class="text" x="228" y="64" text-anchor="middle">3 build</text><text class="text" x="228" y="80" text-anchor="middle">artifacts</text><text class="mut" x="228" y="96" text-anchor="middle">system prompt</text></g>
-    <g><rect class="stage-pi" x="272" y="40" width="80" height="60" rx="6"/><text class="text" x="312" y="64" text-anchor="middle">4 reconstruct</text><text class="text" x="312" y="80" text-anchor="middle">intent</text><text class="mut" x="312" y="96" text-anchor="middle">Pi call</text></g>
-    <g><rect class="stage-pi" x="356" y="40" width="80" height="60" rx="6"/><text class="text" x="396" y="64" text-anchor="middle">5 plan</text><text class="text" x="396" y="80" text-anchor="middle">context</text><text class="mut" x="396" y="96" text-anchor="middle">Pi call</text></g>
-    <g><rect class="stage" x="440" y="40" width="80" height="60" rx="6"/><text class="text" x="480" y="64" text-anchor="middle">6 collect</text><text class="text" x="480" y="80" text-anchor="middle">context</text><text class="mut" x="480" y="96" text-anchor="middle">rg + slices</text></g>
-    <g><rect class="stage-pi" x="524" y="40" width="80" height="60" rx="6"/><text class="text" x="564" y="64" text-anchor="middle">7 digest</text><text class="text" x="564" y="80" text-anchor="middle">context</text><text class="mut" x="564" y="96" text-anchor="middle">Pi call</text></g>
-    <g><rect class="stage-pi" x="608" y="40" width="80" height="60" rx="6"/><text class="text" x="648" y="64" text-anchor="middle">8 review</text><text class="text" x="648" y="80" text-anchor="middle">diff</text><text class="mut" x="648" y="96" text-anchor="middle">Pi · chunked</text></g>
-    <g><rect class="stage-pi" x="692" y="40" width="80" height="60" rx="6"/><text class="text" x="732" y="64" text-anchor="middle">9 verify</text><text class="text" x="732" y="80" text-anchor="middle">findings</text><text class="mut" x="732" y="96" text-anchor="middle">Pi call</text></g>
-    <g><rect class="stage-pi" x="776" y="40" width="80" height="60" rx="6"/><text class="text" x="816" y="64" text-anchor="middle">10 calibrate</text><text class="text" x="816" y="80" text-anchor="middle">severity</text><text class="mut" x="816" y="96" text-anchor="middle">Pi call</text></g>
-    <g><rect class="stage" x="860" y="40" width="80" height="60" rx="6"/><text class="text" x="900" y="64" text-anchor="middle">11 ac</text><text class="text" x="900" y="80" text-anchor="middle">coverage</text><text class="mut" x="900" y="96" text-anchor="middle">heuristic + LLM</text></g>
-    <g><rect class="stage-ado" x="944" y="40" width="116" height="60" rx="6"/><text class="text" x="1002" y="64" text-anchor="middle">12 post</text><text class="text" x="1002" y="80" text-anchor="middle">ado</text><text class="mut" x="1002" y="96" text-anchor="middle">ADO write</text></g>
+    <g><rect class="stage" x="80" y="40" width="180" height="60" rx="6"/><text class="text" x="170" y="64" text-anchor="middle">1 fetch PR metadata</text><text class="mut" x="170" y="82" text-anchor="middle">ADO context</text></g>
+    <g><rect class="stage" x="300" y="40" width="180" height="60" rx="6"/><text class="text" x="390" y="64" text-anchor="middle">2 prepare repository</text><text class="mut" x="390" y="82" text-anchor="middle">diff + files</text></g>
+    <g><rect class="stage-pi" x="520" y="40" width="180" height="60" rx="6"/><text class="text" x="610" y="64" text-anchor="middle">3 execute reasoning</text><text class="mut" x="610" y="82" text-anchor="middle">single_pi → ReviewResult</text></g>
+    <g><rect class="stage-ado" x="740" y="40" width="180" height="60" rx="6"/><text class="text" x="830" y="64" text-anchor="middle">4 post to ADO</text><text class="mut" x="830" y="82" text-anchor="middle">projection + write</text></g>
   </g>
-  <path class="arr" d="M100 70 H104"/><path class="arr" d="M184 70 H188"/><path class="arr" d="M268 70 H272"/><path class="arr" d="M352 70 H356"/><path class="arr" d="M436 70 H440"/><path class="arr" d="M520 70 H524"/><path class="arr" d="M604 70 H608"/><path class="arr" d="M688 70 H692"/><path class="arr" d="M772 70 H776"/><path class="arr" d="M856 70 H860"/><path class="arr" d="M940 70 H944"/>
-  <text class="lbl" x="20" y="140">ARTIFACTS WRITTEN</text>
-  <g font-family="ui-monospace,JetBrains Mono,Menlo,monospace">
-    <text class="art" x="60" y="160" text-anchor="middle">metadata.json</text>
-    <text class="art" x="144" y="160" text-anchor="middle">diff.patch</text>
-    <text class="art" x="228" y="160" text-anchor="middle">system.md</text>
-    <text class="art" x="312" y="160" text-anchor="middle">intent.json</text>
-    <text class="art" x="396" y="160" text-anchor="middle">plan.json</text>
-    <text class="art" x="480" y="160" text-anchor="middle">collected.json</text>
-    <text class="art" x="564" y="160" text-anchor="middle">digest.json</text>
-    <text class="art" x="648" y="160" text-anchor="middle">candidate.json</text>
-    <text class="art" x="732" y="160" text-anchor="middle">verified.json</text>
-    <text class="art" x="816" y="160" text-anchor="middle">severity.json</text>
-    <text class="art" x="900" y="160" text-anchor="middle">final.json</text>
-    <text class="art" x="1002" y="160" text-anchor="middle">posted.json</text>
-  </g>
-  <text class="mut" x="20" y="200">Pi stages (blue) are subprocess calls. ADO stage (green) is the only write surface. AC coverage (white) is a deterministic identifier search with an optional LLM second-pass.</text>
+  <path class="arr" d="M260 70 H300"/><path class="arr" d="M480 70 H520"/><path class="arr" d="M700 70 H740"/>
+  <text class="lbl" x="20" y="140">CANONICAL ARTIFACTS</text>
+  <text class="art" x="170" y="164" text-anchor="middle">metadata.json</text>
+  <text class="art" x="390" y="164" text-anchor="middle">diff.patch</text>
+  <text class="art" x="610" y="164" text-anchor="middle">review-result.json</text>
+  <text class="art" x="830" y="164" text-anchor="middle">final-findings.json</text>
+  <text class="mut" x="20" y="204">single_pi is the default logical reasoning pass. multi_stage remains an explicit fallback.</text>
+  <text class="mut" x="20" y="224">final-findings.json and other compatibility artifacts are projections from ReviewResult.</text>
+  <text class="mut" x="20" y="244">Formatting repair is separately counted PiRunner recovery, not another reasoning stage.</text>
   <g font-family="-apple-system,Segoe UI,system-ui,sans-serif">
-    <rect x="20" y="220" width="1040" height="120" rx="8" fill="none" stroke="#cdcdd3" stroke-dasharray="4 3"/>
-    <text class="lbl" x="40" y="244">GATING</text>
-    <text class="mut" x="40" y="266">• FAILED short-circuits the run. SKIPPED writes nothing and continues.</text>
-    <text class="mut" x="40" y="284">• Stage 1 is skipped in dry-run + --no-fetch mode. Stage 12 is skipped when DRY_RUN=1.</text>
-    <text class="mut" x="40" y="302">• Override should_run(ctx) for conditional execution. Never raise from inside should_run.</text>
-    <text class="mut" x="40" y="320">• Pi uses session reuse: --session-id pr-&lt;id&gt;-review-&lt;run_id&gt;. Disable via PI_SESSION_ENABLED=0.</text>
+    <rect x="20" y="270" width="1040" height="60" rx="8" fill="none" stroke="#cdcdd3" stroke-dasharray="4 3"/>
+    <text class="mut" x="40" y="296">FAILED short-circuits the run; SKIPPED writes nothing and continues. ADO writes occur only in PostToAdoStage.</text>
+    <text class="mut" x="40" y="316">Pi uses per-run sessions and records invocation, repair, token, reasoning, projection, and validation metrics.</text>
   </g>
 </svg>
-  <p class="cap">Figure 2 — Pipeline stages, ordered, with artifact names. Same shape as <code>DEFAULT_PIPELINE</code>.</p>
+  <p class="cap">Figure 2 — Four production stages, the canonical ReviewResult, and the compatibility projection boundary.</p>
 </div>
 
 <div class="diagram">
