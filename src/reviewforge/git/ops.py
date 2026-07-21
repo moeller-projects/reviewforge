@@ -67,13 +67,18 @@ def run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
         raise SystemExit(f"[review][ERROR] {desc} failed with exit code {cp.returncode}")
 
 
-def prepare_repo(cfg: Config, source_branch: str, target_branch: str) -> RepoState:
-    """Clone (shallow fetch) the PR and return the diff between target and source.
+def prepare_repo(
+    cfg: Config,
+    source_branch: str,
+    target_branch: str,
+    *,
+    reviewed_commit: str | None = None,
+) -> RepoState:
+    """Clone the PR branches and return the safest applicable review diff.
 
-    The repo is placed in a temporary directory under :attr:`Config.clone_root`
-    so that the host filesystem can be a Docker volume. The temporary
-    directory and askpass script are returned in :attr:`RepoState.cleanup_paths`
-    so :func:`cleanup` can remove them.
+    ``reviewed_commit`` narrows a follow-up only when it is present and an
+    ancestor of the fetched source; otherwise the normal merge-base range is
+    retained.
     """
     cfg.clone_root.mkdir(parents=True, exist_ok=True)
     cleanup_paths: list[Path] = []
@@ -139,7 +144,20 @@ def prepare_repo(cfg: Config, source_branch: str, target_branch: str) -> RepoSta
     log(f"source {source_branch} -> {source_commit}")
     log(f"merge-base -> {base}")
     run_logged("git checkout source", ["git", "checkout", source_commit], repo_dir)
-    range_spec = f"{base}..{source_commit}"
+    range_start = base
+    if reviewed_commit:
+        is_ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", reviewed_commit, source_commit],
+            cwd=str(repo_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode == 0
+        if is_ancestor:
+            range_start = reviewed_commit
+            log(f"follow-up range -> {range_start}..{source_commit}")
+        else:
+            log("previous review commit is not an ancestor; using full range")
+    range_spec = f"{range_start}..{source_commit}"
     diff = run_git(repo_dir, "diff", "--unified=3", "--no-ext-diff", range_spec)
     files = [l for l in run_git(
         repo_dir, "diff", "--name-only", "--no-ext-diff", range_spec

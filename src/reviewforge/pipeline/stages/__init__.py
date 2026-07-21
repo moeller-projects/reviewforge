@@ -18,6 +18,7 @@ from .calibrate_severity import CalibrateSeverityStage
 from .collect_context import CollectContextStage
 from .context_digest import ContextDigestStage
 from .execute_reasoning_engine import ExecuteReasoningEngineStage
+from .detect_review_mode import DetectReviewModeStage
 from .fetch_pr_metadata import FetchPrMetadataStage
 from .plan_context import PlanContextStage
 from .post_to_ado import PostToAdoStage
@@ -68,7 +69,7 @@ __all__ = [
     "BuildArtifactsStage",
     "CalibrateSeverityStage",
     "CollectContextStage",
-    "ContextDigestStage",
+    "DetectReviewModeStage",
     "DEFAULT_PIPELINE",
     "ExecuteReasoningEngineStage",
     "FAST_REVIEW_PIPELINE",

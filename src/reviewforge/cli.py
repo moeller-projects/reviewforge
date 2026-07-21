@@ -66,6 +66,10 @@ def _build_common_parser() -> argparse.ArgumentParser:
         "--force-review", dest="force_review", action="store_true", default=None,
         help="Review even when skip policy would skip (drafts, closed, etc.)",
     )
+    p.add_argument(
+        "--force-full-review", dest="force_full_review", action="store_true", default=None,
+        help="Ignore review history and run a complete review",
+    )
     # Pi session reuse (Phases A + E of the token-savings plan).
     p.add_argument(
         "--pi-session-id", dest="pi_session_id",
@@ -102,7 +106,10 @@ def _apply_common(cfg: Config, args: argparse.Namespace) -> Config:
         v = getattr(args, field, None)
         if v not in (None, ""):
             overrides[field] = v
-    for field in ("dry_run", "force_review", "pi_session_enabled", "pi_session_clear", "fast_review"):
+    for field in (
+        "dry_run", "force_review", "force_full_review", "pi_session_enabled",
+        "pi_session_clear", "fast_review",
+    ):
         v = getattr(args, field, None)
         if v is not None:
             overrides[field] = v
@@ -121,7 +128,7 @@ def _build_config(args: argparse.Namespace) -> Config:
         "source_branch", "target_branch", "ado_token", "pi_model",
         "review_language", "review_artifact_dir", "review_run_id",
         "pi_session_id", "pi_session_enabled", "pi_session_clear",
-        "dry_run", "force_review", "fast_review", "reasoning_engine",
+        "dry_run", "force_review", "force_full_review", "fast_review", "reasoning_engine",
     ):
         v = getattr(args, field, None)
         if v not in (None, ""):

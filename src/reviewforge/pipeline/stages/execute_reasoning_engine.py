@@ -15,6 +15,9 @@ class ExecuteReasoningEngineStage(Stage):
 
     name = "execute_reasoning_engine"
 
+    def should_run(self, ctx: StageContext) -> bool:
+        return getattr(ctx.extras.get("review_state"), "mode", None) != "no_op"
+
     def run(self, ctx: StageContext) -> dict[str, Any]:
         engine = get_engine(ctx.cfg.reasoning_engine, ctx.cfg)
         result = engine.execute(ctx)

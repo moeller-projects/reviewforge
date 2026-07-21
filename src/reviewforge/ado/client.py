@@ -184,6 +184,12 @@ class AdoClient:
     def get_threads(self, pr_id: int | str) -> list[dict[str, Any]]:
         return self._request("GET", self.base + self.pr_path(pr_id, "/threads")).get("value", [])
 
+    def get_commits(self, pr_id: int | str) -> list[dict[str, Any]]:
+        """Return commits associated with a pull request, newest first."""
+        return self._request(
+            "GET", self.base + self.pr_path(pr_id, "/commits?api-version=7.1")
+        ).get("value", [])
+
     def create_thread(self, pr_id: int | str, body: dict[str, Any]) -> Any:
         return self._request("POST", self.base + self.pr_path(pr_id, "/threads"), body)
 

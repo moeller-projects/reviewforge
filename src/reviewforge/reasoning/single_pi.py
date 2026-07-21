@@ -115,6 +115,12 @@ def _build_single_pi_instruction(ctx: StageContext) -> str:
         parts += [f"\nLinked work items:\n{json.dumps(wi, ensure_ascii=False)}"]
     if threads:
         parts += [f"\nExisting PR comments:\n{json.dumps(threads, ensure_ascii=False)}"]
+    review_context = ctx.extras.get("review_context")
+    if review_context:
+        parts += [
+            "\nDeterministic review state:\n"
+            + json.dumps(review_context, ensure_ascii=False, sort_keys=True)
+        ]
     if diff_text:
         parts += ["\nUnified diff:\n", diff_text]
     return "\n".join(parts) + "\nReturn only the ReviewResult JSON object defined in the system prompt.\n"

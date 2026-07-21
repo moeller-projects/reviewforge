@@ -186,6 +186,33 @@ def simplify_thread(thread: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def review_thread(thread: dict[str, Any]) -> dict[str, Any]:
+    """Normalize all comment data needed for deterministic review history."""
+    ctx = thread.get("threadContext") or {}
+    comments = []
+    for comment in thread.get("comments") or []:
+        author = comment.get("author") or {}
+        comments.append(
+            {
+                "id": comment.get("id"),
+                "authorId": author.get("id"),
+                "author": author.get("displayName") or "unknown",
+                "content": comment.get("content") or "",
+                "publishedDate": comment.get("publishedDate") or "",
+            }
+        )
+    return {
+        "id": thread.get("id"),
+        "status": thread.get("status") or "",
+        "threadContext": {
+            "filePath": ctx.get("filePath"),
+            "rightFileStart": ctx.get("rightFileStart"),
+        },
+        "comments": comments,
+        "commitId": None,
+    }
+
+
 def fetch_work_items(
     client: AdoClient, pr: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -350,22 +377,49 @@ def should_threshold(findings: list[dict[str, Any]], threshold: str) -> bool:
 key_of = dedupe_key
 
 
-# --- Subcommands ----------------------------------------------------------
-
-
 def command_fetch_context(args: argparse.Namespace) -> int:
-    """Fetch the PR's metadata, work items, and existing threads.
-
-    Writes four JSON files into ``args.out``:
-    ``metadata.json``, ``work-items.json``, ``work-item-comments.json``,
-    ``threads.json``, and a combined ``context.json``.
-    """
+    """Fetch normalized PR metadata and review history."""
     client = AdoClient(args.org, args.project, args.repo)
     out = Path(args.out)
     log(f"fetching PR #{args.pr} context")
     pr = client.get_pr(args.pr, include_work_item_refs=True)
     work_items, work_item_comments = fetch_work_items(client, pr)
-    threads = [simplify_thread(t) for t in client.get_threads(args.pr)]
+    raw_threads = client.get_threads(args.pr)
+    threads = [simplify_thread(t) for t in raw_threads]
+    try:
+        auth_payload = client.connection_data()
+        authenticated = (
+            auth_payload.get("authenticatedUser")
+            if isinstance(auth_payload, dict)
+            else {}
+        ) or {}
+    except Exception:
+        authenticated = {}
+    try:
+        commit_payload = client.get_commits(args.pr)
+        raw_commits = commit_payload if isinstance(commit_payload, list) else []
+    except Exception:
+        raw_commits = []
+    commits = [
+        {
+            "commitId": c.get("commitId") or c.get("id"),
+            "authorDate": (c.get("author") or {}).get("date"),
+            "committerDate": (c.get("committer") or {}).get("date"),
+        }
+        for c in raw_commits if isinstance(c, dict)
+    ]
+    source_commit = (
+        (pr.get("lastMergeSourceCommit") or {}).get("commitId")
+        or (pr.get("lastMergeCommit") or {}).get("commitId")
+    )
+    reviewer = None
+    if authenticated.get("id"):
+        reviewer = {
+            "id": authenticated.get("id"),
+            "displayName": authenticated.get("displayName") or "",
+            "uniqueName": authenticated.get("uniqueName") or "",
+            "descriptor": authenticated.get("descriptor") or "",
+        }
     metadata = {
         "org": client.org_name,
         "project": args.project,
@@ -377,8 +431,15 @@ def command_fetch_context(args: argparse.Namespace) -> int:
         "isDraft": bool(pr.get("isDraft")),
         "sourceRefName": pr.get("sourceRefName") or "",
         "targetRefName": pr.get("targetRefName") or "",
+        "sourceCommit": source_commit or "",
         "createdBy": pr.get("createdBy") or None,
         "reviewers": pr.get("reviewers") or [],
+        "reviewState": {
+            "reviewer": reviewer,
+            "threads": [review_thread(t) for t in raw_threads],
+            "commits": commits,
+            "currentCommit": source_commit,
+        },
     }
     context = {
         "pr": metadata,

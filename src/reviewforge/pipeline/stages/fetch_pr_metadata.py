@@ -18,6 +18,7 @@ from typing import Any
 
 from ...ado.client import call_helper
 from ...artifacts.builder import read_json
+from .detect_review_mode import DetectReviewModeStage
 from ..stage import Stage, StageContext, StageStatus
 
 
@@ -87,6 +88,7 @@ class FetchPrMetadataStage(Stage):
     def run(self, ctx: StageContext) -> dict[str, Any]:
         cfg = ctx.cfg
         if ctx.metadata:
+            DetectReviewModeStage().run(ctx)
             return {"cached": True, "pr_id": cfg.pr_id}
         _log(f"fetching Azure DevOps PR #{cfg.pr_id} context")
         call_helper(cfg, "fetch-context", ctx.artifacts.dir)
@@ -98,6 +100,7 @@ class FetchPrMetadataStage(Stage):
         # ``ctx.extras.get("wi_context", [])`` etc. Without this, the
         # work-item-aware prompts operate on empty lists.
         ctx.extras.update(_load_fetched_context(ctx.artifacts))
+        DetectReviewModeStage().run(ctx)
         return {
             "pr_id": cfg.pr_id,
             "status": metadata.get("status"),

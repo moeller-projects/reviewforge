@@ -7,6 +7,7 @@ goes to ``candidate-findings.json``.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
 from dataclasses import replace
 from typing import Any
 
@@ -72,7 +73,13 @@ class ReviewDiffStage(Stage):
                 ctx.artifacts.digest,
                 label,
                 truncated,
-            ) + diff
+            )
+            review_context = ctx.extras.get("review_context")
+            if review_context:
+                text += "\nDETERMINISTIC REVIEW STATE:\n" + json.dumps(
+                    review_context, ensure_ascii=False, sort_keys=True
+                ) + "\n"
+            text += diff
             runner = pi_runner or ctx.pi
             runner.run_json(cfg.review_prompt_path, text, out_path, "reviewer")
             usage = getattr(runner, "token_usage", None)

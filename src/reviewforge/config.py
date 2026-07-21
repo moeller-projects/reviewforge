@@ -180,6 +180,8 @@ class Config:
     review_run_id: str | None
     #: Optional pre-resolved PR URL string. When set, ``pr_id`` was derived from it.
     pr_url: str | None = field(default=None, compare=False)
+    #: Bypass review history and always run a complete review.
+    force_full_review: bool = field(default=False, compare=False)
     # --- Posting & severity thresholds (used by the posting CLI / stage) ---
     #: ADO posting: minimum severity to actually post. ``none`` disables.
     post_min_severity: str = field(default="none", compare=False)
@@ -341,6 +343,7 @@ class Config:
             review_target_branches=os.getenv("REVIEW_TARGET_BRANCHES", ""),
             review_artifact_dir=review_artifact_dir,
             review_artifact_root=review_artifact_root,
+            force_full_review=is_true(os.getenv("FORCE_FULL_REVIEW")),
             review_run_id=review_run_id,
             pr_url=os.getenv("PR_URL") or None,
             pi_session_id=pi_session_id,
@@ -672,6 +675,7 @@ def _build_from_sources(
         ),
         verify_findings=is_true(cli_or_env("verify_findings", "VERIFY_FINDINGS", "1")),
         force_review=is_true(cli_or_env("force_review", "FORCE_REVIEW")),
+        force_full_review=is_true(cli_or_env("force_full_review", "FORCE_FULL_REVIEW")),
         review_target_branches=cli_or_env("review_target_branches", "REVIEW_TARGET_BRANCHES"),
         review_artifact_dir=review_artifact_dir,
         review_artifact_root=Path(review_artifact_root),
