@@ -11,5 +11,6 @@ are kept for context only and do not reflect the current system.
 | [`production-review-workflow.md`](production-review-workflow.md) | Production workflow notes captured during initial rollout. Superseded by the in-repo runbooks. |
 
 For docs that describe how the system works **today**, see
-[`../reference/`](../reference/). For the architecture rationale, see
-[`../design/`](../design/).
+[`../reference/README.md`](../reference/README.md) and
+[`../architecture/overview.md`](../architecture/overview.md). Historical
+records in this directory are context only, not current operational guidance.

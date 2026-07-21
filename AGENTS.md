@@ -1,329 +1,63 @@
-<!--
-purpose: This file defines the rules of engagement for AI coding agents
-         working inside this repository. Read it before proposing changes.
-audience: AI coding agents (Pi, Claude Code, etc.) and human contributors
-         acting on their behalf. Assumes Python 3.11+ and Docker/Podman
-         familiarity.
--->
-
 # AGENTS.md
 
-> **Scope.** ReviewForge for Azure DevOps. Model produces findings; Python owns
-> all ADO side effects. Pi is invoked read-only; the `reviewforge` package
-> is the source of truth for behavior.
+## Purpose
 
----
+This is the working guide for agents changing ReviewForge. The implementation under `src/reviewforge/` is authoritative; do not infer behavior from older documentation or OpenSpec history.
 
-## 1. Project facts [reference]
+## Architecture
 
-| Item | Value |
-| --- | --- |
-| Language | Python ≥ 3.11 |
-| Build target | OCI container (`Dockerfile`) — Docker **or** Podman (auto-detected) |
-| Package manager | `uv` (lockfile: `uv.lock`) |
-| External CLI | Pi coding agent, pinned version `0.79.1` (override via `./build.ps1 -PiVersion`) |
-| LLM model pattern | e.g. `openai/gpt-5.4-mini` (set `PI_MODEL`) |
-| Default test gate | `pytest --cov=reviewforge --cov-fail-under=95` |
-| LLM side effects | **None.** All Azure DevOps calls are in `reviewforge.ado.*` |
-| Idempotency contract | Every posted comment carries `prb:<key>` marker (see §6) |
+ReviewForge has a physical pipeline in `src/reviewforge/pipeline/`: fetch PR metadata, prepare a Git checkout and diff, execute a registered reasoning engine, then post or retain findings. `ReviewResult` in `pipeline/schemas.py` is the canonical engine output. Legacy JSON files are projections. See [architecture](docs/architecture/overview.md).
 
----
+The production default is `single_pi`; `multi_stage` runs the legacy intent/plan/context/review/verify/calibrate flow. Engines do not automatically fall back to one another: the configured engine must succeed or the stage fails. Pi calls are made through `ai.runner.PiRunner`, which scrubs ADO credentials from the subprocess environment, restricts review interaction to read-only tools, and can reuse a per-PR session. Pi must never receive ADO/network side effects; authenticated ADO requests belong in `reviewforge.ado`.
 
-## 2. Quickstart (host machine) [how-to]
+## Repository conventions
 
-```bash
-# 1. Install dev deps (uses uv; lockfile: uv.lock)
-uv sync --extra dev
-# Fallback if uv is not available:
-# pip install -e ".[dev]"
+- Python package code belongs under `src/reviewforge/`.
+- Tests belong under `tests/` and defend observable behavior.
+- Prompts belong under `prompts/`; coding standards belong under `standards/`.
+- Keep public exports and JSON shapes compatible unless the change explicitly changes the contract.
+- Use Pydantic schemas and immediate validation for model-produced JSON.
+- Keep secrets out of artifacts and Pi subprocess environments.
+- Preserve `ARTIFACT_NAMES` filenames and meanings. Treat the list as a stable compatibility contract; do not rename, remove, or repurpose entries without an explicit migration.
+- Preserve the `prb:<dedupe-key>` marker and marker layout in posted comments. Posting uses existing markers to avoid duplicate threads on reruns.
 
-# 2. Run the test suite locally
-uv run pytest tests/ --cov=reviewforge --cov-fail-under=95
+## Coding standards
 
-# 3. Validate a configuration without invoking Pi
-uv run python -m reviewforge validate-config --pr 12345
-```
+Prefer small, direct functions and existing helpers. Preserve error handling at trust boundaries: CLI/env parsing, Git, Pi output, JSON validation, and Azure DevOps posting. Avoid speculative abstractions, new dependencies, and compatibility shims that have no current caller.
 
-```powershell
-# Build the container image (auto-detects docker/podman)
-./build.ps1
+## Prompt standards
 
-# Review a single PR
-./run.ps1 -PrUrl "https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/1423"
+Prompts are data contracts, not prose-only configuration. Preserve JSON-only output requirements, scope limits, untrusted-content handling, evidence requirements, and current field names. Runtime composition is handled by `ai.prompts`; verify any changed prompt path with `Config.validate_files()` and the relevant engine.
 
-# Dry run — produces findings JSON, skips ADO posting
-./run.ps1 -PrUrl "https://..." -DryRun
+## Testing expectations
 
-# Batch — review every active PR
-./run-open-prs.ps1
-
-# Test inside the container
-./test.ps1                       # gate = 95%
-./test.ps1 -CoverageMin 0        # disable gate
-```
-
-**Env loading.** PowerShell wrappers do **not** auto-load `.env`. Load it once per
-session with `set -a; source .env; set +a` (bash) or `dotenv .env` (direnv).
-Precedence everywhere: **CLI flag > env var > `.env`**.
-
----
-
-## 3. Repository layout [reference]
-
-```
-src/reviewforge/        # all real logic lives here
-  cli.py                     # argparse entry: review / post / validate-config / discover
-  config.py                  # Config dataclass, env/.env/CLI layering, alias resolution
-  ado/                       # AdoClient, posting (idempotency), diff_mapper, models
-  git/                       # RepoState, prepare_repo, chunker
-  ai/                        # PiRunner (subprocess wrapper) + prompt assembly
-  pipeline/                  # Stage interface + four-stage production pipeline
-    stages/                  # fetch_pr_metadata … post_to_ado
-  artifacts/                 # ARTIFACT_NAMES contract, RunSummary, file writers
-  prompts/                   # reviewer prompt fragments (markdown)
-  standards/clean-code.md    # default review standard
-  docs/                       # per-module deep dives — start with package-guide.md
-  tests/                      # pytest suite (gate 95%)
-azure-pipelines-pr-review.yml
-build.ps1 / run.ps1 / run-open-prs.ps1 / test.ps1
-Dockerfile / Dockerfile.tests
-```
-
----
-
-## 4. Hard rules (do not break) [how-to]
-
-These exist for real reasons. Treat as **acceptance gates**, not style suggestions.
-
-1. **The package owns all runtime behavior.** The container entrypoint is
-   `python -m reviewforge`; the legacy ADO subprocess is
-   `python -m reviewforge.ado.cli`. New behavior goes in
-   `src/reviewforge/`.
-2. **The LLM must not call Azure DevOps directly.** Pi runs read-only. All
-   `requests`/`httpx`/subprocess calls to ADO live in `reviewforge.ado.*`
-   and are reachable only from the `PostToAdoStage` (or its helper subprocess).
-
-3. **Posting is idempotent.** Every comment gets a `prb:<key>` marker
-   (see §6). `existing_bot_markers()` must be scanned before posting.
-   Never disable dedupe to "make it work".
-
-4. **Do not edit `ARTIFACT_NAMES` lightly.** It is the stable contract
-   for `artifacts/pr-<PR_ID>/runs/<RUN_ID>/*`. Add new files at the end;
-   never rename or remove an entry.
-
-5. **Marker regex is anchored to a whole line.** `^prb:([a-zA-Z0-9]{6,32})$`
-   in `src/reviewforge/ado/posting.py`. The marker must be the **last
-   line** of the comment body, on its own. Other reviewers do not have a
-   `prb:` line — that's how we filter them out.
-
-6. **Coverage gate is 95%.** New code in `src/reviewforge/` must come
-   with tests. PRs that drop below the gate fail the test stage. Override
-   only with `./test.ps1 -CoverageMin 0` for throwaway experiments.
-
-7. **`open-prs` from the Python CLI is intentionally unsupported.** It fails
-   fast with a pointer to `./run-open-prs.ps1`. The architecture runs one
-   container per PR — do not change this without a spec.
-
-8. **No repo-level Node package.** The Docker image installs Pi via npm
-   globally. Hosts do not need to pre-fetch PR branches when `-PrUrl` is
-   used (branches are resolved via the ADO REST API).
-
----
-
-## 5. The pipeline [explanation]
-
-`reviewforge.pipeline.stages.DEFAULT_PIPELINE` runs in this order. Each
-stage receives a mutable `StageContext`; stages may read prior outputs and
-**must** write their declared artifact(s).
-
-| # | Stage | Writes | Skipped when |
-| --- | --- | --- | --- |
-| 1 | `FetchPrMetadataStage` | `metadata.json`, `work-items.json`, `work-item-comments.json`, `threads.json` | dry-run + `--no-fetch` mode |
-| 2 | `PrepareRepositoryStage` | `diff.patch`, `changed-files.json`, `commits.txt` | — |
-| 3 | `ExecuteReasoningEngineStage` | `review-result.json`, `final-findings.json` | — |
-| 4 | `PostToAdoStage` | `posted-comments.json` | `DRY_RUN=1` |
-
-`ExecuteReasoningEngineStage` selects a `ReasoningEngine` by
-`cfg.reasoning_engine`. `single_pi` is the default production engine and
-performs one logical reasoning pass. `multi_stage` is an explicit fallback
-for debugging, benchmarking, regression comparison, and emergency recovery;
-it runs the retained intent → plan → collect → digest → review → verify →
-calibrate → acceptance-criteria flow internally. `ReviewResult` is the
-canonical engine contract; compatibility artifacts are projections from it.
-Pi formatting repair is tracked separately by `PiRunner` and is not another
-reasoning stage.
-
-A stage returns `StageStatus.OK`, `SKIPPED`, or `FAILED`. FAILED short-circuits
-the run; SKIPPED writes nothing and continues. Override `should_run(ctx)` for
-conditional execution; never raise from inside `should_run`.
-
-`PostToAdoStage` also runs the **stale-comment reconciliation pass** after the create
-loop: existing bot threads whose `(file, line)` is no longer in the current
-diff get a `"🤖 stale — ..."` follow-up comment. Disabled via `ANNOTATE_STALE=0`.
-
----
-
-## 6. Idempotent posting contract [reference]
-
-Source of truth: `src/reviewforge/ado/posting.py` and
-[`docs/reference/ado-integration.md`](docs/reference/ado-integration.md).
-
-**Dedupe key (`dedupe_key`) is `sha1(file|line|severity|title|message)[:12]`.**
-
-| Field | Included? | Why |
-| --- | --- | --- |
-| `file` (normalized: strip leading `/`, collapse `\`) | ✅ | core location |
-| `line` | ✅ | core location |
-| `severity` | ✅ | impact |
-| `title` | ✅ | short summary |
-| `message` | ✅ | body |
-| `suggestion`, `contextBasis`, `confidence`, `severity_calibration`, `created_at`, `updated_at` | ❌ | noisy / display-only; would cause false re-posts |
-
-Marker format: `prb:<12-char-key>` on the **last line** of the comment body,
-matching `^prb:([a-zA-Z0-9]{6,32})$`. The regex is intentionally restrictive
-so other reviewers' comments never collide.
-
-**Adding a new finding field to the dedupe key is a breaking change.** It will
-cause every existing comment to be re-posted on the next run. Document the
-change in `CHANGELOG.md` and call it out in the PR description.
-
----
-
-## 7. Adding a pipeline stage [how-to]
-
-```python
-# src/reviewforge/pipeline/stages/my_stage.py
-from ..stage import Stage, StageContext, StageResult
-
-class MyStage(Stage):
-    name = "my_stage"
-
-    def should_run(self, ctx: StageContext) -> bool:
-        return True  # gate with ctx.cfg.* if conditional
-
-    def run(self, ctx: StageContext) -> dict:
-        # ctx.cfg, ctx.artifacts, ctx.metadata, ctx.intent, … are available
-        # Write declared artifact(s) to ctx.artifacts.<slot>
-        out = ctx.artifacts
-        out.my_artifact.write_text("...", encoding="utf-8")
-        return {"wrote": str(out.my_artifact)}
-```
-
-```python
-# src/reviewforge/pipeline/stages/__init__.py
-DEFAULT_PIPELINE: list[Stage] = [
-    ...,
-    MyStage(),     # append; do not reorder existing entries
-]
-```
-
-```python
-# src/reviewforge/artifacts/manager.py  — add to ARTIFACT_NAMES (end of tuple)
-ARTIFACT_NAMES: tuple[str, ...] = (
-    ...,
-    "my-artifact.json",
-)
-```
-
-```python
-# src/reviewforge/artifacts/manager.py  — add the slot to @dataclass Artifacts
-@dataclass(frozen=True)
-class Artifacts:
-    ...
-    my_artifact: Path
-
-    def as_dict(self) -> dict[str, str]:
-        return {n: str(getattr(self, ...)) for n in ARTIFACT_NAMES}
-```
-
-Add a test under `tests/` that instantiates the stage with a stub `StageContext`
-and asserts the artifact exists. Run `./test.ps1` to verify the coverage gate.
-
----
-
-## 8. Configuration [reference]
-
-Loaded by `Config` in `src/reviewforge/config.py`. Precedence:
-**CLI flag > env var > `.env` > hard-coded default**. Common knobs:
-
-| Env var | Default | Effect |
-| --- | --- | --- |
-| `ADO_ORG` | — | ADO org short name (required) |
-| `ADO_PROJECT` | — | ADO project (required) |
-| `ADO_REPO_ID` | — | repo id or name (required) |
-| `PR_ID` | — | PR id (required by container entrypoint) |
-| `REVIEW_LANGUAGE` | `English` | language of the reviewer output |
-| `PI_MODEL` | `openai/gpt-5.5` | model pattern Pi understands |
-| `DRY_RUN` | `0` | `1`/`true` → skip posting, print findings |
-| `FAIL_ON` | `none` | fail check at/above `nit\|minor\|major\|blocker` |
-| `VOTE_WAITING_ON` | `none` | vote "waiting author" at/above the same set |
-| `MAX_DIFF_BYTES` | `200000` | per-chunk diff cap |
-| `CHUNK_TRIGGER_DIFF_BYTES` | `MAX_DIFF_BYTES` | total diff threshold that switches to file-based chunking |
-| `DISABLE_CHUNK_REVIEW` | `0` | `1` → force single-pass review |
-| `PI_TIMEOUT_SECS` | `600` | max seconds Pi may run |
-| `REVIEW_PROMPT_PATH` | baked-in | mount your own reviewer prompt |
-| `REVIEW_STANDARDS_PATH` | baked-in | mount your own standards file |
-| `REVIEW_ARTIFACT_DIR` | derived | per-run output path override |
-| `REVIEW_RUN_ID` | timestamp-pid | deterministic run id |
-
-To mount a custom prompt/standards in the container:
+Run the narrowest relevant test first, then the full suite for permanent behavior changes:
 
 ```bash
--v /path/standards.md:/cfg/standards.md -e REVIEW_STANDARDS_PATH=/cfg/standards.md
--v /path/prompt.md:/cfg/prompt.md       -e REVIEW_PROMPT_PATH=/cfg/prompt.md
+pytest -q
+pytest --cov=reviewforge --cov-report=term-missing
 ```
 
-Custom standards are appended verbatim. Custom prompts **must** preserve the
-JSON output contract — see `prompts/review-system.md`.
+Tests cover CLI parsing, configuration, stages, reasoning, ADO behavior, posting, stale reconciliation, session reuse, and entry points. A change is not complete if the implementation works only through an untested happy path.
 
----
+## Review workflow
 
-## 9. Common pitfalls [how-to]
+1. Inspect the current implementation and callers before editing.
+2. Preserve the canonical `ReviewResult` path and project only at boundaries.
+3. Update tests for new observable behavior.
+4. Run the changed-path test and a smoke command.
+5. Update docs only from verified implementation behavior.
+6. Validate OpenSpec artifacts when a behavior change has an active change record.
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| Comments duplicate on every rerun | Marker regex broken or marker not on its own line | Confirm last line of comment is `prb:xxxxxxxxxxxx`; verify `^prb:([a-zA-Z0-9]{6,32})$` matches |
-| `ModuleNotFoundError: reviewforge` | `src/` not on `sys.path` | `pip install -e .` or use `python -m reviewforge` (it adds `src/` automatically) |
-| Build succeeds but container can't post | Build identity lacks "Contribute to pull requests" | Project Settings → Repos → Security → `<Project> Build Service` → grant Allow |
-| `open-prs` errors from Python CLI | Unsupported by design | Use `./run-open-prs.ps1` |
-| `FAIL_ON`/`VOTE_WAITING_ON` ignored | Wrong value | Allowed: `none`, `nit`, `minor`, `major`, `blocker` |
-| Line placement off by one or two | Model maps to new-file lines; diff hunks are heuristic | Acceptable; if a finding can't be placed, set `line: null` and post as a file-level comment |
-| Pi hangs past 10 min | Provider stall | `PI_TIMEOUT_SECS=600` is the ceiling — increase or split the diff |
-| Coverage gate fails | New module not exercised | Add a test under `tests/test_<module>.py` covering the new public surface |
+## Documentation standards
 
----
+Use Markdown for repository docs. Keep tutorial, how-to, reference, and explanation content separate. State purpose and audience, verify commands and paths, cross-link instead of duplicating, and list gaps explicitly. Do not rewrite existing top-level docs wholesale without explicit user approval; this task provides that approval.
 
-## 10. Out of scope (do not invent) [reference]
+## Useful entry points
 
-- Comment resolution loops on later pushes — listed as a known limitation in
-  `README.md`; not implemented. Don't add it without a spec.
-- In-container tool gating beyond the container boundary — out of scope per
-  README; would require Pi permission config validation.
-- Very-large-single-file diff truncation — partial mitigation only; see
-  `CHUNK_TRIGGER_DIFF_BYTES` / `DISABLE_CHUNK_REVIEW`.
-- Auto-discovery of "active PRs" from the Python CLI — `open-prs` exists but
-  is intentionally a no-op pointer to PowerShell.
-
----
-
-## 11. Where to look first [reference]
-
-- New to the codebase → [`docs/reference/package-guide.md`](docs/reference/package-guide.md), then [`docs/design/architecture.md`](docs/design/architecture.md).
-- Touching ADO code → [`docs/reference/ado-integration.md`](docs/reference/ado-integration.md), then
-  `src/reviewforge/ado/posting.py`.
-- Touching the pipeline → [`docs/reference/pipeline.md`](docs/reference/pipeline.md), then
-  `src/reviewforge/pipeline/stage.py`.
-- Touching Pi invocation → [`docs/reference/ai-runner.md`](docs/reference/ai-runner.md), then
-  `src/reviewforge/ai/runner.py`.
-- Touching config / env vars → [`docs/reference/configuration.md`](docs/reference/configuration.md), then
-  `src/reviewforge/config.py`.
-- Touching the prompt → [`docs/archive/ado-integration-triage.md`](docs/archive/ado-integration-triage.md) (historical), then
-  `prompts/review-system.md`.
-
----
-
-## 12. Open gaps / follow-ups
-
-- Inline diagram of the stage data flow (currently only in [`docs/design/architecture.md`](docs/design/architecture.md)).
-- CHANGELOG entry to require when changing `ARTIFACT_NAMES` or `dedupe_key`.
-- No Python compatibility shims remain under a top-level `scripts/` directory.
+- `python -m reviewforge` or `reviewforge`: primary CLI.
+- `reviewforge review`: generate and normally post a review.
+- `reviewforge post --input <file>`: post an existing final-findings document.
+- `reviewforge discover --project <name>`: emit active PRs as JSON.
+- `python -m reviewforge.ado.cli fetch-context ...`: legacy helper CLI.
+- `python -m reviewforge.ado.cli post-findings ...`: legacy posting helper.
