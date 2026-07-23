@@ -236,11 +236,17 @@ def select_review_state(
     last_commit = latest.commit_id if latest else None
     if latest and not last_commit:
         at = _parse_time(latest.published_at)
+        reviewer_id = reviewer.user_id if reviewer else None
         dated = []
         for commit in commits or []:
             cid = commit.get("commitId") or commit.get("id")
             stamp = commit.get("authorDate") or commit.get("committerDate") or commit.get("date")
             parsed = _parse_time(str(stamp or ""))
+            # A commit authored by the reviewer is not a review boundary they
+            # established; skip it to avoid treating a newly-pushed author
+            # commit as already reviewed.
+            if reviewer_id and str(commit.get("authorId") or "") == reviewer_id:
+                continue
             if cid and at and parsed and parsed <= at:
                 dated.append((parsed, str(cid)))
         if dated:

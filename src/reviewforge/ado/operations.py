@@ -443,6 +443,7 @@ def command_fetch_context(args: argparse.Namespace) -> int:
     commits = [
         {
             "commitId": c.get("commitId") or c.get("id"),
+            "authorId": (c.get("author") or {}).get("id"),
             "authorDate": (c.get("author") or {}).get("date"),
             "committerDate": (c.get("committer") or {}).get("date"),
         }

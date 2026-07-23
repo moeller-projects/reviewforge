@@ -358,9 +358,8 @@ def list_active_pull_requests(
     skip = 0
     out: list[dict[str, Any]] = []
     while True:
-        encoded_repo = urllib.parse.quote(client.repo, safe="")
         url = (
-            f"{client.base}/_apis/git/repositories/{encoded_repo}/pullRequests"
+            f"{client.base}/_apis/git/pullRequests"
             f"?searchCriteria.status=active&api-version=7.0"
             f"&$top={page_size}&$skip={skip}"
         )
@@ -375,6 +374,8 @@ def list_active_pull_requests(
                     continue
             pr_out = dict(pr)
             pr_out["project"] = project_name
+            if "repositoryId" not in pr_out:
+                pr_out["repositoryId"] = pr.get("repository", {}).get("id") or ""
             out.append(pr_out)
             if max_results and len(out) >= max_results:
                 return out

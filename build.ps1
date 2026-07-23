@@ -6,5 +6,9 @@ $env:PYTHONPATH = "$PSScriptRoot/src" + $(if ($env:PYTHONPATH) { "$([IO.Path]::P
 $args = @("-m", "reviewforge.ops", "build")
 if ($Image) { $args += @("--image", $Image) }
 if ($PiVersion) { $args += @("--pi-version", $PiVersion) }
-& python @args
+if (Get-Command uv -ErrorAction SilentlyContinue) {
+    & uv run python @args
+} else {
+    & python @args
+}
 exit $LASTEXITCODE

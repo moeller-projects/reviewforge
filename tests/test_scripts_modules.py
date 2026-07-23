@@ -1279,7 +1279,57 @@ class TestGitOps:
         with pytest.raises(GitOperationError):
             git_ops.run_logged("step", ["git", "status"], tmp_path)
 
-    def test_prepare_repo_and_cleanup(self, tmp_path, monkeypatch):
+    def test_repo_url_accepts_org_url_or_short_name(self, tmp_path):
+        cfg = make_cfg(
+            tmp_path,
+            ado_org="https://dev.azure.com/aveato/",
+            ado_project="Laekker.Kitchen",
+            ado_repo_id="e0f75d73-f70f-4a39-a32f-2137a675b558",
+        )
+        assert git_ops._repo_url(cfg) == (
+            "https://dev.azure.com/aveato/Laekker.Kitchen/"
+            "_git/e0f75d73-f70f-4a39-a32f-2137a675b558"
+        )
+
+        cfg_short = make_cfg(
+            tmp_path,
+            ado_org="aveato",
+            ado_project="Laekker.Kitchen",
+            ado_repo_id="e0f75d73-f70f-4a39-a32f-2137a675b558",
+        )
+        assert git_ops._repo_url(cfg_short) == (
+            "https://dev.azure.com/aveato/Laekker.Kitchen/"
+            "_git/e0f75d73-f70f-4a39-a32f-2137a675b558"
+        )
+
+    def test_prepare_repo_uses_full_range_when_reviewed_commit_is_current_source(self, tmp_path, monkeypatch):
+        cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
+        commands: list[list[str]] = []
+
+        def fake_run(cmd, cwd=None, stdout=None, stderr=None, env=None):
+            commands.append(cmd)
+            if cmd[:2] == ["git", "merge-base"]:
+                return subprocess.CompletedProcess(cmd, 0, b"base123\n", b"")
+            if cmd[:2] == ["git", "rev-parse"]:
+                if "target" in cmd[-1]:
+                    return subprocess.CompletedProcess(cmd, 0, b"target123\n", b"")
+                return subprocess.CompletedProcess(cmd, 0, b"source123\n", b"")
+            if cmd[:2] == ["git", "diff"] and "--name-only" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, b"src/a.py\n", b"")
+            if cmd[:2] == ["git", "diff"]:
+                return subprocess.CompletedProcess(cmd, 0, b"difftext", b"")
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        state = git_ops.prepare_repo(cfg, "feature/x", "main", reviewed_commit="source123")
+        assert state.range_spec == "base123..source123"
+        assert state.files == ["src/a.py"]
+        assert not any(
+            cmd[:2] == ["git", "merge-base"] and "--is-ancestor" in cmd
+            for cmd in commands
+        )
+        git_ops.cleanup(state)
+
         cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
         commands: list[list[str]] = []
 
@@ -1419,6 +1469,27 @@ class TestPlatformOperations:
         assert returned_env_file == str(env_file.resolve())
         assert not temporary
         assert "PI_MODEL=cli-model" in command
+
+    def test_run_mounts_pi_auth_json_when_present(self, monkeypatch, tmp_path):
+        from reviewforge import ops
+
+        monkeypatch.setattr(ops, "runtime", lambda explicit: explicit)
+        auth_json = tmp_path / "auth.json"
+        auth_json.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(auth_json))
+        env_file = tmp_path / "review.env"
+        env_file.write_text("PI_MODEL=file-model\n", encoding="utf-8")
+        args = ops.parser().parse_args(
+            [
+                "run", "--runtime", "docker", "--print-command", "--env-file", str(env_file),
+                "--pr-id", "7", "--ado-token", "token",
+            ]
+        )
+        command, returned_env_file, temporary = ops.run_command(args)
+        assert returned_env_file == str(env_file.resolve())
+        assert not temporary
+        assert f"{auth_json.resolve().as_posix()}:/root/.pi/agent/auth.json" in command
+
 
     def test_batch_discovery_spawns_one_container_per_matching_pr(self, monkeypatch):
         from reviewforge import ops

@@ -24,5 +24,9 @@ if ($Interactive) { $args += "--interactive" }
 if ($DryRun) { $args += "--dry-run" }
 if ($Build) { $args += "--build" }
 if ($KeepContainer) { $args += "--keep-container" }
-& python @args
+if (Get-Command uv -ErrorAction SilentlyContinue) {
+    & uv run python @args
+} else {
+    & python @args
+}
 exit $LASTEXITCODE

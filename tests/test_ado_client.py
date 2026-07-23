@@ -604,3 +604,55 @@ class TestListActivePullRequests:
         with patch.object(AdoClient, "_request", side_effect=responses):
             out = list_active_pull_requests(cfg, project="Pay")
         assert len(out) == 101
+
+    def test_uses_project_wide_pullrequests_endpoint(self, tmp_path, monkeypatch):
+        """Discovery lists PRs across all repos in a project, not a single repo."""
+        from reviewforge.ado.client import list_active_pull_requests
+        cfg = self._cfg(
+            workspace=tmp_path, clone_root=tmp_path,
+            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "std.md",
+            review_artifact_root=tmp_path,
+            ado_repo_id="",  # discovery should not need a repo id
+        )
+        captured: list[str] = []
+
+        def _capture(_self, _method, url):
+            captured.append(url)
+            return {"value": []}
+
+        with patch.object(AdoClient, "_request", _capture):
+            list_active_pull_requests(cfg, project="Pay")
+
+        assert captured
+        for url in captured:
+            assert "/_apis/git/pullRequests?" in url, url
+            assert "/repositories/" not in url, url
+
+    def test_normalizes_repository_id_from_repository_object(self, tmp_path, monkeypatch):
+        """ADO returns repository id under 'repository.id'; surface it as 'repositoryId'."""
+        from reviewforge.ado.client import list_active_pull_requests
+        cfg = self._cfg(
+            workspace=tmp_path, clone_root=tmp_path,
+            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
+            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
+            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
+            standards_path=tmp_path / "std.md",
+            review_artifact_root=tmp_path,
+        )
+        page = {
+            "value": [
+                {
+                    "pullRequestId": 42,
+                    "targetRefName": "refs/heads/main",
+                    "repository": {"id": "repo-uuid", "name": "api"},
+                }
+            ]
+        }
+        with patch.object(AdoClient, "_request", return_value=page):
+            out = list_active_pull_requests(cfg, project="Pay")
+        assert len(out) == 1
+        assert out[0]["repositoryId"] == "repo-uuid"
+        assert out[0]["project"] == "Pay"

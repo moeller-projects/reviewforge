@@ -135,6 +135,33 @@ def test_timestamp_infers_last_commit_and_classifies_resolved_comment():
     assert not state.active_comments
 
 
+def test_fallback_excludes_reviewer_authored_commits():
+    state = select_review_state(
+        reviewer=REVIEWER,
+        threads=[thread("u1", None)],
+        commits=[
+            {"commitId": "reviewer-commit", "authorId": "u1", "authorDate": "2026-07-19T09:00:00Z"},
+            {"commitId": "other-commit", "authorId": "u2", "authorDate": "2026-07-19T08:00:00Z"},
+        ],
+        current_commit="reviewer-commit",
+    )
+    assert state.mode is ReviewMode.FOLLOW_UP
+    assert state.last_reviewed_commit == "other-commit"
+
+
+def test_fallback_all_reviewer_commits_falls_back_to_force_full():
+    state = select_review_state(
+        reviewer=REVIEWER,
+        threads=[thread("u1", None)],
+        commits=[
+            {"commitId": "reviewer-commit", "authorId": "u1", "authorDate": "2026-07-19T09:00:00Z"},
+        ],
+        current_commit="reviewer-commit",
+    )
+    assert state.mode is ReviewMode.FORCE_FULL
+    assert state.reason == "reviewed commit boundary unavailable"
+
+
 def test_unparseable_comment_time_falls_back_safely():
     state = select_review_state(
         reviewer=REVIEWER,

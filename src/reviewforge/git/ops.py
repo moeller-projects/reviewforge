@@ -12,6 +12,7 @@ import urllib.parse
 from ..config import Config
 from ..exceptions import GitOperationError
 from ..runlog import info as log
+from ..ado.client import _normalize_org
 
 #: A tiny ``GIT_ASKPASS`` script that supplies the ADO token when git asks
 #: for credentials. The token is read from the current process environment.
@@ -73,9 +74,9 @@ def run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
 
 def _repo_url(cfg: Config) -> str:
     """Return the git remote URL for the configured ADO repository."""
+    org_url, _ = _normalize_org(cfg.ado_org)
     return (
-        f"https://dev.azure.com/{urllib.parse.quote(cfg.ado_org)}"
-        f"/{urllib.parse.quote(cfg.ado_project)}/_git/{urllib.parse.quote(cfg.ado_repo_id)}"
+        f"{org_url}/{urllib.parse.quote(cfg.ado_project)}/_git/{urllib.parse.quote(cfg.ado_repo_id)}"
     )
 
 
@@ -190,13 +191,14 @@ def prepare_repo(
     run_logged("git checkout source", ["git", "checkout", source_commit], repo_dir)
     range_start = base
     if reviewed_commit:
-        is_ancestor = subprocess.run(
+        if reviewed_commit == source_commit:
+            log("previous review commit matches the current source commit; using full range")
+        elif subprocess.run(
             ["git", "merge-base", "--is-ancestor", reviewed_commit, source_commit],
             cwd=str(repo_dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-        ).returncode == 0
-        if is_ancestor:
+        ).returncode == 0:
             range_start = reviewed_commit
             log(f"follow-up range -> {range_start}..{source_commit}")
         else:

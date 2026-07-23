@@ -75,6 +75,14 @@ def _podman_artifact_mount_source(resolved: Path) -> str:
     return resolved.as_posix()
 
 
+def _auth_json_mount_source() -> str | None:
+    auth_json = Path(_value(None, "PI_AUTH_JSON_PATH", str(Path.home() / ".pi" / "agent" / "auth.json"))).expanduser()
+    if not auth_json.is_file():
+        return None
+    return _podman_artifact_mount_source(auth_json.resolve())
+
+
+
 def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     env_file, temporary = _env_file(args.env_file)
     selected_runtime = runtime(args.runtime)
@@ -100,6 +108,9 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     if name:
         command.extend(["--name", name])
     artifact_path = _value(args.artifact_path, "ARTIFACT_PATH")
+    auth_json_mount = _auth_json_mount_source()
+    if auth_json_mount:
+        command.extend(["--volume", f"{auth_json_mount}:/root/.pi/agent/auth.json"])
     if artifact_path:
         Path(artifact_path).mkdir(parents=True, exist_ok=True)
         resolved_artifact_path = Path(artifact_path).resolve()
