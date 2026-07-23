@@ -1,20 +1,37 @@
 # Operator and scheduling workflows
 
-**Purpose:** run the checked-in PowerShell workflows and locate outputs. **Audience:** operators deploying ReviewForge on Windows/PowerShell hosts. **Mode:** how-to.
+**Purpose:** run ReviewForge container workflows and locate outputs. **Audience:** operators. **Mode:** how-to.
 
-## Single review
+## Cross-platform entrypoints
 
-`run.ps1` is the repository wrapper for one review. It supplies the container/runtime invocation and forwards the configured Azure DevOps and PR values. Inspect its parameter surface before execution because deployment-specific values are intentionally not duplicated here.
+Use Python on Linux, macOS, or Windows:
 
-## Batch and scheduled reviews
+```bash
+python -m reviewforge.ops build --dry-run
+python -m reviewforge.ops run --dry-run --print-command --env-file .env \
+  --pr-url https://dev.azure.com/example/project/_git/repo/pullrequest/1 \
+  --ado-token placeholder
+python -m reviewforge.ops run-open-prs --organization https://dev.azure.com/example/ \
+  --projects project --target-branches main --dry-run
+```
 
-- `run-open-prs.ps1` processes active pull requests in batch.
-- `run-open-prs-scheduled.ps1` is the unattended batch wrapper.
-- `setup-open-prs-schedule.ps1` registers the twice-daily Windows Task Scheduler job.
+`build`, `run`, and `run-open-prs` choose Docker then Podman unless
+`--runtime` is supplied. Explicit flags override environment variables, and
+the chosen `--env-file` is passed directly to the container. `--print-command`
+previews a single-review invocation without spawning a container.
 
-The wrappers require Azure DevOps organization/project/repository credentials and target-branch configuration. Keep the token in the environment or secret store expected by the wrapper; do not commit it. The scheduled wrapper uses its own overlap protection so a second scheduled invocation does not run concurrently with an active batch.
+`run-open-prs` keeps batch selection semantics: `--max-pull-requests` caps
+the sorted matching set before review, and `--interactive` accepts `all`,
+`none`, comma-separated indexes, and inclusive ranges such as `1,3-5`.
 
-The primary CLI's `open-prs` command is intentionally unsupported for batch execution; use the checked-in PowerShell wrapper instead. See [CLI reference](../reference/cli.md).
+## PowerShell compatibility
+
+`build.ps1`, `run.ps1`, and `run-open-prs.ps1` now forward to the Python
+entrypoints. They remain for existing Windows operators and scheduled tasks,
+but new automation should invoke `python -m reviewforge.ops`.
+
+`setup-open-prs-schedule.ps1` remains Windows Task Scheduler integration; it
+continues to invoke the batch compatibility wrapper.
 
 ## Artifacts and posting
 

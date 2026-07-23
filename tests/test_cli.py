@@ -738,60 +738,17 @@ class TestPowerShellWrapperStructure:
         # Helper must be in the export list so run.ps1 can call it.
         assert "Get-ReviewerEnvFile" in text.split("Export-ModuleMember")[-1]
 
-    def test_run_ps1_uses_env_file_helper(self):
+    def test_run_ps1_delegates_to_python_operations(self):
         text = self._require("run.ps1")
-        assert "Get-ReviewerEnvFile" in text
-        # The old Write-EnvFile call should be gone (or only used
-        # transitively by Get-ReviewerEnvFile).
-        assert text.count("Write-EnvFile @") == 0
-        # Env-file flag points at the helper's resolved path.
-        assert '--env-file", $envFileInfo.Path' in text
-
-    def test_run_ps1_emits_dynamic_e_overrides(self):
-        text = self._require("run.ps1")
-        # Every per-invocation secret / override is added as -e so it
-        # wins over the .env file. The post-refactor implementation
-        # uses a hashtable + loop; we check the keys are present and
-        # that the docker invocation adds them via the loop.
-        for key in (
-            "ADO_AUTH_TOKEN",
-            "PR_ID",
-            "PR_URL",
-            "ADO_ORG",
-            "ADO_PROJECT",
-            "ADO_REPO_ID",
-            "SOURCE_BRANCH",
-            "TARGET_BRANCH",
-            "REVIEW_LANGUAGE",
-            "FAIL_ON",
-            "VOTE_WAITING_ON",
-            "PI_MODEL",
-        ):
-            assert f"'{key}'" in text, f"missing -e override for {key}"
-        # The loop itself must add the per-key -e flag.
-        assert '"-e", "$k=$v"' in text or '"-e","$k=$v"' in text or '-e", "$k=$v"' in text
-
-    def test_run_ps1_cleans_up_only_temp_env_file(self):
-        text = self._require("run.ps1")
-        # The cleanup branch must be conditional on IsTemp so we don't
-        # delete the user's real .env by accident.
-        assert "if ($envFileInfo.IsTemp)" in text
-        assert "Remove-Item -LiteralPath $envFileInfo.Path" in text
+        assert "reviewforge.ops" in text
+        assert "--env-file" in text
+        assert "& python @args" in text
 
     def test_run_ps1_documents_env_file_behavior(self):
         text = self._require("run.ps1")
-        # The script's preamble (or .PARAMETER block) must make it
-        # clear that the .env file is not auto-loaded — the user is
-        # responsible for populating the process env. The wrapper
-        # only forwards the file path to ``docker run --env-file``
-        # when the file exists, so the per-PR container sees the
-        # same values.
         assert "--env-file" in text
-        preamble = text[: text.find("[CmdletBinding()]")]
-        assert "NOT auto-loaded" in preamble or "not auto-loaded" in preamble.lower(), (
-            "run.ps1 preamble should explicitly say the .env is not auto-loaded"
-        )
-        assert "docker run --env-file" in preamble or "--env-file" in preamble
+        assert "Compatibility wrapper" in text
+
 
 
 class TestRefactoredWrappers:
@@ -1018,21 +975,8 @@ class TestRefactoredWrappers:
         for token in ("'all'", "'a'", "'none'", "'n'", "(\\d+)-(\\d+)"):
             assert token in text, f"Show-InteractivePrompt missing pattern {token}"
 
-    def test_resolve_script_config_requires_keys(self):
-        text = self._read("common.psm1")
-        # Resolve-ScriptConfig must accept a -Required parameter and
-        # surface a clear error when keys are missing.
-        assert "param(" in text
-        # ``$Required`` is the param-block variable form. The literal
-        # ``-Required`` token only appears at call sites (run.ps1 etc.),
-        # not inside the function definition itself.
-        assert re.search(r"\$Required\b", text), (
-            "Resolve-ScriptConfig does not declare a $Required param"
-        )
-        assert "Missing required configuration" in text
-        # And the call site in run-open-prs.ps1 must use it.
-        call_site = self._read("run-open-prs.ps1")
-        assert re.search(r"-Required\b", call_site), (
-            "run-open-prs.ps1 does not call Resolve-ScriptConfig with -Required"
-        )
+    def test_run_open_prs_delegates_to_python_operations(self):
+        text = self._read("run-open-prs.ps1")
+        assert "reviewforge.ops" in text
+        assert "--organization" in text
 

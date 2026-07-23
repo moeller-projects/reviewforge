@@ -29,3 +29,13 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ --cov=reviewforge --cov-fail-under=95
+
+  pin-agreement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Azure Pipelines consumes shared pins
+        run: |
+          test -f versions.env
+          grep -q 'versions.env' azure-pipelines-pr-review.yml
+          ! grep -Eq '^[[:space:]]+(PI_VERSION|PI_MODEL):' azure-pipelines-pr-review.yml

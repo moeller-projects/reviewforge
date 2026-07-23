@@ -1410,3 +1410,70 @@ class TestDefaultPipeline:
         names = [stage.name for stage in REVIEW_ONLY_PIPELINE]
         assert "post_to_ado" not in names
         assert "execute_reasoning_engine" in names
+
+
+class TestPlatformOperations:
+    def test_build_uses_checked_in_pins(self, monkeypatch):
+        from reviewforge import ops
+
+        monkeypatch.setattr(ops, "runtime", lambda explicit: explicit)
+        command = ops.build_command(
+            ops.parser().parse_args(["build", "--runtime", "docker", "--dry-run"])
+        )
+        assert "PI_VERSION=0.80.7" in command
+        assert "UV_VERSION=0.11.28" in command
+
+    def test_run_explicit_values_override_environment(self, monkeypatch, tmp_path):
+        from reviewforge import ops
+
+        monkeypatch.setattr(ops, "runtime", lambda explicit: explicit)
+        monkeypatch.setenv("PI_MODEL", "env-model")
+        env_file = tmp_path / "review.env"
+        env_file.write_text("PI_MODEL=file-model\n", encoding="utf-8")
+        args = ops.parser().parse_args(
+            [
+                "run", "--runtime", "docker", "--print-command", "--env-file", str(env_file),
+                "--pi-model", "cli-model", "--pr-id", "7", "--ado-token", "token",
+            ]
+        )
+        command, returned_env_file, temporary = ops.run_command(args)
+        assert returned_env_file == str(env_file.resolve())
+        assert not temporary
+        assert "PI_MODEL=cli-model" in command
+
+    def test_batch_discovery_spawns_one_container_per_matching_pr(self, monkeypatch):
+        from reviewforge import ops
+
+        monkeypatch.setattr(ops, "runtime", lambda explicit: explicit)
+        spawned: list[list[str]] = []
+        monkeypatch.setattr(ops, "_execute", lambda command, preview: spawned.append(command) or 0)
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args[0],
+                0,
+                '[{"pullRequestId": 9, "repositoryId": "repo", "targetRefName": "refs/heads/main", "isDraft": false}, {"pullRequestId": 10, "repositoryId": "repo", "targetRefName": "refs/heads/main", "isDraft": false}]',
+                "",
+            ),
+        )
+        assert ops.main(
+            [
+                "run-open-prs", "--runtime", "docker", "--print-command", "--dry-run",
+                "--organization", "https://dev.azure.com/org/", "--projects", "P",
+                "--target-branches", "main", "--max-pull-requests", "1", "--ado-token", "token",
+            ]
+        ) == 0
+        assert ["PR_ID=9" in command for command in spawned] == [True]
+
+    def test_batch_interactive_selection_supports_ranges(self, monkeypatch):
+        from reviewforge import ops
+
+        items = [("P", {"pullRequestId": index}) for index in (1, 2, 3)]
+        monkeypatch.setattr("builtins.input", lambda prompt: "1,3")
+        assert [item[1]["pullRequestId"] for item in ops._select_pull_requests(items, True)] == [1, 3]
+
+    def test_missing_pin_file_fails_loudly(self, tmp_path):
+        from reviewforge import ops
+
+        assert ops.main(["build", "--pin-file", str(tmp_path / "missing.env"), "--dry-run"]) == 2

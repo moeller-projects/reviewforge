@@ -15,3 +15,4 @@ All notable changes to this project will be documented in this file.
 - New artifact `review-result.json` (appended to `ARTIFACT_NAMES`).
 - Dedupe markers now use rewording-stable v2 keys and recognize existing v1 markers during the one-time dual-key transition.
 - Added the narrow `ModelRunner` seam with `PiCliRunner`; `PiRunner` remains a deprecated compatibility alias for one release.
+- PowerShell operations wrappers are deprecated compatibility entrypoints; use `python -m reviewforge.ops` for cross-platform container build and review commands.

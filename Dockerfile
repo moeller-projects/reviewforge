@@ -3,14 +3,17 @@
 # the PR through direct Azure DevOps REST calls. Build once, run per PR.
 FROM node:24-bookworm-slim
 
-# Pin tool versions for reproducible reviews. Bump deliberately.
-ARG PI_VERSION=0.80.7
-ARG UV_VERSION=0.11.28
+# Versions are required build arguments supplied by versions.env via
+# `python -m reviewforge.ops build`; Docker cannot evaluate that file in ARG defaults.
+ARG PI_VERSION
+ARG UV_VERSION
 
 # Runtime tools only. curl is no longer needed because uv is copied in below.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git python3 ripgrep \
  && rm -rf /var/lib/apt/lists/*
+
+RUN test -n "$PI_VERSION" && test -n "$UV_VERSION"
 
 # Pin uv by copying the official binary into the image. This avoids a network
 # fetch, the installer script layer, and the need for curl at build time.

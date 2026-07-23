@@ -4,8 +4,6 @@ pr: none
 variables:
   IMAGE_NAME: reviewforge:$(Build.BuildId)
   REVIEW_LANGUAGE: English
-  PI_MODEL: openai/gpt-5.5
-  PI_VERSION: 0.79.1
   FAIL_ON: none
   VOTE_WAITING_ON: major
   DRY_RUN: "false"
@@ -16,6 +14,14 @@ pool:
 steps:
   - checkout: self
     clean: true
+  - bash: |
+      test -f versions.env || { echo "versions.env is required" >&2; exit 1; }
+      set -a
+      . ./versions.env
+      set +a
+      echo "##vso[task.setvariable variable=PI_VERSION]$PI_VERSION"
+      echo "##vso[task.setvariable variable=PI_MODEL]$PI_MODEL"
+    displayName: Load checked-in version pins
 
   - task: PowerShell@2
     displayName: Build reviewer image
