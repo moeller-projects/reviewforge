@@ -5,6 +5,9 @@ from typing import Any
 
 from ...artifacts.builder import write_json
 from ...reasoning.engine import get_engine
+from ... import __version__
+from ...runlog import warning
+from ..sarif import review_result_to_sarif
 from ..projection import review_result_to_final_doc
 from ..schemas import ReviewResult
 from ..stage import Stage, StageContext
@@ -25,18 +28,30 @@ class ExecuteReasoningEngineStage(Stage):
 
         if not ctx.artifacts.review_result.exists():
             write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
+        sarif_written = False
+        try:
+            write_json(
+                ctx.artifacts.sarif,
+                review_result_to_sarif(result, tool_version=__version__),
+            )
+            sarif_written = True
+        except Exception as exc:  # noqa: BLE001 - observability must not fail reviews
+            warning(f"failed to write SARIF findings: {type(exc).__name__}: {exc}")
         final_doc = ctx.final or review_result_to_final_doc(result)
         if not ctx.artifacts.final.exists():
             write_json(ctx.artifacts.final, final_doc)
         ctx.final = final_doc
 
-        return {
+        details: dict[str, Any] = {
             "engine": engine.name,
             "findings": len(result.findings),
             "review_result": str(ctx.artifacts.review_result),
             "final_findings": str(ctx.artifacts.final),
             "metrics": result.metrics.model_dump(by_alias=True, exclude_none=False),
         }
+        if sarif_written:
+            details["sarif_findings"] = str(ctx.artifacts.sarif)
+        return details
 
 
 __all__ = ["ExecuteReasoningEngineStage"]

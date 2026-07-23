@@ -290,6 +290,7 @@ class TestExecuteReasoningEngineStage:
         assert result.details["findings"] == 1
         assert ctx.artifacts.review_result.exists()
         assert ctx.artifacts.final.exists()
+        assert ctx.artifacts.sarif.exists()
         final = builder.read_json(ctx.artifacts.final)
         assert len(final["findings"]) == 1
         assert final["findings"][0]["confidence"] == "high"
@@ -341,6 +342,22 @@ class TestExecuteReasoningEngineStage:
         assert result.details["findings"] == 1
         assert ctx.artifacts.review_result.exists()
         assert ctx.artifacts.final.exists()
+
+    def test_sarif_failure_does_not_fail_review(self, tmp_path: Path, monkeypatch):
+        cfg = _cfg(tmp_path).with_overrides(reasoning_engine="single_pi")
+        pi = MagicMock()
+        pi.run_json.side_effect = lambda p, s, out, st: builder.write_json(
+            out, _valid_review_result_payload()
+        )
+        ctx = _stage_context(cfg, pi)
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.execute_reasoning_engine.review_result_to_sarif",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("sarif boom")),
+        )
+        result = ExecuteReasoningEngineStage()(ctx)
+        assert result.status == StageStatus.OK
+        assert "sarif_findings" not in result.details
+        assert ctx.artifacts.review_result.exists()
 
     def test_records_failure(self, tmp_path: Path):
         cfg = _cfg(tmp_path)

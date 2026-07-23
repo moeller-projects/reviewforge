@@ -2,8 +2,9 @@
 
 The reviewer writes its run output to ``artifacts/pr-<PR_ID>/runs/<RUN_ID>/`` by
 default. The most recent run is recorded in ``pr-<PR_ID>/latest.txt`` so callers
-can find it without scanning. The set of files written by the pipeline is
-declared in :data:`ARTIFACT_NAMES` and treated as a stable contract.
+can find it without scanning. The set of known artifact paths is declared in
+:data:`ARTIFACT_NAMES`; optional outputs may be absent when their best-effort
+generation fails.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import time
 
 from ..config import Config
 
-#: Stable contract: every well-formed run produces these files.
+#: Stable contract of known artifact names; best-effort outputs may be absent.
 ARTIFACT_NAMES: tuple[str, ...] = (
     "metadata.json",
     "diff.patch",
@@ -27,6 +28,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "work-items.json",
     "threads.json",
     "review-result.json",
+    "sarif-findings.json",
     "run.log",
 )
 
@@ -53,6 +55,7 @@ class Artifacts:
     severity: Path
     final: Path
     review_result: Path
+    sarif: Path
     posted: Path
     summary: Path
     system_prompt: Path
@@ -76,6 +79,7 @@ class Artifacts:
             "commits.txt": str(self.commits),
             "final-findings.json": str(self.final),
             "review-result.json": str(self.review_result),
+            "sarif-findings.json": str(self.sarif),
             "posted-comments.json": str(self.posted),
             "run-summary.json": str(self.summary),
             "review-system.combined.md": str(self.system_prompt),
@@ -129,6 +133,7 @@ def create(cfg: Config) -> Artifacts:
         severity=root / "raw" / "severity-findings.json",
         final=root / "final-findings.json",
         review_result=root / "review-result.json",
+        sarif=root / "sarif-findings.json",
         posted=root / "posted-comments.json",
         summary=root / "run-summary.json",
         system_prompt=root / "review-system.combined.md",
