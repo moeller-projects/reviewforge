@@ -29,9 +29,16 @@ $ErrorActionPreference = "Stop"
 
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
 
-$defaultEnvFile = Join-Path $PSScriptRoot '.env'
-if (Test-Path -LiteralPath $defaultEnvFile) {
-    Import-DotEnvFile -Path $defaultEnvFile | Out-Null
+$envFilePath = if ([System.IO.Path]::IsPathRooted($EnvFile)) {
+    $EnvFile
+} else {
+    Join-Path $PSScriptRoot $EnvFile
+}
+if (Test-Path -LiteralPath $envFilePath) {
+    Import-DotEnvFile -Path $envFilePath | Out-Null
+}
+if ($AdoToken) {
+    Write-Warning "-AdoToken was supplied to a scheduled run, but it is never forwarded or logged. Put ADO_AUTH_TOKEN or ADO_API_KEY in the .env file referenced by -EnvFile."
 }
 
 if ($LogDirectory) {
@@ -50,7 +57,6 @@ try {
         -Organization $Organization `
         -Projects $Projects `
         -TargetBranches $TargetBranches `
-        -AdoToken $AdoToken `
         -MaxPullRequests $MaxPullRequests `
         -DryRun:([bool]$DryRun) `
         -Build:([bool]$Build) `

@@ -254,6 +254,30 @@ function Show-InteractivePrompt {
     }
 }
 
+function Invoke-ReviewForgeOps {
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments
+    )
+
+    if (Get-Command uv -ErrorAction SilentlyContinue) {
+        & uv run --project $PSScriptRoot python @Arguments
+        return
+    }
+
+    $pythonCandidates = @(
+        (Join-Path $PSScriptRoot '.venv/Scripts/python.exe'),
+        (Join-Path $PSScriptRoot '.venv/bin/python')
+    )
+    foreach ($python in $pythonCandidates) {
+        if (Test-Path -LiteralPath $python -PathType Leaf) {
+            & $python @Arguments
+            return
+        }
+    }
+
+    throw "[review][ERROR] neither uv nor a repo .venv was found; install uv or run 'uv sync' once interactively before scheduling."
+}
+
 <#
 .SYNOPSIS
     Detect the container runtime (docker or podman).
@@ -367,4 +391,4 @@ function Get-ReviewerEnvFile {
     }
 }
 
-Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Write-EnvFile, Get-ReviewerEnvFile, Import-DotEnvFile, Get-EnvOrDefault, Resolve-ScriptConfig, ConvertFrom-CommaList, Show-InteractivePrompt
+Export-ModuleMember -Function Write-Step, Fail, Get-ContainerRuntime, Write-EnvFile, Get-ReviewerEnvFile, Import-DotEnvFile, Get-EnvOrDefault, Resolve-ScriptConfig, ConvertFrom-CommaList, Show-InteractivePrompt, Invoke-ReviewForgeOps

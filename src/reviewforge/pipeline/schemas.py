@@ -7,7 +7,6 @@ clear, actionable errors and prevents dangerous coercions of invalid values
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Literal
 import json
 from pathlib import Path
@@ -311,6 +310,20 @@ class ChunkResult(_Base):
     uncertainties: list[Uncertainty] = Field(default_factory=list)
 
 
+class ChunkSynthesis(_Base):
+    """Whole-PR summaries synthesized from prior per-chunk analyses."""
+
+    review_summary: ReviewSummary
+    verification_summary: VerificationSummary = Field(
+        default_factory=lambda: VerificationSummary(
+            summary="Reviewed each deterministic unified-diff chunk.",
+            approach="chunked diff review",
+        )
+    )
+    pr_summary: PrSummary = Field(default_factory=PrSummary)
+    good_practices: list[GoodPractice] = Field(default_factory=list)
+
+
 
 
 class ReviewMetrics(_Base):
@@ -380,10 +393,6 @@ class ReviewResult(_Base):
 # ---------------------------------------------------------------------------
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-
-
 def validate_payload(schema: type[_Base], raw: Any) -> _Base:
     """Validate a parsed-JSON object against ``schema``.
 
@@ -400,6 +409,7 @@ def load_and_validate(path: Path, schema: type[_Base]) -> _Base:
 
 __all__ = [
     "AcCoverageLlmResult",
+    "ChunkSynthesis",
     "Confidence",
     "ContextBasis",
     "ContextDigest",

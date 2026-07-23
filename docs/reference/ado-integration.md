@@ -5,6 +5,7 @@
 `AdoClient` uses Azure DevOps REST APIs for PR metadata, threads, commits, comments, voting, and generic GET/POST/PUT operations. The primary posting path maps file findings to diff lines when possible; fileless findings are PR-level comments.
 
 The pipeline invokes `ado.operations.fetch_pr_context()` and `post_findings()` in-process. `python -m reviewforge.ado.cli fetch-context|post-findings` remains a legacy compatibility CLI for external scripts.
+The `reviewforge.ado.cli` shim emits a `DeprecationWarning` when invoked with `python -m`; it and its `sys.modules` self-replacement are scheduled for removal in 0.4.0. Use `reviewforge.ado.operations` or the primary `reviewforge` CLI.
 
 ## Comment formatting
 

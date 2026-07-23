@@ -738,11 +738,13 @@ class TestPowerShellWrapperStructure:
         # Helper must be in the export list so run.ps1 can call it.
         assert "Get-ReviewerEnvFile" in text.split("Export-ModuleMember")[-1]
 
-    def test_run_ps1_delegates_to_python_operations(self):
+    def test_run_ps1_delegates_to_shared_python_operations_resolver(self):
         text = self._require("run.ps1")
         assert "reviewforge.ops" in text
         assert "--env-file" in text
-        assert "& python @args" in text
+        assert "Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force" in text
+        assert "Invoke-ReviewForgeOps -Arguments $args" in text
+        assert "& python @args" not in text
 
     def test_run_ps1_documents_env_file_behavior(self):
         text = self._require("run.ps1")

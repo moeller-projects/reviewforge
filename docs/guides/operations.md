@@ -33,6 +33,23 @@ but new automation should invoke `python -m reviewforge.ops`.
 `setup-open-prs-schedule.ps1` remains Windows Task Scheduler integration; it
 continues to invoke the batch compatibility wrapper.
 
+## Scheduled open-PR runs
+
+`setup-open-prs-schedule.ps1` registers the task with the repository root as
+its working directory and re-registers an existing task when run again. The
+scheduled wrapper resolves Python deterministically: it uses `uv run
+--project <repo>` when `uv` is available, otherwise it uses the repository's
+synced `.venv` (`.venv/Scripts/python.exe` on Windows or `.venv/bin/python`
+on POSIX). If neither exists, setup fails instead of falling back to a bare
+`python`.
+
+Scheduled credentials and discovery settings come from the `.env` file
+referenced by `-EnvFile`; the wrapper loads it before each run. Never pass
+`-AdoToken` to the scheduled task: tokens must not be stored in Task
+Scheduler arguments or XML. Re-run `setup-open-prs-schedule.ps1` after
+changing the task's `-EnvFile`, script path, or other registration settings;
+it unregisters and re-registers the task.
+
 ## Artifacts and posting
 
 Review output is written under `REVIEW_ARTIFACT_ROOT/pr-<PR_ID>/runs/<RUN_ID>/`. Read `run.log` there for the chronological, redacted container log for that run; `pr-<PR_ID>/latest.txt` identifies the latest run directory. Preserve `run-summary.json`, `review-result.json`, and `final-findings.json` when diagnosing or reposting. The container volume is already mounted by `run.ps1` and `run-open-prs.ps1`, so the same path is available to PowerShell operators. Do not edit the `prb:` deduplication marker in posted comment bodies; see [ADO integration](../reference/ado-integration.md).

@@ -39,7 +39,7 @@ def test_main_module_imports_cli_main():
 
 def test_cli_module_help():
     result = subprocess.run(
-        [sys.executable, "-m", "reviewforge.ado.cli", "--help"],
+        [sys.executable, "-W", "default", "-m", "reviewforge.ado.cli", "--help"],
         capture_output=True,
         text=True,
         cwd=str(ROOT / "src"),
@@ -47,6 +47,7 @@ def test_cli_module_help():
     assert result.returncode == 0
     assert "fetch-context" in result.stdout
     assert "post-findings" in result.stdout
+    assert "DeprecationWarning" in result.stderr
 
 
 def test_cli_module_runs_without_import_error(tmp_path, monkeypatch):

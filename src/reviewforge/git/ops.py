@@ -158,28 +158,35 @@ def prepare_repo(
         depths.append(next_depth)
         deepen *= 5
     if not merge_base_exists():
-        log("merge base unavailable after bounded deepening; fetching both refs unshallow")
-        run_logged(
-            "git fetch unshallow target",
-            ["git", "fetch", "--no-tags", "--unshallow", "origin",
-             f"+refs/heads/{target_branch}:{target_ref}"],
-            repo_dir,
+        is_shallow = (
+            run_git(repo_dir, "rev-parse", "--is-shallow-repository").strip() == "true"
         )
-        run_logged(
-            "git fetch unshallow source",
-            ["git", "fetch", "--no-tags", "--unshallow", "origin",
-             f"+refs/heads/{source_branch}:{source_ref}"],
-            repo_dir,
-        )
+        if is_shallow:
+            log("merge base unavailable after bounded deepening; fetching both refs unshallow")
+            run_logged(
+                "git fetch unshallow target",
+                ["git", "fetch", "--no-tags", "--unshallow", "origin",
+                 f"+refs/heads/{target_branch}:{target_ref}"],
+                repo_dir,
+            )
+            run_logged(
+                "git fetch unshallow source",
+                ["git", "fetch", "--no-tags", "--unshallow", "origin",
+                 f"+refs/heads/{source_branch}:{source_ref}"],
+                repo_dir,
+            )
+            depths_tried: list[int | str] = [*depths, "unshallow"]
+        else:
+            depths_tried = list(depths)
         if not merge_base_exists():
             raise GitOperationError(
                 f"[review][ERROR] no merge base found for branches "
-                f"{target_branch!r} and {source_branch!r} after depths {depths} "
-                "and an unshallow fetch",
+                f"{target_branch!r} and {source_branch!r} after fetch depths "
+                f"{depths_tried}",
                 details={
                     "target_branch": target_branch,
                     "source_branch": source_branch,
-                    "depths": depths,
+                    "depths": depths_tried,
                 },
             )
     base = run_git(repo_dir, "merge-base", target_ref, source_ref).strip()

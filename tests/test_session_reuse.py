@@ -33,6 +33,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from reviewforge.ai.runner import PiRunner  # noqa: E402
 from reviewforge.artifacts import builder, manager  # noqa: E402
 from reviewforge.config import Config  # noqa: E402
+from reviewforge.exceptions import PiExecutionError  # noqa: E402
 from reviewforge.pipeline import orchestrator  # noqa: E402
 from reviewforge.pipeline.stage import (  # noqa: E402
     StageContext,
@@ -175,7 +176,7 @@ class TestSubprocessCommandShape:
     def test_chunked_single_pi_calls_share_session_id(self, cfg, tmp_path, monkeypatch):
         prompt = tmp_path / "fast.md"
         prompt.write_text("prompt", encoding="utf-8")
-        cfg = replace(cfg, max_diff_bytes=55, fast_review_prompt_path=prompt)
+        cfg = replace(cfg, max_diff_bytes=55, fast_review_prompt_path=prompt, chunk_synthesis_prompt_path=prompt)
         calls: list[list[str]] = []
         monkeypatch.setattr(
             "reviewforge.ai.runner.subprocess.run",
@@ -195,7 +196,7 @@ class TestSubprocessCommandShape:
 
         SinglePiReasoningEngine().execute(ctx)
 
-        assert len(calls) == 2
+        assert len(calls) == 3
         assert all(cmd[cmd.index("--session-id") + 1] == "pr-42-review-r1" for cmd in calls)
 
 
@@ -288,6 +289,105 @@ class TestRepairStaysInSession:
         assert calls[1]["input"] == b""
         # Repair instruction is a small fix-up message.
         assert "return only the json" in calls[1]["cmd"][-1].lower()
+
+    def test_repair_timeout_raises_pi_execution_error(self, cfg, tmp_path, monkeypatch):
+        attempts: list[list[str]] = []
+
+        def fake_run(cmd, input=b"", **k):
+            attempts.append(list(cmd))
+            if len(attempts) == 1:
+                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
+            raise subprocess.TimeoutExpired(cmd, 1)
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        runner = PiRunner(cfg)
+        with pytest.raises(PiExecutionError, match="repair timed out"):
+            runner.run_json(tmp_path / "p.md", "ctx", tmp_path / "out.json", "stage")
+        assert runner.repair_invocation_count == 1
+
+    def test_legacy_mode_repair_resends_context(self, cfg, tmp_path, monkeypatch):
+        cfg = replace(cfg, pi_session_enabled=False)
+        calls: list[dict] = []
+
+        def fake_run(cmd, input=b"", **k):
+            calls.append({"cmd": list(cmd), "input": input})
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
+            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        runner = PiRunner(cfg)
+        runner.run_json(tmp_path / "p.md", "original context", tmp_path / "out.json", "stage")
+        assert runner.repair_invocation_count == 1
+        assert calls[1]["input"] == b"original context"
+
+
+class TestLegacyPromptEmbeds:
+    """Legacy (no-session) instruction builders embed full context verbatim."""
+
+    def test_stage_instruction_embeds_existing_artifacts(self, cfg, tmp_path):
+        from reviewforge.ai import prompts
+
+        cfg = replace(cfg, pi_session_enabled=False)
+        metadata = tmp_path / "metadata.json"
+        metadata.write_text('{"title": "T"}', encoding="utf-8")
+        intent = tmp_path / "intent.json"
+        intent.write_text('{"pr_intent": "Fix X"}', encoding="utf-8")
+
+        text = prompts.stage_instruction(
+            "review", cfg, metadata, "a.py\n", [], [], {"intent": intent}
+        )
+
+        assert "Intent reconstruction" in text
+        assert '{"pr_intent": "Fix X"}' in text
+
+    def test_review_instruction_formats_threads_and_notes_truncation(self, cfg, tmp_path):
+        from reviewforge.ai import prompts
+
+        cfg = replace(cfg, pi_session_enabled=False)
+        intent = tmp_path / "intent.md"
+        intent.write_text("intent text", encoding="utf-8")
+        digest = tmp_path / "digest.md"
+        digest.write_text("digest text", encoding="utf-8")
+        state = SimpleNamespace(
+            target_branch="main", source_branch="feature",
+            target_commit="t", source_commit="s",
+        )
+        threads = [
+            {"author": "alice", "filePath": "a.py", "line": 3, "firstComment": "inline"},
+            {"author": "bob", "firstComment": "general"},
+        ]
+
+        text = prompts.review_instruction(
+            cfg, "a.py\n", state, [], [], threads, intent, digest, truncated=True
+        )
+
+        assert "[alice] a.py:3: inline" in text
+        assert "[bob] (general): general" in text
+        assert "intent text" in text
+        assert "digest text" in text
+        assert "NOTE: diff truncated due to size" in text
+
+    def test_augment_prompt_file_tolerates_unreadable_dest(self, cfg, tmp_path, monkeypatch):
+        from reviewforge.ai.prompts import augment_prompt_file
+
+        source = tmp_path / "p.md"
+        source.write_text("body", encoding="utf-8")
+        dest = tmp_path / "p.md.lang"
+        dest.write_text("stale", encoding="utf-8")
+        real_read_text = Path.read_text
+
+        def flaky_read_text(self, *args, **kwargs):
+            if self == dest:
+                raise OSError("unreadable")
+            return real_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", flaky_read_text)
+
+        out = augment_prompt_file(source, cfg, dest=dest)
+
+        assert out == dest
+        assert "English" in real_read_text(dest, encoding="utf-8")
 
 
 class TestSessionIdInRunSummary:

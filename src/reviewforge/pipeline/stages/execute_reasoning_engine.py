@@ -59,6 +59,8 @@ class ExecuteReasoningEngineStage(Stage):
             "final_findings": str(ctx.artifacts.final),
             "metrics": result.metrics.model_dump(by_alias=True, exclude_none=False),
         }
+        if ctx.extras.get("_synthesis_fallback"):
+            details["synthesisFallback"] = True
         if isinstance(fragment_counts, dict):
             details["finding_counts"] = {
                 "candidate": int(fragment_counts.get("candidate", 0) or 0),

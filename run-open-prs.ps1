@@ -13,6 +13,7 @@ param(
     [switch] $KeepContainer
 )
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
 $env:PYTHONPATH = "$PSScriptRoot/src" + $(if ($env:PYTHONPATH) { "$([IO.Path]::PathSeparator)$env:PYTHONPATH" } else { "" })
 $args = @("-m", "reviewforge.ops", "run-open-prs", "--env-file", $EnvFile)
 if ($Organization) { $args += @("--organization", $Organization) }
@@ -24,9 +25,5 @@ if ($Interactive) { $args += "--interactive" }
 if ($DryRun) { $args += "--dry-run" }
 if ($Build) { $args += "--build" }
 if ($KeepContainer) { $args += "--keep-container" }
-if (Get-Command uv -ErrorAction SilentlyContinue) {
-    & uv run python @args
-} else {
-    & python @args
-}
+Invoke-ReviewForgeOps -Arguments $args
 exit $LASTEXITCODE

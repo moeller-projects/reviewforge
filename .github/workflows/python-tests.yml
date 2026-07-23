@@ -28,7 +28,7 @@ jobs:
         run: uv sync --locked --extra dev
 
       - name: Run tests
-        run: uv run pytest tests/ --cov=reviewforge --cov-fail-under=95
+        run: uv run pytest tests/ --cov=reviewforge --cov-fail-under=97
 
   pin-agreement:
     runs-on: ubuntu-latest

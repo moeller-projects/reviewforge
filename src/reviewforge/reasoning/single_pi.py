@@ -16,8 +16,9 @@ from ..artifacts.builder import read_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
 from ..git import ops as git_ops
 from ..ado.posting import _normalize_title
-from ..pipeline.schemas import ChunkResult, ReviewResult, TokenUsage
+from ..pipeline.schemas import ChunkResult, ChunkSynthesis, ReviewResult, TokenUsage
 from ..pipeline.stage import StageContext
+from ..runlog import warning as log_warning
 from .engine import ReasoningEngine, register_engine
 
 
@@ -176,6 +177,38 @@ def _build_chunk_instruction(
     return f"{prefix}\n\n{body}" if prefix else body
 
 
+def _build_synthesis_instruction(
+    chunk_count: int,
+    findings: list[dict[str, Any]],
+    uncertainties: list[dict[str, Any]],
+) -> str:
+    """Build the whole-PR synthesis request; no diff is re-sent."""
+    lines = [
+        f"You reviewed this pull request in {chunk_count} coherent diff chunks.",
+        "Base the summaries on your prior chunk analyses in this session and the merged results below.",
+        "",
+        "Merged findings across all chunks:",
+    ]
+    if findings:
+        for finding in findings:
+            location = finding.get("file") or "general"
+            if finding.get("line"):
+                location = f"{location}:{finding['line']}"
+            lines.append(f"- [{finding.get('severity', 'minor')}] {finding.get('title', '')} ({location})")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("Merged uncertainties across all chunks:")
+    if uncertainties:
+        for item in uncertainties:
+            lines.append(f"- {item.get('topic', '')}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("Return only the chunk-synthesis JSON object defined in the system prompt.")
+    return "\n".join(lines)
+
+
 class SinglePiReasoningEngine(ReasoningEngine):
     """One Pi call that returns a full ``ReviewResult``."""
 
@@ -249,13 +282,24 @@ class SinglePiReasoningEngine(ReasoningEngine):
                         seen.add(key)
                         findings.append(finding.model_dump(by_alias=True))
                 uncertainties.extend(item.model_dump(by_alias=True) for item in partial.uncertainties)
-            result = ReviewResult.model_validate({
-                "review_summary": {"summary": f"Reviewed {len(chunks)} coherent diff chunks."},
-                "verification_summary": {"summary": "Reviewed each deterministic unified-diff chunk.", "approach": "chunked diff review"},
-                "pr_summary": {"implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks."},
-                "findings": findings,
-                "uncertainties": uncertainties,
-            })
+            synthesis = self._synthesize(ctx, len(chunks), findings, uncertainties)
+            if synthesis is not None:
+                payload: dict[str, Any] = {
+                    "review_summary": synthesis.review_summary.model_dump(),
+                    "verification_summary": synthesis.verification_summary.model_dump(),
+                    "pr_summary": synthesis.pr_summary.model_dump(),
+                    "good_practices": [gp.model_dump() for gp in synthesis.good_practices],
+                }
+            else:
+                ctx.extras["_synthesis_fallback"] = True
+                payload = {
+                    "review_summary": {"summary": f"Reviewed {len(chunks)} coherent diff chunks."},
+                    "verification_summary": {"summary": "Reviewed each deterministic unified-diff chunk.", "approach": "chunked diff review"},
+                    "pr_summary": {"implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks."},
+                }
+            payload["findings"] = findings
+            payload["uncertainties"] = uncertainties
+            result = ReviewResult.model_validate(payload)
 
         reasoning_duration_ms = int((time.perf_counter() - reasoning_started) * 1000)
         tokens = _runner_usage(ctx.pi)
@@ -272,6 +316,30 @@ class SinglePiReasoningEngine(ReasoningEngine):
             "chunkCount": len(chunks), "chunkTokenUsage": chunk_usage,
         })
         return result
+
+    def _synthesize(
+        self,
+        ctx: StageContext,
+        chunk_count: int,
+        findings: list[dict[str, Any]],
+        uncertainties: list[dict[str, Any]],
+    ) -> ChunkSynthesis | None:
+        """Ask Pi for whole-PR summaries; ``None`` means use boilerplate."""
+        output_path = ctx.artifacts.raw_dir / "chunk-synthesis.json"
+        try:
+            ctx.pi.run_json(
+                ctx.cfg.chunk_synthesis_prompt_path,
+                _build_synthesis_instruction(chunk_count, findings, uncertainties),
+                output_path,
+                "single-pi synthesis",
+            )
+            return ChunkSynthesis.model_validate(read_json(output_path))
+        except Exception as exc:  # noqa: BLE001 - summaries must never fail a review
+            log_warning(
+                f"chunk synthesis unavailable ({type(exc).__name__}: {exc}); "
+                "falling back to deterministic summaries"
+            )
+            return None
 
     def _enrich_metadata(
         self,

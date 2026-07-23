@@ -42,6 +42,10 @@ if (-not (Test-Path -LiteralPath $ScriptPath)) {
     Fail "Script not found: $ScriptPath"
 }
 
+if ($AdoToken) {
+    Write-Warning "-AdoToken was supplied, but scheduled tasks never embed tokens. Put ADO_AUTH_TOKEN or ADO_API_KEY in the .env file referenced by -EnvFile."
+}
+
 $triggers = foreach ($time in $Times) {
     try {
         $parsed = [TimeSpan]::Parse($time)
@@ -62,7 +66,6 @@ $argList = @(
 if ($Organization)    { $argList += @('-Organization', $Organization) }
 if ($Projects)        { $argList += @('-Projects', ($Projects -join ',')) }
 if ($TargetBranches)  { $argList += @('-TargetBranches', ($TargetBranches -join ',')) }
-if ($AdoToken)        { $argList += @('-AdoToken', $AdoToken) }
 if ($MaxPullRequests -gt 0) { $argList += @('-MaxPullRequests', "$MaxPullRequests") }
 if ($DryRun)          { $argList += '-DryRun' }
 if ($Build)           { $argList += '-Build' }
@@ -70,7 +73,7 @@ if ($EnvFile)         { $argList += @('-EnvFile', $EnvFile) }
 if ($KeepContainer)   { $argList += '-KeepContainer' }
 if ($LogDirectory)    { $argList += @('-LogDirectory', $LogDirectory) }
 
-$action = New-ScheduledTaskAction -Execute "pwsh.exe" -Argument ($argList -join ' ')
+$action = New-ScheduledTaskAction -Execute "pwsh.exe" -Argument ($argList -join ' ') -WorkingDirectory $PSScriptRoot
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 

@@ -319,10 +319,17 @@ class TestFullRunEndToEnd:
 
         cfg = dataclasses.replace(cfg, max_diff_bytes=200, pi_session_enabled=False)
         finding = _rich_finding("dup finding", file="src/app.py", line=3)
-        pi = _install_pi(
-            monkeypatch,
-            lambda stage, _stdin: {"findings": [finding], "uncertainties": []},
-        )
+
+        def responder(stage, _stdin):
+            if stage == "single-pi synthesis":
+                return {
+                    "review_summary": {"summary": "synthesized whole-PR summary"},
+                    "verification_summary": {"summary": "verified across chunks"},
+                    "pr_summary": {"implementation_summary": "synthesized implementation"},
+                }
+            return {"findings": [finding], "uncertainties": []}
+
+        pi = _install_pi(monkeypatch, responder)
 
         outcome = orchestrator.run_full(cfg)
 
@@ -335,6 +342,10 @@ class TestFullRunEndToEnd:
             assert "src/app.py" in instruction
         # Identical findings across chunks dedupe to a single posted thread.
         assert len(ado.created_threads) == 1
+        # The posted summary comes from the synthesis call, not boilerplate.
+        artifacts_dir = _artifacts_dir(cfg)
+        result_doc = json.loads((artifacts_dir / "review-result.json").read_text(encoding="utf-8"))
+        assert result_doc["review_summary"]["summary"] == "synthesized whole-PR summary"
 
     def test_rerun_skips_already_posted_findings(self, cfg, git_repo, ado, monkeypatch):
         findings = [_rich_finding("stable bug", file="src/app.py", line=3)]

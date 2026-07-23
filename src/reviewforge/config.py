@@ -231,6 +231,8 @@ class Config:
     fast_review: bool = field(default=False, compare=False)
     #: System prompt for the single-call reasoning engine.
     fast_review_prompt_path: Path = field(default=Path("/app/prompts/fast-review-system.md"), compare=False)
+    #: System prompt for the whole-PR synthesis call after chunked reviews.
+    chunk_synthesis_prompt_path: Path = field(default=Path("/app/prompts/chunk-synthesis.md"), compare=False)
     #: Maximum commit subjects supplied as intent evidence to single_pi.
     commit_context_max: int = field(default=50, compare=False)
     #: Handling for findings whose inline anchor is absent from the current diff.
@@ -322,6 +324,9 @@ class Config:
         fast_review_prompt_path = _resolve_prompt_path(
             "FAST_REVIEW_PROMPT_PATH", "/app/prompts/fast-review-system.md"
         )
+        chunk_synthesis_prompt_path = _resolve_prompt_path(
+            "CHUNK_SYNTHESIS_PROMPT_PATH", "/app/prompts/chunk-synthesis.md"
+        )
         commit_context_max = require_uint(
             "COMMIT_CONTEXT_MAX", os.getenv("COMMIT_CONTEXT_MAX", "50")
         )
@@ -386,6 +391,7 @@ class Config:
             reasoning_engine=reasoning_engine,
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
+            chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
         )
         return cfg
 
@@ -443,6 +449,8 @@ class Config:
         paths = [self.standards_path]
         if self.fast_review_prompt_path != Path("/app/prompts/fast-review-system.md") or self.fast_review_prompt_path.exists():
             paths.append(self.fast_review_prompt_path)
+        if self.chunk_synthesis_prompt_path != Path("/app/prompts/chunk-synthesis.md") or self.chunk_synthesis_prompt_path.exists():
+            paths.append(self.chunk_synthesis_prompt_path)
         legacy_paths = [
             self.review_prompt_path,
             self.intent_prompt_path,
@@ -743,6 +751,10 @@ def _build_from_sources(
         fast_review_prompt_path=to_path(
             cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"),
             str(Path(__file__).resolve().parents[2] / "prompts" / "fast-review-system.md"),
+        ),
+        chunk_synthesis_prompt_path=to_path(
+            cli_or_env("chunk_synthesis_prompt_path", "CHUNK_SYNTHESIS_PROMPT_PATH"),
+            str(Path(__file__).resolve().parents[2] / "prompts" / "chunk-synthesis.md"),
         ),
         commit_context_max=commit_context_max,
         anchor_policy=anchor_policy,

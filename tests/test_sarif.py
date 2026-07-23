@@ -80,6 +80,17 @@ def test_invalid_locations_are_omitted(file: str):
     assert "locations" not in output["runs"][0]["results"][0]
 
 
+def test_location_uri_edge_cases():
+    from reviewforge.pipeline.sarif import _location_uri, _validate
+
+    assert _location_uri("   ") is None
+    assert _location_uri("src/app.py") == "src/app.py"
+    with pytest.raises(ValueError, match="missing top-level keys"):
+        _validate({"version": "2.1.0"})
+    with pytest.raises(ValueError, match="expected version and runs"):
+        _validate({"version": "1.0.0", "runs": []})
+
+
 def test_artifact_manager_exposes_sarif_path(tmp_path: Path):
     cfg = type("Cfg", (), {"review_artifact_dir": str(tmp_path), "review_run_id": None, "review_artifact_root": tmp_path, "pr_id": "1"})()
     artifacts = manager.create(cfg)

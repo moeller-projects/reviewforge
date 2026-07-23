@@ -1395,18 +1395,19 @@ class TestGitOps:
         commands: list[list[str]] = []
 
         monkeypatch.setattr(git_ops, "run_logged", lambda desc, cmd, cwd: commands.append(cmd))
-        monkeypatch.setattr(
-            git_ops.subprocess,
-            "run",
-            lambda cmd, **kwargs: subprocess.CompletedProcess(
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--is-shallow-repository"]:
+                return subprocess.CompletedProcess(cmd, 0, b"true\n", b"")
+            return subprocess.CompletedProcess(
                 cmd,
                 1 if cmd[:2] == ["git", "merge-base"] else 0,
                 b"",
                 b"",
-            ),
-        )
+            )
 
-        with pytest.raises(GitOperationError, match=r"main.*feature/x.*\[200, 1200, 6200, 10000\]"):
+        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+
+        with pytest.raises(GitOperationError, match=r"main.*feature/x.*\[200, 1200, 6200, 10000, 'unshallow'\]"):
             git_ops.prepare_repo(cfg, "feature/x", "main")
         assert [cmd[3] for cmd in commands if "--deepen=" in " ".join(cmd)] == [
             "--deepen=1000",
@@ -1470,6 +1471,23 @@ class TestPlatformOperations:
         assert not temporary
         assert "PI_MODEL=cli-model" in command
 
+
+    def test_run_uses_env_only_ado_token_for_container(self, monkeypatch, tmp_path):
+        from reviewforge import ops
+
+        monkeypatch.setattr(ops, "runtime", lambda explicit: explicit)
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "env-only-token")
+        env_file = tmp_path / "review.env"
+        env_file.write_text("ADO_AUTH_TOKEN=env-only-token\n", encoding="utf-8")
+        args = ops.parser().parse_args(
+            ["run", "--runtime", "docker", "--env-file", str(env_file), "--pr-id", "7"]
+        )
+
+        command, returned_env_file, temporary = ops.run_command(args)
+
+        assert returned_env_file == str(env_file.resolve())
+        assert not temporary
+        assert "ADO_AUTH_TOKEN=env-only-token" in command
     def test_run_mounts_pi_auth_json_when_present(self, monkeypatch, tmp_path):
         from reviewforge import ops
 
@@ -1527,3 +1545,58 @@ class TestPlatformOperations:
         from reviewforge import ops
 
         assert ops.main(["build", "--pin-file", str(tmp_path / "missing.env"), "--dry-run"]) == 2
+
+
+class TestPowerShellScheduledOps:
+    """Static contracts for Windows wrappers; Task Scheduler is not available in CI."""
+
+    @staticmethod
+    def _script(name: str) -> str:
+        return (ROOT / name).read_text(encoding="utf-8")
+
+    def test_schedule_action_sets_repo_working_directory(self):
+        script = self._script("setup-open-prs-schedule.ps1")
+        assert '-WorkingDirectory $PSScriptRoot' in script
+        assert '-LogonType Interactive' in script
+
+    def test_schedule_arguments_never_forward_token(self):
+        script = self._script("setup-open-prs-schedule.ps1")
+        arg_block = script.split("$argList = @(", 1)[1].split("$action", 1)[0]
+        assert "-AdoToken" not in arg_block
+        assert "scheduled tasks never embed tokens" in script
+        assert "ADO_AUTH_TOKEN or ADO_API_KEY" in script
+
+    @pytest.mark.parametrize(
+        ("branch", "required"),
+        [
+            ("uv", "& uv run --project $PSScriptRoot python @Arguments"),
+            ("windows-venv", ".venv/Scripts/python.exe"),
+            ("posix-venv", ".venv/bin/python"),
+            ("failure", "neither uv nor a repo .venv was found"),
+        ],
+    )
+    def test_shared_resolver_covers_interpreter_branches(self, branch, required):
+        common = self._script("common.psm1")
+        assert "function Invoke-ReviewForgeOps" in common
+        assert "Get-Command uv -ErrorAction SilentlyContinue" in common
+        assert "Test-Path -LiteralPath $python -PathType Leaf" in common
+        assert required in common
+
+    @pytest.mark.parametrize("name", ["run.ps1", "run-open-prs.ps1"])
+    def test_wrappers_delegate_to_shared_resolver(self, name):
+        script = self._script(name)
+        assert "Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force" in script
+        assert "Invoke-ReviewForgeOps -Arguments $args" in script
+        assert "Get-Command uv" not in script
+        assert "& uv run" not in script
+        assert "& python @args" not in script
+
+    def test_scheduled_wrapper_loads_env_and_drops_token_forwarding(self):
+        script = self._script("run-open-prs-scheduled.ps1")
+        assert "Import-DotEnvFile -Path $envFilePath" in script
+        assert "never forwarded or logged" in script
+        assert "-AdoToken $AdoToken" not in script
+
+    def test_interactive_wrappers_keep_explicit_token_support(self):
+        assert 'if ($AdoToken) { $args += @("--ado-token", $AdoToken) }' in self._script("run.ps1")
+        assert 'if ($AdoToken) { $args += @("--ado-token", $AdoToken) }' in self._script("run-open-prs.ps1")

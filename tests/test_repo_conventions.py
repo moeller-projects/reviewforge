@@ -13,9 +13,41 @@ References:
 """
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 
 import pytest
 
+ROOT = Path(__file__).resolve().parent.parent
+
+
+# ---------------------------------------------------------------------------
+# Repository hygiene — no malformed tracked path names.
+#
+# An agent once committed an empty file whose name was a pasted shell command.
+# Tracked file and directory names must never contain shell-command
+# fragments; this class of mistake fails CI.
+# ---------------------------------------------------------------------------
+
+
+class TestTrackedPathNames:
+    """No tracked path contains ';', ':', or a 'FILE:'-style prefix."""
+
+    def test_no_tracked_name_has_shell_command_fragments(self) -> None:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"],
+            check=True,
+            capture_output=True,
+            cwd=ROOT,
+        ).stdout.decode("utf-8")
+        names = [n for n in out.split("\0") if n]
+        assert names, "git ls-files returned nothing — is this a checkout?"
+        for name in names:
+            parts = name.split("/")
+            for part in parts:
+                assert ";" not in part, f"malformed tracked name: {name!r}"
+                assert ":" not in part, f"malformed tracked name: {name!r}"
+                assert not part.startswith("FILE:"), f"malformed tracked name: {name!r}"
 
 
 

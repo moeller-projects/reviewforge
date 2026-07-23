@@ -10,10 +10,10 @@ Run the suite:
 pytest -q
 ```
 
-Run coverage:
+Run coverage (the CI gate is 97%):
 
 ```bash
-pytest --cov=reviewforge --cov-report=term-missing
+pytest --cov=reviewforge --cov-report=term-missing --cov-fail-under=97
 ```
 
 Add tests when a change introduces a new contract or boundary. Prefer deterministic tests of parsed arguments, schema validation, stage outcomes, artifact contents, and posting decisions over source-text assertions.

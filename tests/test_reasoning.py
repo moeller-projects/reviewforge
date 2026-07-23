@@ -34,6 +34,8 @@ from reviewforge.reasoning.multi_stage import MultiStageReasoningEngine  # noqa:
 from reviewforge.reasoning.single_pi import (  # noqa: E402
     SinglePiReasoningEngine,
     _build_single_pi_instruction,
+    _build_synthesis_instruction,
+    _commit_lines,
     _diff_chunks,
     _reduce_diff,
 )
@@ -246,6 +248,40 @@ class TestCanonicalReviewResultContract:
                     ],
                 }
             )
+
+    def test_diff_without_sections_is_byte_truncated(self):
+        reduced, was_reduced = _reduce_diff("diff --git ", 5)
+        assert reduced == "diff "
+        assert was_reduced is True
+
+
+class TestChunkSynthesisHelpers:
+    def test_synthesis_instruction_lists_findings_and_uncertainties(self):
+        text = _build_synthesis_instruction(
+            3,
+            [{"severity": "major", "title": "Bug", "file": "a.py", "line": 7}],
+            [{"topic": "Rollout risk"}],
+        )
+        assert "3 coherent diff chunks" in text
+        assert "[major] Bug (a.py:7)" in text
+        assert "- Rollout risk" in text
+
+    def test_synthesis_instruction_handles_empty_merges(self):
+        text = _build_synthesis_instruction(2, [], [])
+        assert text.count("- none") == 2
+
+    def test_commit_lines_fall_back_to_git_log(self, tmp_path: Path, monkeypatch):
+        cfg = _cfg(tmp_path)
+        pi = MagicMock()
+        ctx = _stage_context(cfg, pi)
+        ctx.state.repo_dir = tmp_path
+        ctx.state.range_spec = "base..head"
+        monkeypatch.setattr(
+            "reviewforge.reasoning.single_pi.git_ops.run_git",
+            lambda _cwd, *args: "abc first\ndef second\n",
+        )
+
+        assert _commit_lines(ctx) == ["abc first", "def second"]
 
 class TestEngineRegistry:
     def test_built_in_engines_registered(self):
@@ -494,7 +530,14 @@ class TestSinglePiReasoningEngine:
         ]
         calls = []
 
-        def fake_run_json(_p, _s, out, _stage):
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "single-pi synthesis":
+                builder.write_json(out, {
+                    "review_summary": {"summary": "Solid chunk synthesis."},
+                    "verification_summary": {"summary": "Verified per chunk."},
+                    "pr_summary": {"implementation_summary": "Did the thing."},
+                })
+                return
             builder.write_json(out, partials[len(calls)])
             calls.append(_s)
 
@@ -512,6 +555,8 @@ class TestSinglePiReasoningEngine:
 
         assert len(result.findings) == 1
         assert result.metrics.chunkCount == 2
+        assert result.review_summary.summary == "Solid chunk synthesis."
+        assert result.pr_summary.implementation_summary == "Did the thing."
         assert ReviewResult.model_validate(result.model_dump())
 
     def test_chunked_execution_repeats_shared_context_and_records_usage(self, tmp_path: Path):
@@ -521,11 +566,18 @@ class TestSinglePiReasoningEngine:
         token_usage = [
             {"in": 10, "out": 5, "total": 15},
             {"in": 17, "out": 7, "total": 24},
+            {"in": 25, "out": 10, "total": 35},
         ]
         payload = _valid_review_result_payload()["findings"][0]
         partial = {"findings": [payload], "uncertainties": []}
 
-        def fake_run_json(_prompt_path, stdin, out, _stage):
+        def fake_run_json(_prompt_path, stdin, out, stage):
+            if stage == "single-pi synthesis":
+                pi.token_usage = token_usage[2]
+                builder.write_json(out, {
+                    "review_summary": {"summary": "Synthesized."},
+                })
+                return
             idx = len(prompts)
             prompts.append(stdin)
             pi.token_usage = token_usage[idx]
@@ -559,7 +611,83 @@ class TestSinglePiReasoningEngine:
             {"input": 10, "output": 5, "total": 15},
             {"input": 7, "output": 2, "total": 9},
         ]
-        assert result.metadata.tokens.model_dump() == {"input": 17, "output": 7, "total": 24}
+        assert result.metadata.tokens.model_dump() == {"input": 25, "output": 10, "total": 35}
+
+    def test_chunked_synthesis_failure_falls_back_to_boilerplate(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        pi = MagicMock()
+        partial = {"findings": [], "uncertainties": []}
+
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "single-pi synthesis":
+                raise ReasoningEngineError("pi exploded", details={})
+            builder.write_json(out, partial)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.token_usage = {"in": 0, "out": 0, "total": 0}
+        pi.invocation_count = 0
+        pi.repair_invocation_count = 0
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert result.review_summary.summary == "Reviewed 2 coherent diff chunks."
+        assert ctx.extras["_synthesis_fallback"] is True
+        assert ReviewResult.model_validate(result.model_dump())
+
+    def test_chunked_synthesis_invalid_json_falls_back(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        pi = MagicMock()
+        partial = {"findings": [], "uncertainties": []}
+
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "single-pi synthesis":
+                builder.write_json(out, {"not": "a synthesis"})
+                return
+            builder.write_json(out, partial)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.token_usage = {"in": 0, "out": 0, "total": 0}
+        pi.invocation_count = 0
+        pi.repair_invocation_count = 0
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert result.review_summary.summary == "Reviewed 2 coherent diff chunks."
+        assert ctx.extras["_synthesis_fallback"] is True
+
+    def test_synthesis_fallback_flag_reaches_stage_details(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        pi = MagicMock()
+        partial = {"findings": [], "uncertainties": []}
+
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "single-pi synthesis":
+                raise ReasoningEngineError("pi exploded", details={})
+            builder.write_json(out, partial)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.token_usage = {"in": 0, "out": 0, "total": 0}
+        pi.invocation_count = 0
+        pi.repair_invocation_count = 0
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        details = ExecuteReasoningEngineStage().run(ctx)
+
+        assert details["synthesisFallback"] is True
 
 
 
@@ -781,4 +909,16 @@ class TestProjection:
         assert final["findings"][0]["confidence"] == "high"
         assert final["findings"][0]["suggestion"] == "Add validation."
         assert final["findings"][0]["evidence"]["contextFilesRead"] == ["a.py", "tests/test_a.py"]
+
+    def test_symbol_files_dedupes_and_skips_missing(self):
+        from reviewforge.pipeline.projection import _symbol_files
+        from reviewforge.pipeline.schemas import RichSymbol
+
+        symbols = [
+            RichSymbol.model_validate({"name": "a", "file": "x.py"}),
+            RichSymbol.model_validate({"name": "b", "file": "x.py"}),
+            RichSymbol.model_validate({"name": "c"}),
+            RichSymbol.model_validate({"name": "d", "file": "y.py"}),
+        ]
+        assert _symbol_files(symbols) == ["x.py", "y.py"]
 
