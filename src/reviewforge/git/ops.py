@@ -11,6 +11,7 @@ import tempfile
 import urllib.parse
 
 from ..config import Config
+from ..exceptions import GitOperationError
 
 #: A tiny ``GIT_ASKPASS`` script that supplies the ADO token when git asks
 #: for credentials. The token is read from the current process environment.
@@ -50,8 +51,10 @@ def run_git(cwd: Path, *args: str, check: bool = True) -> str:
         stderr=subprocess.PIPE,
     )
     if check and cp.returncode:
-        raise SystemExit(
-            f"[review][ERROR] git {' '.join(args)} failed: {cp.stderr.decode(errors='replace')}"
+        stderr = cp.stderr.decode(errors="replace")
+        raise GitOperationError(
+            f"[review][ERROR] git {' '.join(args)} failed: {stderr}",
+            details={"args": args, "cwd": str(cwd), "returncode": cp.returncode, "stderr": stderr},
         )
     return cp.stdout.decode()
 
@@ -64,7 +67,10 @@ def run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
         for line in stream.decode(errors="replace").splitlines():
             log(f"[{desc}] {line}")
     if cp.returncode:
-        raise SystemExit(f"[review][ERROR] {desc} failed with exit code {cp.returncode}")
+        raise GitOperationError(
+            f"[review][ERROR] {desc} failed with exit code {cp.returncode}",
+            details={"command": cmd, "cwd": str(cwd), "returncode": cp.returncode},
+        )
 
 
 def prepare_repo(
@@ -119,24 +125,59 @@ def prepare_repo(
          f"+refs/heads/{source_branch}:{source_ref}"],
         repo_dir,
     )
-    if subprocess.run(
-        ["git", "merge-base", target_ref, source_ref],
-        cwd=str(repo_dir),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode:
+    def merge_base_exists() -> bool:
+        return subprocess.run(
+            ["git", "merge-base", target_ref, source_ref],
+            cwd=str(repo_dir),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode == 0
+
+    depths = [200]
+    deepen = 1_000
+    while not merge_base_exists() and depths[-1] < 10_000:
+        increase = min(deepen, 10_000 - depths[-1])
+        next_depth = depths[-1] + increase
+        log(f"merge base unavailable at depth {depths[-1]}; deepening both refs to {next_depth}")
         run_logged(
-            "git fetch deepen target",
-            ["git", "fetch", "--no-tags", "--deepen=1000", "origin",
+            f"git fetch deepen target by {increase}",
+            ["git", "fetch", "--no-tags", f"--deepen={increase}", "origin",
              f"+refs/heads/{target_branch}:{target_ref}"],
             repo_dir,
         )
         run_logged(
-            "git fetch deepen source",
-            ["git", "fetch", "--no-tags", "--deepen=1000", "origin",
+            f"git fetch deepen source by {increase}",
+            ["git", "fetch", "--no-tags", f"--deepen={increase}", "origin",
              f"+refs/heads/{source_branch}:{source_ref}"],
             repo_dir,
         )
+        depths.append(next_depth)
+        deepen *= 5
+    if not merge_base_exists():
+        log("merge base unavailable after bounded deepening; fetching both refs unshallow")
+        run_logged(
+            "git fetch unshallow target",
+            ["git", "fetch", "--no-tags", "--unshallow", "origin",
+             f"+refs/heads/{target_branch}:{target_ref}"],
+            repo_dir,
+        )
+        run_logged(
+            "git fetch unshallow source",
+            ["git", "fetch", "--no-tags", "--unshallow", "origin",
+             f"+refs/heads/{source_branch}:{source_ref}"],
+            repo_dir,
+        )
+        if not merge_base_exists():
+            raise GitOperationError(
+                f"[review][ERROR] no merge base found for branches "
+                f"{target_branch!r} and {source_branch!r} after depths {depths} "
+                "and an unshallow fetch",
+                details={
+                    "target_branch": target_branch,
+                    "source_branch": source_branch,
+                    "depths": depths,
+                },
+            )
     base = run_git(repo_dir, "merge-base", target_ref, source_ref).strip()
     target_commit = run_git(repo_dir, "rev-parse", "--verify", f"{target_ref}^{{commit}}").strip()
     source_commit = run_git(repo_dir, "rev-parse", "--verify", f"{source_ref}^{{commit}}").strip()

@@ -35,6 +35,7 @@ from reviewforge.ai import prompts  # noqa: E402
 from reviewforge.ai.runner import PiRunner, strip_json_fences  # noqa: E402
 from reviewforge.artifacts import builder, manager  # noqa: E402
 from reviewforge.config import Config, ConfigError, env, is_true, require_uint  # noqa: E402
+from reviewforge.exceptions import GitOperationError  # noqa: E402
 from reviewforge.git import chunker  # noqa: E402
 from reviewforge.git import ops as git_ops  # noqa: E402
 from reviewforge.pipeline import orchestrator  # noqa: E402
@@ -1297,13 +1298,16 @@ class TestGitOps:
             return subprocess.CompletedProcess(a, 1, b"out\n", b"err\n")
 
         monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
-        with pytest.raises(SystemExit):
+        with pytest.raises(GitOperationError):
             git_ops.run_logged("step", ["git", "status"], tmp_path)
 
     def test_prepare_repo_and_cleanup(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
+        commands: list[list[str]] = []
+
 
         def fake_run(cmd, cwd=None, stdout=None, stderr=None, env=None):
+            commands.append(cmd)
             if cmd[:2] == ["git", "merge-base"]:
                 return subprocess.CompletedProcess(cmd, 0, b"base123\n", b"")
             if cmd[:2] == ["git", "rev-parse"]:
@@ -1320,7 +1324,71 @@ class TestGitOps:
         state = git_ops.prepare_repo(cfg, "feature/x", "main")
         assert state.base_commit == "base123"
         assert state.files == ["src/a.py"]
+        assert sum("--depth=200" in cmd for cmd in commands) == 2
+        assert not any("--deepen=" in " ".join(cmd) or "--unshallow" in cmd for cmd in commands)
         git_ops.cleanup(state)
+
+    def test_prepare_repo_deepens_until_merge_base_exists(self, tmp_path, monkeypatch):
+        cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
+        commands: list[list[str]] = []
+        merge_base_calls = 0
+
+        def fake_logged(desc, cmd, cwd):
+            commands.append(cmd)
+
+        def fake_run(cmd, cwd=None, stdout=None, stderr=None, env=None):
+            nonlocal merge_base_calls
+            if cmd[:2] == ["git", "merge-base"]:
+                merge_base_calls += 1
+                return subprocess.CompletedProcess(cmd, 0 if merge_base_calls >= 3 else 1, b"base123\n", b"")
+            if cmd[:2] == ["git", "rev-parse"]:
+                return subprocess.CompletedProcess(cmd, 0, b"commit123\n", b"")
+            if cmd[:2] == ["git", "diff"] and "--name-only" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, b"src/a.py\n", b"")
+            if cmd[:2] == ["git", "diff"]:
+                return subprocess.CompletedProcess(cmd, 0, b"difftext", b"")
+            return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+        monkeypatch.setattr(git_ops, "run_logged", fake_logged)
+        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        state = git_ops.prepare_repo(cfg, "feature/x", "main")
+        assert state.base_commit == "base123"
+        assert [cmd[3] for cmd in commands if "--deepen=1000" in cmd or "--deepen=5000" in cmd] == [
+            "--deepen=1000",
+            "--deepen=1000",
+            "--deepen=5000",
+            "--deepen=5000",
+        ]
+        assert not any("--unshallow" in cmd for cmd in commands)
+        git_ops.cleanup(state)
+
+    def test_prepare_repo_reports_missing_merge_base_after_unshallow(self, tmp_path, monkeypatch):
+        cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
+        commands: list[list[str]] = []
+
+        monkeypatch.setattr(git_ops, "run_logged", lambda desc, cmd, cwd: commands.append(cmd))
+        monkeypatch.setattr(
+            git_ops.subprocess,
+            "run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(
+                cmd,
+                1 if cmd[:2] == ["git", "merge-base"] else 0,
+                b"",
+                b"",
+            ),
+        )
+
+        with pytest.raises(GitOperationError, match=r"main.*feature/x.*\[200, 1200, 6200, 10000\]"):
+            git_ops.prepare_repo(cfg, "feature/x", "main")
+        assert [cmd[3] for cmd in commands if "--deepen=" in " ".join(cmd)] == [
+            "--deepen=1000",
+            "--deepen=1000",
+            "--deepen=5000",
+            "--deepen=5000",
+            "--deepen=3800",
+            "--deepen=3800",
+        ]
+        assert sum("--unshallow" in cmd for cmd in commands) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,10 @@ class ReasoningEngineError(ReviewForgeError):
     """Raised when a reasoning engine fails to produce a valid review result."""
 
 
+class GitOperationError(ReviewForgeError):
+    """Raised when a Git command fails."""
+
+
 class SchemaValidationError(ReviewForgeError):
     """Raised when a model response does not validate against the expected schema."""
 
