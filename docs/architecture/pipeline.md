@@ -14,3 +14,5 @@ Pipelines declared in `pipeline/stages/__init__.py`:
 The selected engine owns Pi-driven reasoning. The physical pipeline owns metadata, repository preparation, materialization, projection, and posting. `run_full`, `run_review_only`, and `run_post_only` create artifacts, run the relevant list, write `run-summary.json`, and return `RunOutcome`.
 
 Review mode can skip inactive or draft PRs, or target branches outside `REVIEW_TARGET_BRANCHES`, unless `force_review` is enabled. `dry_run` and `--no-post` prevent posting while retaining generated artifacts.
+
+Follow-up reviews include deterministic `previousFeedback` curated from bot-authored ADO threads. Dismissed entries are not re-raised unless changed code genuinely reintroduces the issue; fixed entries are reported only when reintroduced. Non-regression re-raises are filtered before posting and recorded in `discarded_findings`.

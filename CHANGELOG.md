@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
 - Added the narrow `ModelRunner` seam with `PiCliRunner`; `PiRunner` remains a deprecated compatibility alias for one release.
 - PowerShell operations wrappers are deprecated compatibility entrypoints; use `python -m reviewforge.ops` for cross-platform container build and review commands.
 - ADO pipeline fetch and post operations now execute in-process through `ado.operations`; `reviewforge.ado.cli` remains a legacy compatibility shim.
+- Follow-up reviews now curate deterministic human feedback from prior bot threads and suppress dismissed re-raises while preserving explicit regressions.
 
 ### Removed
 

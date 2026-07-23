@@ -171,6 +171,9 @@ class TestCanonicalReviewResultContract:
         result = ReviewResult()
         assert result.review_summary.summary
         assert result.verification_summary.summary
+    def test_regression_defaults_false(self):
+        result = ReviewResult.model_validate(_valid_review_result_payload())
+        assert result.findings[0].regression is False
 
     def test_empty_recommendation_is_rejected(self):
         payload = _valid_review_result_payload()
@@ -519,6 +522,7 @@ class TestMultiStageReasoningEngine:
             "line": 5,
             "contextBasis": "diff-only",
             "suggestion": "Fix it.",
+            "regression": True,
             "evidence": {
                 "changedLines": [5],
                 "contextFilesRead": ["b.py"],
@@ -529,6 +533,7 @@ class TestMultiStageReasoningEngine:
         assert rich.title == "Bug"
         assert rich.observation == "It breaks."
         assert rich.recommendation == "Fix it."
+        assert rich.regression is True
         assert rich.evidence.relatedFiles == ["b.py"]
 
     def test_execute_with_stages(self, tmp_path: Path, monkeypatch):

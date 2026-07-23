@@ -4,7 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Any
+
+from ..ado.posting import finding_fingerprint
 
 
 class ReviewMode(str, Enum):
@@ -37,6 +40,14 @@ class ReviewComment:
 
 
 @dataclass(frozen=True)
+class FeedbackEntry:
+    fingerprint: str
+    thread_status: str
+    last_author_reply: str = ""
+    disposition: str = "unresolved"
+    thread_id: str | int | None = None
+
+@dataclass(frozen=True)
 class ReviewState:
     reviewer: ReviewerIdentity | None
     mode: ReviewMode
@@ -44,6 +55,7 @@ class ReviewState:
     last_reviewed_commit: str | None = None
     previous_comments: tuple[ReviewComment, ...] = ()
     active_comments: tuple[ReviewComment, ...] = ()
+    feedback: tuple[FeedbackEntry, ...] = ()
     resolved_comments: tuple[ReviewComment, ...] = ()
     changed_commits: tuple[str, ...] = ()
     changed_files: tuple[str, ...] = ()
@@ -77,6 +89,16 @@ class ReviewState:
             "previousComments": [comment(c) for c in self.previous_comments],
             "activeComments": [comment(c) for c in self.active_comments],
             "resolvedComments": [comment(c) for c in self.resolved_comments],
+            "previousFeedback": [
+                {
+                    "fingerprint": entry.fingerprint,
+                    "threadStatus": entry.thread_status,
+                    "lastAuthorReply": entry.last_author_reply,
+                    "disposition": entry.disposition,
+                    "threadId": entry.thread_id,
+                }
+                for entry in self.feedback
+            ],
             "changedCommits": list(self.changed_commits),
             "changedFiles": list(self.changed_files),
             "reason": self.reason,
@@ -111,6 +133,71 @@ def _comment_from_dict(thread: dict[str, Any], raw: dict[str, Any]) -> ReviewCom
     )
 
 
+_DISMISSED_STATUSES = {"wontfix", "closed", "bydesign"}
+_FIXED_STATUSES = {"fixed", "resolved"}
+_TITLE_RE = re.compile(r"^####\s+[^—-]+(?:—|-)\s+(.+?)\s*$", re.MULTILINE)
+_FEEDBACK_RE = re.compile(r"(?m)^<!--\s*prb-feedback:([a-zA-Z0-9]{6,32})\s*-->\s*$")
+
+
+def _thread_fingerprint(thread: dict[str, Any]) -> str | None:
+    context = thread.get("threadContext") or {}
+    comments = thread.get("comments") or []
+    if comments:
+        for comment in comments:
+            content = str(comment.get("content") or comment.get("text") or "")
+            if match := _FEEDBACK_RE.search(content):
+                return match.group(1)
+    title = thread.get("title")
+    if not title and comments:
+        content = comments[0].get("content") or comments[0].get("text") or ""
+        match = _TITLE_RE.search(str(content))
+        title = match.group(1) if match else ""
+    if not title:
+        return None
+    return finding_fingerprint({"file": context.get("filePath"), "title": title})
+
+
+def _feedback_entries(
+    threads: list[dict[str, Any]], reviewer: ReviewerIdentity | None
+) -> tuple[FeedbackEntry, ...]:
+    entries: list[FeedbackEntry] = []
+    for thread in threads or []:
+        comments = [c for c in thread.get("comments") or [] if isinstance(c, dict)]
+        bot_comments = [
+            c for c in comments
+            if reviewer and str((c.get("author") or {}).get("id") or c.get("authorId") or "") == reviewer.user_id
+        ]
+        if not bot_comments:
+            continue
+        fingerprint = _thread_fingerprint(thread)
+        if not fingerprint:
+            continue
+        status = str(thread.get("status") or "").strip()
+        status_key = status.casefold().replace(" ", "")
+        disposition = (
+            "dismissed" if status_key in _DISMISSED_STATUSES
+            else "fixed" if status_key in _FIXED_STATUSES
+            else "unresolved"
+        )
+        human = [
+            c for c in comments
+            if str((c.get("author") or {}).get("id") or c.get("authorId") or "") != reviewer.user_id
+        ]
+        human.sort(
+            key=lambda c: _parse_time(
+                str(c.get("publishedDate") or c.get("publishedAt") or "")
+            ) or datetime.min.replace(tzinfo=timezone.utc)
+        )
+        reply = str(
+            (human[-1].get("content") or human[-1].get("text") or "")
+            if human else ""
+        )[:500]
+        entries.append(
+            FeedbackEntry(fingerprint, status, reply, disposition, thread.get("id"))
+        )
+    return tuple(entries)
+
+
 def normalize_comments(threads: list[dict[str, Any]]) -> tuple[ReviewComment, ...]:
     comments: list[ReviewComment] = []
     for thread in threads or []:
@@ -132,6 +219,7 @@ def select_review_state(
     changed_files: tuple[str, ...] = (),
 ) -> ReviewState:
     comments = normalize_comments(threads)
+    feedback = _feedback_entries(threads, reviewer)
     own = tuple(c for c in comments if reviewer and c.author_id and c.author_id == reviewer.user_id)
     own = tuple(sorted(
         own,
@@ -172,6 +260,7 @@ def select_review_state(
         previous_comments=own,
         active_comments=active,
         resolved_comments=resolved,
+        feedback=feedback,
         changed_commits=changed_commits,
         changed_files=changed_files,
         reason=reason,
@@ -179,7 +268,27 @@ def select_review_state(
 
 
 
+def filter_dismissed_findings(
+    findings: list[dict[str, Any]], feedback: tuple[FeedbackEntry, ...]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    dismissed = {entry.fingerprint: entry for entry in feedback if entry.disposition == "dismissed"}
+    kept: list[dict[str, Any]] = []
+    discarded: list[dict[str, Any]] = []
+    for finding in findings:
+        entry = dismissed.get(finding_fingerprint(finding))
+        if entry and not finding.get("regression", False):
+            discarded.append({
+                "reason": f"previously dismissed by author (thread {entry.thread_id})",
+                "category": "previously-dismissed",
+                "count": 1,
+            })
+        else:
+            kept.append(finding)
+    return kept, discarded
+
 __all__ = [
+    "FeedbackEntry",
+    "filter_dismissed_findings",
     "ReviewComment",
     "ReviewMode",
     "ReviewState",

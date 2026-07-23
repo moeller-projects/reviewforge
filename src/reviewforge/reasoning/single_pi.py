@@ -137,6 +137,14 @@ def _build_single_pi_instruction(ctx: StageContext) -> str:
             parts += [f"\n{label}:\n{json.dumps(value, ensure_ascii=False)}"]
     if review_context := ctx.extras.get("review_context"):
         parts += ["\nDeterministic review state:\n" + json.dumps(review_context, ensure_ascii=False, sort_keys=True)]
+        feedback = review_context.get("previousFeedback", [])
+        if feedback:
+            parts += [
+                "\nPrevious review feedback:\n",
+                json.dumps(feedback, ensure_ascii=False, sort_keys=True),
+                "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
+                "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.",
+            ]
     if diff_text:
         parts += ["\nUnified diff:\n", diff_text]
     return "\n".join(parts) + "\nReturn only the ReviewResult JSON object defined in the system prompt.\n"

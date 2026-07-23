@@ -194,6 +194,7 @@ class MultiStageReasoningEngine(ReasoningEngine):
             file=f.get("file"),
             line=f.get("line"),
             contextBasis=f.get("contextBasis") or f.get("context_basis"),
+            regression=bool(f.get("regression", False)),
             evidence=evidence,
         )
 

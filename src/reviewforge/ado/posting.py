@@ -107,6 +107,14 @@ def dedupe_key(finding: dict[str, Any]) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def finding_fingerprint(finding: dict[str, Any]) -> str:
+    """Return a rewording-tolerant file/title identity without line numbers."""
+    raw = "|".join(
+        [_normalize_file(finding.get("file")), _normalize_title(finding.get("title"))]
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def make_marker(key: str) -> str:
     """Return the full marker text (``prb:<key>``) for a given key."""
     return f"{MARKER_PREFIX}:{key}"
@@ -367,6 +375,7 @@ __all__ = [
     "classify_threads",
     "dedupe_key_v1",
     "existing_bot_markers",
+    "finding_fingerprint",
     "find_stale_bot_threads",
     "is_work_item_finding",
     "make_marker",

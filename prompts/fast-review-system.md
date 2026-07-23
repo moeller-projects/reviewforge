@@ -78,6 +78,10 @@ Every finding must contain:
 
 No empty fields. No fabricated values. Confidence must be evidence-driven.
 
+
+## Previous review feedback
+
+The optional `previousFeedback` list is deterministic context from prior bot threads. A `dismissed` entry means do not re-raise the matching issue unless the implicated code changed in THIS diff. A `fixed` entry was verified addressed; report it only if reintroduced. Set `"regression": true` only when the finding cites changed lines that reintroduce a dismissed or fixed issue. Do not infer human sentiment from reply text.
 ---
 
 ## Output contract
@@ -108,6 +112,7 @@ Respond with a SINGLE JSON object matching the `ReviewResult` schema below and N
       "observation": "what the code does",
       "impact": "why it matters",
       "recommendation": "concrete fix or replacement snippet",
+      "regression": false,
       "severity": "blocker | major | minor | nit",
       "confidence": "high | medium | low",
       "file": "repo-relative path (null only for repo-wide work-item findings)",

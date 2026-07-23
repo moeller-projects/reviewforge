@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from ..config import ConfigError
+from .posting import finding_fingerprint
 
 
 # --- Shared constants ------------------------------------------------------
@@ -151,6 +152,10 @@ def marker_line(key: str) -> str:
     return f"<!-- {_MARKER_PREFIX}:{key} -->"
 
 
+def _feedback_line(finding: Mapping[str, Any]) -> str:
+    return f"<!-- prb-feedback:{finding_fingerprint(dict(finding))} -->"
+
+
 # --- Formatter protocol ----------------------------------------------------
 
 @runtime_checkable
@@ -245,7 +250,7 @@ class DefaultCommentFormatter:
         # ── Assemble, truncate, stamp ─────────────────────────────────────
         body = "\n".join(parts)
         body = truncate(body, max_chars - 64)
-        body += f"\n\n{marker_line(key)}"
+        body += f"\n\n{_feedback_line(finding)}\n{marker_line(key)}"
         return body
     
     
@@ -386,7 +391,7 @@ class TemplateCommentFormatter:
         # line, on its own, at the end of the body.
         rendered = _MARKER_LINE_RE.sub("", rendered).rstrip()
         rendered = truncate(rendered, max_chars - 64)
-        rendered += f"\n\n{marker_line(key)}"
+        rendered += f"\n\n{_feedback_line(finding)}\n{marker_line(key)}"
         return rendered
 
 

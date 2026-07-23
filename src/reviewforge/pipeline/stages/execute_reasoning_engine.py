@@ -7,8 +7,11 @@ from ...artifacts.builder import write_json
 from ...reasoning.engine import get_engine
 from ... import __version__
 from ...runlog import warning
-from ..sarif import review_result_to_sarif
+from ...artifacts.builder import write_json
+from ...reasoning.engine import get_engine
 from ..projection import review_result_to_final_doc
+from ..review_state import filter_dismissed_findings
+from ..sarif import review_result_to_sarif
 from ..schemas import ReviewResult
 from ..stage import Stage, StageContext
 
@@ -24,6 +27,12 @@ class ExecuteReasoningEngineStage(Stage):
     def run(self, ctx: StageContext) -> dict[str, Any]:
         engine = get_engine(ctx.cfg.reasoning_engine, ctx.cfg)
         result = engine.execute(ctx)
+        feedback = getattr(ctx.extras.get("review_state"), "feedback", ())
+        if feedback:
+            payload = result.model_dump(by_alias=True, exclude_none=False)
+            payload["findings"], discarded = filter_dismissed_findings(payload["findings"], feedback)
+            payload["discarded_findings"] = payload.get("discarded_findings", []) + discarded
+            result = ReviewResult.model_validate(payload)
         ctx.review_result = result
 
         if not ctx.artifacts.review_result.exists():

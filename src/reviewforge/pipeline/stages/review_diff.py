@@ -78,6 +78,14 @@ class ReviewDiffStage(Stage):
                 text += "\nDETERMINISTIC REVIEW STATE:\n" + json.dumps(
                     review_context, ensure_ascii=False, sort_keys=True
                 ) + "\n"
+                feedback = review_context.get("previousFeedback", [])
+                if feedback:
+                    text += (
+                        "\nPREVIOUS REVIEW FEEDBACK:\n"
+                        + json.dumps(feedback, ensure_ascii=False, sort_keys=True)
+                        + "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
+                        "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.\n"
+                    )
             text += diff
             runner = pi_runner or ctx.pi
             runner.run_json(cfg.review_prompt_path, text, out_path, "reviewer")
@@ -114,6 +122,7 @@ class ReviewDiffStage(Stage):
             ctx.extras.get("wi_context", []),
             ctx.extras.get("wi_comments_context", []),
             ctx.extras.get("thread_context", []),
+            ctx.extras.get("review_context", {}),
             cfg.disable_chunk_review,
             cfg.chunk_trigger_diff_bytes,
             cfg.max_diff_bytes,

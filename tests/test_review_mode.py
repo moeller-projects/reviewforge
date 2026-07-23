@@ -3,6 +3,7 @@ from __future__ import annotations
 from reviewforge.pipeline.review_state import (
     ReviewMode,
     ReviewerIdentity,
+    filter_dismissed_findings,
     select_review_state,
 )
 
@@ -142,3 +143,67 @@ def test_unparseable_comment_time_falls_back_safely():
         current_commit="new",
     )
     assert state.mode is ReviewMode.FOLLOW_UP
+
+
+def feedback_thread(status: str) -> dict:
+    return {
+        "id": 7,
+        "status": status,
+        "threadContext": {"filePath": "/src/app.py"},
+        "comments": [
+            {
+                "id": 8,
+                "author": {"id": "u1", "displayName": "Reviewer"},
+                "content": "#### Major — Validate input\nDetails\n<!-- prb:abc123456789 -->",
+                "publishedDate": "2026-07-19T10:00:00Z",
+            },
+            {
+                "id": 9,
+                "author": {"id": "human", "displayName": "Human"},
+                "content": "Acknowledged.",
+                "publishedDate": "2026-07-19T11:00:00Z",
+            },
+        ],
+    }
+
+
+def test_feedback_classifies_thread_dispositions_and_serializes_context():
+    state = select_review_state(
+        reviewer=REVIEWER,
+        threads=[feedback_thread("wontFix"), feedback_thread("fixed"), feedback_thread("active")],
+        commits=[],
+        current_commit="new",
+    )
+    assert [entry.disposition for entry in state.feedback] == ["dismissed", "fixed", "unresolved"]
+    assert state.feedback[0].last_author_reply == "Acknowledged."
+    assert state.as_context()["previousFeedback"][0]["threadId"] == 7
+
+
+def test_dismissed_matching_finding_is_filtered_but_regression_is_kept():
+    state = select_review_state(
+        reviewer=REVIEWER,
+        threads=[feedback_thread("wontFix")],
+        commits=[],
+        current_commit="new",
+    )
+    finding = {
+        "title": "Validate input",
+        "file": "src/app.py",
+        "regression": False,
+    }
+    kept, discarded = filter_dismissed_findings([finding], state.feedback)
+    assert kept == []
+    assert discarded[0]["reason"] == "previously dismissed by author (thread 7)"
+    kept, discarded = filter_dismissed_findings([{**finding, "regression": True}], state.feedback)
+    assert kept and not discarded
+
+
+def test_feedback_uses_machine_fingerprint_from_custom_comment_layout():
+    item = feedback_thread("wontFix")
+    item["comments"][0]["content"] = "<!-- prb-feedback:abcdef123456 -->"
+    state = select_review_state(
+        reviewer=REVIEWER, threads=[item], commits=[], current_commit="new",
+        changed_commits=("old..new",),
+    )
+    assert state.feedback[0].fingerprint == "abcdef123456"
+    assert state.as_context()["changedCommits"] == ["old..new"]

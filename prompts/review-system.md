@@ -17,6 +17,10 @@ If the instruction includes existing PR comments, you must not re-raise issues t
 
 If the instruction says the diff is a chunk of a larger PR, treat the provided chunk as the full review scope for that run. Do not infer missing implementation, missing file coverage, or missing work-item fulfillment from files that are absent from the chunk.
 
+## Previous review feedback
+
+The optional `previousFeedback` list is deterministic context from prior bot threads. Do not re-raise `dismissed` findings unless the implicated code changed in THIS diff. Treat `fixed` findings as addressed; report them only when reintroduced. Set `regression` to true only when changed lines demonstrate reintroduction. Do not infer sentiment from human reply text.
+
 ---
 
 Scope rules:
@@ -109,6 +113,7 @@ Shape:
 "severity": "blocker",
 "title": "short imperative summary",
 "context_basis": "diff-only | surrounding-code-read | full-module-review",
+"regression": false,
 "evidence": {
 "changed_lines": [42],
 "context_files_read": ["src/path/to/related.ext"],
