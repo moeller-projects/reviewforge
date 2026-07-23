@@ -303,6 +303,14 @@ class Uncertainty(_Base):
             raise ValueError("topic must be a non-empty string")
         return v
 
+class ChunkResult(_Base):
+    """Partial finding output from one coherent unified-diff chunk."""
+
+    findings: list[RichFinding] = Field(default_factory=list)
+    uncertainties: list[Uncertainty] = Field(default_factory=list)
+
+
+
 
 class ReviewMetrics(_Base):
     """Deterministic and model-reported review metrics."""
@@ -324,6 +332,8 @@ class ReviewMetrics(_Base):
     projectionDurationMs: int = Field(default=0, ge=0)
     validationDurationMs: int = Field(default=0, ge=0)
     estimatedCost: float | None = Field(default=None, ge=0)
+    chunkCount: int = Field(default=1, ge=1)
+    chunkTokenUsage: list[TokenUsage] = Field(default_factory=list)
 
 
 class ReviewConfidence(_Base):

@@ -231,6 +231,8 @@ class Config:
     fast_review: bool = field(default=False, compare=False)
     #: System prompt for the single-call reasoning engine.
     fast_review_prompt_path: Path = field(default=Path("/app/prompts/fast-review-system.md"), compare=False)
+    #: Maximum commit subjects supplied as intent evidence to single_pi.
+    commit_context_max: int = field(default=50, compare=False)
     # --- Pi session reuse (Phases A + E) -------------------------------
     #: When ``True`` (default), the runner uses ``--session`` to keep state
     #: between stages and chunks. Disable for deterministic reruns or when
@@ -318,6 +320,9 @@ class Config:
         fast_review_prompt_path = _resolve_prompt_path(
             "FAST_REVIEW_PROMPT_PATH", "/app/prompts/fast-review-system.md"
         )
+        commit_context_max = require_uint(
+            "COMMIT_CONTEXT_MAX", os.getenv("COMMIT_CONTEXT_MAX", "50")
+        )
 
         cfg = cls(
             ado_org=os.getenv("ADO_ORG", ""),
@@ -359,6 +364,7 @@ class Config:
             pi_session_enabled=pi_session_enabled,
             pi_session_clear=pi_session_clear,
             debug_intermediates=is_true(os.getenv("DEBUG_INTERMEDIATES")),
+            commit_context_max=commit_context_max,
             post_min_severity=post_min_severity,
             drop_low_confidence=drop_low_confidence,
             require_context_for=require_context_for,
@@ -647,6 +653,9 @@ def _build_from_sources(
         cli_or_env("ado_retry_budget_secs", "ADO_RETRY_BUDGET_SECS", "90")
     )
     model_backend = cli_or_env("model_backend", "MODEL_BACKEND", "pi").lower()
+    commit_context_max = require_uint(
+        "COMMIT_CONTEXT_MAX", cli_or_env("commit_context_max", "COMMIT_CONTEXT_MAX", "50")
+    )
     if model_backend != "pi":
         raise ConfigError(f"MODEL_BACKEND must be 'pi', got: {model_backend!r}")
 
@@ -726,6 +735,7 @@ def _build_from_sources(
             cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"),
             str(Path(__file__).resolve().parents[2] / "prompts" / "fast-review-system.md"),
         ),
+        commit_context_max=commit_context_max,
         pr_url=pr_url,
         pi_session_id=pi_session_id,
         pi_session_enabled=pi_session_enabled,

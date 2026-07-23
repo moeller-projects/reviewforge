@@ -14,8 +14,9 @@ from typing import Any
 
 from ..artifacts.builder import read_json, write_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
+from ..git import ops as git_ops
 from ..pipeline.projection import review_result_to_final_doc
-from ..pipeline.schemas import ReviewResult
+from ..pipeline.schemas import ChunkResult, ReviewResult, TokenUsage
 from ..pipeline.stage import StageContext
 from .engine import ReasoningEngine, register_engine
 
@@ -83,47 +84,71 @@ def _utf8_prefix(text: str, max_bytes: int) -> str:
     """Return the longest UTF-8-safe prefix fitting ``max_bytes``."""
     return text.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
 
+def _commit_lines(ctx: StageContext) -> list[str]:
+    if ctx.artifacts.commits.exists():
+        text = ctx.artifacts.commits.read_text(encoding="utf-8")
+    elif ctx.state is not None and getattr(ctx.state, "repo_dir", None):
+        text = git_ops.run_git(ctx.state.repo_dir, "log", "--oneline", ctx.state.range_spec)
+    else:
+        text = ""
+    return text.splitlines()[:getattr(ctx.cfg, "commit_context_max", 50)]
+
+
+def _diff_chunks(diff_text: str, max_bytes: int) -> list[str]:
+    """Partition a unified diff at file boundaries in stable source order."""
+    if len(diff_text.encode("utf-8")) <= max_bytes:
+        return [diff_text]
+    sections = [f"diff --git {part}" for part in diff_text.split("diff --git ") if part]
+    chunks: list[str] = []
+    current = ""
+    for section in sections:
+        if current and len((current + section).encode("utf-8")) > max_bytes:
+            chunks.append(current)
+            current = ""
+        current += section
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _build_single_pi_instruction(ctx: StageContext) -> str:
-    """Build the user message for the single-call reasoning engine."""
-    metadata = ctx.metadata if ctx.metadata else read_json(ctx.artifacts.metadata) or {}
+    """Build the user message for a non-chunked reasoning review."""
+    metadata = ctx.metadata or (
+        read_json(ctx.artifacts.metadata) if ctx.artifacts.metadata.exists() else {}
+    )
     files_text = getattr(ctx, "files_text", "") or "\n".join(
         getattr(ctx.state, "files", []) if ctx.state is not None else []
     ) or "(no changed files)"
-    wi = ctx.extras.get("wi_context", [])
-    threads = ctx.extras.get("thread_context", [])
-
-    diff_text = ""
-    if ctx.state is not None and ctx.state.diff_text:
-        diff_text = ctx.state.diff_text
-    elif ctx.artifacts.diff.exists():
-        diff_text = ctx.artifacts.diff.read_text(encoding="utf-8")
-    diff_text, reduced = _reduce_diff(diff_text, getattr(ctx.cfg, "max_diff_bytes", 0))
-
+    diff_text = getattr(ctx.state, "diff_text", "") or (
+        ctx.artifacts.diff.read_text(encoding="utf-8") if ctx.artifacts.diff.exists() else ""
+    )
     parts = [
         f"Single-call reasoning review for Azure DevOps PR #{ctx.cfg.pr_id}.",
         "Return only the rich ReviewResult JSON object defined in the system prompt.",
     ]
-    if reduced:
-        parts.append(
-            "\nThe unified diff was deterministically reduced to fit the context budget. "
-            "Use changed-file headers and read-only tools before reporting uncertainty."
-        )
     if metadata:
         parts += ["\nRepository/project metadata:", json.dumps(metadata, ensure_ascii=False)]
     parts += ["\nChanged files:", files_text]
-    if wi:
-        parts += [f"\nLinked work items:\n{json.dumps(wi, ensure_ascii=False)}"]
-    if threads:
-        parts += [f"\nExisting PR comments:\n{json.dumps(threads, ensure_ascii=False)}"]
-    review_context = ctx.extras.get("review_context")
-    if review_context:
-        parts += [
-            "\nDeterministic review state:\n"
-            + json.dumps(review_context, ensure_ascii=False, sort_keys=True)
-        ]
+    commits = _commit_lines(ctx)
+    if commits:
+        parts += ["\nCommits in this PR:", "\n".join(commits)]
+    for label, value in (("Linked work items", ctx.extras.get("wi_context", [])), ("Existing PR comments", ctx.extras.get("thread_context", []))):
+        if value:
+            parts += [f"\n{label}:\n{json.dumps(value, ensure_ascii=False)}"]
+    if review_context := ctx.extras.get("review_context"):
+        parts += ["\nDeterministic review state:\n" + json.dumps(review_context, ensure_ascii=False, sort_keys=True)]
     if diff_text:
         parts += ["\nUnified diff:\n", diff_text]
     return "\n".join(parts) + "\nReturn only the ReviewResult JSON object defined in the system prompt.\n"
+
+
+def _build_chunk_instruction(ctx: StageContext, chunk: str, index: int, total: int) -> str:
+    prefix = _build_single_pi_instruction(ctx).rsplit("\nUnified diff:\n", 1)[0] if index == 1 else ""
+    return (
+        f"{prefix}\n\nReview chunk {index}/{total} of the same PR diff. "
+        "Return only a JSON object with findings and uncertainties; do not summarize the PR.\n"
+        f"Unified diff chunk:\n{chunk}"
+    )
 
 
 class SinglePiReasoningEngine(ReasoningEngine):
@@ -138,50 +163,73 @@ class SinglePiReasoningEngine(ReasoningEngine):
 
     def execute(self, ctx: StageContext) -> ReviewResult:
         cfg = ctx.cfg
-        instruction = _build_single_pi_instruction(ctx)
-        output_path = ctx.artifacts.raw_dir / "fast-review.json"
-
+        diff_text = getattr(ctx.state, "diff_text", "") or (
+            ctx.artifacts.diff.read_text(encoding="utf-8") if ctx.artifacts.diff.exists() else ""
+        )
+        chunks = _diff_chunks(diff_text, cfg.max_diff_bytes)
         started_at = time.time()
         reasoning_started = time.perf_counter()
-        ctx.pi.run_json(cfg.fast_review_prompt_path, instruction, output_path, "single-pi reasoning")
+        chunk_usage: list[TokenUsage] = []
+
+        if len(chunks) == 1:
+            output_path = ctx.artifacts.raw_dir / "fast-review.json"
+            ctx.pi.run_json(cfg.fast_review_prompt_path, _build_single_pi_instruction(ctx), output_path, "single-pi reasoning")
+            raw = read_json(output_path)
+            if raw is None:
+                raise ReasoningEngineError("single-pi reasoning produced no JSON", details={"output_path": str(output_path)})
+            try:
+                result = ReviewResult.model_validate(raw)
+            except Exception as exc:
+                raise SchemaValidationError("single-pi response does not match ReviewResult schema", details={"error": str(exc), "output_path": str(output_path)}) from exc
+        else:
+            findings = []
+            uncertainties = []
+            seen: set[tuple[str | None, int | None, str]] = set()
+            for index, chunk in enumerate(chunks, 1):
+                output_path = ctx.artifacts.raw_dir / f"fast-review-{index}.json"
+                ctx.pi.run_json(
+                    cfg.fast_review_prompt_path,
+                    _build_chunk_instruction(ctx, chunk, index, len(chunks)),
+                    output_path,
+                    f"single-pi chunk {index}/{len(chunks)}",
+                )
+                raw = read_json(output_path)
+                try:
+                    partial = ChunkResult.model_validate(raw)
+                except Exception as exc:
+                    raise SchemaValidationError(
+                        "single-pi chunk response does not match ChunkResult schema",
+                        details={"error": str(exc), "output_path": str(output_path)},
+                    ) from exc
+                chunk_usage.append(TokenUsage(**_runner_usage(ctx.pi)))
+                for finding in partial.findings:
+                    key = (finding.file, finding.line, finding.title.casefold().strip())
+                    if key not in seen:
+                        seen.add(key)
+                        findings.append(finding.model_dump(by_alias=True))
+                uncertainties.extend(item.model_dump(by_alias=True) for item in partial.uncertainties)
+            result = ReviewResult.model_validate({
+                "review_summary": {"summary": f"Reviewed {len(chunks)} coherent diff chunks."},
+                "verification_summary": {"summary": "Reviewed each deterministic unified-diff chunk.", "approach": "chunked diff review"},
+                "pr_summary": {"implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks."},
+                "findings": findings,
+                "uncertainties": uncertainties,
+            })
+
         reasoning_duration_ms = int((time.perf_counter() - reasoning_started) * 1000)
         tokens = _runner_usage(ctx.pi)
         ctx.last_token_usage = tokens
-
-        raw = read_json(output_path)
-        if raw is None:
-            raise ReasoningEngineError(
-                "single-pi reasoning produced no JSON",
-                details={"output_path": str(output_path)},
-            )
-
-        validation_started = time.perf_counter()
-        try:
-            result = ReviewResult.model_validate(raw)
-        except Exception as exc:
-            raise SchemaValidationError(
-                "single-pi response does not match ReviewResult schema",
-                details={"error": str(exc), "output_path": str(output_path)},
-            ) from exc
-        validation_duration_ms = int((time.perf_counter() - validation_started) * 1000)
-
-        projection_duration_ms = 0
         finished_at = time.time()
         result = self._enrich_metadata(result, cfg, started_at, finished_at, tokens)
-        result.metrics = result.metrics.model_copy(
-            update={
-                "piInputTokens": tokens.get("in", 0),
-                "piOutputTokens": tokens.get("out", 0),
-                "piTotalTokens": tokens.get("total", 0),
-                "invocationCount": _runner_count(ctx.pi, "invocation_count"),
-                "repairInvocationCount": _runner_count(ctx.pi, "repair_invocation_count"),
-                "wallClockDurationMs": int((finished_at - started_at) * 1000),
-                "reasoningDurationMs": reasoning_duration_ms,
-                "projectionDurationMs": projection_duration_ms,
-                "validationDurationMs": validation_duration_ms,
-                "changedFilesReviewed": len(getattr(ctx.state, "files", [])),
-            }
-        )
+        result.metrics = result.metrics.model_copy(update={
+            "piInputTokens": tokens.get("in", 0), "piOutputTokens": tokens.get("out", 0),
+            "piTotalTokens": tokens.get("total", 0), "invocationCount": _runner_count(ctx.pi, "invocation_count"),
+            "repairInvocationCount": _runner_count(ctx.pi, "repair_invocation_count"),
+            "wallClockDurationMs": int((finished_at - started_at) * 1000),
+            "reasoningDurationMs": reasoning_duration_ms, "projectionDurationMs": 0,
+            "validationDurationMs": 0, "changedFilesReviewed": len(getattr(ctx.state, "files", [])),
+            "chunkCount": len(chunks), "chunkTokenUsage": chunk_usage,
+        })
         write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
         write_json(ctx.artifacts.final, review_result_to_final_doc(result))
         return result

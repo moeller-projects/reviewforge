@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,9 +33,10 @@ from reviewforge.reasoning.engine import (  # noqa: E402
 from reviewforge.reasoning.multi_stage import MultiStageReasoningEngine  # noqa: E402
 from reviewforge.reasoning.single_pi import (  # noqa: E402
     SinglePiReasoningEngine,
+    _build_single_pi_instruction,
+    _diff_chunks,
     _reduce_diff,
 )
-
 
 def _cfg(tmp_path: Path) -> Config:
     files: dict[str, Path] = {}
@@ -440,6 +442,43 @@ class TestSinglePiReasoningEngine:
         engine = SinglePiReasoningEngine()
         with pytest.raises(SchemaValidationError, match="ReviewResult schema"):
             engine.execute(ctx)
+
+    def test_instruction_includes_bounded_commit_context(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), commit_context_max=1)
+        pi = MagicMock()
+        ctx = _stage_context(cfg, pi)
+        ctx.artifacts.commits.write_text("abc first\nxyz second\n", encoding="utf-8")
+
+        instruction = _build_single_pi_instruction(ctx)
+
+        assert "Commits in this PR:\nabc first" in instruction
+        assert "xyz second" not in instruction
+
+    def test_diff_chunks_are_deterministic(self):
+        diff = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+        assert _diff_chunks(diff, 55) == _diff_chunks(diff, 55)
+
+    def test_chunked_execution_dedupes_findings(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        pi = MagicMock()
+        payload = _valid_review_result_payload()
+        partial = {"findings": payload["findings"], "uncertainties": []}
+        pi.run_json.side_effect = lambda _p, _s, out, _stage: builder.write_json(out, partial)
+        pi.last_tokens = {"in": 10, "out": 5, "total": 15}
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(result.findings) == 1
+        assert result.metrics.chunkCount == 2
+        assert ReviewResult.model_validate(result.model_dump())
 
 
 class TestMultiStageReasoningEngine:

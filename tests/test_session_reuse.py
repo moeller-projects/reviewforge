@@ -37,6 +37,7 @@ from reviewforge.pipeline import orchestrator  # noqa: E402
 from reviewforge.pipeline.stage import (  # noqa: E402
     StageContext,
 )
+from reviewforge.reasoning.single_pi import SinglePiReasoningEngine  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +171,32 @@ class TestSubprocessCommandShape:
         assert "--no-session" in calls[0]
         assert "--session-id" not in calls[0]
         assert "--clear-session" not in calls[0]
+
+    def test_chunked_single_pi_calls_share_session_id(self, cfg, tmp_path, monkeypatch):
+        prompt = tmp_path / "fast.md"
+        prompt.write_text("prompt", encoding="utf-8")
+        cfg = replace(cfg, max_diff_bytes=55, fast_review_prompt_path=prompt)
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            "reviewforge.ai.runner.subprocess.run",
+            lambda cmd, **_kwargs: (
+                calls.append(list(cmd))
+                or subprocess.CompletedProcess(cmd, 0, b'{"findings":[],"uncertainties":[]}', b"")
+            ),
+        )
+        state = SimpleNamespace(
+            diff_text=(
+                "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+new\n"
+                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+new\n"
+            ),
+            files=["a.py", "b.py"],
+        )
+        ctx = StageContext(cfg=cfg, artifacts=manager.create(cfg), state=state, pi=PiRunner(cfg))
+
+        SinglePiReasoningEngine().execute(ctx)
+
+        assert len(calls) == 2
+        assert all(cmd[cmd.index("--session-id") + 1] == "pr-42-review-r1" for cmd in calls)
 
 
 class TestSubsequentStageShorterInput:

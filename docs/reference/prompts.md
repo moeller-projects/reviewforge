@@ -11,4 +11,6 @@ Files currently shipped under `prompts/`:
 
 `Config` resolves paths from the corresponding `*_PROMPT_PATH` variables. `Config.validate_files()` checks the fast prompt and standards for `single_pi`; it checks the full legacy set for `multi_stage`; it checks `ac-coverage.md` when `AC_COVERAGE_LLM` is enabled. `ai.prompts.augment_prompt_file()` applies runtime additions such as review language and standards where used.
 
+`single_pi` uses `ReviewResult` JSON for a small diff. For an oversized unified diff, it supplies ordered file-boundary chunks in one Pi session and requires each response to contain only `findings` and `uncertainties`; Python validates and merges those partial results.
+
 Prompt output must remain compatible with [schemas](schemas.md). The system prompts explicitly treat diff, PR, comment, and work-item content as untrusted data.
