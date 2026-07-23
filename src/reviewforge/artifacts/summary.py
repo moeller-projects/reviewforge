@@ -139,6 +139,21 @@ def _safe_count_findings(path: Path) -> int:
     return 0
 
 
+def _stage_finding_counts(summary: RunSummary) -> dict[str, int]:
+    for rec in summary.stages:
+        if not isinstance(rec.details, dict):
+            continue
+        counts = rec.details.get("finding_counts")
+        if isinstance(counts, dict):
+            return {
+                "candidate": int(counts.get("candidate", 0) or 0),
+                "verified": int(counts.get("verified", 0) or 0),
+                "severity": int(counts.get("severity", 0) or 0),
+                "final": int(counts.get("final", 0) or 0),
+            }
+    return {}
+
+
 def finalize_run_summary(
     summary: RunSummary,
     *,
@@ -163,11 +178,12 @@ def finalize_run_summary(
         except ValueError:
             summary.duration_ms = 0
 
+    stage_counts = _stage_finding_counts(summary)
     summary.finding_counts = {
-        "candidate": _safe_count_findings(artifacts.candidate),
-        "verified": _safe_count_findings(artifacts.verified),
-        "severity": _safe_count_findings(artifacts.severity),
-        "final": _safe_count_findings(artifacts.final),
+        "candidate": _safe_count_findings(artifacts.candidate) or stage_counts.get("candidate", 0),
+        "verified": _safe_count_findings(artifacts.verified) or stage_counts.get("verified", 0),
+        "severity": _safe_count_findings(artifacts.severity) or stage_counts.get("severity", 0),
+        "final": _safe_count_findings(artifacts.final) or stage_counts.get("final", 0),
     }
     # Aggregate token usage across all stage records.
     total_in = 0

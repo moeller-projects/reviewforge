@@ -44,6 +44,14 @@ from ..pipeline.stages.verify_findings import VerifyFindingsStage
 from .engine import ReasoningEngine, register_engine
 
 
+def _finding_count(doc: dict[str, Any] | None) -> int:
+    if isinstance(doc, dict):
+        findings = doc.get("findings")
+        if isinstance(findings, list):
+            return len(findings)
+    return 0
+
+
 class MultiStageReasoningEngine(ReasoningEngine):
     """Run the original multi-stage review pipeline as one reasoning unit.
 
@@ -74,14 +82,27 @@ class MultiStageReasoningEngine(ReasoningEngine):
             CalibrateSeverityStage(),
         ]
         results = run_stages(stages, ctx)
-        ctx.final = ctx.severity or {"summary": "", "findings": []}
-        results.extend(run_stages([AcceptanceCriteriaCoverageStage()], ctx))
         for result in results:
             if result.status == "failed":
                 raise ReasoningEngineError(
                     f"reasoning stage {result.name} failed",
                     details={"error": result.error or "", "stage": result.name},
                 )
+        ctx.final = ctx.severity or {"summary": "", "findings": []}
+        ac_results = run_stages([AcceptanceCriteriaCoverageStage()], ctx)
+        results.extend(ac_results)
+        for result in ac_results:
+            if result.status == "failed":
+                raise ReasoningEngineError(
+                    f"reasoning stage {result.name} failed",
+                    details={"error": result.error or "", "stage": result.name},
+                )
+        ctx.extras["_finding_counts"] = {
+            "candidate": _finding_count(ctx.candidate),
+            "verified": _finding_count(ctx.verified),
+            "severity": _finding_count(ctx.severity),
+            "final": _finding_count(ctx.final),
+        }
         if not cfg.debug_intermediates:
             for path in (
                 ctx.artifacts.intent, ctx.artifacts.plan, ctx.artifacts.collected,
@@ -89,7 +110,6 @@ class MultiStageReasoningEngine(ReasoningEngine):
                 ctx.artifacts.severity,
             ):
                 path.unlink(missing_ok=True)
-
         finished_at = time.time()
         final = ctx.final or {"summary": "", "findings": []}
         findings = final.get("findings", [])

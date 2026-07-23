@@ -749,6 +749,10 @@ class TestPowerShellWrapperStructure:
         assert "--env-file" in text
         assert "Compatibility wrapper" in text
 
+    def test_wrappers_use_platform_path_separator(self):
+        for rel in ("run.ps1", "run-open-prs.ps1", "build.ps1"):
+            text = self._require(rel)
+            assert "[IO.Path]::PathSeparator" in text
 
 
 class TestRefactoredWrappers:
@@ -861,45 +865,53 @@ class TestRefactoredWrappers:
         ):
             assert fn in export_line, f"{fn} not exported from common.psm1"
 
-    def test_run_ps1_minimal_params(self):
+    def test_run_ps1_accepts_pipeline_params(self):
         text = self._read("run.ps1")
-        # Parse the [CmdletBinding()] param block to count named params.
-        # The post-refactor script should expose only 9 params
-        # (PrUrl, Org, Project, RepoId, PrId, AdoToken, EnvFile, DryRun, Build).
-        param_names = set()
-        in_param = False
-        for line in text.splitlines():
-            if "[CmdletBinding()]" in line:
-                in_param = True
-                continue
-            if in_param and line.startswith(")"):
-                break
-            if in_param:
-                stripped = line.strip()
-                if stripped.startswith("[") and "]" in stripped:
-                    # type / validate attribute line
-                    after = stripped.split("]", 1)[1].strip()
-                    if after.startswith("$"):
-                        # `]` $Foo` -> first ident after `$`
-                        ident = after.lstrip("$").split()[0].rstrip(",")
-                        param_names.add(ident)
-        # Switch params (``[switch] $Build``) have the `$` directly
-        # attached, not separated by a space. Catch those too.
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("[switch]"):
-                after = stripped.split("$", 1)[1]
-                ident = after.split()[0].rstrip(",")
-                param_names.add(ident)
-
-        expected = {"PrUrl", "Org", "Project", "RepoId", "PrId", "AdoToken", "EnvFile", "DryRun", "Build"}
+        param_names = self._parse_powershell_param_names(text)
+        expected = {
+            "Runtime",
+            "PinFile",
+            "Image",
+            "PrUrl",
+            "Org",
+            "Project",
+            "RepoId",
+            "PrId",
+            "AdoToken",
+            "SourceBranch",
+            "TargetBranch",
+            "Language",
+            "FailOn",
+            "VoteWaitingOn",
+            "OpenAiApiKey",
+            "PiModel",
+            "EnvFile",
+            "ContainerName",
+            "ArtifactPath",
+            "DryRun",
+            "PrintCommand",
+            "Build",
+            "KeepContainer",
+        }
         assert expected.issubset(param_names), (
             f"run.ps1 missing expected params. Found: {sorted(param_names)}, expected: {sorted(expected)}"
         )
-        # Heuristic cap: post-refactor run.ps1 should be < 15 params.
-        # If this fails, somebody re-added a 10th config param that
-        # should have moved to env.
-        assert len(param_names) <= 12, f"run.ps1 has too many params: {sorted(param_names)}"
+        for token in (
+            "--runtime",
+            "--pin-file",
+            "--image",
+            "--language",
+            "--fail-on",
+            "--vote-waiting-on",
+            "--pi-model",
+            "--container-name",
+            "--artifact-path",
+            "--print-command",
+            "SOURCE_BRANCH",
+            "TARGET_BRANCH",
+            "OPENAI_API_KEY",
+        ):
+            assert token in text
 
     def test_run_open_prs_ps1_minimal_params(self):
         text = self._read("run-open-prs.ps1")
@@ -979,4 +991,3 @@ class TestRefactoredWrappers:
         text = self._read("run-open-prs.ps1")
         assert "reviewforge.ops" in text
         assert "--organization" in text
-

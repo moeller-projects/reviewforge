@@ -11,6 +11,7 @@ from typing import Any
 
 from ...ado.operations import post_findings
 from ...artifacts.builder import read_json
+from ...exceptions import ReviewForgeError
 from ...runlog import info as _log
 from ..stage import Stage, StageContext
 from ..validation import validate_postable_review_doc
@@ -53,7 +54,13 @@ class PostToAdoStage(Stage):
             return {"dry_run": True, "findings": len(ctx.final.get("findings", []))}
 
         _log(f"posting findings PR #{cfg.pr_id} via Python ADO helper")
-        posted = call_helper(cfg, "post-findings", ctx.artifacts.dir, findings=ctx.artifacts.final)
+        try:
+            posted = call_helper(cfg, "post-findings", ctx.artifacts.dir, findings=ctx.artifacts.final)
+        except ReviewForgeError:
+            path = ctx.artifacts.dir / "posted-findings.json"
+            if path.exists():
+                ctx.posted = read_json(path) or {}
+            raise
         if posted is None:
             path = ctx.artifacts.dir / "posted-findings.json"
             posted = read_json(path) if path.exists() else {}

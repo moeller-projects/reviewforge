@@ -49,7 +49,9 @@ def test_downgrades_invalid_anchor_and_keeps_exempt_findings(tmp_path):
     assert result.status == StageStatus.OK
     assert result.details == {"downgraded": 1, "dropped": 0}
     assert findings[0]["line"] == 3
-    assert findings[1]["file"] is None and findings[1]["anchorDowngraded"] is True
+    assert findings[1]["file"] == "a.py"
+    assert findings[1]["line"] == 99
+    assert findings[1]["anchorDowngraded"] is True
     assert findings[2]["file"] == "gone.py"
 
 

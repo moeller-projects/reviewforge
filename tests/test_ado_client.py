@@ -356,6 +356,15 @@ class TestHttpMethods:
             assert client.get_pr(1) == {"ok": True}
         assert urlopen.call_count == 2
 
+    def test_post_does_not_retry_url_error(self):
+        from urllib.error import URLError
+
+        client = AdoClient("contoso", "P", "api", token="t", sleeper=MagicMock())
+        with patch("reviewforge.ado.client.urllib.request.urlopen", side_effect=URLError("reset")) as urlopen:
+            with pytest.raises(AdoApiError):
+                client.create_thread(1, {"comments": []})
+        assert urlopen.call_count == 1
+
     def test_pr_path_encodes_repo_id(self):
         client = AdoClient("contoso", "P", "a/b", token="t")
         path = client.pr_path(1)

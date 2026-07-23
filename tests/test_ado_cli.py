@@ -301,20 +301,20 @@ class TestValidateFindings:
 
     def test_invalid_severity_raises(self):
         doc = self._doc(findings=[{"severity": "critical", "title": "T", "message": "M"}])
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.validate_findings(doc)
 
     def test_missing_message_raises(self):
         doc = self._doc(findings=[{"severity": "major", "title": "T", "message": ""}])
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.validate_findings(doc)
 
     def test_not_a_dict_raises(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.validate_findings([])
 
     def test_summary_not_string_raises(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.validate_findings({"summary": 123, "findings": []})
 
     def test_invalid_confidence_raises(self):
@@ -323,7 +323,7 @@ class TestValidateFindings:
                 {"severity": "major", "title": "T", "message": "M", "confidence": "unknown"}
             ]
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.validate_findings(doc)
 
     def test_valid_confidence_values(self):
@@ -422,11 +422,26 @@ class TestCommandPostFindings:
         mock_client.get_threads.return_value = []
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("ADO_RETRY_ATTEMPTS", "7")
+        monkeypatch.setenv("ADO_RETRY_BASE_DELAY", "1.5")
+        monkeypatch.setenv("ADO_RETRY_CAP_DELAY", "9.0")
+        monkeypatch.setenv("ADO_RETRY_BUDGET_SECS", "11.0")
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
-        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client) as ctor:
             rc = m.command_post_findings(self._args(findings_file, out_file))
+
+        ctor.assert_called_once_with(
+            "contoso",
+            "Payments",
+            "api",
+            token="tok",
+            retry_attempts=7,
+            retry_base_delay=1.5,
+            retry_cap_delay=9.0,
+            retry_budget_secs=11.0,
+        )
 
         assert rc == 0
         result = json.loads(out_file.read_text())
@@ -637,10 +652,24 @@ class TestCommandFetchContext:
         mock_client.org_name = "contoso"
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("ADO_RETRY_ATTEMPTS", "7")
+        monkeypatch.setenv("ADO_RETRY_BASE_DELAY", "1.5")
+        monkeypatch.setenv("ADO_RETRY_CAP_DELAY", "9.0")
+        monkeypatch.setenv("ADO_RETRY_BUDGET_SECS", "11.0")
 
-        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client) as ctor:
             rc = m.command_fetch_context(self._args(tmp_path))
 
+        ctor.assert_called_once_with(
+            "contoso",
+            "Payments",
+            "api",
+            token="tok",
+            retry_attempts=7,
+            retry_base_delay=1.5,
+            retry_cap_delay=9.0,
+            retry_budget_secs=11.0,
+        )
         assert rc == 0
         for filename in ("metadata.json", "work-items.json", "work-item-comments.json", "threads.json", "context.json"):
             assert (tmp_path / filename).exists(), f"{filename} not written"
@@ -717,12 +746,77 @@ class TestCli:
 
 class TestAdditionalCoverage:
     def test_token_missing_raises(self, monkeypatch):
-        monkeypatch.delenv('ADO_AUTH_TOKEN', raising=False)
-        monkeypatch.delenv('ADO_MCP_AUTH_TOKEN', raising=False)
+        monkeypatch.delenv("ADO_AUTH_TOKEN", raising=False)
+        monkeypatch.delenv("ADO_MCP_AUTH_TOKEN", raising=False)
         monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
         monkeypatch.delenv("ADO_API_KEY", raising=False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError, match="Missing required config: ADO_AUTH_TOKEN"):
             m.token()
+
+    def test_post_findings_raises_when_fail_on_triggers(self, tmp_path, monkeypatch):
+        findings_file = tmp_path / "findings.json"
+        out_file = tmp_path / "posted.json"
+        findings_file.write_text(
+            json.dumps(
+                {
+                    "summary": "ok",
+                    "findings": [
+                        {"severity": "blocker", "title": "T", "message": "M"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        cfg = SimpleNamespace(
+            ado_org="contoso",
+            ado_project="Payments",
+            ado_repo_id="api",
+            pr_id="42",
+            ado_token="tok",
+            ado_retry_attempts=3,
+            ado_retry_base_delay=1.0,
+            ado_retry_cap_delay=30.0,
+            ado_retry_budget_secs=90.0,
+        )
+        mock_client = MagicMock()
+        mock_client.get_pr.return_value = {"reviewers": []}
+        mock_client.get_threads.return_value = []
+        mock_client.create_thread.return_value = {"id": 1}
+
+        monkeypatch.setenv("FAIL_ON", "blocker")
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
+            with pytest.raises(AdoApiError, match="post-findings failed") as exc_info:
+                m.post_findings(cfg, findings_file, out_file)
+
+        assert out_file.exists()
+        result = json.loads(out_file.read_text())
+        assert result["failOnTriggered"] is True
+        assert exc_info.value.details["result"]["failOnTriggered"] is True
+
+    def test_post_findings_preserves_validation_message(self, tmp_path, monkeypatch):
+        findings_file = tmp_path / "findings.json"
+        out_file = tmp_path / "posted.json"
+        findings_file.write_text(
+            json.dumps({"summary": "ok", "findings": []}),
+            encoding="utf-8",
+        )
+
+        cfg = SimpleNamespace(
+            ado_org="contoso",
+            ado_project="Payments",
+            ado_repo_id="api",
+            pr_id="42",
+            ado_token="tok",
+            ado_retry_attempts=3,
+            ado_retry_base_delay=1.0,
+            ado_retry_cap_delay=30.0,
+            ado_retry_budget_secs=90.0,
+        )
+        monkeypatch.setenv("POST_MIN_SEVERITY", "bogus")
+        with patch("reviewforge.ado.cli.AdoClient", return_value=MagicMock()):
+            with pytest.raises(AdoApiError, match="POST_MIN_SEVERITY must be one of"):
+                m.post_findings(cfg, findings_file, out_file)
 
     def test_enc_quotes_values(self):
         assert m.enc('a b') == 'a%20b'
@@ -801,7 +895,7 @@ class TestFilterFindings:
 
     def test_post_min_severity_invalid_exits(self, monkeypatch):
         monkeypatch.setenv("POST_MIN_SEVERITY", "bogus")
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m._filter_findings([self._f("minor")])
 
     def test_drop_low_confidence(self, monkeypatch):
@@ -826,7 +920,7 @@ class TestFilterFindings:
 
     def test_require_context_for_invalid_exits(self, monkeypatch):
         monkeypatch.setenv("REQUIRE_CONTEXT_FOR", "bogus")
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m._filter_findings([self._f("minor")])
 
     def test_require_context_basis_keeps_finding(self, monkeypatch):
@@ -849,13 +943,13 @@ class TestFilterFindings:
     def test_max_findings_negative_exits(self, monkeypatch):
         monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
         monkeypatch.setenv("MAX_FINDINGS", "-1")
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m._filter_findings([self._f("minor")])
 
     def test_max_findings_invalid_exits(self, monkeypatch):
         monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
         monkeypatch.setenv("MAX_FINDINGS", "notanumber")
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m._filter_findings([self._f("minor")])
 
 
@@ -893,7 +987,7 @@ class TestEnvShims:
     def test_token_missing_exits(self, monkeypatch):
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY", "SYSTEM_ACCESSTOKEN"):
             monkeypatch.delenv(k, raising=False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.token()
 
     def test_org_returns_env_value(self, monkeypatch):
@@ -902,7 +996,7 @@ class TestEnvShims:
 
     def test_org_missing_exits(self, monkeypatch):
         monkeypatch.delenv("ADO_ORG", raising=False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.org()
 
     def test_project_returns_env_value(self, monkeypatch):
@@ -911,7 +1005,7 @@ class TestEnvShims:
 
     def test_project_missing_exits(self, monkeypatch):
         monkeypatch.delenv("ADO_PROJECT", raising=False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.project()
 
     def test_repo_returns_env_value(self, monkeypatch):
@@ -920,5 +1014,5 @@ class TestEnvShims:
 
     def test_repo_missing_exits(self, monkeypatch):
         monkeypatch.delenv("ADO_REPO_ID", raising=False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.repo()

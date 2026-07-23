@@ -199,14 +199,14 @@ class AdoClient:
                     error_body = exc.read().decode("utf-8", errors="replace")
                 except Exception:
                     pass
-                retryable = method not in {"POST", "PUT"} and exc.code in {429, 500, 502, 503, 504}
+                retryable = method == "GET" and exc.code in {429, 500, 502, 503, 504}
                 error = AdoApiError(
                     f"[review][ERROR] ADO API {method} {url} returned {exc.code} {exc.reason}",
                     details={"method": method, "url": url, "status_code": exc.code, "response_body": error_body},
                 )
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
             except (urllib.error.URLError, TimeoutError) as exc:
-                retryable = True
+                retryable = method == "GET"
                 retry_after = None
                 error = AdoApiError(
                     f"[review][ERROR] ADO API {method} {url} failed: {exc.reason if isinstance(exc, urllib.error.URLError) else exc}",

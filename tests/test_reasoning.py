@@ -485,9 +485,26 @@ class TestSinglePiReasoningEngine:
         cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
         pi = MagicMock()
         payload = _valid_review_result_payload()
-        partial = {"findings": payload["findings"], "uncertainties": []}
-        pi.run_json.side_effect = lambda _p, _s, out, _stage: builder.write_json(out, partial)
-        pi.last_tokens = {"in": 10, "out": 5, "total": 15}
+        partials = [
+            {
+                "findings": [{**payload["findings"][0], "title": "Missing input validation."}],
+                "uncertainties": [],
+            },
+            {
+                "findings": [{**payload["findings"][0], "title": "Missing input validation!"}],
+                "uncertainties": [],
+            },
+        ]
+        calls = []
+
+        def fake_run_json(_p, _s, out, _stage):
+            builder.write_json(out, partials[len(calls)])
+            calls.append(_s)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.token_usage = {"in": 0, "out": 0, "total": 0}
+        pi.invocation_count = 0
+        pi.repair_invocation_count = 0
         ctx = _stage_context(cfg, pi)
         ctx.state.diff_text = (
             "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
@@ -499,6 +516,54 @@ class TestSinglePiReasoningEngine:
         assert len(result.findings) == 1
         assert result.metrics.chunkCount == 2
         assert ReviewResult.model_validate(result.model_dump())
+
+    def test_chunked_execution_repeats_shared_context_and_records_usage(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, pi_session_enabled=False)
+        pi = MagicMock()
+        prompts: list[str] = []
+        token_usage = [
+            {"in": 10, "out": 5, "total": 15},
+            {"in": 17, "out": 7, "total": 24},
+        ]
+        payload = _valid_review_result_payload()["findings"][0]
+        partial = {"findings": [payload], "uncertainties": []}
+
+        def fake_run_json(_prompt_path, stdin, out, _stage):
+            idx = len(prompts)
+            prompts.append(stdin)
+            pi.token_usage = token_usage[idx]
+            builder.write_json(out, partial)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.token_usage = {"in": 0, "out": 0, "total": 0}
+        pi.invocation_count = 0
+        pi.repair_invocation_count = 0
+        ctx = _stage_context(cfg, pi)
+        ctx.metadata = {"repository": "payments", "pullRequestId": 42}
+        ctx.files_text = "a.py\nb.py\n"
+        ctx.extras["wi_context"] = [{"id": 7}]
+        ctx.extras["thread_context"] = [{"id": 9}]
+        ctx.extras["review_context"] = {"previousFeedback": [{"title": "Old issue"}]}
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(prompts) == 2
+        for prompt in prompts:
+            assert prompt.startswith("Single-call reasoning review for Azure DevOps PR #42.")
+            assert "Repository/project metadata:" in prompt
+            assert "Changed files:" in prompt
+            assert "Previous review feedback:" in prompt
+            assert "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true." in prompt
+        assert [u.model_dump() for u in result.metrics.chunkTokenUsage] == [
+            {"input": 10, "output": 5, "total": 15},
+            {"input": 7, "output": 2, "total": 9},
+        ]
+        assert result.metadata.tokens.model_dump() == {"input": 17, "output": 7, "total": 24}
+
 
 
 class TestMultiStageReasoningEngine:
@@ -522,18 +587,16 @@ class TestMultiStageReasoningEngine:
             "line": 5,
             "contextBasis": "diff-only",
             "suggestion": "Fix it.",
-            "regression": True,
             "evidence": {
                 "changedLines": [5],
                 "contextFilesRead": ["b.py"],
-                "whyNewInThisPr": "New code.",
+                "whyNewInThisPr": "Introduced here.",
+                "whyNotIntentional": "No equivalent guard exists.",
             },
         }
         rich = MultiStageReasoningEngine._legacy_to_rich(legacy)
         assert rich.title == "Bug"
-        assert rich.observation == "It breaks."
-        assert rich.recommendation == "Fix it."
-        assert rich.regression is True
+        assert rich.file == "b.py"
         assert rich.evidence.relatedFiles == ["b.py"]
 
     def test_execute_with_stages(self, tmp_path: Path, monkeypatch):
@@ -569,9 +632,7 @@ class TestMultiStageReasoningEngine:
                 for s in stages
             ]
 
-        monkeypatch.setattr(
-            "reviewforge.reasoning.multi_stage.run_stages", fake_run_stages
-        )
+        monkeypatch.setattr("reviewforge.reasoning.multi_stage.run_stages", fake_run_stages)
 
         engine = MultiStageReasoningEngine()
         result = engine.execute(ctx)
@@ -587,11 +648,28 @@ class TestMultiStageReasoningEngine:
         ctx = _stage_context(cfg, MagicMock())
 
         def fake_run_stages(stages, c):
-            for path in (c.artifacts.intent, c.artifacts.plan, c.artifacts.collected, c.artifacts.digest, c.artifacts.candidate, c.artifacts.verified, c.artifacts.severity):
+            for path in (
+                c.artifacts.intent,
+                c.artifacts.plan,
+                c.artifacts.collected,
+                c.artifacts.digest,
+                c.artifacts.candidate,
+                c.artifacts.verified,
+                c.artifacts.severity,
+            ):
                 builder.write_json(path, {"summary": "", "findings": []})
             c.intent = {"pr_intent": "debug", "risk_areas": []}
             c.severity = {"summary": "", "findings": []}
-            return [StageResult(name=s.name, status=StageStatus.OK, started_at="t1", finished_at="t2", duration_ms=1) for s in stages]
+            return [
+                StageResult(
+                    name=s.name,
+                    status=StageStatus.OK,
+                    started_at="t1",
+                    finished_at="t2",
+                    duration_ms=1,
+                )
+                for s in stages
+            ]
 
         monkeypatch.setattr("reviewforge.reasoning.multi_stage.run_stages", fake_run_stages)
         MultiStageReasoningEngine().execute(ctx)
@@ -601,11 +679,80 @@ class TestMultiStageReasoningEngine:
             ctx.artifacts.severity,
         ))
 
+    def test_debug_intermediates_captures_fragment_counts(self, tmp_path: Path, monkeypatch):
+        cfg = _cfg(tmp_path)
+        ctx = _stage_context(cfg, MagicMock())
+        call_count = 0
+
+        def fake_run_stages(stages, c):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                for path, n in [
+                    (c.artifacts.intent, 0),
+                    (c.artifacts.plan, 0),
+                    (c.artifacts.collected, 0),
+                    (c.artifacts.digest, 0),
+                    (c.artifacts.candidate, 5),
+                    (c.artifacts.verified, 3),
+                ]:
+                    builder.write_json(path, {"summary": "", "findings": [{"i": i} for i in range(n)]})
+                severity_finding = {
+                    "title": "Bug",
+                    "message": "It breaks.",
+                    "severity": "minor",
+                    "suggestion": "Fix it.",
+                    "file": "b.py",
+                    "line": 5,
+                    "evidence": {
+                        "changedLines": [5],
+                        "contextFilesRead": ["b.py"],
+                        "whyNewInThisPr": "Introduced here.",
+                        "whyNotIntentional": "No equivalent guard exists.",
+                    },
+                }
+                builder.write_json(
+                    c.artifacts.severity,
+                    {"summary": "", "findings": [severity_finding]},
+                )
+                c.intent = {"pr_intent": "debug", "risk_areas": []}
+                c.plan = {"pr_intent": "debug", "files_to_read": [], "searches_to_run": [], "tests_to_inspect": []}
+                c.collected = {"tests": []}
+                c.digest = {"possible_intentional_choices": []}
+                c.candidate = {"summary": "", "findings": [{"i": i} for i in range(5)]}
+                c.verified = {"summary": "", "findings": [{"i": i} for i in range(3)]}
+                c.severity = {"summary": "", "findings": [severity_finding]}
+            return [
+                StageResult(
+                    name=s.name,
+                    status=StageStatus.OK,
+                    started_at="t1",
+                    finished_at="t2",
+                    duration_ms=1,
+                )
+                for s in stages
+            ]
+
+        monkeypatch.setattr("reviewforge.reasoning.multi_stage.run_stages", fake_run_stages)
+        MultiStageReasoningEngine().execute(ctx)
+        assert call_count == 2
+        assert ctx.extras["_finding_counts"] == {
+            "candidate": 5,
+            "verified": 3,
+            "severity": 1,
+            "final": 1,
+        }
+        assert not any(path.exists() for path in (
+            ctx.artifacts.candidate, ctx.artifacts.verified, ctx.artifacts.severity,
+        ))
+
     def test_execute_propagates_failure(self, tmp_path: Path, monkeypatch):
         cfg = _cfg(tmp_path)
         ctx = _stage_context(cfg, MagicMock())
+        calls = []
 
         def fake_run_stages(stages, c):
+            calls.append([s.name for s in stages])
             return [
                 StageResult(
                     name="reconstruct_intent",
@@ -617,14 +764,12 @@ class TestMultiStageReasoningEngine:
                 )
             ]
 
-        monkeypatch.setattr(
-            "reviewforge.reasoning.multi_stage.run_stages", fake_run_stages
-        )
+        monkeypatch.setattr("reviewforge.reasoning.multi_stage.run_stages", fake_run_stages)
 
         engine = MultiStageReasoningEngine()
         with pytest.raises(ReasoningEngineError, match="reconstruct_intent failed"):
             engine.execute(ctx)
-
+        assert len(calls) == 1
 
 class TestProjection:
     def test_review_result_to_final_doc(self):

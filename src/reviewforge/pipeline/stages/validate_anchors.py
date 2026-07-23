@@ -40,7 +40,8 @@ class ValidateAnchorsStage(Stage):
                 dropped_keys.add((finding.get("file"), finding.get("line"), str(finding.get("title", "")).casefold().strip()))
             else:
                 downgraded += 1
-                kept.append({**finding, "file": None, "line": None, "anchorDowngraded": True})
+                # Preserve the code anchor so posting can classify it as no_line_mapping.
+                kept.append({**finding, "anchorDowngraded": True})
         ctx.final = {**ctx.final, "findings": kept}
         write_json(ctx.artifacts.final, ctx.final)
         if ctx.review_result is not None and dropped_keys:

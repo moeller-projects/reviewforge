@@ -65,19 +65,6 @@ SEV_LABEL: dict[str, str] = {
 VOTE_WAITING: int = -5
 MARKER: str = "prb"
 
-
-# --- Compatibility helpers retained for external consumers ----------
-
-
-def enc(value: str) -> str:
-    """URL-encode a single value. Compatibility helper for older code."""
-    import urllib.parse
-    return urllib.parse.quote(value, safe="")
-
-
-# Aliases for env-driven config (see config.Config for the canonical source).
-# These aliases preserve callers that import ``token`` /
-# ``org`` / ``project`` / ``repo`` from this module.
 # Order matches ``config._ENV_ALIASES["ado_token"]``: Azure Pipelines
 # provides ``SYSTEM_ACCESSTOKEN`` first, so that wins when present.
 _TOKEN_ENV_KEYS = (
@@ -86,6 +73,15 @@ _TOKEN_ENV_KEYS = (
     "ADO_MCP_AUTH_TOKEN",
     "ADO_API_KEY",
 )
+
+
+# --- Compatibility helpers retained for external consumers ----------
+
+
+def enc(value: str) -> str:
+    """URL-encode a single value. Compatibility helper for older code."""
+    import urllib.parse
+    return urllib.parse.quote(value, safe="")
 
 
 def token() -> str:
@@ -104,6 +100,47 @@ def token() -> str:
             "(aliases: SYSTEM_ACCESSTOKEN, ADO_MCP_AUTH_TOKEN, ADO_API_KEY)."
         )
     return value
+
+
+def _retry_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        fail(f"{name} must be an integer, got {raw!r}")
+
+
+def _retry_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        fail(f"{name} must be a number, got {raw!r}")
+
+
+def _client_kwargs(args: Any) -> dict[str, Any]:
+    token_value = getattr(args, "token", None)
+    if not token_value:
+        token_value = token()
+    return {
+        "token": token_value,
+        "retry_attempts": getattr(args, "retry_attempts", None)
+        if getattr(args, "retry_attempts", None) is not None
+        else _retry_int_env("ADO_RETRY_ATTEMPTS", 3),
+        "retry_base_delay": getattr(args, "retry_base_delay", None)
+        if getattr(args, "retry_base_delay", None) is not None
+        else _retry_float_env("ADO_RETRY_BASE_DELAY", 1.0),
+        "retry_cap_delay": getattr(args, "retry_cap_delay", None)
+        if getattr(args, "retry_cap_delay", None) is not None
+        else _retry_float_env("ADO_RETRY_CAP_DELAY", 30.0),
+        "retry_budget_secs": getattr(args, "retry_budget_secs", None)
+        if getattr(args, "retry_budget_secs", None) is not None
+        else _retry_float_env("ADO_RETRY_BUDGET_SECS", 90.0),
+    }
 
 
 def org() -> str:
@@ -144,8 +181,7 @@ def log(message: str) -> None:
 
 
 def fail(message: str, code: int = 1) -> None:
-    print(f"[ado][ERROR] {message}", file=sys.stderr)
-    raise SystemExit(code)
+    raise AdoApiError(f"[ado][ERROR] {message}")
 
 
 def is_true(value: str | None) -> bool:
@@ -339,6 +375,7 @@ def validate_findings(
             "confidence": confidence,
             "contextBasis": f.get("contextBasis"),
             "suggestion": f.get("suggestion"),
+            "anchorDowngraded": bool(f.get("anchorDowngraded")),
         }
         if isinstance(normalized["file"], str) and normalized["file"].startswith("/"):
             normalized["file"] = normalized["file"].lstrip("/")
@@ -382,7 +419,7 @@ key_of = dedupe_key
 
 def command_fetch_context(args: argparse.Namespace) -> int:
     """Fetch normalized PR metadata and review history."""
-    client = AdoClient(args.org, args.project, args.repo)
+    client = AdoClient(args.org, args.project, args.repo, **_client_kwargs(args))
     out = Path(args.out)
     log(f"fetching PR #{args.pr} context")
     pr = client.get_pr(args.pr, include_work_item_refs=True)
@@ -518,7 +555,7 @@ def _filter_findings(
 
 def command_post_findings(args: argparse.Namespace) -> int:
     """Post findings to ADO. Idempotent: skips findings already present."""
-    client = AdoClient(args.org, args.project, args.repo)
+    client = AdoClient(args.org, args.project, args.repo, **_client_kwargs(args))
     doc = extract_json(Path(args.findings))
     summary, findings = validate_findings(doc)
     parsed_count = len(findings)
@@ -573,6 +610,13 @@ def command_post_findings(args: argparse.Namespace) -> int:
         if is_work_item_finding(f):
             f = as_general_comment(f)
         key = key_of(f)
+        if f.get("anchorDowngraded"):
+            result["skipped"] += 1
+            result["skipped_reasons"]["no_line_mapping"] += 1
+            log(
+                f"skipped finding '{f['title']}' (key={key}): anchor downgraded; no line mapping available"
+            )
+            continue
         if not should_post(f, existing):
             result["skipped"] += 1
             result["skipped_reasons"]["duplicate"] += 1
@@ -699,28 +743,47 @@ def command_post_findings(args: argparse.Namespace) -> int:
 def fetch_pr_context(cfg: Any, out_dir: Path) -> dict[str, Any]:  # pragma: no cover
     """Fetch normalized PR context without crossing a process boundary."""
     args = SimpleNamespace(
-        org=cfg.ado_org, project=cfg.ado_project, repo=cfg.ado_repo_id,
-        pr=int(cfg.pr_id), out=str(out_dir),
+        org=cfg.ado_org,
+        project=cfg.ado_project,
+        repo=cfg.ado_repo_id,
+        pr=int(cfg.pr_id),
+        out=str(out_dir),
+        token=cfg.ado_token,
+        retry_attempts=cfg.ado_retry_attempts,
+        retry_base_delay=cfg.ado_retry_base_delay,
+        retry_cap_delay=cfg.ado_retry_cap_delay,
+        retry_budget_secs=cfg.ado_retry_budget_secs,
     )
-    try:
-        command_fetch_context(args)
-    except SystemExit as exc:
-        raise AdoApiError("[review][ERROR] fetch-context failed") from exc
+    command_fetch_context(args)
     return read_json(out_dir / "context.json") or {}
 
 
 def post_findings(cfg: Any, findings_path: Path, out_path: Path) -> dict[str, Any]:  # pragma: no cover
     args = SimpleNamespace(
-        org=cfg.ado_org, project=cfg.ado_project, repo=cfg.ado_repo_id,
-        pr=int(cfg.pr_id), findings=str(findings_path), out=str(out_path),
+        org=cfg.ado_org,
+        project=cfg.ado_project,
+        repo=cfg.ado_repo_id,
+        pr=int(cfg.pr_id),
+        findings=str(findings_path),
+        out=str(out_path),
+        token=cfg.ado_token,
+        retry_attempts=cfg.ado_retry_attempts,
+        retry_base_delay=cfg.ado_retry_base_delay,
+        retry_cap_delay=cfg.ado_retry_cap_delay,
+        retry_budget_secs=cfg.ado_retry_budget_secs,
     )
-    try:
-        code = command_post_findings(args)
-    except SystemExit as exc:
-        raise AdoApiError("[review][ERROR] post-findings failed") from exc
+    code = command_post_findings(args)
     result = read_json(out_path) or {}
-    if code and not result.get("failOnTriggered"):
-        raise AdoApiError("[review][ERROR] post-findings failed", details={"exit_code": code})
+    if code and result.get("failOnTriggered"):
+        raise AdoApiError(
+            "[review][ERROR] post-findings failed",
+            details={"exit_code": code, "result": result},
+        )
+    if code:
+        raise AdoApiError(
+            "[review][ERROR] post-findings failed",
+            details={"exit_code": code},
+        )
     return result
 
 

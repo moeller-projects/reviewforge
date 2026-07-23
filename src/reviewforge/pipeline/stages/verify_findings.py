@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import shutil
+import sys
 import traceback
 from typing import Any
 
@@ -15,7 +16,47 @@ from ..stage import Stage, StageContext
 from ..validation import StageLabel, validate_stage
 
 
+def _finding_titles(findings: list[dict[str, Any]]) -> list[str]:
+    titles: list[str] = []
+    for finding in findings:
+        title = finding.get("title")
+        if isinstance(title, str) and title.strip():
+            titles.append(title.strip())
+    return titles
 
+
+def _log_validation_failure(
+    stage: str,
+    output: Any,
+    doc: Any,
+    *,
+    error: BaseException,
+) -> None:
+    findings = doc.get("findings", []) if isinstance(doc, dict) else []
+    titles = _finding_titles(findings)
+    _log(
+        f"{stage} validation failed: output={output}; findings={len(findings)}; "
+        f"title_count={len(titles)}; titles={titles}; error={type(error).__name__}"
+    )
+    print(
+        f"[review][DEBUG] {stage} validation payload: "
+        f"{json.dumps(doc, ensure_ascii=False, sort_keys=True)}",
+        file=sys.stderr,
+    )
+
+
+def _log_worker_crash(idx: int, output: Any, finding: dict[str, Any], exc: BaseException) -> None:
+    title = str(finding.get("title", "")).strip()
+    _log(
+        f"finding verification {idx} crashed: output={output}; title={title!r}; "
+        f"error={type(exc).__name__}: {exc}"
+    )
+    print(
+        f"[review][DEBUG] finding verification {idx} payload: "
+        f"{json.dumps(finding, ensure_ascii=False, sort_keys=True)}",
+        file=sys.stderr,
+    )
+    traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
 
 
 class VerifyFindingsStage(Stage):
@@ -72,8 +113,8 @@ class VerifyFindingsStage(Stage):
             doc = read_json(ctx.artifacts.verified) or {"summary": "", "findings": []}
             try:
                 validate_stage(doc, StageLabel.FINDING_VERIFICATION)
-            except BaseException:
-                _log(f"verification output failed validation: {json.dumps(doc, ensure_ascii=False, sort_keys=True)}")
+            except BaseException as exc:
+                _log_validation_failure("finding verification", ctx.artifacts.verified, doc, error=exc)
                 raise
             ctx.verified = doc
             store_cached_json(cfg, "verify_findings", cache, doc)
@@ -85,6 +126,7 @@ class VerifyFindingsStage(Stage):
         # construct an ``Artifacts`` manually, and ``PiRunner.run_json``
         # uses ``Path.write_bytes`` which does NOT create parent dirs.
         ctx.artifacts.raw_dir.mkdir(parents=True, exist_ok=True)
+
         def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
             out = ctx.artifacts.dir / "raw" / f"verify-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
@@ -100,12 +142,7 @@ class VerifyFindingsStage(Stage):
                 runner.run_json(cfg.verify_prompt_path, payload, out, f"finding verification {idx}")
                 return read_json(out) or {}
             except BaseException as exc:
-                _log(
-                    f"finding verification {idx} crashed "
-                    f"({type(exc).__name__}: {exc}); output={out}; "
-                    f"finding={json.dumps(finding, ensure_ascii=False, sort_keys=True)}\n"
-                    f"{traceback.format_exc().rstrip()}"
-                )
+                _log_worker_crash(idx, out, finding, exc)
                 raise
 
         merged: list[dict[str, Any]] = []
@@ -119,11 +156,7 @@ class VerifyFindingsStage(Stage):
                     doc = fut.result()
                 except BaseException as exc:
                     idx = futures[fut]
-                    _log(
-                        f"finding verification {idx} future failed "
-                        f"({type(exc).__name__}: {exc})\n"
-                        f"{traceback.format_exc().rstrip()}"
-                    )
+                    _log(f"finding verification {idx} future failed: {type(exc).__name__}: {exc}")
                     raise
                 if doc.get("summary"):
                     summary_parts.append(doc.get("summary", ""))
@@ -131,8 +164,8 @@ class VerifyFindingsStage(Stage):
         doc = {"summary": " ".join(summary_parts).strip(), "findings": merged}
         try:
             validate_stage(doc, StageLabel.FINDING_VERIFICATION)
-        except BaseException:
-            _log(f"merged verification output failed validation: {json.dumps(doc, ensure_ascii=False, sort_keys=True)}")
+        except BaseException as exc:
+            _log_validation_failure("merged finding verification", ctx.artifacts.verified, doc, error=exc)
             raise
         write_json(ctx.artifacts.verified, doc)
         ctx.verified = doc

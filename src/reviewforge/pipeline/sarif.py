@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from ..ado.posting import dedupe_key
@@ -11,9 +12,33 @@ _REPO_URL = "https://dev.azure.com/aveato/auto-pr-reviewer/_git/auto-pr-reviewer
 _LEVELS = {"blocker": "error", "major": "error", "minor": "warning", "nit": "note"}
 
 
-def _rule_id(title: str) -> str:
+def _rule_id(title: str, used: set[str], counts: dict[str, int]) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    return slug or "finding"
+    base = slug or "finding"
+    count = counts.get(base, 0)
+    while True:
+        count += 1
+        rule_id = base if count == 1 else f"{base}-{count}"
+        if rule_id not in used:
+            counts[base] = count
+            used.add(rule_id)
+            return rule_id
+
+
+def _location_uri(path: str | None) -> str | None:
+    if not path:
+        return None
+    uri = path.replace("\\", "/").strip()
+    if not uri:
+        return None
+    if uri.startswith("/") or uri.startswith("//") or re.match(r"^[A-Za-z]:", uri):
+        return None
+    if PureWindowsPath(uri).is_absolute():
+        return None
+    parts = PurePosixPath(uri).parts
+    if any(part == ".." for part in parts):
+        return None
+    return PurePosixPath(uri).as_posix()
 
 
 def _message(finding: RichFinding) -> str:
@@ -44,11 +69,19 @@ def review_result_to_sarif(result: ReviewResult, *, tool_version: str) -> dict[s
     """Render a canonical result as a minimal SARIF 2.1.0 log."""
     rules: list[dict[str, Any]] = []
     rule_ids: dict[str, str] = {}
+    used_rule_ids: set[str] = set()
+    slug_counts: dict[str, int] = {}
     sarif_results: list[dict[str, Any]] = []
     for finding in result.findings:
         if finding.title not in rule_ids:
-            rule_ids[finding.title] = _rule_id(finding.title)
-            rules.append({"id": rule_ids[finding.title], "name": finding.title, "shortDescription": {"text": finding.title}})
+            rule_ids[finding.title] = _rule_id(finding.title, used_rule_ids, slug_counts)
+            rules.append(
+                {
+                    "id": rule_ids[finding.title],
+                    "name": finding.title,
+                    "shortDescription": {"text": finding.title},
+                }
+            )
         rule_id = rule_ids[finding.title]
         item: dict[str, Any] = {
             "ruleId": rule_id,
@@ -61,8 +94,16 @@ def review_result_to_sarif(result: ReviewResult, *, tool_version: str) -> dict[s
                 "prbKey": dedupe_key(finding.model_dump(by_alias=True)),
             },
         }
-        if finding.file and finding.line is not None:
-            item["locations"] = [{"physicalLocation": {"artifactLocation": {"uri": finding.file.replace("\\", "/").lstrip("/")}, "region": {"startLine": finding.line}}}]
+        location_uri = _location_uri(finding.file)
+        if location_uri and finding.line is not None:
+            item["locations"] = [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": location_uri},
+                        "region": {"startLine": finding.line},
+                    }
+                }
+            ]
         sarif_results.append(item)
 
     metadata = result.metadata

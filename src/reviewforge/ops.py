@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -67,6 +68,13 @@ def _env_file(path: str) -> tuple[str, bool]:
     return handle.name, True
 
 
+def _podman_artifact_mount_source(resolved: Path) -> str:
+    if resolved.drive:
+        posix = resolved.as_posix()
+        return f"/{resolved.drive[0].lower()}{posix[2:]}"
+    return resolved.as_posix()
+
+
 def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     env_file, temporary = _env_file(args.env_file)
     selected_runtime = runtime(args.runtime)
@@ -94,7 +102,9 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     artifact_path = _value(args.artifact_path, "ARTIFACT_PATH")
     if artifact_path:
         Path(artifact_path).mkdir(parents=True, exist_ok=True)
-        command.extend(["--volume", f"{Path(artifact_path).resolve()}:/workspace/artifacts"])
+        resolved_artifact_path = Path(artifact_path).resolve()
+        mount_source = _podman_artifact_mount_source(resolved_artifact_path) if selected_runtime == "podman" else resolved_artifact_path.as_posix()
+        command.extend(["--volume", f"{mount_source}:/workspace/artifacts"])
     else:
         command.extend(["--volume", f"{_value(None, 'REVIEW_ARTIFACT_VOLUME_NAME', 'reviewforge-artifacts')}:/workspace/artifacts"])
     command.extend(["--env-file", env_file])
@@ -105,8 +115,19 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     return command, env_file, temporary
 
 
+def _redact_command(command: list[str]) -> str:
+    redacted = command.copy()
+    for index, token in enumerate(redacted[:-1]):
+        if token != "-e":
+            continue
+        key, sep, _ = redacted[index + 1].partition("=")
+        if sep and re.search(r"(token|password|secret|key)", key, re.IGNORECASE):
+            redacted[index + 1] = f"{key}=***"
+    return " ".join(redacted)
+
+
 def _execute(command: list[str], preview: bool) -> int:
-    print(" ".join(command))
+    print(_redact_command(command))
     return 0 if preview else subprocess.run(command, check=False).returncode
 
 
@@ -172,14 +193,26 @@ def cmd_run_open_prs(args: argparse.Namespace) -> int:
     if args.max_pull_requests:
         selected = selected[:args.max_pull_requests]
     selected = _select_pull_requests(selected, args.interactive or (sys.stdin.isatty() and sys.stdout.isatty()))
+    if args.build:
+        build = argparse.Namespace(**vars(args), pi_version=None, uv_version=None)
+        if cmd_build(build):
+            return 1
     failures = 0
     for project, pr in selected:
         values = vars(args).copy()
         values.update(
-            org=org.rstrip("/").split("/")[-1], project=project,
-            repo_id=str(pr["repositoryId"]), pr_id=str(pr["pullRequestId"]), pr_url=None,
-            language=None, fail_on=None, vote_waiting_on=None, pi_model=None,
-            container_name=None, artifact_path=None,
+            org=org,
+            project=project,
+            repo_id=str(pr["repositoryId"]),
+            pr_id=str(pr["pullRequestId"]),
+            pr_url=None,
+            language=None,
+            fail_on=None,
+            vote_waiting_on=None,
+            pi_model=None,
+            container_name=None,
+            artifact_path=None,
+            build=False,
         )
         failures += bool(cmd_run(argparse.Namespace(**values)))
     return int(failures > 0)

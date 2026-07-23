@@ -51,6 +51,8 @@ from reviewforge.pipeline.stages import (  # noqa: E402
     ReviewDiffStage,
     VerifyFindingsStage,
 )
+from reviewforge.exceptions import AdoApiError  # noqa: E402
+from reviewforge.runlog import configure as configure_runlog  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -795,8 +797,48 @@ class TestVerifyFindingsStage:
         result = VerifyFindingsStage()(ctx)
         assert result.status == StageStatus.FAILED
         stderr = capsys.readouterr().err
-        assert "verification output failed validation" in stderr
+        assert "finding verification validation failed" in stderr
+        assert "title_count=1" in stderr
         assert '"message": ""' in stderr
+
+    def test_single_validation_logs_metadata_only(self, cfg, artifacts, capsys, tmp_path):
+        configure_runlog(tmp_path / "run.log")
+        bad = {
+            "summary": "TOP-SECRET-RAW-DOC",
+            "findings": [
+                {"severity": "major", "title": "T", "message": ""}
+            ],
+        }
+        pi = _make_pi({"verified": artifacts.verified}, bad)
+        builder.write_json(
+            artifacts.candidate,
+            {
+                "summary": "candidates",
+                "findings": [{"severity": "major", "title": "T", "message": "M"}],
+            },
+        )
+        state = SimpleNamespace(
+            diff_text="d",
+            target_branch="m",
+            source_branch="f",
+            target_commit="t",
+            source_commit="s",
+            base_commit="b",
+        )
+        ctx = _stage_context(cfg, artifacts, pi, state=state)
+
+        result = VerifyFindingsStage()(ctx)
+
+        assert result.status == StageStatus.FAILED
+        log = (tmp_path / "run.log").read_text(encoding="utf-8")
+        assert "finding verification validation failed" in log
+        assert "output=" in log
+        assert "title_count=1" in log
+        assert "TOP-SECRET-RAW-DOC" not in log
+        stderr = capsys.readouterr().err
+        assert "TOP-SECRET-RAW-DOC" in stderr
+
+
 
     def test_fails_on_invalid_verified_doc(self, cfg, artifacts):
         cfg = replace(cfg, verify_findings=True)
@@ -1069,6 +1111,38 @@ class TestPostToAdoStage:
         assert called[0][0][1] == "post-findings"
         assert result.details == {"posted": {"created": 1, "skipped": 0, "comments": []}, "findings": 1}
         assert ctx.posted == {"created": 1, "skipped": 0, "comments": []}
+
+    def test_fail_on_triggered_marks_stage_failed_and_keeps_posted_result(self, cfg, artifacts, monkeypatch):
+        cfg = replace(cfg, dry_run=False)
+        artifacts.dir.joinpath("posted-findings.json").write_text(
+            json.dumps(
+                {
+                    "summary": "ok",
+                    "parsed": 1,
+                    "accepted": 1,
+                    "created": 1,
+                    "skipped": 0,
+                    "skipped_reasons": {"duplicate": 0, "no_line_mapping": 0, "file_fallback": 0},
+                    "comments": [],
+                    "votedWaitingForAuthor": False,
+                    "failOnTriggered": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        ctx.final = self.DOC
+
+        def _helper(*args, **kwargs):
+            raise AdoApiError(
+                "[review][ERROR] post-findings failed",
+                details={"exit_code": 1, "result": builder.read_json(artifacts.posted)},
+            )
+
+        monkeypatch.setattr("reviewforge.pipeline.stages.post_to_ado.call_helper", _helper)
+        result = PostToAdoStage()(ctx)
+        assert result.status == StageStatus.FAILED
+        assert builder.read_json(artifacts.dir / "posted-findings.json")["failOnTriggered"] is True
 
     def test_posts_context_document_without_fragment_artifact(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=True)
@@ -1351,7 +1425,7 @@ class TestVerifyFindingsBatchedRegression:
         result = VerifyFindingsStage()(ctx)
 
         stderr = capsys.readouterr().err
-        assert "merged verification output failed validation" in stderr
+        assert "merged finding verification validation failed" in stderr
         assert '"message": ""' in stderr
 
     def test_batched_run_creates_raw_dir_when_missing(self, cfg, artifacts):

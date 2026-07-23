@@ -411,6 +411,34 @@ class TestRunSummary:
         assert out["duration_ms"] >= 0
         assert out["finished_at"] != ""
 
+    def test_finalize_run_summary_uses_stage_finding_counts_when_artifacts_missing(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        artifacts = manager.create(cfg)
+        summary = art_summary.new_run_summary(cfg, artifacts)
+        summary.add_stage(
+            art_summary.StageRecord(
+                name="execute_reasoning_engine",
+                status="ok",
+                started_at="t1",
+                duration_ms=1,
+                details={
+                    "finding_counts": {
+                        "candidate": 5,
+                        "verified": 3,
+                        "severity": 1,
+                        "final": 1,
+                    }
+                },
+            )
+        )
+        out = art_summary.finalize_run_summary(
+            summary,
+            cfg=cfg,
+            artifacts=artifacts,
+            exit_code=0,
+        )
+        assert out["finding_counts"] == {"candidate": 5, "verified": 3, "severity": 1, "final": 1}
+
     def test_finalize_run_summary_with_skipped_reason(self, tmp_path):
         cfg = _cfg(tmp_path)
         artifacts = manager.create(cfg)

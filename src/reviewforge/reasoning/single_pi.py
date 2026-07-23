@@ -15,6 +15,7 @@ from typing import Any
 from ..artifacts.builder import read_json, write_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
 from ..git import ops as git_ops
+from ..ado.posting import _normalize_title
 from ..pipeline.projection import review_result_to_final_doc
 from ..pipeline.schemas import ChunkResult, ReviewResult, TokenUsage
 from ..pipeline.stage import StageContext
@@ -26,12 +27,48 @@ def _runner_usage(runner: Any) -> dict[str, int]:
     if isinstance(usage, dict):
         return {k: int(usage.get(k, 0) or 0) for k in ("in", "out", "total")}
     usage = getattr(runner, "last_tokens", {})
-    return usage if isinstance(usage, dict) else {}
+    if isinstance(usage, dict):
+        return {k: int(usage.get(k, 0) or 0) for k in ("in", "out", "total")}
+    return {}
 
 
 def _runner_count(runner: Any, name: str) -> int:
     value = getattr(runner, name, 0)
     return value if isinstance(value, int) else 0
+
+
+def _build_single_pi_prefix(ctx: StageContext) -> str:
+    """Build the shared non-diff prefix for single-pi prompts."""
+    metadata = ctx.metadata or (
+        read_json(ctx.artifacts.metadata) if ctx.artifacts.metadata.exists() else {}
+    )
+    files_text = getattr(ctx, "files_text", "") or "\n".join(
+        getattr(ctx.state, "files", []) if ctx.state is not None else []
+    ) or "(no changed files)"
+    parts = [
+        f"Single-call reasoning review for Azure DevOps PR #{ctx.cfg.pr_id}.",
+        "Return only the rich ReviewResult JSON object defined in the system prompt.",
+    ]
+    if metadata:
+        parts += ["\nRepository/project metadata:", json.dumps(metadata, ensure_ascii=False)]
+    parts += ["\nChanged files:", files_text]
+    commits = _commit_lines(ctx)
+    if commits:
+        parts += ["\nCommits in this PR:", "\n".join(commits)]
+    for label, value in (("Linked work items", ctx.extras.get("wi_context", [])), ("Existing PR comments", ctx.extras.get("thread_context", []))):
+        if value:
+            parts += [f"\n{label}:\n{json.dumps(value, ensure_ascii=False)}"]
+    if review_context := ctx.extras.get("review_context"):
+        parts += ["\nDeterministic review state:\n" + json.dumps(review_context, ensure_ascii=False, sort_keys=True)]
+        feedback = review_context.get("previousFeedback", [])
+        if feedback:
+            parts += [
+                "\nPrevious review feedback:\n",
+                json.dumps(feedback, ensure_ascii=False, sort_keys=True),
+                "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
+                "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.",
+            ]
+    return "\n".join(parts)
 
 
 def _reduce_diff(diff_text: str, max_bytes: int) -> tuple[str, bool]:
@@ -113,50 +150,31 @@ def _diff_chunks(diff_text: str, max_bytes: int) -> list[str]:
 
 def _build_single_pi_instruction(ctx: StageContext) -> str:
     """Build the user message for a non-chunked reasoning review."""
-    metadata = ctx.metadata or (
-        read_json(ctx.artifacts.metadata) if ctx.artifacts.metadata.exists() else {}
-    )
-    files_text = getattr(ctx, "files_text", "") or "\n".join(
-        getattr(ctx.state, "files", []) if ctx.state is not None else []
-    ) or "(no changed files)"
+    prefix = _build_single_pi_prefix(ctx)
     diff_text = getattr(ctx.state, "diff_text", "") or (
         ctx.artifacts.diff.read_text(encoding="utf-8") if ctx.artifacts.diff.exists() else ""
     )
-    parts = [
-        f"Single-call reasoning review for Azure DevOps PR #{ctx.cfg.pr_id}.",
-        "Return only the rich ReviewResult JSON object defined in the system prompt.",
-    ]
-    if metadata:
-        parts += ["\nRepository/project metadata:", json.dumps(metadata, ensure_ascii=False)]
-    parts += ["\nChanged files:", files_text]
-    commits = _commit_lines(ctx)
-    if commits:
-        parts += ["\nCommits in this PR:", "\n".join(commits)]
-    for label, value in (("Linked work items", ctx.extras.get("wi_context", [])), ("Existing PR comments", ctx.extras.get("thread_context", []))):
-        if value:
-            parts += [f"\n{label}:\n{json.dumps(value, ensure_ascii=False)}"]
-    if review_context := ctx.extras.get("review_context"):
-        parts += ["\nDeterministic review state:\n" + json.dumps(review_context, ensure_ascii=False, sort_keys=True)]
-        feedback = review_context.get("previousFeedback", [])
-        if feedback:
-            parts += [
-                "\nPrevious review feedback:\n",
-                json.dumps(feedback, ensure_ascii=False, sort_keys=True),
-                "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
-                "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.",
-            ]
+    parts = [prefix]
     if diff_text:
         parts += ["\nUnified diff:\n", diff_text]
     return "\n".join(parts) + "\nReturn only the ReviewResult JSON object defined in the system prompt.\n"
 
 
-def _build_chunk_instruction(ctx: StageContext, chunk: str, index: int, total: int) -> str:
-    prefix = _build_single_pi_instruction(ctx).rsplit("\nUnified diff:\n", 1)[0] if index == 1 else ""
-    return (
-        f"{prefix}\n\nReview chunk {index}/{total} of the same PR diff. "
+def _build_chunk_instruction(
+    ctx: StageContext,
+    chunk: str,
+    index: int,
+    total: int,
+    *,
+    include_shared_prefix: bool,
+) -> str:
+    prefix = _build_single_pi_prefix(ctx) if include_shared_prefix or index == 1 else ""
+    body = (
+        f"Review chunk {index}/{total} of the same PR diff. "
         "Return only a JSON object with findings and uncertainties; do not summarize the PR.\n"
         f"Unified diff chunk:\n{chunk}"
     )
+    return f"{prefix}\n\n{body}" if prefix else body
 
 
 class SinglePiReasoningEngine(ReasoningEngine):
@@ -193,11 +211,19 @@ class SinglePiReasoningEngine(ReasoningEngine):
             findings = []
             uncertainties = []
             seen: set[tuple[str | None, int | None, str]] = set()
+            previous_tokens = _runner_usage(ctx.pi)
+            repeat_shared_prefix = not cfg.pi_session_enabled or cfg.pi_session_clear
             for index, chunk in enumerate(chunks, 1):
                 output_path = ctx.artifacts.raw_dir / f"fast-review-{index}.json"
                 ctx.pi.run_json(
                     cfg.fast_review_prompt_path,
-                    _build_chunk_instruction(ctx, chunk, index, len(chunks)),
+                    _build_chunk_instruction(
+                        ctx,
+                        chunk,
+                        index,
+                        len(chunks),
+                        include_shared_prefix=repeat_shared_prefix,
+                    ),
                     output_path,
                     f"single-pi chunk {index}/{len(chunks)}",
                 )
@@ -209,9 +235,17 @@ class SinglePiReasoningEngine(ReasoningEngine):
                         "single-pi chunk response does not match ChunkResult schema",
                         details={"error": str(exc), "output_path": str(output_path)},
                     ) from exc
-                chunk_usage.append(TokenUsage(**_runner_usage(ctx.pi)))
+                current_tokens = _runner_usage(ctx.pi)
+                chunk_usage.append(
+                    TokenUsage(
+                        input=max(0, current_tokens.get("in", 0) - previous_tokens.get("in", 0)),
+                        output=max(0, current_tokens.get("out", 0) - previous_tokens.get("out", 0)),
+                        total=max(0, current_tokens.get("total", 0) - previous_tokens.get("total", 0)),
+                    )
+                )
+                previous_tokens = current_tokens
                 for finding in partial.findings:
-                    key = (finding.file, finding.line, finding.title.casefold().strip())
+                    key = (finding.file, finding.line, _normalize_title(finding.title))
                     if key not in seen:
                         seen.add(key)
                         findings.append(finding.model_dump(by_alias=True))

@@ -51,6 +51,7 @@ class ExecuteReasoningEngineStage(Stage):
             write_json(ctx.artifacts.final, final_doc)
         ctx.final = final_doc
 
+        fragment_counts = ctx.extras.get("_finding_counts")
         details: dict[str, Any] = {
             "engine": engine.name,
             "findings": len(result.findings),
@@ -58,6 +59,13 @@ class ExecuteReasoningEngineStage(Stage):
             "final_findings": str(ctx.artifacts.final),
             "metrics": result.metrics.model_dump(by_alias=True, exclude_none=False),
         }
+        if isinstance(fragment_counts, dict):
+            details["finding_counts"] = {
+                "candidate": int(fragment_counts.get("candidate", 0) or 0),
+                "verified": int(fragment_counts.get("verified", 0) or 0),
+                "severity": int(fragment_counts.get("severity", 0) or 0),
+                "final": int(fragment_counts.get("final", 0) or 0),
+            }
         if sarif_written:
             details["sarif_findings"] = str(ctx.artifacts.sarif)
         return details

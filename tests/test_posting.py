@@ -313,6 +313,41 @@ class TestCommandPostFindingsWorkItem:
         assert result["skipped"] == 0
         assert result["skipped_reasons"]["no_line_mapping"] == 0
 
+    def test_anchor_downgraded_finding_uses_no_line_mapping_skip(
+        self, tmp_path, monkeypatch
+    ):
+        findings_file, out_file = _write_findings(
+            tmp_path,
+            [
+                {
+                    "severity": "major",
+                    "title": "Token in log",
+                    "message": "Sensitive data leaked.",
+                    "file": "src/log.ts",
+                    "line": 10,
+                    "anchorDowngraded": True,
+                }
+            ],
+        )
+
+        mock_client = _mock_client()
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
+        monkeypatch.delenv("FAIL_ON", raising=False)
+
+        from reviewforge.ado import cli as m
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
+            rc = m.command_post_findings(_args(findings_file, out_file))
+
+        assert rc == 0
+        mock_client.create_thread.assert_not_called()
+        result = json.loads(out_file.read_text())
+        assert result["created"] == 0
+        assert result["skipped"] == 1
+        assert result["skipped_reasons"]["no_line_mapping"] == 1
+
+
     def test_dedupe_key_stable_across_guessed_and_null_file(
         self, tmp_path, monkeypatch
     ):

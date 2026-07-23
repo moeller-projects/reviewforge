@@ -13,7 +13,7 @@ param(
     [switch] $KeepContainer
 )
 $ErrorActionPreference = "Stop"
-$env:PYTHONPATH = "$PSScriptRoot/src" + $(if ($env:PYTHONPATH) { ";$env:PYTHONPATH" } else { "" })
+$env:PYTHONPATH = "$PSScriptRoot/src" + $(if ($env:PYTHONPATH) { "$([IO.Path]::PathSeparator)$env:PYTHONPATH" } else { "" })
 $args = @("-m", "reviewforge.ops", "run-open-prs", "--env-file", $EnvFile)
 if ($Organization) { $args += @("--organization", $Organization) }
 if ($Projects) { $args += @("--projects", ($Projects -join ',')) }
