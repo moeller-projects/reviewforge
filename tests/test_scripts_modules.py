@@ -1403,6 +1403,7 @@ class TestDefaultPipeline:
             "fetch_pr_metadata",
             "prepare_repository",
             "execute_reasoning_engine",
+            "validate_anchors",
             "post_to_ado",
         ]
 

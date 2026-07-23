@@ -6,7 +6,7 @@
 
 Pipelines declared in `pipeline/stages/__init__.py`:
 
-- `DEFAULT_PIPELINE`: `FetchPrMetadataStage` -> `PrepareRepositoryStage` -> `ExecuteReasoningEngineStage` -> `PostToAdoStage`.
+- `DEFAULT_PIPELINE`: `FetchPrMetadataStage` -> `PrepareRepositoryStage` -> `ExecuteReasoningEngineStage` -> `ValidateAnchorsStage` -> `PostToAdoStage`.
 - `REVIEW_ONLY_PIPELINE`: the same sequence without posting.
 - `POST_ONLY_PIPELINE`: `FetchPrMetadataStage` -> `PostToAdoStage`.
 - `FAST_REVIEW_PIPELINE` and `FAST_REVIEW_REVIEW_ONLY_PIPELINE`: compatibility aliases for the corresponding current lists.

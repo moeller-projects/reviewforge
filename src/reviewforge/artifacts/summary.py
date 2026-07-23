@@ -65,6 +65,8 @@ class RunSummary:
     projection_duration_ms: int = 0
     validation_duration_ms: int = 0
     token_usage: dict[str, int] = field(default_factory=dict)
+    anchor_downgraded: int = 0
+    anchor_dropped: int = 0
 
     def add_stage(self, rec: StageRecord) -> None:
         self.stages.append(rec)
@@ -94,6 +96,8 @@ class RunSummary:
             "projection_duration_ms": self.projection_duration_ms,
             "validation_duration_ms": self.validation_duration_ms,
             "token_usage": self.token_usage,
+            "anchor_downgraded": self.anchor_downgraded,
+            "anchor_dropped": self.anchor_dropped,
         }
 
 
@@ -198,6 +202,10 @@ def finalize_run_summary(
             summary.validation_duration_ms += int(
                 metrics.get("validationDurationMs", 0) or 0
             )
+    for rec in summary.stages:
+        if rec.name == "validate_anchors":
+            summary.anchor_downgraded += int(rec.details.get("downgraded", 0) or 0)
+            summary.anchor_dropped += int(rec.details.get("dropped", 0) or 0)
     if any_tokens:
         summary.token_usage = {
             "in": total_in,

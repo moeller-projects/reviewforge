@@ -6,8 +6,8 @@ The orchestrator imports them and runs them in a fixed order:
     1. :class:`FetchPrMetadataStage`
     2. :class:`PrepareRepositoryStage`
     3. :class:`ExecuteReasoningEngineStage`
-    4. :class:`PostToAdoStage`
-
+    4. :class:`ValidateAnchorsStage`
+    5. :class:`PostToAdoStage`
 The Pi-driven review work itself lives in ``reviewforge.reasoning`` engines.
 """
 from __future__ import annotations
@@ -26,11 +26,13 @@ from .prepare_repository import PrepareRepositoryStage
 from .reconstruct_intent import ReconstructIntentStage
 from .review_diff import ReviewDiffStage
 from .verify_findings import VerifyFindingsStage
+from .validate_anchors import ValidateAnchorsStage
 
 DEFAULT_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
     ExecuteReasoningEngineStage(),
+    ValidateAnchorsStage(),
     PostToAdoStage(),
 ]
 
@@ -40,6 +42,7 @@ REVIEW_ONLY_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
     ExecuteReasoningEngineStage(),
+    ValidateAnchorsStage(),
 ]
 
 #: A minimal pipeline used by ``post`` to re-validate and post a previously
@@ -54,6 +57,7 @@ FAST_REVIEW_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
     ExecuteReasoningEngineStage(),
+    ValidateAnchorsStage(),
     PostToAdoStage(),
 ]
 
@@ -61,8 +65,8 @@ FAST_REVIEW_REVIEW_ONLY_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
     ExecuteReasoningEngineStage(),
+    ValidateAnchorsStage(),
 ]
-
 
 __all__ = [
     "AcceptanceCriteriaCoverageStage",
@@ -83,4 +87,5 @@ __all__ = [
     "ReconstructIntentStage",
     "ReviewDiffStage",
     "VerifyFindingsStage",
+    "ValidateAnchorsStage",
 ]

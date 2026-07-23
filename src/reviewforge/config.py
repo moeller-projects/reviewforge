@@ -233,6 +233,8 @@ class Config:
     fast_review_prompt_path: Path = field(default=Path("/app/prompts/fast-review-system.md"), compare=False)
     #: Maximum commit subjects supplied as intent evidence to single_pi.
     commit_context_max: int = field(default=50, compare=False)
+    #: Handling for findings whose inline anchor is absent from the current diff.
+    anchor_policy: str = field(default="downgrade", compare=False)
     # --- Pi session reuse (Phases A + E) -------------------------------
     #: When ``True`` (default), the runner uses ``--session`` to keep state
     #: between stages and chunks. Disable for deterministic reruns or when
@@ -323,6 +325,9 @@ class Config:
         commit_context_max = require_uint(
             "COMMIT_CONTEXT_MAX", os.getenv("COMMIT_CONTEXT_MAX", "50")
         )
+        anchor_policy = os.getenv("ANCHOR_POLICY", "downgrade").lower()
+        if anchor_policy not in {"downgrade", "drop", "off"}:
+            raise ConfigError("ANCHOR_POLICY must be 'downgrade', 'drop', or 'off'")
 
         cfg = cls(
             ado_org=os.getenv("ADO_ORG", ""),
@@ -365,6 +370,7 @@ class Config:
             pi_session_clear=pi_session_clear,
             debug_intermediates=is_true(os.getenv("DEBUG_INTERMEDIATES")),
             commit_context_max=commit_context_max,
+            anchor_policy=anchor_policy,
             post_min_severity=post_min_severity,
             drop_low_confidence=drop_low_confidence,
             require_context_for=require_context_for,
@@ -656,6 +662,9 @@ def _build_from_sources(
     commit_context_max = require_uint(
         "COMMIT_CONTEXT_MAX", cli_or_env("commit_context_max", "COMMIT_CONTEXT_MAX", "50")
     )
+    anchor_policy = cli_or_env("anchor_policy", "ANCHOR_POLICY", "downgrade").lower()
+    if anchor_policy not in {"downgrade", "drop", "off"}:
+        raise ConfigError("ANCHOR_POLICY must be 'downgrade', 'drop', or 'off'")
     if model_backend != "pi":
         raise ConfigError(f"MODEL_BACKEND must be 'pi', got: {model_backend!r}")
 
@@ -736,6 +745,7 @@ def _build_from_sources(
             str(Path(__file__).resolve().parents[2] / "prompts" / "fast-review-system.md"),
         ),
         commit_context_max=commit_context_max,
+        anchor_policy=anchor_policy,
         pr_url=pr_url,
         pi_session_id=pi_session_id,
         pi_session_enabled=pi_session_enabled,
