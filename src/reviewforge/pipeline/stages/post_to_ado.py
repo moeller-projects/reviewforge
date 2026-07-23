@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from typing import Any
 
 from ...ado.client import call_helper
@@ -18,7 +19,7 @@ from ..validation import validate_postable_review_doc
 
 
 def _log(message: str) -> None:
-    print(f"[review] {message}", file=__import__("sys").stderr)
+    print(f"[review] {message}", file=sys.stderr)
 
 
 class PostToAdoStage(Stage):

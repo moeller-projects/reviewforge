@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
+import sys
 
 from ...artifacts.builder import changed_files, write_json
 from ...ado.client import resolve_branches
@@ -11,7 +12,7 @@ from ..stage import Stage, StageContext
 
 
 def _log(message: str) -> None:
-    print(f"[review] {message}", file=__import__("sys").stderr)
+    print(f"[review] {message}", file=sys.stderr)
 
 
 class PrepareRepositoryStage(Stage):

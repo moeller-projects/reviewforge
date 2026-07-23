@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import sys
 from dataclasses import replace
 from typing import Any
 
@@ -19,7 +20,7 @@ from ..stage import Stage, StageContext
 
 
 def _log(message: str) -> None:
-    print(f"[review] {message}", file=__import__("sys").stderr)
+    print(f"[review] {message}", file=sys.stderr)
 
 
 def _normalize_finding(f: dict[str, Any]) -> dict[str, Any]:

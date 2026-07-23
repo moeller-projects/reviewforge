@@ -7,6 +7,7 @@ Pipelines). The reviewer only needs GET on PRs/threads and POST on
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -92,7 +93,7 @@ def resolve_token() -> str:
     ``ADO_MCP_AUTH_TOKEN`` / ``ADO_API_KEY``.
     """
     for name in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
-        value = __import__("os").environ.get(name)
+        value = os.environ.get(name)
         if value:
             return value
     raise SystemExit(

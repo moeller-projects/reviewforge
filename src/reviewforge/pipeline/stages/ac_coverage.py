@@ -21,6 +21,7 @@ the same coverage gaps as a real run would).
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import replace
 from typing import Any
 
@@ -33,7 +34,7 @@ from ..validation import validate_review_doc
 
 
 def _log(message: str) -> None:
-    print(f"[review] {message}", file=__import__("sys").stderr)
+    print(f"[review] {message}", file=sys.stderr)
 
 
 def _sum_tokens(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:

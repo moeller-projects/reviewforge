@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import shutil
 import traceback
+import sys
 
 from typing import Any
 
@@ -16,7 +17,7 @@ from ..validation import StageLabel, validate_stage
 
 
 def _log(message: str) -> None:
-    print(f"[review] {message}", file=__import__("sys").stderr)
+    print(f"[review] {message}", file=sys.stderr)
 
 
 class VerifyFindingsStage(Stage):

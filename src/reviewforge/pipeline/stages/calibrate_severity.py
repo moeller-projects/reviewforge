@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import sys
 from typing import Any
 
 from ...ai.prompts import stage_instruction
@@ -13,7 +14,7 @@ from ..validation import StageLabel, validate_stage
 
 
 def _log(message: str) -> None:
-    print(f"[review] {message}", file=__import__("sys").stderr)
+    print(f"[review] {message}", file=sys.stderr)
 
 
 def _validated_calibration(doc: Any, original: dict[str, Any]) -> dict[str, Any]:

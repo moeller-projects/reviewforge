@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from ..stage import Stage, StageContext
 
 
 def _log(message: str) -> None:
-    print(f"[review] {message}", file=__import__("sys").stderr)
+    print(f"[review] {message}", file=sys.stderr)
 
 
 def _safe_path(repo_dir: Path, requested: str) -> Path | None:
