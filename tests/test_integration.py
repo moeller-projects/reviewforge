@@ -111,14 +111,28 @@ def cfg(tmp_path: Path, clean_env) -> Config:
     )
 
 
-def _git(repo: Path, *args: str) -> str:
+def _git(repo: Path, *args: str, date: str | None = None) -> str:
+    env = None
+    if date:
+        import os
+
+        env = {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
     cp = subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
         capture_output=True,
         text=True,
+        env=env,
     )
     return cp.stdout
+
+
+def add_commit(repo: Path, file: str, content: str, message: str, date: str) -> str:
+    """Append a commit on the current branch and return its SHA."""
+    (repo / file).write_text(content, encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", message, date=date)
+    return _git(repo, "rev-parse", "HEAD").strip()
 
 
 @pytest.fixture
@@ -131,14 +145,14 @@ def git_repo(tmp_path: Path, monkeypatch) -> Path:
     _git(repo, "config", "user.name", "T")
     src = repo / "src"
     src.mkdir()
-    (src / "app.py").write_text("a1\na2\na3\na4\na5\n", encoding="utf-8")
+    (src / "app.py").write_text("apple1\napple2\napple3\napple4\napple5\n", encoding="utf-8")
     (src / "other.py").write_text("o1\no2\no3\n", encoding="utf-8")
     _git(repo, "add", ".")
-    _git(repo, "commit", "-m", "base")
+    _git(repo, "commit", "-m", "base", date="2026-01-01T10:00:00Z")
     _git(repo, "checkout", "-b", "feature")
-    (src / "app.py").write_text("a1\na2\nCHANGED\na4\na5\n", encoding="utf-8")
+    (src / "app.py").write_text("apple1\napple2\nAPPLE-CHANGED\napple4\napple5\n", encoding="utf-8")
     (src / "other.py").write_text("o1\nOTHER-CHANGED\no3\n", encoding="utf-8")
-    _git(repo, "commit", "-am", "change two files")
+    _git(repo, "commit", "-am", "change two files", date="2026-01-02T10:00:00Z")
     # Redirect HOME so prepare_repo's `git config --global safe.directory`
     # does not touch the developer's real global git config.
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -153,21 +167,27 @@ class AdoStub:
         self.requests: list[tuple[str, str, dict | None]] = []
         self.threads = threads if threads is not None else []
         self.created_threads: list[dict] = []
+        self.added_comments: list[dict] = []
+        self.pr = PR_PAYLOAD
+        self.commits: list[dict] = []
 
     def __call__(self, req, *args, **kwargs):
         url = req.full_url
         method = req.get_method()
         body = json.loads(req.data.decode()) if req.data else None
         self.requests.append((method, url, body))
-        if "pullRequests/42/threads" in url and method == "POST":
+        if url.rstrip("/").endswith("/pullRequests/42/threads") and method == "POST":
             self.created_threads.append(body)
             payload: dict = {"id": 100 + len(self.created_threads)}
+        elif "pullRequests/42/threads" in url and method == "POST":
+            self.added_comments.append(body)
+            payload = {"id": 1}
         elif "pullRequests/42/threads" in url:
             payload = {"value": self.threads}
         elif "pullRequests/42/commits" in url:
-            payload = {"value": []}
+            payload = {"value": self.commits}
         elif "pullRequests/42" in url:
-            payload = PR_PAYLOAD
+            payload = self.pr
         elif "connectionData" in url:
             payload = {"authenticatedUser": {"id": "reviewer-1", "displayName": "Bot"}}
         elif "workItemsBatch" in url:
@@ -440,3 +460,208 @@ class TestPostOnlyEndToEnd:
         # in-process boundary instead of becoming a generic failure.
         assert "POST_MIN_SEVERITY" in (post_stage.error or "")
         assert not ado.created_threads
+
+
+# ---------------------------------------------------------------------------
+# Review-only and dry-run variants
+# ---------------------------------------------------------------------------
+
+
+class TestReviewOnlyEndToEnd:
+    def test_review_only_produces_findings_without_posting(self, cfg, git_repo, ado, monkeypatch, tmp_path):
+        _install_pi(
+            monkeypatch,
+            lambda stage, _stdin: _review_result([_rich_finding("inline bug", file="src/app.py", line=3)]),
+        )
+        output = tmp_path / "out" / "findings.json"
+
+        outcome = orchestrator.run_review_only(cfg, output=output)
+
+        assert outcome.exit_code == 0, [r.error for r in outcome.stages if r.status == "failed"]
+        assert not any(r.name == "post_to_ado" for r in outcome.stages)
+        assert ado.created_threads == []
+        assert output.exists()
+        final = json.loads((_artifacts_dir(cfg) / "final-findings.json").read_text(encoding="utf-8"))
+        assert [f["title"] for f in final["findings"]] == ["inline bug"]
+
+
+class TestDryRunEndToEnd:
+    def test_dry_run_skips_posting_but_runs_pipeline(self, cfg, git_repo, ado, monkeypatch):
+        cfg = cfg.with_overrides(dry_run=True)
+        _install_pi(
+            monkeypatch,
+            lambda stage, _stdin: _review_result([_rich_finding("inline bug", file="src/app.py", line=3)]),
+        )
+
+        outcome = orchestrator.run_full(cfg)
+
+        assert outcome.exit_code == 0, [r.error for r in outcome.stages if r.status == "failed"]
+        assert not any(m == "POST" for m, _url, _body in ado.requests)
+        posted = json.loads((_artifacts_dir(cfg) / "posted-comments.json").read_text(encoding="utf-8"))
+        assert posted["dry_run"] == 1
+        assert posted["created"] == 0
+
+
+# ---------------------------------------------------------------------------
+# multi_stage engine (legacy fallback)
+# ---------------------------------------------------------------------------
+
+
+_MULTI_STAGE_RESPONSES = {
+    "intent reconstruction": {"pr_intent": "change things", "changed_behaviors": [], "risk_areas": []},
+    "context planning": {"files_to_read": [], "searches_to_run": [], "tests_to_inspect": []},
+    "context digest": {"relevant_context": [], "possible_intentional_choices": [], "context_gaps": []},
+}
+
+
+def _legacy_finding(title: str, *, file="src/app.py", line=3, severity="major") -> dict:
+    return {
+        "title": title,
+        "message": f"message for {title}",
+        "severity": severity,
+        "file": file,
+        "line": line,
+        "suggestion": f"fix {title}",
+        "confidence": "high",
+        "evidence": {"changedLines": [line], "whyNewInThisPr": "new"},
+    }
+
+
+def _multi_stage_responder(stage: str, _stdin: str) -> dict:
+    if stage in _MULTI_STAGE_RESPONSES:
+        return _MULTI_STAGE_RESPONSES[stage]
+    if stage == "reviewer":
+        return {"summary": "reviewed", "findings": [_legacy_finding("legacy bug")]}
+    if stage.startswith("severity calibration"):
+        return {"summary": "reviewed", "findings": [_legacy_finding("legacy bug", severity="minor")]}
+    raise AssertionError(f"unexpected Pi stage: {stage}")
+
+
+class TestMultiStageEndToEnd:
+    def test_multi_stage_engine_posts_and_cleans_fragments(self, cfg, git_repo, ado, monkeypatch):
+        cfg = cfg.with_overrides(reasoning_engine="multi_stage", verify_findings=False)
+        _install_pi(monkeypatch, _multi_stage_responder)
+
+        outcome = orchestrator.run_full(cfg)
+
+        assert outcome.exit_code == 0, [r.error for r in outcome.stages if r.status == "failed"]
+        engine = next(r for r in outcome.stages if r.name == "execute_reasoning_engine")
+        assert engine.details["engine"] == "multi_stage"
+
+        # Calibrated severity reaches the posted comment.
+        assert len(ado.created_threads) == 1
+        assert "legacy bug" in json.dumps(ado.created_threads[0])
+
+        # Fragment artifacts are removed (DEBUG_INTERMEDIATES=0) but the
+        # run summary keeps their counts.
+        artifacts_dir = _artifacts_dir(cfg)
+        for fragment in ("candidate-findings.json", "verified-findings.json", "severity-findings.json"):
+            assert not (artifacts_dir / fragment).exists(), fragment
+        summary = json.loads((artifacts_dir / "run-summary.json").read_text(encoding="utf-8"))
+        assert summary["finding_counts"]["candidate"] == 1
+        assert summary["finding_counts"]["final"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Regression-aware human feedback filtering (full pipeline)
+# ---------------------------------------------------------------------------
+
+
+def _bot_thread(*, status: str, title: str, file: str, author_id: str = "reviewer-1") -> dict:
+    return {
+        "id": 55,
+        "status": status,
+        "threadContext": {
+            "filePath": "/" + file,
+            "rightFileStart": {"line": 3, "offset": 1},
+            "rightFileEnd": {"line": 3, "offset": 1},
+        },
+        "comments": [
+            {
+                "id": 1,
+                "author": {"id": author_id, "displayName": "Bot"},
+                "content": f"#### Major — {title}\nDetails\n<!-- prb:0123456789ab -->",
+                "publishedDate": "2026-01-03T10:00:00Z",
+            },
+        ],
+    }
+
+
+class TestFeedbackFilteringEndToEnd:
+    def test_dismissed_finding_is_filtered_before_posting(self, cfg, git_repo, ado, monkeypatch):
+        ado.threads = [_bot_thread(status="wontFix", title="inline bug", file="src/app.py")]
+        findings = [
+            _rich_finding("inline bug", file="src/app.py", line=3),
+            _rich_finding("fresh bug", file="src/other.py", line=2),
+        ]
+        _install_pi(monkeypatch, lambda stage, _stdin: _review_result(findings))
+
+        outcome = orchestrator.run_full(cfg)
+
+        assert outcome.exit_code == 0, [r.error for r in outcome.stages if r.status == "failed"]
+        # The previously-dismissed finding is not re-posted; the fresh one is.
+        assert len(ado.created_threads) == 1
+        assert "fresh bug" in json.dumps(ado.created_threads[0])
+        final = json.loads((_artifacts_dir(cfg) / "final-findings.json").read_text(encoding="utf-8"))
+        assert [f["title"] for f in final["findings"]] == ["fresh bug"]
+        review_result = json.loads((_artifacts_dir(cfg) / "review-result.json").read_text(encoding="utf-8"))
+        discarded = review_result.get("discarded_findings") or review_result.get("discardedFindings")
+        assert discarded and "dismissed" in json.dumps(discarded)
+
+
+# ---------------------------------------------------------------------------
+# Review modes: follow-up narrowing and no-op reruns
+# ---------------------------------------------------------------------------
+
+
+class TestReviewModesEndToEnd:
+    def _reviewed_state(self, ado, *, reviewed_sha: str, current_sha: str, reviewed_at: str):
+        ado.pr = {**PR_PAYLOAD, "lastMergeSourceCommit": {"commitId": current_sha}}
+        ado.commits = [
+            {
+                "commitId": current_sha,
+                "author": {"date": "2026-01-05T10:00:00Z"},
+                "committer": {"date": "2026-01-05T10:00:00Z"},
+            },
+            {
+                "commitId": reviewed_sha,
+                "author": {"date": "2026-01-02T10:00:00Z"},
+                "committer": {"date": "2026-01-02T10:00:00Z"},
+            },
+        ]
+        ado.threads = [_bot_thread(status="active", title="old bug", file="src/app.py")]
+        ado.threads[0]["comments"][0]["publishedDate"] = reviewed_at
+
+    def test_follow_up_review_diffs_only_new_commits(self, cfg, git_repo, ado, monkeypatch):
+        reviewed_sha = _git(git_repo, "rev-parse", "HEAD").strip()
+        new_sha = add_commit(
+            git_repo, "src/other.py", "o1\nOTHER-CHANGED\nSECOND\n", "second change", "2026-01-05T10:00:00Z"
+        )
+        self._reviewed_state(ado, reviewed_sha=reviewed_sha, current_sha=new_sha, reviewed_at="2026-01-03T10:00:00Z")
+        pi = _install_pi(monkeypatch, lambda stage, _stdin: _review_result([]))
+
+        outcome = orchestrator.run_full(cfg)
+
+        assert outcome.exit_code == 0, [r.error for r in outcome.stages if r.status == "failed"]
+        assert len(pi.calls) == 1
+        instruction = pi.calls[0][1]
+        # The diff sent to Pi covers only the new commit; the
+        # previously-reviewed app.py change is out of range (its content
+        # lines do not appear).
+        assert "SECOND" in instruction
+        assert "apple4" not in instruction
+        prepare = next(r for r in outcome.stages if r.name == "prepare_repository")
+        assert prepare.details["files"] == 1
+
+    def test_no_new_commits_is_no_op(self, cfg, git_repo, ado, monkeypatch):
+        head = _git(git_repo, "rev-parse", "HEAD").strip()
+        self._reviewed_state(ado, reviewed_sha=head, current_sha=head, reviewed_at="2026-01-03T10:00:00Z")
+        pi = _install_pi(monkeypatch, lambda stage, _stdin: _review_result([]))
+
+        outcome = orchestrator.run_full(cfg)
+
+        assert outcome.exit_code == 0, [r.error for r in outcome.stages if r.status == "failed"]
+        # No reasoning call, no posting, no stale annotation without a diff.
+        assert pi.calls == []
+        assert ado.created_threads == []
+        assert ado.added_comments == []

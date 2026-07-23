@@ -12,11 +12,10 @@ import json
 import time
 from typing import Any
 
-from ..artifacts.builder import read_json, write_json
+from ..artifacts.builder import read_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
 from ..git import ops as git_ops
 from ..ado.posting import _normalize_title
-from ..pipeline.projection import review_result_to_final_doc
 from ..pipeline.schemas import ChunkResult, ReviewResult, TokenUsage
 from ..pipeline.stage import StageContext
 from .engine import ReasoningEngine, register_engine
@@ -272,8 +271,6 @@ class SinglePiReasoningEngine(ReasoningEngine):
             "validationDurationMs": 0, "changedFilesReviewed": len(getattr(ctx.state, "files", [])),
             "chunkCount": len(chunks), "chunkTokenUsage": chunk_usage,
         })
-        write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
-        write_json(ctx.artifacts.final, review_result_to_final_doc(result))
         return result
 
     def _enrich_metadata(

@@ -682,7 +682,7 @@ def command_post_findings(args: argparse.Namespace) -> int:
     # is no longer in the current diff, and append a "stale" comment
     # so reviewers don't trust an outdated inline finding. Disabled
     # when ANNOTATE_STALE=0.
-    if os.getenv("ANNOTATE_STALE", "1") != "0":
+    if os.getenv("ANNOTATE_STALE", "1") != "0" and mapper is not None:
         diff_anchors = _build_diff_anchors(mapper)
         just_posted_ids = {
             c["threadId"] for c in result["comments"] if c.get("threadId")

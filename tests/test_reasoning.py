@@ -414,7 +414,9 @@ class TestSinglePiReasoningEngine:
         assert result.findings == []
         assert result.review_confidence.level == "high"
 
-    def test_writes_only_canonical_and_projection_artifacts(self, tmp_path: Path):
+    def test_returns_result_without_writing_artifacts(self, tmp_path: Path):
+        # Artifact persistence is owned by ExecuteReasoningEngineStage so
+        # that feedback filtering applies before anything hits disk.
         cfg = _cfg(tmp_path)
         pi = MagicMock()
         pi.run_json.side_effect = lambda p, s, out, st: builder.write_json(
@@ -425,19 +427,14 @@ class TestSinglePiReasoningEngine:
 
         result = SinglePiReasoningEngine().execute(ctx)
 
-        assert ctx.artifacts.review_result.exists()
-        assert ctx.artifacts.final.exists()
+        assert not ctx.artifacts.review_result.exists()
+        assert not ctx.artifacts.final.exists()
         assert not any(path.exists() for path in (
             ctx.artifacts.intent, ctx.artifacts.plan, ctx.artifacts.collected,
             ctx.artifacts.digest, ctx.artifacts.candidate, ctx.artifacts.verified,
             ctx.artifacts.severity,
         ))
-        assert builder.read_json(ctx.artifacts.review_result) == result.model_dump(
-            by_alias=True, exclude_none=False
-        )
-        final = builder.read_json(ctx.artifacts.final)
-        assert final["summary"] == "Clean change."
-        assert final["findings"][0]["confidence"] == "high"
+        assert result.findings[0].confidence == "high"
 
     def test_missing_json_raises_reasoning_engine_error(self, tmp_path: Path):
         cfg = _cfg(tmp_path)
