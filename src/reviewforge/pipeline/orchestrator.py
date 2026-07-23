@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..ado.client import call_helper, get_pr
+from ..ado.client import get_pr
 from ..ai.model_runner import ModelRunner, create_model_runner
 from ..artifacts.builder import changed_files, read_json, write_json
 from ..artifacts.manager import Artifacts, create as create_artifacts

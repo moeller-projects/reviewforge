@@ -520,29 +520,7 @@ class TestAdoClient:
         )
         assert ado_client.resolve_branches(cfg) == ("feature/x", "main")
 
-    def test_call_helper_builds_fetch_context_command(self, tmp_path, monkeypatch):
-        cfg = make_cfg(tmp_path)
-        calls = []
 
-        def fake_run(args, stdout, stderr):
-            calls.append(args)
-            return subprocess.CompletedProcess(args, 0, b"", b"")
-
-        monkeypatch.setattr(ado_client.subprocess, "run", fake_run)
-        ado_client.call_helper(cfg, "fetch-context", tmp_path)
-        assert calls[0][1:3] == ["-m", "reviewforge.ado.cli"]
-        assert calls[0][3] == "fetch-context"
-        assert calls[0][-2:] == ["--out", str(tmp_path)]
-
-    def test_call_helper_raises_on_failure(self, tmp_path, monkeypatch):
-        cfg = make_cfg(tmp_path)
-        monkeypatch.setattr(
-            ado_client.subprocess,
-            "run",
-            lambda *a, **k: subprocess.CompletedProcess(a, 2, b"", b"boom"),
-        )
-        with pytest.raises(AdoApiError):
-            ado_client.call_helper(cfg, "fetch-context", tmp_path)
 
 
 # ---------------------------------------------------------------------------

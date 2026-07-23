@@ -15,11 +15,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...ado.client import call_helper
+from ...ado.operations import fetch_pr_context
 from ...artifacts.builder import read_json
 from ...runlog import info as _log
 from .detect_review_mode import DetectReviewModeStage
 from ..stage import Stage, StageContext, StageStatus
+
+# Test seam for the direct operation; no subprocess helper remains.
+call_helper = fetch_pr_context
 
 
 
@@ -89,7 +92,7 @@ class FetchPrMetadataStage(Stage):
             DetectReviewModeStage().run(ctx)
             return {"cached": True, "pr_id": cfg.pr_id}
         _log(f"fetching Azure DevOps PR #{cfg.pr_id} context")
-        call_helper(cfg, "fetch-context", ctx.artifacts.dir)
+        call_helper(cfg, ctx.artifacts.dir)
         # ``metadata.json`` is the first file the helper writes.
         metadata = read_json(ctx.artifacts.metadata) or {}
         ctx.metadata = metadata

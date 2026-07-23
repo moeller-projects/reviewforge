@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 - Dedupe markers now use rewording-stable v2 keys and recognize existing v1 markers during the one-time dual-key transition.
 - Added the narrow `ModelRunner` seam with `PiCliRunner`; `PiRunner` remains a deprecated compatibility alias for one release.
 - PowerShell operations wrappers are deprecated compatibility entrypoints; use `python -m reviewforge.ops` for cross-platform container build and review commands.
+- ADO pipeline fetch and post operations now execute in-process through `ado.operations`; `reviewforge.ado.cli` remains a legacy compatibility shim.
 
 ### Removed
 

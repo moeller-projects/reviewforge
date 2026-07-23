@@ -9,14 +9,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ...ado.client import call_helper
+from ...ado.operations import post_findings
 from ...artifacts.builder import read_json
-from ...artifacts.summary import finalize_run_summary
 from ...runlog import info as _log
 from ..stage import Stage, StageContext
 from ..validation import validate_postable_review_doc
 
 
+
+def call_helper(cfg, command, artifact_dir, *, findings=None):
+    assert command == "post-findings"
+    return post_findings(cfg, findings, artifact_dir / "posted-findings.json")
 
 
 
@@ -50,13 +53,11 @@ class PostToAdoStage(Stage):
             return {"dry_run": True, "findings": len(ctx.final.get("findings", []))}
 
         _log(f"posting findings PR #{cfg.pr_id} via Python ADO helper")
-        call_helper(cfg, "post-findings", ctx.artifacts.dir, findings=ctx.artifacts.final)
-        posted_path = ctx.artifacts.dir / "posted-findings.json"
-        if posted_path.exists():
-            try:
-                ctx.posted = read_json(posted_path) or {}
-            except Exception:
-                ctx.posted = {}
+        posted = call_helper(cfg, "post-findings", ctx.artifacts.dir, findings=ctx.artifacts.final)
+        if posted is None:
+            path = ctx.artifacts.dir / "posted-findings.json"
+            posted = read_json(path) if path.exists() else {}
+        ctx.posted = posted
         return {
             "posted": ctx.posted,
             "findings": len(ctx.final.get("findings", [])),

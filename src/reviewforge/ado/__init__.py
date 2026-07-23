@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from .client import (
     AdoClient,
-    call_helper,
     get_pr,
     normalize_ado_segment,
     normalize_branch_name,
@@ -33,7 +32,6 @@ __all__ = [
     "DiffLineMapper",
     "JsonObject",
     "PrIdentity",
-    "call_helper",
     "dedupe_key",
     "existing_bot_markers",
     "get_pr",

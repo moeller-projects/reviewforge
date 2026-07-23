@@ -384,53 +384,11 @@ def list_active_pull_requests(
     return out
 
 
-def call_helper(
-    cfg: Config,
-    command: str,
-    artifact_dir: Path,
-    *,
-    findings: Path | None = None,
-) -> None:
-    """Invoke the package's isolated ADO CLI as a subprocess.
-
-    The subprocess keeps ADO side effects isolated while avoiding a
-    repository-relative helper script.
-    """
-    args = [
-        sys.executable,
-        "-m",
-        "reviewforge.ado.cli",
-        command,
-        "--org",
-        cfg.ado_org,
-        "--project",
-        cfg.ado_project,
-        "--repo",
-        cfg.ado_repo_id,
-        "--pr",
-        cfg.pr_id,
-    ]
-    if command == "fetch-context":
-        args += ["--out", str(artifact_dir)]
-    else:
-        assert findings is not None
-        args += ["--findings", str(findings), "--out", str(artifact_dir / "posted-findings.json")]
-    cp = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if cp.stderr:
-        for line in cp.stderr.decode(errors="replace").splitlines():
-            _log(f"[ado {command}] {line}")
-    if cp.returncode:
-        stderr = cp.stderr.decode(errors="replace")
-        raise AdoApiError(
-            f"[review][ERROR] ADO CLI {command} failed: {stderr}",
-            details={"command": command, "returncode": cp.returncode, "stderr": stderr},
-        )
 
 
 __all__ = [
     "AdoClient",
     "PrIdentity",
-    "call_helper",
     "get_pr",
     "parse_pr_identity",
     "parse_pr_url",

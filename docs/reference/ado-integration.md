@@ -4,6 +4,8 @@
 
 `AdoClient` uses Azure DevOps REST APIs for PR metadata, threads, commits, comments, voting, and generic GET/POST/PUT operations. The primary posting path maps file findings to diff lines when possible; fileless findings are PR-level comments.
 
+The pipeline invokes `ado.operations.fetch_pr_context()` and `post_findings()` in-process. `python -m reviewforge.ado.cli fetch-context|post-findings` remains a legacy compatibility CLI for external scripts.
+
 ## Comment formatting
 
 Set `COMMENT_TEMPLATE_PATH` to use a Jinja2 Markdown template. The formatter exposes `title`, `message`, `severity`, `severity_label`, `confidence`, `context_basis`, `suggestion`, `file`, `line`, `key`, `marker`, `summary`, and `evidence`. Evidence includes `whyNewInThisPr`, `whyNotIntentional`, `contextFilesRead`, and `changedLines`.

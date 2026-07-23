@@ -21,7 +21,6 @@ sys.path.insert(0, str(ROOT / "src"))
 from reviewforge.ado.client import (  # noqa: E402
     AdoClient,
     _normalize_org,
-    call_helper,
     get_pr,
     normalize_ado_segment,
     normalize_branch_name,
@@ -468,92 +467,6 @@ class TestModuleHelpers:
 # ---------------------------------------------------------------------------
 
 
-class TestCallHelper:
-    def test_call_helper_builds_fetch_context_command(self, tmp_path, monkeypatch):
-        from reviewforge.config import Config
-        cfg = Config(
-            ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="42",
-            ado_token="t", source_branch="s", target_branch="t",
-            workspace=tmp_path, clone_root=tmp_path, review_language="English",
-            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
-            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
-            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
-            standards_path=tmp_path / "std.md",
-            pi_model="m", max_diff_bytes=1, chunk_trigger_diff_bytes=1,
-            disable_chunk_review=False, pi_timeout_secs=5, dry_run=True,
-            include_work_items=True, include_existing_comments=True,
-            verify_findings=True, force_review=False, review_target_branches="",
-            review_artifact_dir=None, review_artifact_root=tmp_path, review_run_id=None,
-        )
-        import subprocess as _sp
-        captured = []
-
-        def fake_run(args, stdout, stderr):
-            captured.append(args)
-            return _sp.CompletedProcess(args, 0, b"", b"")
-
-        monkeypatch.setattr("reviewforge.ado.client.subprocess.run", fake_run)
-        call_helper(cfg, "fetch-context", tmp_path)
-        # The last two args are --out <path>.
-        assert captured[0][-2:] == ["--out", str(tmp_path)]
-        # The third positional is the subcommand.
-        assert captured[0][3] == "fetch-context"
-
-    def test_call_helper_builds_post_findings_command(self, tmp_path, monkeypatch):
-        from reviewforge.config import Config
-        cfg = Config(
-            ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="42",
-            ado_token="t", source_branch="s", target_branch="t",
-            workspace=tmp_path, clone_root=tmp_path, review_language="English",
-            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
-            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
-            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
-            standards_path=tmp_path / "std.md",
-            pi_model="m", max_diff_bytes=1, chunk_trigger_diff_bytes=1,
-            disable_chunk_review=False, pi_timeout_secs=5, dry_run=True,
-            include_work_items=True, include_existing_comments=True,
-            verify_findings=True, force_review=False, review_target_branches="",
-            review_artifact_dir=None, review_artifact_root=tmp_path, review_run_id=None,
-        )
-        import subprocess as _sp
-        captured = []
-
-        def fake_run(args, stdout, stderr):
-            captured.append(args)
-            return _sp.CompletedProcess(args, 0, b"", b"")
-
-        monkeypatch.setattr("reviewforge.ado.client.subprocess.run", fake_run)
-        findings = tmp_path / "findings.json"
-        findings.write_text("{}", encoding="utf-8")
-        call_helper(cfg, "post-findings", tmp_path, findings=findings)
-        # --findings + --out point at the right files.
-        assert "--findings" in captured[0]
-        assert str(findings) in captured[0]
-        assert captured[0][3] == "post-findings"
-
-    def test_call_helper_raises_on_failure(self, tmp_path, monkeypatch):
-        from reviewforge.config import Config
-        cfg = Config(
-            ado_org="contoso", ado_project="P", ado_repo_id="api", pr_id="42",
-            ado_token="t", source_branch="s", target_branch="t",
-            workspace=tmp_path, clone_root=tmp_path, review_language="English",
-            review_prompt_path=tmp_path / "r.md", intent_prompt_path=tmp_path / "i.md",
-            context_plan_prompt_path=tmp_path / "p.md", context_digest_prompt_path=tmp_path / "d.md",
-            verify_prompt_path=tmp_path / "v.md", severity_prompt_path=tmp_path / "s.md",
-            standards_path=tmp_path / "std.md",
-            pi_model="m", max_diff_bytes=1, chunk_trigger_diff_bytes=1,
-            disable_chunk_review=False, pi_timeout_secs=5, dry_run=True,
-            include_work_items=True, include_existing_comments=True,
-            verify_findings=True, force_review=False, review_target_branches="",
-            review_artifact_dir=None, review_artifact_root=tmp_path, review_run_id=None,
-        )
-        import subprocess as _sp
-        monkeypatch.setattr(
-            "reviewforge.ado.client.subprocess.run",
-            lambda *a, **k: _sp.CompletedProcess(a, 2, b"", b"boom"),
-        )
-        with pytest.raises(AdoApiError):
-            call_helper(cfg, "fetch-context", tmp_path)
 
 
 # ---------------------------------------------------------------------------
