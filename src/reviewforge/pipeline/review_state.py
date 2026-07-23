@@ -157,6 +157,13 @@ def _thread_fingerprint(thread: dict[str, Any]) -> str | None:
     return finding_fingerprint({"file": context.get("filePath"), "title": title})
 
 
+def _comment_author_id(comment: dict[str, Any]) -> str:
+    author = comment.get("author")
+    if isinstance(author, dict):
+        return str(author.get("id") or "")
+    return str(comment.get("authorId") or "")
+
+
 def _feedback_entries(
     threads: list[dict[str, Any]], reviewer: ReviewerIdentity | None
 ) -> tuple[FeedbackEntry, ...]:
@@ -165,7 +172,7 @@ def _feedback_entries(
         comments = [c for c in thread.get("comments") or [] if isinstance(c, dict)]
         bot_comments = [
             c for c in comments
-            if reviewer and str((c.get("author") or {}).get("id") or c.get("authorId") or "") == reviewer.user_id
+            if reviewer and _comment_author_id(c) == reviewer.user_id
         ]
         if not bot_comments:
             continue
@@ -181,7 +188,7 @@ def _feedback_entries(
         )
         human = [
             c for c in comments
-            if str((c.get("author") or {}).get("id") or c.get("authorId") or "") != reviewer.user_id
+            if _comment_author_id(c) != reviewer.user_id
         ]
         human.sort(
             key=lambda c: _parse_time(

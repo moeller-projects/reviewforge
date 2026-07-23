@@ -198,6 +198,20 @@ def test_dismissed_matching_finding_is_filtered_but_regression_is_kept():
     assert kept and not discarded
 
 
+def test_feedback_tolerates_normalized_string_authors():
+    # review_thread() normalizes comment authors to display-name strings;
+    # feedback extraction must not treat them as {id: ...} dicts.
+    item = feedback_thread("wontFix")
+    for comment in item["comments"]:
+        comment["authorId"] = comment["author"]["id"]
+        comment["author"] = comment["author"]["displayName"]
+    state = select_review_state(
+        reviewer=REVIEWER, threads=[item], commits=[], current_commit="new",
+    )
+    assert state.feedback[0].disposition == "dismissed"
+    assert state.feedback[0].last_author_reply == "Acknowledged."
+
+
 def test_feedback_uses_machine_fingerprint_from_custom_comment_layout():
     item = feedback_thread("wontFix")
     item["comments"][0]["content"] = "<!-- prb-feedback:abcdef123456 -->"

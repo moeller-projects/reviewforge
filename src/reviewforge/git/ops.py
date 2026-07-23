@@ -71,6 +71,14 @@ def run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
         )
 
 
+def _repo_url(cfg: Config) -> str:
+    """Return the git remote URL for the configured ADO repository."""
+    return (
+        f"https://dev.azure.com/{urllib.parse.quote(cfg.ado_org)}"
+        f"/{urllib.parse.quote(cfg.ado_project)}/_git/{urllib.parse.quote(cfg.ado_repo_id)}"
+    )
+
+
 def prepare_repo(
     cfg: Config,
     source_branch: str,
@@ -95,10 +103,7 @@ def prepare_repo(
     askpass.chmod(0o700)
     os.environ["GIT_ASKPASS"] = str(askpass)
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
-    repo_url = (
-        f"https://dev.azure.com/{urllib.parse.quote(cfg.ado_org)}"
-        f"/{urllib.parse.quote(cfg.ado_project)}/_git/{urllib.parse.quote(cfg.ado_repo_id)}"
-    )
+    repo_url = _repo_url(cfg)
     log(f"initializing reviewed repo in {repo_dir}")
     run_logged("git init", ["git", "init"], repo_dir)
     run_logged(
