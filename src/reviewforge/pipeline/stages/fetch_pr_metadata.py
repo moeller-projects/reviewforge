@@ -13,17 +13,15 @@ section (see ``docs/design/work-item-verification-false-positives.md``).
 """
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 from ...ado.client import call_helper
 from ...artifacts.builder import read_json
+from ...runlog import info as _log
 from .detect_review_mode import DetectReviewModeStage
 from ..stage import Stage, StageContext, StageStatus
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
 
 
 def _load_fetched_context(artifacts: Any) -> dict[str, Any]:

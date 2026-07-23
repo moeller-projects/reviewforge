@@ -27,6 +27,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "work-items.json",
     "threads.json",
     "review-result.json",
+    "run.log",
 )
 
 
@@ -58,6 +59,7 @@ class Artifacts:
     raw_dir: Path
     work_items: Path
     threads: Path
+    run_log: Path
 
     def as_dict(self) -> dict[str, str]:
         """Return a dict mapping artifact name → absolute path string.
@@ -79,6 +81,7 @@ class Artifacts:
             "review-system.combined.md": str(self.system_prompt),
             "work-items.json": str(self.work_items),
             "threads.json": str(self.threads),
+            "run.log": str(self.run_log),
         }
 
 
@@ -132,6 +135,7 @@ def create(cfg: Config) -> Artifacts:
         raw_dir=root / "raw",
         work_items=root / "work-items.json",
         threads=root / "threads.json",
+        run_log=root / "run.log",
     )
 
 

@@ -40,6 +40,7 @@ import tempfile
 
 from ..config import Config
 from ..exceptions import PiExecutionError
+from ..runlog import info as _log, warning as _warn
 from .prompts import augment_prompt_file
 
 
@@ -64,12 +65,8 @@ def strip_json_fences(path: Path) -> None:
     path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
 
 
-def _warn(message: str) -> None:
-    print(f"[review][WARN] {message}", file=sys.stderr)
 
 
 def _scrub_ado_env(env: dict[str, str]) -> None:

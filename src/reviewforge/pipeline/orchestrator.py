@@ -33,6 +33,7 @@ from ..artifacts.summary import (
     finalize_run_summary,
     new_run_summary,
 )
+from ..runlog import configure as configure_runlog, info as log_info
 from ..config import Config
 from ..exceptions import DependencyError, InputError
 from ..git import ops as git_ops
@@ -44,10 +45,10 @@ from .stages import (
     REVIEW_ONLY_PIPELINE,
 )
 from .validation import validate_postable_review_doc
+_log = log_info
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
+
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +157,8 @@ def run_full(cfg: Config) -> RunOutcome:
     """Run the full review pipeline (review + post)."""
     cfg.validate_files()
     artifacts = create_artifacts(cfg)
+    configure_runlog(artifacts.run_log)
+    log_info("run started")
     pi = create_model_runner(cfg)
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
@@ -182,6 +185,8 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
     """
     cfg.validate_files()
     artifacts = create_artifacts(cfg)
+    configure_runlog(artifacts.run_log)
+    log_info("review-only run started")
     pi = create_model_runner(cfg)
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
@@ -216,6 +221,8 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
             details={"input_path": str(input_path)},
         )
     artifacts = create_artifacts(cfg)
+    configure_runlog(artifacts.run_log)
+    log_info("post-only run started")
     pi = create_model_runner(cfg)
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)

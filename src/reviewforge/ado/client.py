@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import subprocess
-import random
 import time
 import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from ..runlog import info as _log
 
 from ..config import Config
 from ..exceptions import AdoApiError
@@ -215,9 +217,9 @@ class AdoClient:
             delay = self._retry_delay(attempt, retry_after)
             if self._monotonic() - started + delay > self.retry_budget_secs:
                 raise error
-            print(
-                f"[review][ado] attempt {attempt}/{self.retry_attempts} failed: {error.message}; retrying in {delay:g}s",
-                file=sys.stderr,
+            _log(
+                f"[ado] attempt {attempt}/{self.retry_attempts} failed: "
+                f"{error.message}; retrying in {delay:g}s"
             )
             self._sleep(delay)
 
@@ -416,7 +418,7 @@ def call_helper(
     cp = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if cp.stderr:
         for line in cp.stderr.decode(errors="replace").splitlines():
-            print(f"[review][ado {command}] {line}", file=sys.stderr)
+            _log(f"[ado {command}] {line}")
     if cp.returncode:
         stderr = cp.stderr.decode(errors="replace")
         raise AdoApiError(

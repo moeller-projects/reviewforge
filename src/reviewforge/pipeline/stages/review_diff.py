@@ -8,19 +8,17 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import sys
 from dataclasses import replace
 from typing import Any
 
 from ...ai.prompts import review_instruction
 from ...artifacts.builder import read_json, write_json
 from ...git.chunker import build_chunks
+from ...runlog import info as _log
 from ..cache import cache_key, load_cached_json, store_cached_json
 from ..stage import Stage, StageContext
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
 
 
 def _normalize_finding(f: dict[str, Any]) -> dict[str, Any]:

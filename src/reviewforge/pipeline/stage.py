@@ -12,10 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
-import sys
 import time
-from ..exceptions import ReviewForgeError
 
+from ..exceptions import ReviewForgeError
+from ..runlog import error as log_error, info as log_info
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
@@ -182,13 +182,12 @@ def run_stages(stages: list[Stage], ctx: StageContext) -> list[StageResult]:
     """
     results: list[StageResult] = []
     for stage in stages:
+        log_info(f"stage {stage.name} started")
         result = stage(ctx)
         results.append(result)
+        log_info(f"stage {result.name} finished: {result.status} in {result.duration_ms}ms")
         if result.status == StageStatus.FAILED:
-            print(
-                f"[review][ERROR] stage {result.name} failed: {result.error}",
-                file=sys.stderr,
-            )
+            log_error(f"stage {result.name} failed: {result.error}")
             break
     return results
 

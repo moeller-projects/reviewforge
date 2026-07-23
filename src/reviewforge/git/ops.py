@@ -6,12 +6,12 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import urllib.parse
 
 from ..config import Config
 from ..exceptions import GitOperationError
+from ..runlog import info as log
 
 #: A tiny ``GIT_ASKPASS`` script that supplies the ADO token when git asks
 #: for credentials. The token is read from the current process environment.
@@ -38,8 +38,6 @@ class RepoState:
     cleanup_paths: list[Path]
 
 
-def log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
 
 
 def run_git(cwd: Path, *args: str, check: bool = True) -> str:

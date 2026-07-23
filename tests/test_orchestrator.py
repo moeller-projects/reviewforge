@@ -221,6 +221,30 @@ class TestRunFull:
         assert payload["stages"][0]["details"] == {"k": 1}
         assert payload["duration_ms"] >= 0
 
+    def test_persists_chronological_stage_and_pi_log(self, cfg, monkeypatch, capsys):
+        from reviewforge.runlog import info
+
+        class PiStage:
+            name = "pi"
+
+            def __call__(self, ctx):
+                from reviewforge.pipeline.stage import StageResult, StageStatus
+
+                info("[pi review] streamed stderr")
+                return StageResult(
+                    name=self.name,
+                    status=StageStatus.OK,
+                    started_at="",
+                    finished_at="",
+                    duration_ms=0,
+                )
+
+        monkeypatch.setattr(orchestrator, "DEFAULT_PIPELINE", [PiStage()])
+        run_full(cfg)
+        log_path = cfg.review_artifact_root / "pr-42" / "runs" / "run-1" / "run.log"
+        log = log_path.read_text(encoding="utf-8")
+        assert log.index("stage pi started") < log.index("[pi review] streamed stderr") < log.index("stage pi finished")
+        assert "[pi review] streamed stderr" in capsys.readouterr().err
 
 # ---------------------------------------------------------------------------
 # run_review_only

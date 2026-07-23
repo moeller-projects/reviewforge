@@ -35,4 +35,4 @@ continues to invoke the batch compatibility wrapper.
 
 ## Artifacts and posting
 
-Review output is written under `REVIEW_ARTIFACT_ROOT/pr-<PR_ID>/runs/<RUN_ID>/`. Preserve `run-summary.json`, `review-result.json`, and `final-findings.json` when diagnosing or reposting. Do not edit the `prb:` deduplication marker in posted comment bodies; see [ADO integration](../reference/ado-integration.md).
+Review output is written under `REVIEW_ARTIFACT_ROOT/pr-<PR_ID>/runs/<RUN_ID>/`. Read `run.log` there for the chronological, redacted container log for that run; `pr-<PR_ID>/latest.txt` identifies the latest run directory. Preserve `run-summary.json`, `review-result.json`, and `final-findings.json` when diagnosing or reposting. The container volume is already mounted by `run.ps1` and `run-open-prs.ps1`, so the same path is available to PowerShell operators. Do not edit the `prb:` deduplication marker in posted comment bodies; see [ADO integration](../reference/ado-integration.md).

@@ -5,19 +5,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import shutil
 import traceback
-import sys
-
 from typing import Any
 
 from ...ai.prompts import stage_instruction
 from ...artifacts.builder import read_json, write_json
+from ...runlog import info as _log
 from ..cache import cache_key, load_cached_json, store_cached_json
 from ..stage import Stage, StageContext
 from ..validation import StageLabel, validate_stage
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
+
 
 
 class VerifyFindingsStage(Stage):

@@ -21,20 +21,18 @@ the same coverage gaps as a real run would).
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import replace
 from typing import Any
 
 from ...ado.ac_coverage import AcCoverageResult, check_ac_coverage, strip_html, uncovered_findings
 from ...ai.prompts import stage_instruction
 from ...artifacts.builder import read_json, write_json
+from ...runlog import info as _log
 from ..schemas import AcCoverageLlmResult
 from ..stage import Stage, StageContext
 from ..validation import validate_review_doc
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
 
 
 def _sum_tokens(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:

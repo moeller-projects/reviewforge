@@ -7,18 +7,17 @@ uses the isolated ``python -m reviewforge.ado.cli`` subprocess helper.
 from __future__ import annotations
 
 import json
-import sys
 from typing import Any
 
 from ...ado.client import call_helper
 from ...artifacts.builder import read_json
 from ...artifacts.summary import finalize_run_summary
+from ...runlog import info as _log
 from ..stage import Stage, StageContext
 from ..validation import validate_postable_review_doc
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
+
 
 
 class PostToAdoStage(Stage):

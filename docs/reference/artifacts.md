@@ -6,6 +6,6 @@ Default location: `REVIEW_ARTIFACT_ROOT/pr-<PR_ID>/runs/<RUN_ID>/`, with the lat
 
 Stable files from `ARTIFACT_NAMES`:
 
-`metadata.json`, `diff.patch`, `changed-files.json`, `commits.txt`, `final-findings.json`, `posted-comments.json`, `run-summary.json`, `review-system.combined.md`, `work-items.json`, `threads.json`, and `review-result.json`.
+`metadata.json`, `diff.patch`, `changed-files.json`, `commits.txt`, `final-findings.json`, `posted-comments.json`, `run-summary.json`, `review-system.combined.md`, `work-items.json`, `threads.json`, `review-result.json`, and `run.log`.
 
-`review-result.json` is the canonical engine output. `final-findings.json` is a write-once postable projection and the `reviewforge post --input` interchange shape. `run-summary.json` contains stage records, timing, token totals, posting counts, skip reason, and exit code.
+`review-result.json` is the canonical engine output. `final-findings.json` is a write-once postable projection and the `reviewforge post --input` interchange shape. `run-summary.json` is the machine-readable record of stage records, timing, token totals, posting counts, skip reason, and exit code. `run.log` is the human-readable chronological record of the run.

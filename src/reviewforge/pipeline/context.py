@@ -4,11 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-import sys
+
+from ..runlog import info as _log
 
 
-def _log(message: str) -> None:
-    print(f"[review] {message}", file=sys.stderr)
+
 
 
 @dataclass
