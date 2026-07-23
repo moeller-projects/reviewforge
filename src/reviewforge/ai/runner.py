@@ -198,19 +198,10 @@ class PiRunner:
 
         Raises :class:`SystemExit` on timeouts or unrecoverable errors.
         """
-        if not self.cfg.pi_session_enabled:
-            instruction = (
-                "Process the task described in the system prompt. "
-                "The instruction and unified diff are provided on stdin."
-            )
-        else:
-            # Sessions: the first call still gets the full stdin payload
-            # (system prompt context, diff, etc). Later calls send only
-            # the new instruction because the model retains prior context.
-            instruction = (
-                "Process the task described in the system prompt. "
-                "The instruction and unified diff are provided on stdin."
-            )
+        instruction = (
+            "Process the task described in the system prompt. "
+            "The instruction and unified diff are provided on stdin."
+        )
         resolved_prompt = self._resolve_system_prompt(prompt_path)
         cmd = self._build_cmd(resolved_prompt, instruction)
         env = self._build_subprocess_env()
