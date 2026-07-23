@@ -91,7 +91,7 @@ class VerifyFindingsStage(Stage):
             out = ctx.artifacts.dir / "raw" / f"verify-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
             try:
-                if type(ctx.pi).__name__ == "PiRunner":
+                if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
                     # Pi sessions are not safe for concurrent writes. Isolate
                     # each verification worker while retaining session reuse.
                     session_id = f"{ctx.pi.session_id}-verify-{idx}"

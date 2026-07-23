@@ -16,7 +16,16 @@ Every rendered comment ends with exactly one canonical marker:
 <!-- prb:<dedupe-key> -->
 ```
 
-Do not remove, rewrite, or relocate this marker. Posting scans existing bot threads for markers and skips an already-posted dedupe key. Changing the marker layout can create duplicate comments on reruns.
+New markers use the v2 key: normalized file and line plus a lowercase,
+punctuation-free, whitespace-collapsed title. Severity and message are
+excluded because they can drift between model runs. During the one-time
+transition, posting recognizes both v1 markers (which included severity and
+message) and v2 markers; new comments carry only the v2 marker.
+
+Do not remove, rewrite, or relocate this marker. The `prb:<6-32 alnum key>`
+contract accepts this HTML-comment form and its bare-line equivalent. Posting
+scans existing bot threads for either key version; stale reconciliation, not
+deduplication, handles comments whose line anchors move after a push.
 
 ## Other posting controls
 

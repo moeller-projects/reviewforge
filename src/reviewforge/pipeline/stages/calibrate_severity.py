@@ -8,6 +8,7 @@ from typing import Any
 
 from ...ai.prompts import stage_instruction
 from ...artifacts.builder import read_json, write_json
+from ...exceptions import SchemaValidationError
 from ..cache import cache_key, load_cached_json, store_cached_json
 from ..stage import Stage, StageContext
 from ..validation import StageLabel, validate_stage
@@ -28,7 +29,7 @@ def _validated_calibration(doc: Any, original: dict[str, Any]) -> dict[str, Any]
             {"summary": doc.get("summary", ""), "findings": findings},
             StageLabel.SEVERITY_CALIBRATION,
         )
-    except SystemExit:
+    except SchemaValidationError:
         _log("malformed calibration finding; preserving verified finding")
         return original
     return findings[0]
@@ -96,7 +97,7 @@ class CalibrateSeverityStage(Stage):
         def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
             out = ctx.artifacts.dir / "raw" / f"severity-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
-            if type(ctx.pi).__name__ == "PiRunner":
+            if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
                 # Pi sessions are not safe for concurrent writes. Keep the
                 # parallel workers independent while retaining session reuse
                 # within each worker's subprocess lifecycle.

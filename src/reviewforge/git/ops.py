@@ -43,7 +43,7 @@ def log(message: str) -> None:
 
 
 def run_git(cwd: Path, *args: str, check: bool = True) -> str:
-    """Run a git command and return stdout. Raises ``SystemExit`` on failure."""
+    """Run a git command and return stdout."""
     cp = subprocess.run(
         ["git", *args],
         cwd=str(cwd),

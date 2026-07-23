@@ -35,7 +35,7 @@ from reviewforge.ai import prompts  # noqa: E402
 from reviewforge.ai.runner import PiRunner, strip_json_fences  # noqa: E402
 from reviewforge.artifacts import builder, manager  # noqa: E402
 from reviewforge.config import Config, ConfigError, env, is_true, require_uint  # noqa: E402
-from reviewforge.exceptions import GitOperationError  # noqa: E402
+from reviewforge.exceptions import AdoApiError, GitOperationError, PiExecutionError, SchemaValidationError  # noqa: E402
 from reviewforge.git import chunker  # noqa: E402
 from reviewforge.git import ops as git_ops  # noqa: E402
 from reviewforge.pipeline import orchestrator  # noqa: E402
@@ -541,7 +541,7 @@ class TestAdoClient:
             "run",
             lambda *a, **k: subprocess.CompletedProcess(a, 2, b"", b"boom"),
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             ado_client.call_helper(cfg, "fetch-context", tmp_path)
 
 
@@ -811,7 +811,7 @@ class TestPiRunner:
         )
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
-        with pytest.raises(SystemExit):
+        with pytest.raises(PiExecutionError):
             PiRunner(cfg).run_json(prompt, "stdin", tmp_path / "out.json", "stage")
 
 
@@ -822,11 +822,11 @@ class TestPiRunner:
 
 class TestValidation:
     def test_validate_review_doc_rejects_bad_severity(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(SchemaValidationError):
             validate_review_doc({"summary": "x", "findings": [{"severity": "critical", "title": "T", "message": "M"}]})
 
     def test_validate_stage_rejects_missing_intent_fields(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(SchemaValidationError):
             validate_stage({"pr_intent": "x"}, "intent reconstruction")
 
     def test_validate_stage_accepts_context_plan(self):
@@ -845,9 +845,9 @@ class TestIdempotentPosting:
              "confidence": "high", "suggestion": "fix it"}
         assert ad_posting.dedupe_key(a) == ad_posting.dedupe_key(b)
 
-    def test_dedupe_key_changes_with_significant_field(self):
+    def test_dedupe_key_changes_with_semantic_identity(self):
         a = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M"}
-        b = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T", "message": "M2"}
+        b = {"file": "src/app.py", "line": 5, "severity": "major", "title": "T2", "message": "M"}
         assert ad_posting.dedupe_key(a) != ad_posting.dedupe_key(b)
 
     def test_dedupe_key_normalizes_leading_slash(self):

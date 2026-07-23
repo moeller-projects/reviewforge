@@ -13,6 +13,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 from typing import Any
+from ..exceptions import ReviewForgeError, emit_domain_error
 
 # Re-exports retained for older test suites and external consumers.
 from .client import (  # noqa: F401  (re-exports)
@@ -570,7 +571,7 @@ def command_post_findings(args: argparse.Namespace) -> int:
         if is_work_item_finding(f):
             f = as_general_comment(f)
         key = key_of(f)
-        if key in existing:
+        if not should_post(f, existing):
             result["skipped"] += 1
             result["skipped_reasons"]["duplicate"] += 1
             log(f"skipping duplicate finding '{f['title']}' (key={key})")
@@ -721,7 +722,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except ReviewForgeError as exc:
+        emit_domain_error(exc)
+        return 1
 
 
 def _build_diff_anchors(mapper: DiffLineMapper | None) -> dict[str, set[int]]:

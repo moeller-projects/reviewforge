@@ -12,6 +12,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from reviewforge.ado import client as ado_client  # noqa: E402
+from reviewforge.exceptions import AdoApiError  # noqa: E402
 from reviewforge.artifacts import builder as artifact_builder  # noqa: E402
 from reviewforge.pipeline.validation import validate_review_doc  # noqa: E402
 
@@ -29,7 +30,7 @@ def test_parse_visualstudio_pr_url():
 
 
 def test_parse_pr_url_rejects_unknown_format():
-    with pytest.raises(SystemExit):
+    with pytest.raises(AdoApiError):
         ado_client.parse_pr_url("https://example.com/pr/1")
 
 

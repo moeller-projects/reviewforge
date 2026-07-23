@@ -178,6 +178,13 @@ class Config:
     review_artifact_dir: str | None
     review_artifact_root: Path
     review_run_id: str | None
+    #: ADO HTTP retry policy. POST/PUT only retry transport failures.
+    ado_retry_attempts: int = field(default=3, compare=False)
+    ado_retry_base_delay: float = field(default=1.0, compare=False)
+    ado_retry_cap_delay: float = field(default=30.0, compare=False)
+    ado_retry_budget_secs: float = field(default=90.0, compare=False)
+    #: Selected model execution backend. Only ``pi`` ships today.
+    model_backend: str = field(default="pi", compare=False)
     #: Optional pre-resolved PR URL string. When set, ``pr_id`` was derived from it.
     pr_url: str | None = field(default=None, compare=False)
     #: Bypass review history and always run a complete review.
@@ -589,8 +596,10 @@ def _build_from_sources(
     if pr_url:
         try:
             from .ado.client import parse_pr_url
+            from .exceptions import AdoApiError
+
             url_org, url_proj, url_repo, url_pr_id = parse_pr_url(pr_url)
-        except SystemExit:
+        except AdoApiError:
             url_org = url_proj = url_repo = url_pr_id = ""
     if not pr_id and url_pr_id:
         pr_id = url_pr_id
@@ -622,6 +631,21 @@ def _build_from_sources(
     reasoning_engine = _resolve_reasoning_engine(
         cli_or_env("reasoning_engine", "REASONING_ENGINE"), fast_review
     )
+    ado_retry_attempts = require_uint(
+        "ADO_RETRY_ATTEMPTS", cli_or_env("ado_retry_attempts", "ADO_RETRY_ATTEMPTS", "3")
+    )
+    ado_retry_base_delay = float(
+        cli_or_env("ado_retry_base_delay", "ADO_RETRY_BASE_DELAY", "1")
+    )
+    ado_retry_cap_delay = float(
+        cli_or_env("ado_retry_cap_delay", "ADO_RETRY_CAP_DELAY", "30")
+    )
+    ado_retry_budget_secs = float(
+        cli_or_env("ado_retry_budget_secs", "ADO_RETRY_BUDGET_SECS", "90")
+    )
+    model_backend = cli_or_env("model_backend", "MODEL_BACKEND", "pi").lower()
+    if model_backend != "pi":
+        raise ConfigError(f"MODEL_BACKEND must be 'pi', got: {model_backend!r}")
 
     def to_path(value: str, default: str) -> Path:
         return Path(value) if value else Path(default)
@@ -680,6 +704,11 @@ def _build_from_sources(
         review_artifact_dir=review_artifact_dir,
         review_artifact_root=Path(review_artifact_root),
         review_run_id=review_run_id,
+        ado_retry_attempts=ado_retry_attempts,
+        ado_retry_base_delay=ado_retry_base_delay,
+        ado_retry_cap_delay=ado_retry_cap_delay,
+        ado_retry_budget_secs=ado_retry_budget_secs,
+        model_backend=model_backend,
         context_file_max_lines=context_file_max_lines,
         context_search_max_matches=context_search_max_matches,
         collect_context_workers=collect_context_workers,

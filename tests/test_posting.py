@@ -392,3 +392,73 @@ class TestCommandPostFindingsWorkItem:
         assert rc == 0
         # The guessed-file form also dedupes against the same marker.
         client.create_thread.assert_not_called()
+
+
+class TestDedupeKeyMigration:
+    def test_rephrased_severity_and_message_post_once(self, tmp_path, monkeypatch):
+        from reviewforge.ado import cli as m
+
+        original = {
+            "file": None,
+            "line": None,
+            "severity": "major",
+            "title": "Missing authorization check",
+            "message": "The handler does not verify the caller.",
+        }
+        first_findings, out_file = _write_findings(tmp_path, [original])
+        client = _mock_client()
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            assert m.command_post_findings(_args(first_findings, out_file)) == 0
+
+        content = client.create_thread.call_args.args[1]["comments"][0]["content"]
+        assert f"<!-- prb:{posting.dedupe_key(original)} -->" in content
+        assert posting.dedupe_key(original) != posting.dedupe_key_v1(original)
+        client.get_threads.return_value = [{"comments": [{"content": content}]}]
+        rephrased = {
+            **original,
+            "severity": "blocker",
+            "message": "Unauthenticated callers can invoke this endpoint.",
+        }
+        second_findings, second_out = _write_findings(tmp_path, [rephrased])
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            assert m.command_post_findings(_args(second_findings, second_out)) == 0
+
+        client.create_thread.assert_called_once()
+        assert json.loads(second_out.read_text())["skipped_reasons"]["duplicate"] == 1
+
+    def test_v1_marked_thread_skips_rerun(self, tmp_path, monkeypatch):
+        from reviewforge.ado import cli as m
+
+        finding = {
+            "file": None,
+            "line": None,
+            "severity": "major",
+            "title": "Missing authorization check",
+            "message": "The handler does not verify the caller.",
+        }
+        findings_file, out_file = _write_findings(tmp_path, [finding])
+        client = _mock_client()
+        v1_marker = posting.make_marker(posting.dedupe_key_v1(finding))
+        client.get_threads.return_value = [
+            {"comments": [{"content": f"historical comment\n<!-- {v1_marker} -->"}]}
+        ]
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            assert m.command_post_findings(_args(findings_file, out_file)) == 0
+
+        client.create_thread.assert_not_called()
+        assert json.loads(out_file.read_text())["skipped_reasons"]["duplicate"] == 1
+
+    def test_title_casing_and_punctuation_share_v2_key(self):
+        base = {
+            "file": "/src/auth.py",
+            "line": 42,
+            "title": "Missing authorization check!",
+        }
+        assert posting.dedupe_key(base) == posting.dedupe_key(
+            {**base, "title": "missing   authorization-check"}
+        )

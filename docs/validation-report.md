@@ -14,11 +14,9 @@
 - Reasoning engine names were copied from the engine registry modules.
 - Schema names and literal values were copied from `pipeline/schemas.py`.
 - Documentation contract check found 33 Markdown files and purpose tags on all generated docs.
-- Focused CLI, entry-point, and reasoning tests passed: 76 passed, 1 skipped.
-
-## Not passed / repository state
-
-- Full `pytest -q` is currently red in pre-existing code: `tests/test_stages.py::TestPrepareRepositoryStage::test_writes_diff_and_changed_files` cannot resolve the monkeypatch target `reviewforge.pipeline.stages.prepare_repository.git_ops`. No code was changed to mask this unrelated failure.
+- Stage test module `.venv/bin/pytest tests/test_stages.py -q` passed.
+- Full `.venv/bin/pytest -q` passed: 686 passed, 1 skipped.
+- Coverage gate passed: `.venv/bin/pytest --cov=reviewforge --cov-report=term-missing` reported 95% total coverage.
 
 ## Scope limits
 

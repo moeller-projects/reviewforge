@@ -29,6 +29,7 @@ from reviewforge.ado.client import (  # noqa: E402
     resolve_branches,
     resolve_token,
 )
+from reviewforge.exceptions import AdoApiError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +83,11 @@ class TestNormalizeOrg:
         assert short == "contoso"
 
     def test_unknown_url_raises(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             _normalize_org("https://example.com/foo")
 
     def test_short_name_with_dot_raises(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             _normalize_org("contoso.example.com")
 
 
@@ -209,7 +210,7 @@ class TestResolveToken:
     def test_raises_when_all_missing(self, monkeypatch):
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
             monkeypatch.delenv(k, raising=False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             resolve_token()
 
 
@@ -230,7 +231,7 @@ class TestParsePrUrl:
         )
 
     def test_unparseable(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             parse_pr_url("https://example.com/pull/1")
 
 
@@ -288,8 +289,73 @@ class TestHttpMethods:
         client = AdoClient("contoso", "P", "api", token="t")
         err = HTTPError(url="x", code=500, msg="boom", hdrs={}, fp=BytesIO(b""))
         with _patch_urlopen(error=err):
-            with pytest.raises(HTTPError):
+            with pytest.raises(AdoApiError):
                 client.get_pr(1)
+
+    def test_get_retries_503_then_succeeds(self):
+        from urllib.error import HTTPError
+
+        error = HTTPError(url="x", code=503, msg="busy", hdrs={}, fp=BytesIO(b""))
+        sleeper = MagicMock()
+        client = AdoClient(
+            "contoso", "P", "api", token="t", sleeper=sleeper, random_fn=lambda: 0
+        )
+        with patch(
+            "reviewforge.ado.client.urllib.request.urlopen",
+            side_effect=[error, _http_response({"ok": True})],
+        ) as urlopen:
+            assert client.get_pr(1) == {"ok": True}
+        assert urlopen.call_count == 2
+        sleeper.assert_called_once_with(0.5)
+
+    def test_429_honors_retry_after(self):
+        from email.message import Message
+        from urllib.error import HTTPError
+
+        headers = Message()
+        headers["Retry-After"] = "7"
+        error = HTTPError(url="x", code=429, msg="slow", hdrs=headers, fp=BytesIO(b""))
+        sleeper = MagicMock()
+        client = AdoClient("contoso", "P", "api", token="t", sleeper=sleeper)
+        with patch(
+            "reviewforge.ado.client.urllib.request.urlopen",
+            side_effect=[error, _http_response({"ok": True})],
+        ):
+            assert client.get_pr(1) == {"ok": True}
+        sleeper.assert_called_once_with(7)
+
+    def test_401_fails_without_retry(self):
+        from urllib.error import HTTPError
+
+        error = HTTPError(url="x", code=401, msg="unauthorized", hdrs={}, fp=BytesIO(b""))
+        client = AdoClient("contoso", "P", "api", token="t", sleeper=MagicMock())
+        with patch("reviewforge.ado.client.urllib.request.urlopen", side_effect=error) as urlopen:
+            with pytest.raises(AdoApiError):
+                client.get_pr(1)
+        assert urlopen.call_count == 1
+
+    def test_post_500_fails_without_retry(self):
+        from urllib.error import HTTPError
+
+        error = HTTPError(url="x", code=500, msg="server", hdrs={}, fp=BytesIO(b""))
+        client = AdoClient("contoso", "P", "api", token="t", sleeper=MagicMock())
+        with patch("reviewforge.ado.client.urllib.request.urlopen", side_effect=error) as urlopen:
+            with pytest.raises(AdoApiError):
+                client.create_thread(1, {"comments": []})
+        assert urlopen.call_count == 1
+
+    def test_get_retries_url_error(self):
+        from urllib.error import URLError
+
+        client = AdoClient(
+            "contoso", "P", "api", token="t", sleeper=MagicMock(), random_fn=lambda: 0
+        )
+        with patch(
+            "reviewforge.ado.client.urllib.request.urlopen",
+            side_effect=[URLError("reset"), _http_response({"ok": True})],
+        ) as urlopen:
+            assert client.get_pr(1) == {"ok": True}
+        assert urlopen.call_count == 2
 
     def test_pr_path_encodes_repo_id(self):
         client = AdoClient("contoso", "P", "a/b", token="t")
@@ -393,7 +459,7 @@ class TestModuleHelpers:
             "reviewforge.ado.client.get_pr",
             lambda c: {"sourceRefName": "refs/heads/s"},  # missing target
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             resolve_branches(cfg)
 
 
@@ -486,7 +552,7 @@ class TestCallHelper:
             "reviewforge.ado.client.subprocess.run",
             lambda *a, **k: _sp.CompletedProcess(a, 2, b"", b"boom"),
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             call_helper(cfg, "fetch-context", tmp_path)
 
 

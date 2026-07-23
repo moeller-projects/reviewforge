@@ -1,13 +1,15 @@
 """Idempotent ADO posting primitives.
 
-The reviewer must not double-post when re-run on the same PR. The contract is:
+The reviewer must not double-post when re-run on the same PR. Every posted
+comment carries a ``prb:<key>`` marker. New v2 keys hash normalized file, line,
+and title only: model-generated message prose and recalibrated severity drift
+between runs, while title remains the semantic identity. Existing v1 keys,
+which included severity and message, remain recognized during the mandatory
+migration so historical bot comments still dedupe.
 
-* Every posted comment carries a stable marker of the form ``prb:<key>``.
-* Before posting, the reviewer scans the existing PR threads for these
-  markers and skips findings whose marker is already present.
-* :func:`dedupe_key` is the canonical way to compute the marker from a
-  finding. It is stable across reruns and tolerant of small model variation
-  in non-significant fields.
+Marker syntax and line anchoring are separate contracts. Markers identify an
+equivalent finding; stale-comment reconciliation handles anchors that move
+after a push.
 
 This module is intentionally small and pure: no HTTP calls, no subprocess
 spawning. The posting CLI imports these helpers to make decisions.
@@ -35,10 +37,18 @@ _MARKER_RE = re.compile(
     rf"(?m)^(?:\s*<!--\s*)?{re.escape(MARKER_PREFIX)}:([a-zA-Z0-9]{{6,32}})(?:\s*-->)?\s*$"
 )
 
-#: Field names excluded from the dedupe key. These are noisy or display-only.
+#: Field names excluded from the v2 dedupe key. These are noisy or display-only.
 _NON_SIGNIFICANT_FIELDS: frozenset[str] = frozenset(
-    {"suggestion", "contextBasis", "confidence", "severity_calibration",
-     "created_at", "updated_at"}
+    {
+        "suggestion",
+        "contextBasis",
+        "confidence",
+        "severity",
+        "message",
+        "severity_calibration",
+        "created_at",
+        "updated_at",
+    }
 )
 
 
@@ -54,6 +64,11 @@ def _normalize_file(file: Any) -> str:
     return str(file).lstrip("/").replace("\\", "/")
 
 
+def _normalize_title(title: Any) -> str:
+    """Normalize title wording without treating punctuation as semantic."""
+    return " ".join(re.sub(r"[\W_]+", " ", str(title or "").lower()).split())
+
+
 def _normalize_evidence(evidence: Any) -> tuple[Any, ...]:
     """Reduce evidence to a stable tuple of (sorted) significant items."""
     if not isinstance(evidence, dict):
@@ -61,20 +76,8 @@ def _normalize_evidence(evidence: Any) -> tuple[Any, ...]:
     return tuple(sorted((str(k), str(v)) for k, v in evidence.items()))
 
 
-def dedupe_key(finding: dict[str, Any]) -> str:
-    """Compute a stable 12-char SHA-1 prefix identifying a finding.
-
-    The key covers the fields that semantically define the finding:
-
-    * ``file`` (normalized) and ``line`` — the location
-    * ``severity`` — the impact
-    * ``title`` — the short summary
-    * ``message`` — the body
-
-    Other fields (confidence, suggestion, evidence) are intentionally
-    excluded so that minor model variation between reruns does not change
-    the key.
-    """
+def dedupe_key_v1(finding: dict[str, Any]) -> str:
+    """Compute the historical v1 key for compatibility checks only."""
     raw = "|".join(
         [
             _normalize_file(finding.get("file")),
@@ -87,17 +90,33 @@ def dedupe_key(finding: dict[str, Any]) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def dedupe_key(finding: dict[str, Any]) -> str:
+    """Compute the v2 marker key from normalized location and title.
+
+    Severity and message are deliberately excluded because they are
+    model-generated or recalibrated prose that can change on rerun. Stale
+    line anchors remain the responsibility of stale reconciliation.
+    """
+    raw = "|".join(
+        [
+            _normalize_file(finding.get("file")),
+            str(finding.get("line") or ""),
+            _normalize_title(finding.get("title")),
+        ]
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def make_marker(key: str) -> str:
     """Return the full marker text (``prb:<key>``) for a given key."""
     return f"{MARKER_PREFIX}:{key}"
 
 
 def existing_bot_markers(threads: Iterable[dict[str, Any]]) -> set[str]:
-    """Return the set of bot markers already present in the given PR threads.
+    """Return v1 and v2 bot markers present in the given PR threads.
 
-    Only the first comment of each thread is scanned; this is how the bot
-    itself posts and how other reviewers' threads are distinguishable (they
-    will not contain a ``prb:`` marker on the first comment line).
+    The stable marker grammar is version-agnostic, so both historical and new
+    key values are collected without changing marker syntax or layout.
     """
     markers: set[str] = set()
     for thread in threads or []:
@@ -110,13 +129,15 @@ def existing_bot_markers(threads: Iterable[dict[str, Any]]) -> set[str]:
 
 
 def should_post(finding: dict[str, Any], existing_markers: set[str]) -> bool:
-    """Return ``True`` iff a finding with this dedupe key has not been posted.
+    """Return ``True`` only when neither v1 nor v2 key has been posted.
 
-    When ``existing_markers`` is empty, the function returns ``True`` (the
-    caller can still choose to skip posting for other reasons, such as
-    ``dry_run``).
+    New comments use :func:`dedupe_key` (v2); checking v1 preserves
+    idempotency for comments written before the migration.
     """
-    return dedupe_key(finding) not in existing_markers
+    return not {
+        dedupe_key_v1(finding),
+        dedupe_key(finding),
+    }.intersection(existing_markers)
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +365,7 @@ __all__ = [
     "as_general_comment",
     "attach_marker",
     "classify_threads",
-    "dedupe_key",
+    "dedupe_key_v1",
     "existing_bot_markers",
     "find_stale_bot_threads",
     "is_work_item_finding",

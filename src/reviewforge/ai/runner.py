@@ -39,6 +39,7 @@ import sys
 import tempfile
 
 from ..config import Config
+from ..exceptions import PiExecutionError
 from .prompts import augment_prompt_file
 
 
@@ -67,6 +68,10 @@ def _log(message: str) -> None:
     print(f"[review] {message}", file=sys.stderr)
 
 
+def _warn(message: str) -> None:
+    print(f"[review][WARN] {message}", file=sys.stderr)
+
+
 def _scrub_ado_env(env: dict[str, str]) -> None:
     """Remove ADO credentials from the subprocess env in place."""
     for key in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
@@ -80,13 +85,14 @@ def _default_session_id(cfg: Config) -> str:
     return f"pr-{cfg.pr_id}-review"
 
 
-class PiRunner:
+class PiCliRunner:
     """Run the ``pi`` CLI as a JSON producer, with optional session reuse."""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._last_tokens: dict[str, int] = {}
         self._token_usage = {"in": 0, "out": 0, "total": 0}
+        self._token_usage_source = "none"
         self._invocation_count = 0
         self._repair_invocation_count = 0
         # Per-runner cache of source prompt path → augmented prompt path.
@@ -109,6 +115,11 @@ class PiRunner:
         return dict(self._token_usage)
 
     @property
+    def token_usage_source(self) -> str:
+        """Source of token usage from the most recent Pi call."""
+        return self._token_usage_source
+
+    @property
     def invocation_count(self) -> int:
         return self._invocation_count
 
@@ -118,9 +129,19 @@ class PiRunner:
 
     def _record_tokens(self, tokens: dict[str, int]) -> None:
         self._last_tokens = dict(tokens)
+        self._token_usage_source = "stderr-regex" if tokens else "none"
         for key in ("in", "out", "total"):
             self._token_usage[key] += int(tokens.get(key, 0) or 0)
 
+    def _warn_missing_token_usage(self, stage: str) -> None:
+        """Warn when a successful Pi response lacks observable usage."""
+        if not self._last_tokens:
+            _warn(f"Pi {stage} returned a non-empty response without token usage")
+        if self._invocation_count and not any(self._token_usage.values()):
+            _warn(
+                f"Pi has {self._invocation_count} invocation(s) "
+                "with all parsed token usage values at 0"
+            )
 
     @property
     def session_id(self) -> str:
@@ -196,7 +217,7 @@ class PiRunner:
         On invalid JSON, retries once with a "return only JSON" repair
         prompt that runs in the same session (no re-sending of context).
 
-        Raises :class:`SystemExit` on timeouts or unrecoverable errors.
+        Raises :class:`PiExecutionError` on timeouts or unrecoverable errors.
         """
         instruction = (
             "Process the task described in the system prompt. "
@@ -222,21 +243,26 @@ class PiRunner:
                 env=env,
             )
         except subprocess.TimeoutExpired:
-            raise SystemExit(
-                f"[review][ERROR] Pi {stage} timed out after {self.cfg.pi_timeout_secs}s"
+            raise PiExecutionError(
+                f"[review][ERROR] Pi {stage} timed out after {self.cfg.pi_timeout_secs}s",
+                details={"stage": stage, "timeout_secs": self.cfg.pi_timeout_secs},
             )
-        if cp.stderr:
-            stderr_text = cp.stderr.decode(errors="replace")
-            for line in stderr_text.splitlines():
-                _log(f"[pi {stage}] {line}")
-            self._record_tokens(self._parse_token_usage(stderr_text))
-        else:
-            self._last_tokens = {}
+        stderr_text = cp.stderr.decode(errors="replace")
+        for line in stderr_text.splitlines():
+            _log(f"[pi {stage}] {line}")
+        self._record_tokens(self._parse_token_usage(stderr_text))
         if cp.returncode:
-            raise SystemExit(f"[review][ERROR] pi {stage} exited {cp.returncode}")
+            raise PiExecutionError(
+                f"[review][ERROR] pi {stage} exited {cp.returncode}",
+                details={"stage": stage, "returncode": cp.returncode},
+            )
         output_path.write_bytes(cp.stdout)
         if not output_path.stat().st_size:
-            raise SystemExit(f"[review][ERROR] pi {stage} produced no output")
+            raise PiExecutionError(
+                f"[review][ERROR] pi {stage} produced no output",
+                details={"stage": stage},
+            )
+        self._warn_missing_token_usage(stage)
 
         # First attempt: parse as-is.
         try:
@@ -276,22 +302,32 @@ class PiRunner:
                 env=env,
             )
         except subprocess.TimeoutExpired:
-            raise SystemExit(
-                f"[review][ERROR] Pi {stage} repair timed out"
+            raise PiExecutionError(
+                f"[review][ERROR] Pi {stage} repair timed out",
+                details={"stage": stage, "repair": True},
             )
-        if cp.stderr:
-            stderr_text = cp.stderr.decode(errors="replace")
-            for line in stderr_text.splitlines():
-                _log(f"[pi {stage} repair] {line}")
-            self._record_tokens(self._parse_token_usage(stderr_text))
+        stderr_text = cp.stderr.decode(errors="replace")
+        for line in stderr_text.splitlines():
+            _log(f"[pi {stage} repair] {line}")
+        self._record_tokens(self._parse_token_usage(stderr_text))
         if cp.returncode or not cp.stdout:
-            raise SystemExit(f"[review][ERROR] Pi {stage} repair call failed")
+            raise PiExecutionError(
+                f"[review][ERROR] Pi {stage} repair call failed",
+                details={"stage": stage, "repair": True, "returncode": cp.returncode},
+            )
         output_path.write_bytes(cp.stdout)
+        self._warn_missing_token_usage(f"{stage} repair")
         strip_json_fences(output_path)
         try:
             json.loads(output_path.read_text())
         except Exception:
-            raise SystemExit(f"[review][ERROR] pi {stage} repair call produced invalid JSON")
+            raise PiExecutionError(
+                f"[review][ERROR] pi {stage} repair call produced invalid JSON",
+                details={"stage": stage, "repair": True},
+            )
 
 
-__all__ = ["PiRunner", "strip_json_fences"]
+PiRunner = PiCliRunner
+
+
+__all__ = ["PiCliRunner", "PiRunner", "strip_json_fences"]

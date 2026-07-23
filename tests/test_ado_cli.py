@@ -18,6 +18,7 @@ import pytest
 
 # Import the canonical implementation from the package.
 from reviewforge.ado import cli as m  # noqa: E402  (ADO CLI surface)
+from reviewforge.exceptions import AdoApiError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ class TestNormalizeOrg:
         assert short == "contoso"
 
     def test_unknown_url_raises(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(AdoApiError):
             m.normalize_org("https://example.com/foo")
 
 

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 import sys
 import time
+from ..exceptions import ReviewForgeError
 
 
 def _now_iso() -> str:
@@ -105,6 +106,7 @@ class Stage:
         started_at = _now_iso()
         ctx.last_token_usage = {}
         t0 = time.monotonic()
+        invocation_count = getattr(ctx.pi, "invocation_count", None)
         try:
             if not self.should_run(ctx):
                 finished_at = _now_iso()
@@ -118,6 +120,16 @@ class Stage:
             details = self.run(ctx) or {}
             if not isinstance(details, dict):
                 details = {"result": details}
+            final_invocation_count = getattr(ctx.pi, "invocation_count", None)
+            if (
+                isinstance(invocation_count, int)
+                and isinstance(final_invocation_count, int)
+                and final_invocation_count > invocation_count
+            ):
+                details.setdefault(
+                    "token_usage_source",
+                    getattr(ctx.pi, "token_usage_source", "none"),
+                )
             finished_at = _now_iso()
             # Capture token usage if the stage left it on the context.
             tokens = ctx.last_token_usage
@@ -129,6 +141,16 @@ class Stage:
                 duration_ms=int((time.monotonic() - t0) * 1000),
                 details=details,
                 token_usage=dict(tokens),
+            )
+        except ReviewForgeError as exc:
+            finished_at = _now_iso()
+            return StageResult(
+                name=self.name,
+                status=StageStatus.FAILED,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                error=str(exc),
             )
         except SystemExit as exc:
             finished_at = _now_iso()

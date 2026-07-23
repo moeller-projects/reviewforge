@@ -2,7 +2,7 @@
 
 **Purpose:** provide the complete environment-name index. **Audience:** operators. **Mode:** reference.
 
-ADO and PR: `SYSTEM_ACCESSTOKEN`, `ADO_AUTH_TOKEN`, `ADO_MCP_AUTH_TOKEN`, `ADO_API_KEY`, `ADO_ORG`, `ADO_PROJECT`, `ADO_REPO_ID`, `PR_ID`, `PR_URL`, `SOURCE_BRANCH`, `TARGET_BRANCH`.
+ADO and PR: `SYSTEM_ACCESSTOKEN`, `ADO_AUTH_TOKEN`, `ADO_MCP_AUTH_TOKEN`, `ADO_API_KEY`, `ADO_ORG`, `ADO_PROJECT`, `ADO_REPO_ID`, `PR_ID`, `PR_URL`, `SOURCE_BRANCH`, `TARGET_BRANCH`. HTTP retries: `ADO_RETRY_ATTEMPTS` (default `3`), `ADO_RETRY_BASE_DELAY` (seconds, default `1`), `ADO_RETRY_CAP_DELAY` (seconds, default `30`), and `ADO_RETRY_BUDGET_SECS` (default `90`). Retries apply to safe GET transport/transient failures; POST/PUT retry only transport failures.
 
 Review: `REVIEW_LANGUAGE`, `PI_MODEL`, `MAX_DIFF_BYTES`, `CHUNK_TRIGGER_DIFF_BYTES`, `DISABLE_CHUNK_REVIEW`, `PI_TIMEOUT_SECS`, `DRY_RUN`, `INCLUDE_WORK_ITEMS`, `INCLUDE_EXISTING_COMMENTS`, `VERIFY_FINDINGS`, `FORCE_REVIEW`, `FORCE_FULL_REVIEW`, `REVIEW_TARGET_BRANCHES`.
 

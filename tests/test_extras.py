@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from reviewforge.ai.runner import PiRunner  # noqa: E402
 from reviewforge.artifacts import builder, manager, summary as art_summary  # noqa: E402
 from reviewforge.config import Config  # noqa: E402
+from reviewforge.exceptions import PiExecutionError, ReviewForgeError  # noqa: E402
 from reviewforge.pipeline import stage as pstage  # noqa: E402
 from reviewforge.pipeline import validation as pvalidation  # noqa: E402
 from reviewforge.pipeline.stage import (  # noqa: E402
@@ -81,7 +82,7 @@ class TestPiRunnerEdgeCases:
             raise subprocess.TimeoutExpired(cmd=a[0] if a else "", timeout=5)
 
         monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "timed out" in str(exc.value)
 
@@ -91,7 +92,7 @@ class TestPiRunnerEdgeCases:
             "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 7, b"", b"err"),
         )
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "exited 7" in str(exc.value)
 
@@ -101,7 +102,7 @@ class TestPiRunnerEdgeCases:
             "reviewforge.ai.runner.subprocess.run",
             lambda *a, **k: subprocess.CompletedProcess(a, 0, b"", b""),
         )
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "produced no output" in str(exc.value)
 
@@ -116,7 +117,7 @@ class TestPiRunnerEdgeCases:
             return subprocess.CompletedProcess(cmd, 9, b"", b"")
 
         monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "repair call failed" in str(exc.value)
 
@@ -132,7 +133,7 @@ class TestPiRunnerEdgeCases:
             return subprocess.CompletedProcess(cmd, 0, b"still not json", b"")
 
         monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "invalid JSON" in str(exc.value)
 
@@ -440,29 +441,29 @@ class TestValidationEdges:
         pvalidation.validate_stage({}, "context collection")  # no validator → noop
 
     def test_validate_stage_rejects_non_dict(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             pvalidation.validate_stage(["not", "a", "dict"], "intent reconstruction")
 
     def test_validate_review_doc_rejects_non_dict_finding(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             pvalidation.validate_review_doc(
                 {"summary": "x", "findings": ["not a dict"]}
             )
 
     def test_validate_review_doc_rejects_missing_title(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             pvalidation.validate_review_doc(
                 {"summary": "x", "findings": [{"severity": "major", "title": "", "message": "m"}]}
             )
 
     def test_validate_review_doc_rejects_missing_message(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             pvalidation.validate_review_doc(
                 {"summary": "x", "findings": [{"severity": "major", "title": "t", "message": "  "}]}
             )
 
     def test_validate_review_doc_rejects_non_dict(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             pvalidation.validate_review_doc("not a dict")
 
 

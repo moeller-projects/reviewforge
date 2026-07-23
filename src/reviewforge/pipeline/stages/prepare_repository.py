@@ -7,6 +7,7 @@ import sys
 
 from ...artifacts.builder import changed_files, write_json
 from ...ado.client import resolve_branches
+from ...git import ops as git_ops
 from ..review_state import ReviewMode
 from ..stage import Stage, StageContext
 

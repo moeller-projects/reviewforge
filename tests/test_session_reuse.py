@@ -874,8 +874,10 @@ class TestTokenUsageObservability:
         runner = PiRunner(cfg)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert runner.last_tokens == {"in": 1500, "out": 800, "total": 2300}
+        assert PiRunner._parse_token_usage(stderr.decode()) == runner.last_tokens
+        assert runner.token_usage_source == "stderr-regex"
 
-    def test_token_usage_no_match_returns_empty(self, tmp_path, monkeypatch):
+    def test_token_usage_no_match_warns_and_uses_none(self, tmp_path, monkeypatch, capsys):
         cfg = SimpleNamespace(
             pi_model="m", pi_timeout_secs=5, dry_run=True,
             review_prompt_path=Path("/tmp/r.md"),
@@ -894,6 +896,10 @@ class TestTokenUsageObservability:
         runner = PiRunner(cfg)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert runner.last_tokens == {}
+        assert runner.token_usage_source == "none"
+        err = capsys.readouterr().err
+        assert "[review][WARN] Pi stage returned a non-empty response without token usage" in err
+        assert "all parsed token usage values at 0" in err
 
     def test_token_usage_no_stderr(self, tmp_path, monkeypatch):
         cfg = SimpleNamespace(
@@ -1050,4 +1056,32 @@ class TestTokenUsageObservability:
         payload = json.loads(path.read_text())
         # The stage's token_usage is in the stages list.
         assert payload["stages"][0]["token_usage"] == {"in": 1, "out": 2, "total": 3}
+
+    def test_run_summary_records_token_usage_source(self, cfg, tmp_path, monkeypatch):
+        from reviewforge.pipeline.stage import Stage
+
+        monkeypatch.setattr(
+            "reviewforge.ai.runner.subprocess.run",
+            lambda *a, **k: subprocess.CompletedProcess(
+                a, 0, b'{"ok": true}', b"tokens 1 in / 2 out"
+            ),
+        )
+
+        class PiStage(Stage):
+            name = "pi"
+
+            def run(self, ctx):
+                ctx.pi.run_json(cfg.review_prompt_path, "in", tmp_path / "out.json", "pi")
+                ctx.last_token_usage = ctx.pi.last_tokens
+                return {"ok": True}
+
+        monkeypatch.setattr(orchestrator, "DEFAULT_PIPELINE", [PiStage()])
+        outcome = orchestrator.run_full(cfg)
+        assert outcome.stages[0].details["token_usage_source"] == "stderr-regex"
+        summary_path = (
+            cfg.review_artifact_root / f"pr-{cfg.pr_id}" / "runs"
+            / cfg.review_run_id / "run-summary.json"
+        )
+        payload = json.loads(summary_path.read_text())
+        assert payload["stages"][0]["details"]["token_usage_source"] == "stderr-regex"
 

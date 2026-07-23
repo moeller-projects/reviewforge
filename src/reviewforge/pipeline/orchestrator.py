@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..ado.client import call_helper, get_pr
-from ..ai.runner import PiRunner
+from ..ai.model_runner import ModelRunner, create_model_runner
 from ..artifacts.builder import changed_files, read_json, write_json
 from ..artifacts.manager import Artifacts, create as create_artifacts
 from ..artifacts.summary import (
@@ -34,6 +34,7 @@ from ..artifacts.summary import (
     new_run_summary,
 )
 from ..config import Config
+from ..exceptions import DependencyError, InputError
 from ..git import ops as git_ops
 from ..pipeline.context import ReviewContext
 from .stage import Stage, StageContext, run_stages
@@ -54,11 +55,18 @@ def _log(message: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def ensure_tools() -> None:
-    """Raise ``SystemExit`` if a required tool is missing on ``PATH``."""
-    for tool in ("git", "pi", "rg"):
-        if not shutil.which(tool):
-            raise SystemExit(f"[review][ERROR] {tool} required")
+def ensure_tools(cfg: Config | None = None) -> None:
+    """Raise a domain error if the selected backend's tool is unavailable."""
+    backend_tools = {"pi": "pi"}
+    backend = cfg.model_backend if cfg is not None else "pi"
+    tool = backend_tools.get(backend)
+    if tool is None:
+        raise DependencyError(f"[review][ERROR] unknown model backend: {backend}")
+    for required in ("git", tool, "rg"):
+        if not shutil.which(required):
+            raise DependencyError(
+                f"[review][ERROR] {required} required", details={"tool": required}
+            )
 
 
 def should_skip(cfg: Config, metadata: dict[str, Any]) -> dict[str, Any] | None:
@@ -112,14 +120,14 @@ class RunOutcome:
 
 def _build_legacy_context(cfg: Config, artifacts: Artifacts) -> ReviewContext:
     """Build a :class:`ReviewContext` for legacy code paths."""
-    pi = PiRunner(cfg)
+    pi = create_model_runner(cfg)
     return ReviewContext(cfg=cfg, artifacts=artifacts, pi=pi)
 
 
 def _make_stage_context(
     cfg: Config,
     artifacts: Artifacts,
-    pi: PiRunner,
+    pi: ModelRunner,
 ) -> StageContext:
     """Build a fresh :class:`StageContext` populated with the legacy paths."""
     ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=pi)
@@ -155,7 +163,7 @@ def run_full(cfg: Config) -> RunOutcome:
     """Run the full review pipeline (review + post)."""
     cfg.validate_files()
     artifacts = create_artifacts(cfg)
-    pi = PiRunner(cfg)
+    pi = create_model_runner(cfg)
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
@@ -181,7 +189,7 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
     """
     cfg.validate_files()
     artifacts = create_artifacts(cfg)
-    pi = PiRunner(cfg)
+    pi = create_model_runner(cfg)
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
@@ -210,9 +218,12 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
     """
     cfg.validate_files()
     if not input_path.exists():
-        raise SystemExit(f"[review][ERROR] input file not found: {input_path}")
+        raise InputError(
+            f"[review][ERROR] input file not found: {input_path}",
+            details={"input_path": str(input_path)},
+        )
     artifacts = create_artifacts(cfg)
-    pi = PiRunner(cfg)
+    pi = create_model_runner(cfg)
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 

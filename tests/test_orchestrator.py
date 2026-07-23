@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from reviewforge.artifacts import builder, manager  # noqa: E402
 from reviewforge.config import Config  # noqa: E402
+from reviewforge.exceptions import ReviewForgeError  # noqa: E402
 from reviewforge.pipeline import orchestrator  # noqa: E402
 from reviewforge.pipeline.orchestrator import (  # noqa: E402
     ensure_tools,
@@ -87,7 +88,7 @@ class TestEnsureTools:
         monkeypatch.setattr(
             "reviewforge.pipeline.orchestrator.shutil.which", lambda t: None
         )
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             ensure_tools()
 
     def test_returns_when_all_tools_present(self, monkeypatch):
@@ -272,7 +273,7 @@ class TestRunReviewOnly:
 
 class TestRunPostOnly:
     def test_raises_when_input_missing(self, cfg, tmp_path):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             run_post_only(cfg, input_path=tmp_path / "missing.json")
 
     def test_copies_input_to_severity_and_final(self, cfg, tmp_path, monkeypatch):
@@ -315,7 +316,7 @@ class TestRunPostOnly:
         # raises SystemExit.
         input_path = tmp_path / "review.json"
         input_path.write_text(json.dumps({"summary": 123, "findings": []}), encoding="utf-8")
-        with pytest.raises(SystemExit):
+        with pytest.raises(ReviewForgeError):
             run_post_only(cfg, input_path=input_path)
 
     def test_failure_propagates(self, cfg, tmp_path, monkeypatch):

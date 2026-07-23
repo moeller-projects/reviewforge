@@ -1,4 +1,4 @@
-"""AI runner (Pi coding agent) subpackage."""
+"""AI model-runner and prompt subpackage."""
 from __future__ import annotations
 
 from .prompts import (
@@ -6,9 +6,13 @@ from .prompts import (
     stage_instruction,
     system_prompt,
 )
-from .runner import PiRunner, strip_json_fences
+from .model_runner import ModelRunner, create_model_runner
+from .runner import PiCliRunner, PiRunner, strip_json_fences
 
 __all__ = [
+    "ModelRunner",
+    "PiCliRunner",
+    "create_model_runner",
     "PiRunner",
     "review_instruction",
     "stage_instruction",

@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from ..config import ConfigError
+from ..exceptions import SchemaValidationError
 
 #: Allowed severity values for a finding.
 SEVERITIES: set[str] = {"blocker", "major", "minor", "nit"}
@@ -76,7 +76,7 @@ def validate_stage(doc: Any, stage: StageLabel | str) -> None:
     if validator is None:
         return
     if not isinstance(doc, dict) or not validator(doc):
-        raise SystemExit(_STAGE_SCHEMA_ERRORS[label])
+        raise SchemaValidationError(_STAGE_SCHEMA_ERRORS[label], details={"stage": label.value})
 
 
 def validate_review_doc(doc: Any) -> None:
@@ -86,19 +86,19 @@ def validate_review_doc(doc: Any) -> None:
         or not isinstance(doc.get("summary"), str)
         or not isinstance(doc.get("findings"), list)
     ):
-        raise SystemExit("[review][ERROR] review doc schema invalid")
+        raise SchemaValidationError("[review][ERROR] review doc schema invalid")
     for f in doc["findings"]:
         if not isinstance(f, dict):
-            raise SystemExit("[review][ERROR] finding is not an object")
+            raise SchemaValidationError("[review][ERROR] finding is not an object")
         if f.get("severity") not in SEVERITIES:
-            raise SystemExit(
+            raise SchemaValidationError(
                 f"[review][ERROR] invalid severity {f.get('severity')!r}; "
                 f"expected one of {sorted(SEVERITIES)}"
             )
         if not isinstance(f.get("title"), str) or not f["title"].strip():
-            raise SystemExit("[review][ERROR] finding missing non-empty title")
+            raise SchemaValidationError("[review][ERROR] finding missing non-empty title")
         if not isinstance(f.get("message"), str) or not f["message"].strip():
-            raise SystemExit("[review][ERROR] finding missing non-empty message")
+            raise SchemaValidationError("[review][ERROR] finding missing non-empty message")
 
 
 def validate_postable_review_doc(doc: Any) -> None:
@@ -107,10 +107,10 @@ def validate_postable_review_doc(doc: Any) -> None:
     for finding in doc["findings"]:
         suggestion = finding.get("suggestion")
         if not isinstance(suggestion, str) or not suggestion.strip():
-            raise SystemExit("[review][ERROR] finding missing non-empty recommendation")
+            raise SchemaValidationError("[review][ERROR] finding missing non-empty recommendation")
         evidence = finding.get("evidence")
         if not isinstance(evidence, dict):
-            raise SystemExit("[review][ERROR] finding missing evidence")
+            raise SchemaValidationError("[review][ERROR] finding missing evidence")
         references = (
             evidence.get("changedLines")
             or evidence.get("changed_lines")
@@ -133,9 +133,9 @@ def validate_postable_review_doc(doc: Any) -> None:
             not (evidence.get("changedLines") or evidence.get("changed_lines"))
             and not classification
         ):
-            raise SystemExit("[review][ERROR] finding evidence is incomplete")
+            raise SchemaValidationError("[review][ERROR] finding evidence is incomplete")
         if not isinstance(rationale, str) or not rationale.strip():
-            raise SystemExit("[review][ERROR] finding evidence missing rationale")
+            raise SchemaValidationError("[review][ERROR] finding evidence missing rationale")
 
 
 __all__ = [

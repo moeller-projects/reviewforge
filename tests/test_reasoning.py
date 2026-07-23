@@ -16,7 +16,7 @@ sys.path.insert(0, str(SRC))
 
 from reviewforge.artifacts import builder, manager  # noqa: E402
 from reviewforge.config import Config  # noqa: E402
-from reviewforge.exceptions import ReasoningEngineError, SchemaValidationError  # noqa: E402
+from reviewforge.exceptions import ReasoningEngineError, ReviewForgeError, SchemaValidationError  # noqa: E402
 from reviewforge.pipeline.schemas import (  # noqa: E402
     ReviewResult,
 )
@@ -227,7 +227,7 @@ class TestCanonicalReviewResultContract:
         assert was_reduced is False
 
     def test_postable_projection_rejects_missing_evidence(self):
-        with pytest.raises(SystemExit, match="evidence"):
+        with pytest.raises(ReviewForgeError, match="evidence"):
             validate_postable_review_doc(
                 {
                     "summary": "review",

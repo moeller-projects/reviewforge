@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from reviewforge import cli  # noqa: E402
+from reviewforge.exceptions import PiExecutionError  # noqa: E402
 from reviewforge.cli import (  # noqa: E402
     _apply_common,
     _build_config,
@@ -401,6 +402,18 @@ class TestMain:
         monkeypatch.setattr(cli, "run_full", lambda cfg: FakeOutcome())
         rc = main(["review"])
         assert rc == 0
+
+    def test_translates_domain_error(self, clean_env, monkeypatch, tmp_path, capsys):
+        _set_min_env(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            cli,
+            "run_full",
+            lambda cfg: (_ for _ in ()).throw(
+                PiExecutionError("[review][ERROR] pi review exited 1")
+            ),
+        )
+        assert main(["review"]) == 1
+        assert capsys.readouterr().err == "[review][ERROR] pi review exited 1\n"
 
     def test_returns_1_for_unknown_command(self, clean_env, monkeypatch, tmp_path, capsys):
         # argparse will reject an unknown subcommand with SystemExit(2)

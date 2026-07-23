@@ -10,6 +10,8 @@ import json
 import os
 import re
 import subprocess
+import random
+import time
 import sys
 import urllib.parse
 import urllib.request
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
+from ..exceptions import AdoApiError
 from .models import PrIdentity
 
 
@@ -39,7 +42,7 @@ def parse_pr_url(value: str) -> tuple[str, str, str, str]:
         match = re.search(pattern, value)
         if match:
             return tuple(urllib.parse.unquote(x) for x in match.groups())  # type: ignore[return-value]
-    raise SystemExit("[review][ERROR] Could not parse PR_URL")
+    raise AdoApiError("[review][ERROR] Could not parse PR_URL", details={"url": value})
 
 
 def normalize_ado_segment(value: str, name: str) -> str:
@@ -96,7 +99,7 @@ def resolve_token() -> str:
         value = os.environ.get(name)
         if value:
             return value
-    raise SystemExit(
+    raise AdoApiError(
         "[review][ERROR] ADO_AUTH_TOKEN (aliases: ADO_MCP_AUTH_TOKEN, ADO_API_KEY) required"
     )
 
@@ -116,23 +119,59 @@ def _normalize_org(org: str) -> tuple[str, str]:
         host = urllib.parse.urlparse(raw).hostname or ""
         if host.endswith(".visualstudio.com"):
             return raw, host.split(".", 1)[0]
-        raise SystemExit(f"[review][ERROR] Could not derive organization name from URL: {org}")
+        raise AdoApiError(
+            f"[review][ERROR] Could not derive organization name from URL: {org}",
+            details={"organization": org},
+        )
     if "/" in raw or "." in raw:
-        raise SystemExit(f"[review][ERROR] Could not derive organization name from URL: {org}")
+        raise AdoApiError(
+            f"[review][ERROR] Could not derive organization name from URL: {org}",
+            details={"organization": org},
+        )
     return f"https://dev.azure.com/{raw}", raw
 
 
 class AdoClient:
     """Minimal Azure DevOps REST client for the reviewer."""
 
-    def __init__(self, org: str, project: str, repo: str, token: str | None = None):
+    def __init__(
+        self,
+        org: str,
+        project: str,
+        repo: str,
+        token: str | None = None,
+        *,
+        retry_attempts: int = 3,
+        retry_base_delay: float = 1.0,
+        retry_cap_delay: float = 30.0,
+        retry_budget_secs: float = 90.0,
+        sleeper: Any = time.sleep,
+        random_fn: Any = random.random,
+        monotonic: Any = time.monotonic,
+    ):
         self.org_url, self.org_name = _normalize_org(org)
         self.project = project
         self.repo = repo
         self.base = f"{self.org_url}/{urllib.parse.quote(project)}"
         self.token = token or resolve_token()
+        self.retry_attempts = max(1, retry_attempts)
+        self.retry_base_delay = max(0.0, retry_base_delay)
+        self.retry_cap_delay = max(0.0, retry_cap_delay)
+        self.retry_budget_secs = max(0.0, retry_budget_secs)
+        self._sleep = sleeper
+        self._random = random_fn
+        self._monotonic = monotonic
 
     # ----- low-level --------------------------------------------------------
+
+    def _retry_delay(self, attempt: int, retry_after: str | None) -> float:
+        if retry_after:
+            try:
+                return min(self.retry_cap_delay, max(0.0, float(retry_after)))
+            except ValueError:
+                pass
+        delay = min(self.retry_cap_delay, self.retry_base_delay * (2 ** (attempt - 1)))
+        return delay * (0.5 + self._random() / 2)
 
     def _request(self, method: str, url: str, body: Any | None = None) -> dict[str, Any]:
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -146,26 +185,41 @@ class AdoClient:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as response:  # nosec - trusted URL
-                raw = response.read().decode("utf-8")
-                if not raw:
-                    return {}
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            # Log the response body for debugging (ADO often includes error details)
-            error_body = ""
+        started = self._monotonic()
+        for attempt in range(1, self.retry_attempts + 1):
             try:
-                error_body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
+                with urllib.request.urlopen(req, timeout=60) as response:  # nosec - trusted URL
+                    raw = response.read().decode("utf-8")
+                    return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as exc:
+                error_body = ""
+                try:
+                    error_body = exc.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                retryable = method not in {"POST", "PUT"} and exc.code in {429, 500, 502, 503, 504}
+                error = AdoApiError(
+                    f"[review][ERROR] ADO API {method} {url} returned {exc.code} {exc.reason}",
+                    details={"method": method, "url": url, "status_code": exc.code, "response_body": error_body},
+                )
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            except (urllib.error.URLError, TimeoutError) as exc:
+                retryable = True
+                retry_after = None
+                error = AdoApiError(
+                    f"[review][ERROR] ADO API {method} {url} failed: {exc.reason if isinstance(exc, urllib.error.URLError) else exc}",
+                    details={"method": method, "url": url},
+                )
+            if not retryable or attempt == self.retry_attempts:
+                raise error
+            delay = self._retry_delay(attempt, retry_after)
+            if self._monotonic() - started + delay > self.retry_budget_secs:
+                raise error
             print(
-                f"[review][ERROR] ADO API {method} {url} returned {exc.code} {exc.reason}",
+                f"[review][ado] attempt {attempt}/{self.retry_attempts} failed: {error.message}; retrying in {delay:g}s",
                 file=sys.stderr,
             )
-            if error_body:
-                print(f"[review][ERROR] ADO response body: {error_body}", file=sys.stderr)
-            raise
+            self._sleep(delay)
 
     # ----- paths ------------------------------------------------------------
 
@@ -242,7 +296,11 @@ class AdoClient:
 
 def get_pr(cfg: Config) -> dict[str, Any]:
     """Fetch a single PR via the REST API using :class:`Config`."""
-    client = AdoClient(cfg.ado_org, cfg.ado_project, cfg.ado_repo_id, token=cfg.ado_token)
+    client = AdoClient(
+        cfg.ado_org, cfg.ado_project, cfg.ado_repo_id, token=cfg.ado_token,
+        retry_attempts=cfg.ado_retry_attempts, retry_base_delay=cfg.ado_retry_base_delay,
+        retry_cap_delay=cfg.ado_retry_cap_delay, retry_budget_secs=cfg.ado_retry_budget_secs,
+    )
     return client.get_pr(cfg.pr_id)
 
 
@@ -258,7 +316,10 @@ def resolve_branches(cfg: Config) -> tuple[str, str]:
         source = source or data.get("sourceRefName") or ""
         target = target or data.get("targetRefName") or ""
     if not source or not target:
-        raise SystemExit("[review][ERROR] could not resolve source/target branch from API")
+        raise AdoApiError(
+            "[review][ERROR] could not resolve source/target branch from API",
+            details={"source": source, "target": target},
+        )
     return source.removeprefix("refs/heads/"), target.removeprefix("refs/heads/")
 
 
@@ -281,7 +342,11 @@ def list_active_pull_requests(
     """
     project_name = project or cfg.ado_project
     project_name = normalize_ado_segment(project_name, "ADO project")
-    client = AdoClient(cfg.ado_org, project_name, cfg.ado_repo_id, token=cfg.ado_token)
+    client = AdoClient(
+        cfg.ado_org, project_name, cfg.ado_repo_id, token=cfg.ado_token,
+        retry_attempts=cfg.ado_retry_attempts, retry_base_delay=cfg.ado_retry_base_delay,
+        retry_cap_delay=cfg.ado_retry_cap_delay, retry_budget_secs=cfg.ado_retry_budget_secs,
+    )
     target_set: set[str] | None = None
     if target_branches:
         target_set = {normalize_branch_name(b) for b in target_branches if b}
@@ -353,8 +418,10 @@ def call_helper(
         for line in cp.stderr.decode(errors="replace").splitlines():
             print(f"[review][ado {command}] {line}", file=sys.stderr)
     if cp.returncode:
-        raise SystemExit(
-            f"[review][ERROR] ADO CLI {command} failed: {cp.stderr.decode(errors='replace')}"
+        stderr = cp.stderr.decode(errors="replace")
+        raise AdoApiError(
+            f"[review][ERROR] ADO CLI {command} failed: {stderr}",
+            details={"command": command, "returncode": cp.returncode, "stderr": stderr},
         )
 
 

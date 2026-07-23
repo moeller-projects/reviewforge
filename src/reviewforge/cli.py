@@ -20,6 +20,7 @@ from typing import Any, Sequence
 
 from .ado.client import resolve_branches
 from .config import Config, ConfigError
+from .exceptions import ReviewForgeError, emit_domain_error
 from .pipeline.orchestrator import (
     run_post_only,
     run_review_only,
@@ -393,7 +394,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if func is None:
         parser.print_help(sys.stderr)
         return 1
-    return int(func(args))
+    try:
+        return int(func(args))
+    except ReviewForgeError as exc:
+        emit_domain_error(exc)
+        return 1
 
 
 __all__ = ["build_parser", "main"]

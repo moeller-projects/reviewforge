@@ -46,7 +46,7 @@ class ReviewDiffStage(Stage):
         )
 
         def _fork_runner(worker_id: int):
-            if type(ctx.pi).__name__ == "PiRunner" and hasattr(ctx.pi, "cfg"):
+            if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
                 # Chunk workers run concurrently; each needs an isolated Pi
                 # session to avoid concurrent writes to shared session state.
                 session_id = f"{ctx.pi.session_id}-chunk-{worker_id}"
