@@ -991,8 +991,8 @@ class TestPostToAdoStage:
 
     def test_dry_run_short_circuits(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=True)
-        builder.write_json(artifacts.severity, self.DOC)
         ctx = _stage_context(cfg, artifacts, MagicMock())
+        ctx.final = self.DOC
         called = []
         monkeypatch.setattr(
             "reviewforge.pipeline.stages.post_to_ado.call_helper",
@@ -1010,7 +1010,6 @@ class TestPostToAdoStage:
 
     def test_preserves_existing_final_findings(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=False)
-        builder.write_json(artifacts.severity, {"summary": "ok", "findings": []})
         builder.write_json(
             artifacts.final,
             {
@@ -1035,6 +1034,7 @@ class TestPostToAdoStage:
             encoding="utf-8",
         )
         ctx = _stage_context(cfg, artifacts, MagicMock())
+        ctx.final = builder.read_json(artifacts.final)
         called = []
         monkeypatch.setattr(
             "reviewforge.pipeline.stages.post_to_ado.call_helper",
@@ -1052,12 +1052,12 @@ class TestPostToAdoStage:
 
     def test_posting_calls_helper_and_records(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=False)
-        builder.write_json(artifacts.severity, self.DOC)
         artifacts.dir.joinpath("posted-findings.json").write_text(
             json.dumps({"created": 1, "skipped": 0, "comments": []}),
             encoding="utf-8",
         )
         ctx = _stage_context(cfg, artifacts, MagicMock())
+        ctx.final = self.DOC
         called = []
         monkeypatch.setattr(
             "reviewforge.pipeline.stages.post_to_ado.call_helper",
@@ -1070,20 +1070,17 @@ class TestPostToAdoStage:
         assert result.details == {"posted": {"created": 1, "skipped": 0, "comments": []}, "findings": 1}
         assert ctx.posted == {"created": 1, "skipped": 0, "comments": []}
 
-    def test_loads_existing_severity_from_artifact(self, cfg, artifacts, monkeypatch):
+    def test_posts_context_document_without_fragment_artifact(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=True)
-        builder.write_json(artifacts.severity, self.DOC)
         ctx = _stage_context(cfg, artifacts, MagicMock())
-        ctx.severity = None  # Force stage to read from artifact
+        ctx.final = self.DOC
         monkeypatch.setattr(
             "reviewforge.pipeline.stages.post_to_ado.call_helper",
             lambda *a, **k: None,
         )
         result = PostToAdoStage()(ctx)
         assert result.status == StageStatus.OK
-        assert ctx.severity is not None
-        assert ctx.severity == self.DOC
-
+        assert ctx.final == self.DOC
 
 # ---------------------------------------------------------------------------
 # CollectContextStage extras

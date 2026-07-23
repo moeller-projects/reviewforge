@@ -276,37 +276,27 @@ class TestRunPostOnly:
         with pytest.raises(ReviewForgeError):
             run_post_only(cfg, input_path=tmp_path / "missing.json")
 
-    def test_copies_input_to_severity_and_final(self, cfg, tmp_path, monkeypatch):
+    def test_posts_input_without_fragment_artifacts(self, cfg, tmp_path, monkeypatch):
         payload = {
             "summary": "ok",
-            "findings": [
-                {
-                    "severity": "major",
-                    "title": "T",
-                    "message": "M",
-                    "suggestion": "Fix it.",
-                    "evidence": {
-                        "changedLines": [1],
-                        "whyNewInThisPr": "Introduced by the change.",
-                    },
-                }
-            ],
+            "findings": [{
+                "severity": "major", "title": "T", "message": "M", "suggestion": "Fix it.",
+                "evidence": {"changedLines": [1], "whyNewInThisPr": "Introduced by the change."},
+            }],
         }
         input_path = tmp_path / "review.json"
         input_path.write_text(json.dumps(payload), encoding="utf-8")
         recorded = []
 
         def fake_run(stages_list, ctx):
-            # Validate the artifacts now match the input.
-            assert builder.read_json(ctx.artifacts.severity) == payload
-            assert builder.read_json(ctx.artifacts.final) == payload
+            assert ctx.final == payload
+            assert not ctx.artifacts.severity.exists()
+            assert not ctx.artifacts.final.exists()
             recorded.extend(s.name for s in stages_list)
             return []
 
         monkeypatch.setattr(orchestrator, "run_stages", fake_run)
-        monkeypatch.setattr(
-            orchestrator, "POST_ONLY_PIPELINE", [_make_stub("p1"), _make_stub("p2")]
-        )
+        monkeypatch.setattr(orchestrator, "POST_ONLY_PIPELINE", [_make_stub("p1"), _make_stub("p2")])
         outcome = run_post_only(cfg, input_path=input_path)
         assert outcome.exit_code == 0
         assert recorded == ["p1", "p2"]

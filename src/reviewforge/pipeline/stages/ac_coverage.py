@@ -174,17 +174,11 @@ class AcceptanceCriteriaCoverageStage(Stage):
             }
 
         findings = uncovered_findings(uncovered)
-        # Append to the final review doc. The post stage reads this same
-        # file, so the AC findings flow through the existing posting
-        # pipeline (general-thread path, dedupe, vote, etc.).
-        final = read_json(artifacts.final) if artifacts.final.exists() else None
-        if final is None:
-            # Backstop: copy from severity if final is missing.
-            final = read_json(artifacts.severity) if artifacts.severity.exists() else {"summary": "", "findings": []}
+        # Keep AC findings in the postable document held on the context.
+        final = ctx.final or {"summary": "", "findings": []}
         before = len(final.get("findings", []))
         final.setdefault("findings", []).extend(findings)
         validate_review_doc(final)
-        write_json(artifacts.final, final)
         ctx.final = final
 
         _log(

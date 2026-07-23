@@ -63,8 +63,6 @@ class MultiStageReasoningEngine(ReasoningEngine):
         cfg = ctx.cfg
         started_at = time.time()
 
-        # Run the original Pi-driven stages in order. Each stage writes to
-        # ``ctx`` and the canonical artifact files for observability.
         stages = [
             BuildArtifactsStage(),
             ReconstructIntentStage(),
@@ -74,15 +72,23 @@ class MultiStageReasoningEngine(ReasoningEngine):
             ReviewDiffStage(),
             VerifyFindingsStage(),
             CalibrateSeverityStage(),
-            AcceptanceCriteriaCoverageStage(),
         ]
         results = run_stages(stages, ctx)
+        ctx.final = ctx.severity or {"summary": "", "findings": []}
+        results.extend(run_stages([AcceptanceCriteriaCoverageStage()], ctx))
         for result in results:
             if result.status == "failed":
                 raise ReasoningEngineError(
                     f"reasoning stage {result.name} failed",
                     details={"error": result.error or "", "stage": result.name},
                 )
+        if not cfg.debug_intermediates:
+            for path in (
+                ctx.artifacts.intent, ctx.artifacts.plan, ctx.artifacts.collected,
+                ctx.artifacts.digest, ctx.artifacts.candidate, ctx.artifacts.verified,
+                ctx.artifacts.severity,
+            ):
+                path.unlink(missing_ok=True)
 
         finished_at = time.time()
         final = ctx.final or {"summary": "", "findings": []}

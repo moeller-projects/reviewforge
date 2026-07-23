@@ -66,24 +66,12 @@ class TestMarkerContract:
 #
 # Quoted from AGENTS.md §4.4:
 #   Do not edit ARTIFACT_NAMES lightly. It is the stable contract.
-#   Add new files at the end; never rename or remove an entry.
-# ---------------------------------------------------------------------------
-
-
-# Snapshot of the canonical names in the order declared in
-# ``artifacts/manager.py``. Any drift here is a breaking change.
+# Snapshot of the canonical names after the explicit 0.3 artifact migration.
 CANONICAL_ARTIFACT_NAMES: tuple[str, ...] = (
     "metadata.json",
     "diff.patch",
     "changed-files.json",
     "commits.txt",
-    "intent.json",
-    "context-plan.json",
-    "collected-context.json",
-    "context-digest.json",
-    "candidate-findings.json",
-    "verified-findings.json",
-    "severity-findings.json",
     "final-findings.json",
     "posted-comments.json",
     "run-summary.json",

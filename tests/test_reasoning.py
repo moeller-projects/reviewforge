@@ -392,7 +392,7 @@ class TestSinglePiReasoningEngine:
         assert result.findings == []
         assert result.review_confidence.level == "high"
 
-    def test_synthesizes_intermediate_artifacts(self, tmp_path: Path):
+    def test_writes_only_canonical_and_projection_artifacts(self, tmp_path: Path):
         cfg = _cfg(tmp_path)
         pi = MagicMock()
         pi.run_json.side_effect = lambda p, s, out, st: builder.write_json(
@@ -401,20 +401,18 @@ class TestSinglePiReasoningEngine:
         pi.last_tokens = {}
         ctx = _stage_context(cfg, pi)
 
-        engine = SinglePiReasoningEngine()
-        engine.execute(ctx)
+        result = SinglePiReasoningEngine().execute(ctx)
 
-        assert ctx.artifacts.intent.exists()
-        assert ctx.artifacts.plan.exists()
-        assert ctx.artifacts.collected.exists()
-        assert ctx.artifacts.digest.exists()
-        assert ctx.artifacts.candidate.exists()
-        assert ctx.artifacts.verified.exists()
-        assert ctx.artifacts.severity.exists()
-
-        intent = builder.read_json(ctx.artifacts.intent)
-        assert intent["pr_intent"] == "Add a new helper."
-
+        assert ctx.artifacts.review_result.exists()
+        assert ctx.artifacts.final.exists()
+        assert not any(path.exists() for path in (
+            ctx.artifacts.intent, ctx.artifacts.plan, ctx.artifacts.collected,
+            ctx.artifacts.digest, ctx.artifacts.candidate, ctx.artifacts.verified,
+            ctx.artifacts.severity,
+        ))
+        assert builder.read_json(ctx.artifacts.review_result) == result.model_dump(
+            by_alias=True, exclude_none=False
+        )
         final = builder.read_json(ctx.artifacts.final)
         assert final["summary"] == "Clean change."
         assert final["findings"][0]["confidence"] == "high"
@@ -522,6 +520,25 @@ class TestMultiStageReasoningEngine:
         assert result.findings[0].severity == "minor"
         assert result.review_confidence.level == "high"
         assert result.metadata.model.reasoning_engine == "multi_stage"
+
+    def test_debug_intermediates_retains_multi_stage_fragments(self, tmp_path: Path, monkeypatch):
+        cfg = _cfg(tmp_path).with_overrides(debug_intermediates=True)
+        ctx = _stage_context(cfg, MagicMock())
+
+        def fake_run_stages(stages, c):
+            for path in (c.artifacts.intent, c.artifacts.plan, c.artifacts.collected, c.artifacts.digest, c.artifacts.candidate, c.artifacts.verified, c.artifacts.severity):
+                builder.write_json(path, {"summary": "", "findings": []})
+            c.intent = {"pr_intent": "debug", "risk_areas": []}
+            c.severity = {"summary": "", "findings": []}
+            return [StageResult(name=s.name, status=StageStatus.OK, started_at="t1", finished_at="t2", duration_ms=1) for s in stages]
+
+        monkeypatch.setattr("reviewforge.reasoning.multi_stage.run_stages", fake_run_stages)
+        MultiStageReasoningEngine().execute(ctx)
+        assert all(path.exists() for path in (
+            ctx.artifacts.intent, ctx.artifacts.plan, ctx.artifacts.collected,
+            ctx.artifacts.digest, ctx.artifacts.candidate, ctx.artifacts.verified,
+            ctx.artifacts.severity,
+        ))
 
     def test_execute_propagates_failure(self, tmp_path: Path, monkeypatch):
         cfg = _cfg(tmp_path)

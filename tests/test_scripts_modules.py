@@ -1176,8 +1176,8 @@ class TestStageRunner:
     def test_post_stage_dry_run_does_not_call_helper(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path, dry_run=True)
         artifacts = manager.create(cfg)
-        builder.write_json(artifacts.severity, {"summary": "ok", "findings": []})
         ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+        ctx.final = {"summary": "ok", "findings": []}
         called = []
         monkeypatch.setattr(
             "reviewforge.pipeline.stages.post_to_ado.call_helper",
@@ -1191,8 +1191,8 @@ class TestStageRunner:
     def test_post_stage_calls_helper_when_not_dry_run(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path, dry_run=False)
         artifacts = manager.create(cfg)
-        builder.write_json(artifacts.severity, {"summary": "ok", "findings": []})
         ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+        ctx.final = {"summary": "ok", "findings": []}
         called = []
         monkeypatch.setattr(
             "reviewforge.pipeline.stages.post_to_ado.call_helper",

@@ -129,16 +129,9 @@ def _make_stage_context(
     artifacts: Artifacts,
     pi: ModelRunner,
 ) -> StageContext:
-    """Build a fresh :class:`StageContext` populated with the legacy paths."""
+    """Build a fresh :class:`StageContext` for canonical review results."""
     ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=pi)
     ctx.extras["paths"] = {
-        "intent": artifacts.intent,
-        "plan": artifacts.plan,
-        "collected": artifacts.collected,
-        "digest": artifacts.digest,
-        "candidate": artifacts.candidate,
-        "verified": artifacts.verified,
-        "severity": artifacts.severity,
         "final": artifacts.final,
         "review_result": artifacts.review_result,
         "metadata": artifacts.metadata,
@@ -227,13 +220,8 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
-    # Persist the input as both the severity and final docs so PostToAdoStage
-    # reads the same shape it expects from the full pipeline.
     payload = read_json(input_path) or {"summary": "", "findings": []}
     validate_postable_review_doc(payload)
-    write_json(artifacts.severity, payload)
-    write_json(artifacts.final, payload)
-    ctx.severity = payload
     ctx.final = payload
 
     results = run_stages(POST_ONLY_PIPELINE, ctx)

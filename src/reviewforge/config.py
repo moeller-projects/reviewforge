@@ -224,6 +224,8 @@ class Config:
     #: intent/plan/digest/review/verify/calibrate flow for debugging,
     #: benchmarking, regression comparison, and emergency fallback.
     reasoning_engine: str = field(default="single_pi", compare=False)
+    #: Persist multi-stage fragment documents for debugging only.
+    debug_intermediates: bool = field(default=False, compare=False)
     #: Backward-compat alias. When ``True`` (or ``FAST_REVIEW=1``), equivalent
     #: to ``reasoning_engine = "single_pi"``.
     fast_review: bool = field(default=False, compare=False)
@@ -356,6 +358,7 @@ class Config:
             pi_session_id=pi_session_id,
             pi_session_enabled=pi_session_enabled,
             pi_session_clear=pi_session_clear,
+            debug_intermediates=is_true(os.getenv("DEBUG_INTERMEDIATES")),
             post_min_severity=post_min_severity,
             drop_low_confidence=drop_low_confidence,
             require_context_for=require_context_for,
@@ -727,6 +730,7 @@ def _build_from_sources(
         pi_session_id=pi_session_id,
         pi_session_enabled=pi_session_enabled,
         pi_session_clear=pi_session_clear,
+        debug_intermediates=is_true(cli_or_env("debug_intermediates", "DEBUG_INTERMEDIATES")),
     )
 
 

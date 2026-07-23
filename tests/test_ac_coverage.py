@@ -343,9 +343,8 @@ def _stage_ctx(tmp_path, *, dry_run=False, work_items=None, diff_text="", ac_cov
         artifacts.changed_files,
         [{"file": f} for f in ["src/foo.py"]],
     )
-    # Seed final-findings so the stage has something to append to.
-    builder.write_json(artifacts.final, {"summary": "ok", "findings": []})
     ctx = StageContext(cfg=cfg, artifacts=artifacts, state=None, pi=MagicMock())
+    ctx.final = {"summary": "ok", "findings": []}
     ctx.files_text = "src/foo.py\n"
     return ctx
 
@@ -385,7 +384,7 @@ class TestAcceptanceCriteriaCoverageStage:
         assert result.details["uncovered"] == 1
         assert result.details["appended"] == 1
 
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert len(final["findings"]) == 1
         f = final["findings"][0]
         assert f["file"] is None
@@ -410,7 +409,7 @@ class TestAcceptanceCriteriaCoverageStage:
         result = AcceptanceCriteriaCoverageStage()(ctx)
         assert result.status == "ok"
         assert result.details["uncovered"] == 0
-        assert builder.read_json(ctx.artifacts.final)["findings"] == []
+        assert ctx.final["findings"] == []
 
     def test_skips_when_no_work_items(self, tmp_path):
         ctx = _stage_ctx(tmp_path, work_items=[], diff_text="+ x\n")
@@ -446,35 +445,25 @@ class TestAcceptanceCriteriaCoverageStage:
         wi = {"id": 7, "title": "x", "acceptanceCriteria": "Update src/missing.py"}
         ctx = _stage_ctx(tmp_path, work_items=[wi], diff_text="+ x\n")
         # Pre-seed an existing finding.
-        builder.write_json(
-            ctx.artifacts.final,
-            {"summary": "ok", "findings": [
-                {"file": "x.py", "line": 1, "severity": "nit", "title": "old", "message": "m"}
-            ]},
-        )
+        ctx.final = {"summary": "ok", "findings": [
+            {"file": "x.py", "line": 1, "severity": "nit", "title": "old", "message": "m"}
+        ]}
         result = AcceptanceCriteriaCoverageStage()(ctx)
         assert result.status == "ok"
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert len(final["findings"]) == 2
         assert final["findings"][0]["title"] == "old"
         assert "Work item #7" in final["findings"][1]["title"]
 
-    def test_severity_findings_dropped_when_final_missing(self, tmp_path):
-        # Backstop: if final is missing but severity exists, fall back.
+    def test_fragment_findings_are_not_read_when_final_missing(self, tmp_path):
         wi = {"id": 7, "title": "x", "acceptanceCriteria": "Update src/missing.py"}
         ctx = _stage_ctx(tmp_path, work_items=[wi], diff_text="+ x\n")
-        ctx.artifacts.final.unlink()
-        builder.write_json(
-            ctx.artifacts.severity,
-            {"summary": "ok", "findings": [
-                {"file": "x.py", "line": 1, "severity": "nit", "title": "t", "message": "m"}
-            ]},
-        )
+        ctx.final = None
         result = AcceptanceCriteriaCoverageStage()(ctx)
         assert result.status == "ok"
-        # Original finding preserved + AC coverage finding appended.
-        final = builder.read_json(ctx.artifacts.final)
-        assert len(final["findings"]) == 2
+        # Only the new AC finding is present; fragments are never read.
+        final = ctx.final
+        assert len(final["findings"]) == 1
 
     def test_llm_second_pass_clears_false_positive(self, tmp_path):
         wi = {
@@ -496,7 +485,7 @@ class TestAcceptanceCriteriaCoverageStage:
         assert result.details["uncovered"] == 0
         assert result.details["llm_reassessed"] is True
         assert ctx.pi.run_json.called
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert final["findings"] == []
 
     def test_llm_second_pass_keeps_real_gap(self, tmp_path):
@@ -518,7 +507,7 @@ class TestAcceptanceCriteriaCoverageStage:
         assert result.status == "ok"
         assert result.details["uncovered"] == 1
         assert result.details["appended"] == 1
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert len(final["findings"]) == 1
         assert "LLM re-check: refund.ts not touched" in final["findings"][0]["message"]
 
@@ -541,7 +530,7 @@ class TestAcceptanceCriteriaCoverageStage:
         result = AcceptanceCriteriaCoverageStage()(ctx)
         assert result.status == "ok"
         assert result.details["uncovered"] == 1
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert len(final["findings"]) == 1
 
     def test_llm_max_acs_caps_calls(self, tmp_path):
@@ -564,7 +553,7 @@ class TestAcceptanceCriteriaCoverageStage:
         assert result.status == "ok"
         assert ctx.pi.run_json.call_count == 2
         assert result.details["uncovered"] == 3
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert len(final["findings"]) == 3
 
     def test_llm_disabled_by_default(self, tmp_path):
@@ -580,7 +569,7 @@ class TestAcceptanceCriteriaCoverageStage:
         assert result.status == "ok"
         assert result.details["uncovered"] == 1
         assert not ctx.pi.run_json.called
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert len(final["findings"]) == 1
 
     def test_no_llm_calls_when_all_covered(self, tmp_path):
@@ -619,5 +608,5 @@ class TestAcceptanceCriteriaCoverageStage:
         ctx.pi = _make_pi_runner([{"covered": False, "reason": "missing refund changes"}])
         result = AcceptanceCriteriaCoverageStage()(ctx)
         assert result.status == "ok"
-        final = builder.read_json(ctx.artifacts.final)
+        final = ctx.final
         assert "LLM re-check: missing refund changes" in final["findings"][0]["message"]

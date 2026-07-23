@@ -10,6 +10,6 @@ Paths and runs: `WORKSPACE`, `CLONE_ROOT`, `REVIEW_PROMPT_PATH`, `INTENT_PROMPT_
 
 Posting and context: `POST_MIN_SEVERITY`, `DROP_LOW_CONFIDENCE`, `REQUIRE_CONTEXT_FOR`, `MAX_FINDINGS`, `VOTE_WAITING_ON`, `FAIL_ON`, `CONTEXT_FILE_MAX_LINES`, `CONTEXT_SEARCH_MAX_MATCHES`, `COLLECT_CONTEXT_WORKERS`, `AC_COVERAGE_LLM`, `AC_COVERAGE_LLM_MAX_ACS`.
 
-Engine and session: `REASONING_ENGINE`, `FAST_REVIEW`, `PI_SESSION_ID`, `PI_SESSION_ENABLED`, `PI_SESSION_CLEAR`.
+Engine and session: `REASONING_ENGINE`, `FAST_REVIEW`, `DEBUG_INTERMEDIATES` (default `0`; retain multi-stage fragment documents under `raw/` for debugging), `PI_SESSION_ID`, `PI_SESSION_ENABLED`, `PI_SESSION_CLEAR`.
 
 Values are parsed by `Config`; boolean values accept `1`, `true`, `yes`, or `on` (case-insensitive).

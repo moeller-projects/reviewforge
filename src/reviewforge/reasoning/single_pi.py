@@ -165,9 +165,7 @@ class SinglePiReasoningEngine(ReasoningEngine):
             ) from exc
         validation_duration_ms = int((time.perf_counter() - validation_started) * 1000)
 
-        projection_started = time.perf_counter()
-        self._synthesize_intermediate_artifacts(result, ctx)
-        projection_duration_ms = int((time.perf_counter() - projection_started) * 1000)
+        projection_duration_ms = 0
         finished_at = time.time()
         result = self._enrich_metadata(result, cfg, started_at, finished_at, tokens)
         result.metrics = result.metrics.model_copy(
@@ -184,6 +182,7 @@ class SinglePiReasoningEngine(ReasoningEngine):
                 "changedFilesReviewed": len(getattr(ctx.state, "files", [])),
             }
         )
+        write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
         write_json(ctx.artifacts.final, review_result_to_final_doc(result))
         return result
 
@@ -216,101 +215,6 @@ class SinglePiReasoningEngine(ReasoningEngine):
         )
         return result
 
-    @staticmethod
-    def _synthesize_intermediate_artifacts(result: ReviewResult, ctx: StageContext) -> None:
-        """Write the legacy intermediate artifact files from a rich result.
-
-        The single-call engine does not run the individual multi-stage steps,
-        but downstream tooling and reviewers expect the same artifact layout.
-        We synthesize the best-effort equivalents from the returned
-        ``ReviewResult``.
-        """
-        pr_intent = result.pr_summary.intent or result.review_summary.summary
-
-        intent_doc = {
-            "pr_intent": pr_intent,
-            "changed_behaviors": [],
-            "risk_areas": [r for r in result.pr_summary.risk_assessment.splitlines() if r],
-        }
-        write_json(ctx.artifacts.intent, intent_doc)
-
-        files_read: list[dict[str, str]] = []
-        tests_read: list[str] = []
-        work_items_read: list[str] = []
-        seen_files: set[str] = set()
-        for f in result.findings:
-            ev = f.evidence
-            for path in ev.relatedFiles:
-                if path and path not in seen_files:
-                    seen_files.add(path)
-                    files_read.append({"path": path, "reason": "related to finding"})
-            for t in ev.testsRead:
-                if t and t not in tests_read:
-                    tests_read.append(t)
-            for w in ev.workItems:
-                if w and w not in work_items_read:
-                    work_items_read.append(w)
-            for sym in ev.symbols:
-                if sym.file and sym.file not in seen_files:
-                    seen_files.add(sym.file)
-                    files_read.append({"path": sym.file, "reason": f"symbol {sym.name}"})
-
-        plan_doc = {
-            "pr_intent": pr_intent,
-            "files_to_read": files_read,
-            "searches_to_run": [],
-            "tests_to_inspect": tests_read,
-        }
-        write_json(ctx.artifacts.plan, plan_doc)
-
-        collected_doc = {
-            "files": [{"path": item["path"], "content": ""} for item in files_read],
-            "tests": tests_read,
-            "searches": [],
-        }
-        write_json(ctx.artifacts.collected, collected_doc)
-
-        digest_doc = {
-            "relevant_context": [],
-            "possible_intentional_choices": result.pr_summary.positive_observations,
-            "context_gaps": [u.topic for u in result.uncertainties],
-        }
-        write_json(ctx.artifacts.digest, digest_doc)
-
-
-        legacy_findings = []
-        for f in result.findings:
-            ev = f.evidence
-            context_files = list(
-                dict.fromkeys(
-                    list(ev.relatedFiles) + list(ev.testsRead) + list(ev.workItems)
-                )
-            )
-            legacy_findings.append(
-                {
-                    "title": f.title,
-                    "message": f"{f.observation} {f.impact} {f.recommendation}".strip(),
-                    "severity": f.severity,
-                    "file": f.file,
-                    "line": f.line,
-                    "confidence": f.confidence,
-                    "contextBasis": f.contextBasis,
-                    "suggestion": f.recommendation,
-                    "evidence": {
-                        "changedLines": list(ev.changedLines),
-                        "contextFilesRead": context_files,
-                        "whyNewInThisPr": ev.whyNewInThisPr,
-                        "whyNotIntentional": ev.whyNotIntentional,
-                        "classification": ev.classification,
-                    },
-                }
-            )
-
-        review_doc = {"summary": result.review_summary.summary, "findings": legacy_findings}
-        write_json(ctx.artifacts.candidate, review_doc)
-        write_json(ctx.artifacts.verified, review_doc)
-        write_json(ctx.artifacts.severity, review_doc)
-        write_json(ctx.artifacts.final, review_result_to_final_doc(result))
 
 
 register_engine(SinglePiReasoningEngine().name, SinglePiReasoningEngine)

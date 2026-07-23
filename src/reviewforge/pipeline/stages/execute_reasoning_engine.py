@@ -23,9 +23,11 @@ class ExecuteReasoningEngineStage(Stage):
         result = engine.execute(ctx)
         ctx.review_result = result
 
-        write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
-        final_doc = review_result_to_final_doc(result)
-        write_json(ctx.artifacts.final, final_doc)
+        if not ctx.artifacts.review_result.exists():
+            write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
+        final_doc = ctx.final or review_result_to_final_doc(result)
+        if not ctx.artifacts.final.exists():
+            write_json(ctx.artifacts.final, final_doc)
         ctx.final = final_doc
 
         return {

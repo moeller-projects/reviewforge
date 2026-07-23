@@ -7,7 +7,6 @@ uses the isolated ``python -m reviewforge.ado.cli`` subprocess helper.
 from __future__ import annotations
 
 import json
-import shutil
 import sys
 from typing import Any
 
@@ -33,17 +32,14 @@ class PostToAdoStage(Stage):
 
     def run(self, ctx: StageContext) -> dict[str, Any]:
         cfg = ctx.cfg
-        if ctx.severity is None and ctx.artifacts.severity.exists():
-            ctx.severity = read_json(ctx.artifacts.severity) or {"summary": "", "findings": []}
-        # Preserve any existing final doc. Earlier stages may have already
-        # appended extra findings to ``final-findings.json`` (for example,
-        # AC coverage findings). Only fall back to severity when final is
-        # missing, which covers the post-only path and standalone use.
-        if ctx.artifacts.final.exists():
-            ctx.final = read_json(ctx.artifacts.final) or {"summary": "", "findings": []}
-        else:
-            shutil.copyfile(ctx.artifacts.severity, ctx.artifacts.final)
-            ctx.final = read_json(ctx.artifacts.final) or {"summary": "", "findings": []}
+        if ctx.final is None:
+            if ctx.review_result is None:
+                raise RuntimeError("[review][ERROR] no postable review document in context")
+            from ..projection import review_result_to_final_doc
+            ctx.final = review_result_to_final_doc(ctx.review_result)
+        if not ctx.artifacts.final.exists():
+            from ...artifacts.builder import write_json
+            write_json(ctx.artifacts.final, ctx.final)
 
         validate_postable_review_doc(ctx.final)
         if cfg.dry_run:
