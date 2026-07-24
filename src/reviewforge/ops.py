@@ -203,7 +203,7 @@ def cmd_run_open_prs(args: argparse.Namespace) -> int:
     selected.sort(key=lambda item: (item[0], str(item[1].get("repositoryId", "")), str(item[1].get("targetRefName", "")), int(item[1]["pullRequestId"])))
     if args.max_pull_requests:
         selected = selected[:args.max_pull_requests]
-    selected = _select_pull_requests(selected, args.interactive or (sys.stdin.isatty() and sys.stdout.isatty()))
+    selected = _select_pull_requests(selected, args.interactive)
     if args.build:
         build = argparse.Namespace(**vars(args), pi_version=None, uv_version=None)
         if cmd_build(build):

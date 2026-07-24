@@ -151,6 +151,45 @@ class TestSelectPullRequests:
     def test_non_interactive_returns_all(self):
         assert ops._select_pull_requests(self._items(), interactive=False) == self._items()
 
+    def test_cmd_run_open_prs_does_not_prompt_when_tty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(
+                cmd,
+                0,
+                '[{"pullRequestId": 1, "repositoryId": "r", "targetRefName": "refs/heads/main", "title": "t1", "isDraft": false}, {"pullRequestId": 2, "repositoryId": "r", "targetRefName": "refs/heads/main", "title": "t2", "isDraft": false}]',
+                "",
+            ),
+        )
+
+        class _TTY:
+            @staticmethod
+            def isatty() -> bool:
+                return True
+
+        monkeypatch.setattr(ops.sys, "stdin", _TTY())
+        monkeypatch.setattr(ops.sys, "stdout", _TTY())
+        monkeypatch.setattr("builtins.input", lambda _prompt: (_ for _ in ()).throw(AssertionError("prompted")))
+        selected: list[str] = []
+        monkeypatch.setattr(ops, "cmd_run", lambda args: selected.append(args.pr_id) or 0)
+        args = ops.parser().parse_args(
+            [
+                "run-open-prs",
+                "--env-file",
+                str(tmp_path / ".env"),
+                "--organization",
+                "contoso",
+                "--projects",
+                "P",
+                "--target-branches",
+                "main",
+            ]
+        )
+        assert ops.cmd_run_open_prs(args) == 0
+        assert selected == ["1", "2"]
+
+
     def test_all_and_none(self, monkeypatch, capsys):
         monkeypatch.setattr("builtins.input", lambda _prompt: "all")
         assert ops._select_pull_requests(self._items(), interactive=True) == self._items()
