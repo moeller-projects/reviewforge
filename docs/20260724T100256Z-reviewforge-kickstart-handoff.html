@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReviewForge Kickstart-Handoff</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, securityLevel: 'strict', theme: 'neutral' });
+  </script>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#5b6770; --line:#d8dee4; --accent:#155eef; --soft:#f5f8fb; --danger:#a4262c; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:16px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; color:var(--ink); background:#fff; }
+    main { max-width:1120px; margin:0 auto; padding:2rem 1.25rem 4rem; }
+    header { border-bottom:1px solid var(--line); padding-bottom:1.5rem; margin-bottom:2rem; }
+    h1,h2,h3 { line-height:1.2; }
+    h1 { font-size:clamp(2rem,5vw,3.3rem); margin:.3rem 0; }
+    h2 { margin-top:2.5rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }
+    h3 { margin-top:1.7rem; }
+    .eyebrow { color:var(--accent); font-weight:700; letter-spacing:.08em; text-transform:uppercase; font-size:.78rem; }
+    .subtitle { color:var(--muted); max-width:800px; }
+    .toolbar { display:flex; gap:.5rem; flex-wrap:wrap; margin:1rem 0; }
+    button { border:1px solid var(--line); border-radius:999px; background:#fff; padding:.45rem .8rem; cursor:pointer; font-weight:600; }
+    button.active { color:#fff; border-color:var(--accent); background:var(--accent); }
+    .panel { background:var(--soft); border:1px solid var(--line); border-radius:12px; padding:1rem 1.2rem; margin:1rem 0; }
+    .priority { border-left:5px solid var(--danger); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1rem; }
+    code, pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    code { background:#e7edf3; color:#17202a; padding:.1rem .3rem; border-radius:4px; }
+    pre { overflow:auto; background:#111827; color:#e5e7eb; border-radius:9px; padding:1rem; font-size:.86rem; }
+    pre code { background:transparent; color:inherit; padding:0; border-radius:0; }
+    .mermaid { background:#fff; border:1px solid var(--line); border-radius:9px; padding:1rem; overflow:auto; }
+    .loc { color:var(--muted); font-size:.84rem; }
+    .en { display:none; }
+    body.english .de { display:none; } body.english .en { display:block; }
+    body.english li.en, body.english p.en, body.english h2.en, body.english h3.en { display:block; }
+    body:not(.english) li.de, body:not(.english) p.de, body:not(.english) h2.de, body:not(.english) h3.de { display:block; }
+    footer { border-top:1px solid var(--line); margin-top:3rem; padding-top:1rem; color:var(--muted); font-size:.9rem; }
+    @media print { .toolbar { display:none; } main { max-width:none; } .panel { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">ReviewForge · Kickstart-Handoff · 2026-07-24</div>
+    <h1 class="de">Sicherer Einstieg für ReviewForge</h1>
+    <h1 class="en">ReviewForge safe-start handoff</h1>
+    <p class="subtitle de">Ein umsetzbarer Einstieg für neue Entwickler:innen und Operator:innen: installieren, konfigurieren, einen Review ohne Posting ausführen, Artefakte prüfen und erst danach ADO-Posting freischalten.</p>
+    <p class="subtitle en">An actionable starting point for new developers and operators: install, configure, run a no-post review, inspect artifacts, and only then enable ADO posting.</p>
+    <div class="toolbar" aria-label="Language selector">
+      <button id="de" class="active" type="button">Deutsch</button>
+      <button id="en" type="button">English</button>
+    </div>
+    <p class="loc">Default language: Deutsch · Source: <code>docs/reviewforge-deep-analysis.md</code>, current runtime code, and verified repository docs.</p>
+  </header>
+
+  <section>
+    <h2 class="de">1. Ziel und Erfolgsdefinition</h2><h2 class="en">1. Goal and definition of done</h2>
+    <div class="panel">
+      <p class="de">Du kannst einen einzelnen Pull Request reproduzierbar reviewen, ohne versehentlich Kommentare zu posten. Du verstehst danach den Artefaktbaum, den Default-Reasoning-Pfad <code>single_pi</code> und die Grenze zwischen Python-Orchestrierung, Pi-Subprozess und Azure DevOps.</p>
+      <p class="en">You can review one pull request reproducibly without accidentally posting comments. You understand the artifact tree, the default <code>single_pi</code> reasoning path, and the boundary between Python orchestration, the Pi subprocess, and Azure DevOps.</p>
+    </div>
+    <div class="grid">
+      <div class="panel"><strong>Done 1</strong><br><span class="de">Installation und Toolchain geprüft.</span><span class="en">Installation and toolchain verified.</span></div>
+      <div class="panel"><strong>Done 2</strong><br><span class="de">No-post Review erfolgreich ausgeführt.</span><span class="en">No-post review completed successfully.</span></div>
+      <div class="panel"><strong>Done 3</strong><br><span class="de">JSON, Summary und Logs geprüft.</span><span class="en">JSON, summary, and logs inspected.</span></div>
+      <div class="panel"><strong>Done 4</strong><br><span class="de">Posting erst nach manueller Prüfung aktiviert.</span><span class="en">Posting enabled only after manual inspection.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="de">2. Architektur in einem Bild</h2><h2 class="en">2. Architecture at a glance</h2>
+    <div class="mermaid">
+      graph TB
+        U[Developer / CI] --> C[reviewforge.cli.main]
+        C --> O[pipeline.orchestrator]
+        O --> P[Stage pipeline]
+        P --> F[Fetch ADO metadata]
+        P --> G[Prepare git repository and diff]
+        P --> R[Execute reasoning engine]
+        R --> S[single_pi default]
+        R --> M[multi_stage explicit legacy]
+        S --> PI[PiCliRunner / pi subprocess]
+        P --> V[Validate anchors]
+        P --> A[PostToAdoStage]
+        A --> API[Azure DevOps REST API]
+        O --> ART[per-run artifacts]
+    </div>
+    <p class="de">Der Produktionspfad ist bewusst physisch klein: <code>DEFAULT_PIPELINE</code> enthält Fetch, Repository-Vorbereitung, Engine, Anchor-Validierung und Posting. Das Modell liefert niemals ADO-Network-Side-Effects.</p>
+    <p class="en">The production path is intentionally physically small: <code>DEFAULT_PIPELINE</code> contains fetch, repository preparation, engine execution, anchor validation, and posting. The model never performs ADO/network side effects.</p>
+  </section>
+
+  <section>
+    <h2 class="de">3. Erster Durchlauf: Tutorial</h2><h2 class="en">3. First run: tutorial</h2>
+    <h3 class="de">3.1 Umgebung installieren</h3><h3 class="en">3.1 Install the environment</h3>
+    <pre><code>uv venv
+. .venv/bin/activate
+uv sync --extra dev</code></pre>
+    <p class="de">Zusätzlich erforderlich: <code>git</code>, <code>rg</code> (ripgrep) und die <code>pi</code>-CLI. <code>uv sync --extra dev</code> verwendet das Repository-Lockfile <code>uv.lock</code> und installiert die Entwicklungsabhängigkeiten reproduzierbar.</p>
+    <p class="en">Also required: <code>git</code>, <code>rg</code> (ripgrep), and the <code>pi</code> CLI. <code>uv sync --extra dev</code> uses the repository lockfile <code>uv.lock</code> and installs development dependencies reproducibly.</p>
+    <h3 class="de">3.2 Konfiguration setzen</h3><h3 class="en">3.2 Configure the run</h3>
+    <pre><code>export ADO_ORG="your-org"
+export ADO_PROJECT="your-project"
+export ADO_REPO_ID="your-repository-id"
+export PR_ID="123"
+export ADO_AUTH_TOKEN="..."
+
+# Optional: explizit kein Posting
+export DRY_RUN=1</code></pre>
+    <p class="de">Nutze für die vollständige Variablenliste <code>docs/reference/environment-variables.md</code>. Secrets gehören in die Umgebung oder ein lokales Secret-Management, nicht in Prompts oder Artefakte.</p>
+    <p class="en">Use <code>docs/reference/environment-variables.md</code> for the complete variable list. Keep secrets in the environment or local secret management, never in prompts or artifacts.</p>
+    <h3 class="de">3.3 No-post Review ausführen</h3><h3 class="en">3.3 Run a no-post review</h3>
+    <pre><code>uv run reviewforge review --no-post
+# alternativ:
+uv run python -m reviewforge review --no-post</code></pre>
+    <p class="de">Der Repository-Guide dokumentiert zusätzlich <code>uv run reviewforge review --dry-run</code>. Verwende <code>--no-post</code> als explizite Review-only-Grenze; <code>--dry-run</code> verhindert Posting ebenfalls, druckt aber die Findings als JSON.</p>
+    <p class="en">The repository guide also documents <code>uv run reviewforge review --dry-run</code>. Use <code>--no-post</code> as the explicit review-only boundary; <code>--dry-run</code> also prevents posting but prints findings as JSON.</p>
+  </section>
+
+  <section>
+    <h2 class="de">4. Datenfluss und sichtbare Workflows</h2><h2 class="en">4. Data flow and visible workflows</h2>
+    <div class="mermaid">
+      sequenceDiagram
+        participant CLI as CLI
+        participant OR as Orchestrator
+        participant ADO as ADO fetch
+        participant GIT as Git preparation
+        participant PI as Pi runner
+        participant FS as Artifacts
+        CLI->>OR: run_review_only(cfg)
+        OR->>FS: create per-run directory
+        OR->>ADO: fetch metadata, work items, threads
+        ADO-->>FS: metadata.json and context files
+        OR->>GIT: prepare branches and unified diff
+        GIT-->>FS: diff.patch, changed-files.json, commits.txt
+        OR->>PI: single_pi prompt + diff
+        PI-->>FS: raw JSON
+        OR->>FS: review-result.json and final-findings.json
+        OR-->>CLI: RunOutcome / exit code
+    </div>
+    <p class="de">Der Full-Review-Pfad fügt danach <code>ValidateAnchorsStage</code> und <code>PostToAdoStage</code> hinzu. Der Post-only-Pfad liest ein bestehendes Findings-Dokument und führt nur Fetch plus Posting aus.</p>
+    <p class="en">The full review path then adds <code>ValidateAnchorsStage</code> and <code>PostToAdoStage</code>. The post-only path reads an existing findings document and performs only fetch plus posting.</p>
+    <h3 class="de">Artefakte nach dem Lauf</h3><h3 class="en">Artifacts after the run</h3>
+    <pre><code>artifacts/pr-&lt;PR_ID&gt;/runs/&lt;RUN_ID&gt;/{
+  metadata.json
+  diff.patch
+  changed-files.json
+  commits.txt
+  review-result.json
+  final-findings.json
+  run-summary.json
+  run.log
+  raw/
+}</code></pre>
+  </section>
+
+  <section>
+    <h2 class="de">5. Nützliche Code-Anker mit exakten LOC</h2><h2 class="en">5. Useful code anchors with exact LOC</h2>
+    <p class="de">Diese Ausschnitte sind die schnellsten Einstiegspunkte beim Debugging.</p>
+    <p class="en">These excerpts are the fastest entry points when debugging.</p>
+    <h3><code>src/reviewforge/pipeline/orchestrator.py:156-178</code></h3>
+    <pre><code>156 def run_full(cfg: Config) -&gt; RunOutcome:
+157     """Run the full review pipeline (review + post)."""
+158     cfg.validate_files()
+159     artifacts = create_artifacts(cfg)
+160     configure_runlog(artifacts.run_log)
+161     log_info("run started")
+162     pi = create_model_runner(cfg)
+163     summary = new_run_summary(cfg, artifacts)
+164     ctx = _make_stage_context(cfg, artifacts, pi)
+165
+166     results = run_stages(DEFAULT_PIPELINE, ctx)
+167     _record_results(summary, results)
+168     exit_code = _exit_code_for(results)
+169     finalize = finalize_run_summary(
+170         summary,
+171         cfg=cfg,
+172         artifacts=artifacts,
+173         posted=ctx.posted,
+174         skipped_reason=ctx.skip_reason,
+175         exit_code=exit_code,
+176     )
+177     write_json(artifacts.summary, finalize)
+178     return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+
+    <h3><code>src/reviewforge/ai/runner.py:164-180</code></h3>
+    <pre><code>164     def _build_cmd(self, prompt_path: Path, instruction: str) -&gt; list[str]:
+165         """Compose the Pi CLI command, including session flags when enabled."""
+166         cmd = [
+167             "pi",
+168             *(["--no-session"] if not self.cfg.pi_session_enabled else []),
+169             *(["--session-id", self.session_id] if self.cfg.pi_session_enabled else []),
+170             *(["--clear-session"] if self.cfg.pi_session_clear else []),
+171             "--no-context-files",
+172             "--no-extensions",
+173             "--no-skills",
+174             "--no-prompt-templates",
+175             "--tools", "read,grep",
+176             "--model", self.cfg.pi_model,
+177             "--thinking", "medium",
+178             "--append-system-prompt", str(prompt_path),
+179             "-p", instruction,
+180         ]</code></pre>
+    <p class="de">Wichtig: Pi erhält nur die read/grep-Tools. Azure-DevOps-Credentials werden vor dem Subprozess entfernt.</p>
+    <p class="en">Important: Pi receives only the read/grep tools. Azure DevOps credentials are removed before spawning the subprocess.</p>
+
+    <h3><code>src/reviewforge/pipeline/stages/validate_anchors.py:31-45</code></h3>
+    <pre><code>31 for finding in ctx.final.get("findings", []):
+32     if is_work_item_finding(finding) or not finding.get("file") or not finding.get("line"):
+33         kept.append(finding)
+34         continue
+35     valid = int(finding["line"]) in mapper.line_set(str(finding["file"]))
+36     if valid:
+37         kept.append(finding)
+38     elif ctx.cfg.anchor_policy == "drop":
+39         dropped += 1
+40     else:
+41         downgraded += 1
+42         kept.append({**finding, "anchorDowngraded": True})</code></pre>
+    <p class="de">Das ist die Posting-Sicherheitsgrenze: ungültige Inline-Anker werden entweder verworfen oder explizit auf keine Line-Mapping-Verfügbarkeit herabgestuft.</p>
+    <p class="en">This is the posting safety boundary: invalid inline anchors are either dropped or explicitly downgraded to no-line-mapping availability.</p>
+  </section>
+
+  <section>
+    <h2 class="de">6. Lokalisierte Tests / localized tests</h2><h2 class="en">6. Localized tests</h2>
+    <p class="de">Die Tests sind absichtlich in Deutsch und Englisch beschrieben. Führe beide Varianten aus; die Befehle testen denselben Vertrag.</p>
+    <p class="en">The tests are intentionally described in German and English. Run both variants; the commands test the same contract.</p>
+    <div class="grid">
+      <div class="panel">
+        <h3 class="de">Deutsch: Smoke-Test</h3><h3 class="en">German: smoke test</h3>
+        <pre><code>uv run python -m reviewforge --help
+uv run reviewforge review --no-post</code></pre>
+        <ul class="de"><li>Erwartung: CLI-Hilfe endet ohne Traceback.</li><li>Erwartung: Review läuft ohne ADO-POST.</li><li>Erwartung: <code>run-summary.json</code> und Findings-Artefakte existieren.</li></ul>
+        <ul class="en"><li>Expected: CLI help exits without a traceback.</li><li>Expected: review completes without an ADO POST.</li><li>Expected: <code>run-summary.json</code> and findings artifacts exist.</li></ul>
+      </div>
+      <div class="panel">
+        <h3 class="de">Deutsch: gezielte Tests</h3><h3 class="en">English: focused tests</h3>
+        <pre><code>uv run --extra dev pytest -q tests/test_cli.py tests/test_orchestrator.py \
+  tests/test_reasoning.py tests/test_validate_anchors.py</code></pre>
+        <ul class="de"><li>Prüft CLI-Dispatch, Orchestrierung, Single-Pi-Schema und Anchor-Policy.</li></ul>
+        <ul class="en"><li>Covers CLI dispatch, orchestration, Single-Pi schema handling, and anchor policy.</li></ul>
+      </div>
+      <div class="panel">
+        <h3 class="de">Englisch: post-only contract</h3><h3 class="en">English: post-only contract</h3>
+        <pre><code>uv run reviewforge post --input path/to/final-findings.json</code></pre>
+        <ul class="de"><li>Nur nach JSON-Prüfung und in einer sicheren Test-ADO-Umgebung ausführen.</li></ul>
+        <ul class="en"><li>Run only after JSON inspection and in a safe test ADO environment.</li></ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="de">7. Guardrails und bekannte Risiken</h2><h2 class="en">7. Guardrails and known risks</h2>
+    <div class="panel priority">
+      <strong>P1</strong>
+      <p class="de">Die direkte Pi-Subprozess-Grenze <code>PiCliRunner.run_json</code> benötigt besondere Aufmerksamkeit: Timeout, ungültiges JSON, Repair-Call und Token-Parsing sind kritisch.</p>
+      <p class="en">The Pi subprocess boundary <code>PiCliRunner.run_json</code> needs special attention: timeout, invalid JSON, repair calls, and token parsing are critical.</p>
+    </div>
+    <ul>
+      <li><code>--no-post</code> für lokale Entwicklung verwenden.</li>
+      <li class="de">Keine ADO-Tokens in Prompt-Dateien, Findings oder Logs schreiben.</li><li class="en">Never write ADO tokens into prompt files, findings, or logs.</li>
+      <li class="de">Vor Änderungen an Stage-Outputs die Pydantic-Schemas und Projektionen prüfen.</li><li class="en">Before changing stage outputs, inspect the Pydantic schemas and projections.</li>
+      <li class="de">Artifact-Namen und <code>prb:&lt;dedupe-key&gt;</code>-Marker sind Kompatibilitätsverträge.</li><li class="en">Artifact names and <code>prb:&lt;dedupe-key&gt;</code> markers are compatibility contracts.</li>
+      <li class="de">Bei parallelen Pi-Workers keine Sessions teilen; die bestehenden Stage-Implementierungen erzeugen isolierte Session-IDs.</li><li class="en">Do not share Pi sessions across parallel workers; existing stages create isolated session IDs.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 class="de">8. Nächste Schritte für das Handoff</h2><h2 class="en">8. Handoff next steps</h2>
+    <ol>
+      <li class="de">Lokalen No-post Smoke-Test ausführen und Run-ID notieren.</li><li class="en">Run the local no-post smoke test and record the run ID.</li>
+      <li class="de"><code>run-summary.json</code>, <code>review-result.json</code> und <code>final-findings.json</code> vergleichen.</li><li class="en">Compare <code>run-summary.json</code>, <code>review-result.json</code>, and <code>final-findings.json</code>.</li>
+      <li class="de">Bei Fehlern zuerst <code>run.log</code>, danach Stage-Name und Artefaktpfad dokumentieren.</li><li class="en">For failures, capture <code>run.log</code>, the stage name, and the artifact path first.</li>
+      <li class="de">Erst nach Review der Findings und der Anchor-Mappings mit <code>post --input</code> posten.</li><li class="en">Only post with <code>post --input</code> after reviewing findings and anchor mappings.</li>
+      <li class="de">Für Architekturdetails den vollständigen Bericht <code>docs/reviewforge-deep-analysis.md</code> lesen.</li><li class="en">Read <code>docs/reviewforge-deep-analysis.md</code> for the full architecture analysis.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <p class="de">Dokumenttyp: user-facing kickstart handoff · Primärsprache: Deutsch · Englische Spiegeltexte enthalten · Mermaid-Diagramme werden beim Laden gerendert.</p>
+    <p class="en">Document type: user-facing kickstart handoff · Primary language: German · English mirror text included · Mermaid diagrams render on load.</p>
+    <p>Generated: 2026-07-24T10:02:56Z · Repository: ReviewForge</p>
+  </footer>
+</main>
+<script>
+  const de = document.getElementById('de');
+  const en = document.getElementById('en');
+  function setLanguage(language) {
+    document.body.classList.toggle('english', language === 'en');
+    de.classList.toggle('active', language !== 'en');
+    en.classList.toggle('active', language === 'en');
+    document.documentElement.lang = language === 'en' ? 'en' : 'de';
+  }
+  de.addEventListener('click', () => setLanguage('de'));
+  en.addEventListener('click', () => setLanguage('en'));
+</script>
+</body>
+</html>
