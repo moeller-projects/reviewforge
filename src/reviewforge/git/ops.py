@@ -85,11 +85,20 @@ def run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
 
 
 
+def _retry_command(cmd: list[str], attempt: int) -> list[str]:
+    """Select less failure-prone Git transport options for retries."""
+    if attempt == 1 or len(cmd) < 2 or cmd[:2] not in (["git", "fetch"], ["git", "checkout"]):
+        return cmd
+    retry = ["git", "-c", "http.version=HTTP/1.1", *cmd[1:]]
+    if cmd[1] == "fetch" and attempt >= 3 and "--filter=blob:none" not in retry:
+        retry.insert(retry.index("fetch") + 1, "--filter=blob:none")
+    return retry
+
 def run_logged_retry(desc: str, cmd: list[str], cwd: Path, *, attempts: int = 3) -> None:
-    """Run a logged command with a few retries for transient transport failures."""
+    """Retry commands with alternate Git transport and smaller pack variants."""
     for attempt in range(1, attempts + 1):
         try:
-            run_logged(desc, cmd, cwd)
+            run_logged(desc, _retry_command(cmd, attempt), cwd)
             return
         except GitOperationError:
             if attempt == attempts:
@@ -259,8 +268,8 @@ def prepare_repo(
         log(f"target {target_branch} -> {target_commit}")
         log(f"source {source_branch} -> {source_commit}")
         log(f"merge-base -> {base}")
-        run_logged("git checkout source", ["git", "checkout", source_commit], repo_dir)
         range_spec = _review_range(repo_dir, base, source_commit, reviewed_commit)
+        run_logged_retry("git checkout source", ["git", "checkout", source_commit], repo_dir)
         diff = run_git(repo_dir, "diff", "--unified=3", "--no-ext-diff", range_spec)
         files = [
             line for line in run_git(repo_dir, "diff", "--name-only", "--no-ext-diff", range_spec).splitlines()

@@ -129,6 +129,78 @@ class TestFetchRetries:
         assert sim.fetch_target_calls == 2
         git_ops.cleanup(state)
 
+    def test_retry_switches_fetch_to_http11(self, tmp_path, monkeypatch):
+        commands: list[list[str]] = []
+
+        def fake_run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
+            commands.append(cmd)
+            if len(commands) == 1:
+                raise GitOperationError("transient disconnect")
+
+        monkeypatch.setattr(git_ops, "run_logged", fake_run_logged)
+        git_ops.run_logged_retry(
+            "git fetch target",
+            ["git", "fetch", "--no-tags", "origin", "refs/heads/main"],
+            tmp_path,
+            attempts=2,
+        )
+
+        assert commands == [
+            ["git", "fetch", "--no-tags", "origin", "refs/heads/main"],
+            [
+                "git",
+                "-c",
+                "http.version=HTTP/1.1",
+                "fetch",
+                "--no-tags",
+                "origin",
+                "refs/heads/main",
+            ],
+        ]
+    def test_final_fetch_retry_requests_blobless_pack(self, tmp_path, monkeypatch):
+        commands: list[list[str]] = []
+
+        def fake_run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
+            commands.append(cmd)
+            if len(commands) < 3:
+                raise GitOperationError("transient disconnect")
+
+        monkeypatch.setattr(git_ops, "run_logged", fake_run_logged)
+        git_ops.run_logged_retry(
+            "git fetch target",
+            ["git", "fetch", "--no-tags", "--depth=200", "origin", "refs/heads/main"],
+            tmp_path,
+        )
+
+        assert commands[2] == [
+            "git",
+            "-c",
+            "http.version=HTTP/1.1",
+            "fetch",
+            "--filter=blob:none",
+            "--no-tags",
+            "--depth=200",
+            "origin",
+            "refs/heads/main",
+        ]
+    def test_checkout_retry_switches_transport_without_fetch_filter(self, tmp_path, monkeypatch):
+        commands: list[list[str]] = []
+
+        def fake_run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
+            commands.append(cmd)
+            if len(commands) < 3:
+                raise GitOperationError("promisor fetch disconnect")
+
+        monkeypatch.setattr(git_ops, "run_logged", fake_run_logged)
+        git_ops.run_logged_retry(
+            "git checkout source",
+            ["git", "checkout", "commit"],
+            tmp_path,
+        )
+
+        assert commands[1] == ["git", "-c", "http.version=HTTP/1.1", "checkout", "commit"]
+        assert commands[2] == commands[1]
+
 
 class TestRunGit:
     def test_failed_command_raises_git_operation_error(self, tmp_path, monkeypatch):
