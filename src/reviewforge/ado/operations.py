@@ -964,10 +964,9 @@ def main(argv: list[str] | None = None) -> int:
 def _build_diff_anchors(mapper: DiffLineMapper | None) -> dict[str, set[int]]:
     """Build ``{file_path: set_of_new_file_lines}`` from a diff mapper.
 
-    A ``None`` mapper (no diff.patch on disk) yields an empty mapping,
-    which causes every existing bot anchor to be flagged stale — the
-    safe failure mode, since we'd rather over-annotate than miss a
-    stale finding.
+    A missing mapper produces an empty mapping, but callers skip reconciliation
+    before invoking this helper. Missing diff data therefore fails closed:
+    existing bot anchors are not treated as stale without a current diff.
     """
     if mapper is None:
         return {}

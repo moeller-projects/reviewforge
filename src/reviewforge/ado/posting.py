@@ -235,6 +235,19 @@ def _thread_stale_marker(thread: dict[str, Any]) -> str | None:
     return None
 
 
+def _thread_is_actionable(thread: dict[str, Any]) -> bool:
+    """Return whether a thread can still benefit from stale-anchor notice.
+
+    A stale-anchor notice is useful only for unresolved discussions. Explicitly
+    terminal ADO states are ignored; unknown or missing states remain eligible
+    to preserve the existing conservative behavior.
+    """
+    if thread.get("isDeleted") or thread.get("thread_is_deleted"):
+        return False
+    status = str(thread.get("status") or "").casefold()
+    return status not in {"fixed", "wontfix", "closed"}
+
+
 def _stale_thread_entry(
     thread: dict[str, Any],
     existing_markers: set[str],
@@ -242,7 +255,7 @@ def _stale_thread_entry(
     just_posted: set[int | str],
 ) -> dict[str, Any] | None:
     thread_id = thread.get("id")
-    if thread_id is None or thread_id in just_posted:
+    if thread_id is None or thread_id in just_posted or not _thread_is_actionable(thread):
         return None
     finding_key = _thread_marker(thread)
     # A stale follow-up for this finding already exists → annotated before.
@@ -289,18 +302,19 @@ def find_stale_bot_threads(
 
 
 def stale_comment_body(*, short_sha: str | None = None, key: str | None = None) -> str:
-    """Return the canonical body of the "stale" follow-up comment.
+    """Return the canonical stale-anchor follow-up comment.
 
     When ``key`` is given, the body ends with the ``prb-stale:<key>`` marker on
-    its own line so a later run can tell this thread has already been annotated
-    and avoid appending a duplicate.
+    its own line so a later run can tell this thread has already been
+    annotated and avoid appending a duplicate.
     """
     sha = (short_sha or "").strip() or "current HEAD"
     marker_line = f"\n{stale_marker(key)}" if key else ""
     return (
-        "🤖 stale — this finding no longer anchors to a line that exists in "
-        f"the current diff at {sha}. The original comment is kept for "
-        "audit trail; resolve or close this thread once the discussion is done."
+        "🤖 stale anchor — this finding was posted against a line that is no "
+        "longer present in the current diff at "
+        f"{sha}. The original finding is preserved for context; re-evaluate "
+        "it against the new code before acting."
         + marker_line
     )
 

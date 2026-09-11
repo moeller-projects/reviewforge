@@ -134,6 +134,27 @@ class TestFindStaleBotThreads:
         assert len(stale) == 1
         assert stale[0]["reason"] == "file_no_longer_in_diff"
 
+    @pytest.mark.parametrize("status", ["fixed", "wontFix", "wontfix", "closed"])
+    def test_terminal_thread_status_is_not_stale(self, status):
+        thread = _bot_thread(1, "/src/app.py", 6, "abc123def456")
+        thread["status"] = status
+        stale = posting.find_stale_bot_threads(
+            [thread],
+            {"abc123def456"},
+            {"src/app.py": {1, 2, 3, 4, 5}},
+        )
+        assert stale == []
+
+    def test_deleted_thread_is_not_stale(self):
+        thread = _bot_thread(1, "/src/app.py", 6, "abc123def456")
+        thread["isDeleted"] = True
+        assert posting.find_stale_bot_threads(
+            [thread],
+            {"abc123def456"},
+            {"src/app.py": {1, 2, 3, 4, 5}},
+        ) == []
+
+
     def test_general_comment_never_stale(self):
         # Work-item findings are posted as general PR comments (no threadContext).
         threads = [{"id": 1, "threadContext": None, "comments": [
@@ -221,6 +242,8 @@ class TestFindStaleBotThreads:
 
     def test_append_stale_marker_when_key_given(self):
         body = posting.stale_comment_body(short_sha="abcdef12", key="abc123def456")
+        assert "stale anchor" in body
+        assert "re-evaluate it against the new code" in body
         assert f"\n{posting.stale_marker('abc123def456')}" in body
         # The marker sits on its own final line.
         assert body.rstrip().endswith(posting.stale_marker("abc123def456"))
@@ -374,6 +397,25 @@ class TestCommandPostFindingsStalePass:
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
         monkeypatch.setenv("ANNOTATE_STALE", "0")
+        monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
+        monkeypatch.delenv("FAIL_ON", raising=False)
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
+        assert rc == 0
+        client.add_comment.assert_not_called()
+
+    def test_missing_diff_skips_stale_reconciliation(self, tmp_path, monkeypatch):
+        findings_file = _findings_file(tmp_path, [])
+        out_file = tmp_path / "out.json"
+
+        bot_thread = _bot_thread(7, "/src/app.py", 6, "abc123def456")
+        client = MagicMock()
+        client.get_pr.return_value = {"reviewers": []}
+        client.get_threads.return_value = [bot_thread]
+
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("ANNOTATE_STALE", raising=False)
         monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
         monkeypatch.delenv("FAIL_ON", raising=False)
 
