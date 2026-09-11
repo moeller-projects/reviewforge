@@ -33,6 +33,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "graph-context.json",
     "comment-replies.json",
     "pi-invocations.json",
+    "review-scopes.json",
 )
 
 
@@ -69,6 +70,7 @@ class Artifacts:
     run_log: Path
     crg_analysis: Path
     graph_context: Path
+    review_scopes: Path
     pi_invocations: Path
 
     def as_dict(self) -> dict[str, str]:
@@ -96,6 +98,7 @@ class Artifacts:
             "run.log": str(self.run_log),
             "graph-context.json": str(self.graph_context),
             "crg-analysis.json": str(self.crg_analysis),
+            "review-scopes.json": str(self.review_scopes),
             "pi-invocations.json": str(self.pi_invocations),
         }
 
@@ -155,6 +158,7 @@ def create(cfg: Config) -> Artifacts:
         run_log=root / "run.log",
         crg_analysis=root / "crg-analysis.json",
         graph_context=root / "graph-context.json",
+        review_scopes=root / "review-scopes.json",
         pi_invocations=root / "pi-invocations.json",
     )
 

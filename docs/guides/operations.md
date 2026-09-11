@@ -30,6 +30,30 @@ are deduplicated and reviewed in displayed order.
 detached. Without it, generated runs include `--rm -d`; with it, they include
 `-d` without `--rm`.
 
+## Status, failures, and restart behavior
+
+Every stage writes an explicit outcome to `run.log`. Skipped stages include a
+reason, including `no_op` review runs such as “No new commits since the
+previous review.” The same reason is persisted in the stage entry in
+`run-summary.json`; failures include the captured error there as well.
+
+The ReviewForge process returns exit code `1` when a pipeline stage fails and
+exit code `0` when all stages complete without failure. Configuration and
+argument errors return `2`.
+
+Container runs are detached (`-d`). Therefore `reviewforge.ops run` reports
+whether Docker/Podman successfully started the container, not the eventual
+application exit code inside a detached container. Inspect the container
+status and the mounted `run.log`/`run-summary.json` for the review result.
+
+The PowerShell wrappers default to `--restart on-failure:3`. A restart policy
+retains the named container. On a later invocation, when the calculated
+container name already exists, the launcher leaves a running container alone
+and restarts a stopped container instead of attempting a duplicate `run`.
+Override the policy with `-Restart` / `--restart`; pass an empty PowerShell
+value or omit the option in Python to disable it. A restart policy cannot be
+combined with `--rm`, so restart-enabled runs retain their containers.
+
 ## PowerShell compatibility
 
 `build.ps1`, `run.ps1`, and `run-open-prs.ps1` now forward to the Python

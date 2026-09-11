@@ -13,7 +13,7 @@ from typing import Any
 
 from ...ai.prompts import review_instruction
 from ...artifacts.builder import read_json, write_json
-from ...git.chunker import build_chunks
+from ...git.chunker import build_chunks, build_scopes, scope_document
 from ...runlog import info as _log
 from ..cache import cache_key, load_cached_json, store_cached_json
 from ..stage import Stage, StageContext
@@ -107,13 +107,31 @@ def _merge_chunk_docs(
 
 def _run_chunks(ctx: StageContext, cfg: Any, chunks: list[Any], run_one: Any) -> dict[str, Any]:
     import os
-    max_workers = max(1, min(len(chunks), max(2, (os.cpu_count() or 2) // 2), 8))
+    max_workers = max(
+        1,
+        min(
+            len(chunks),
+            int(getattr(cfg, "scope_workers", 8) or 1),
+            max(2, (os.cpu_count() or 2) // 2),
+        ),
+    )
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
         for i, chunk in enumerate(chunks, 1):
             out = ctx.artifacts.dir / "raw" / f"chunk-{i}.json"
             out.parent.mkdir(parents=True, exist_ok=True)
-            futures[pool.submit(run_one, chunk.diff_text, chunk.files_text, out, f"chunk {i}/{len(chunks)}", chunk.truncated, _fork_runner(ctx, i))] = i
+            futures[
+                pool.submit(
+                    run_one,
+                    chunk.diff_text,
+                    chunk.files_text,
+                    out,
+                    f"chunk {i}/{len(chunks)}"
+                    + (f" ({chunk.scope_id})" if getattr(chunk, "scope_id", "") else ""),
+                    chunk.truncated,
+                    _fork_runner(ctx, i),
+                )
+            ] = i
         ordered = [None] * len(chunks)
         for future in as_completed(futures):
             ordered[futures[future] - 1] = future.result()
@@ -141,7 +159,9 @@ def _review_cache_key(ctx: StageContext, cfg: Any) -> str:
         ctx.artifacts.intent, ctx.artifacts.digest,
         ctx.extras.get("wi_context", []), ctx.extras.get("wi_comments_context", []),
         ctx.extras.get("thread_context", []), ctx.extras.get("review_context", {}),
+        ctx.extras.get("crg_analysis", {}), ctx.extras.get("graph_context", {}),
         cfg.disable_chunk_review, cfg.chunk_trigger_diff_bytes, cfg.max_diff_bytes,
+        getattr(cfg, "scope_workers", 8),
     ])
 
 
@@ -186,8 +206,27 @@ class ReviewDiffStage(Stage):
             return {"findings": len(cached.get("findings", [])), "chunks": cached.get("chunks", 0), "cached": True}
         if cfg.disable_chunk_review or diff_bytes <= cfg.chunk_trigger_diff_bytes:
             return _single_review(ctx, cfg, run_one, diff_bytes, review_cache_key)
-        _log("diff exceeds chunk trigger; splitting file-based chunks")
-        chunks, _truncated = build_chunks(ctx.state, cfg.max_diff_bytes)
+        _log("diff exceeds chunk trigger; planning review scopes")
+        crg = ctx.extras.get("crg_analysis")
+        graph_context = ctx.extras.get("graph_context")
+        if isinstance(crg, dict) and crg.get("status") in {"ok", "degraded"}:
+            chunks, _truncated = build_scopes(
+                ctx.state.diff_text,
+                list(getattr(ctx.state, "files", [])),
+                cfg.max_diff_bytes,
+                crg_analysis=crg,
+                graph_context=graph_context if isinstance(graph_context, dict) else None,
+            )
+        else:
+            chunks, _truncated = build_chunks(ctx.state, cfg.max_diff_bytes)
+        write_json(
+            ctx.artifacts.review_scopes,
+            scope_document(
+                chunks,
+                crg_used=isinstance(crg, dict) and crg.get("status") in {"ok", "degraded"},
+                max_bytes=cfg.max_diff_bytes,
+            ),
+        )
         _run_chunks(ctx, cfg, chunks, run_one)
         doc = read_json(ctx.artifacts.candidate) or {"summary": "", "findings": []}
         doc["findings"] = [_normalize_finding(f) for f in doc.get("findings", [])]
@@ -196,7 +235,7 @@ class ReviewDiffStage(Stage):
         ctx.candidate = doc
         return {
             "findings": len(doc.get("findings", [])),
-            "chunks": int(not (cfg.disable_chunk_review or diff_bytes <= cfg.chunk_trigger_diff_bytes)),
+            "chunks": len(doc.get("findings", [])),
         }
 
 

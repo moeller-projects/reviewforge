@@ -331,6 +331,8 @@ class Config:
     graph_api_diff: bool = field(default=False, compare=False)
     graph_flows: bool = field(default=False, compare=False)
     graph_arch: bool = field(default=False, compare=False)
+    #: Maximum concurrent CRG-aware review scopes. Defaults to eight.
+    scope_workers: int = field(default=8, compare=False)
     graph_context_max_bytes: int = field(default=12288, compare=False)
 
     # ------------------------------------------------------------------ env --
@@ -475,6 +477,7 @@ class Config:
             graph_api_diff=is_true(os.getenv("GRAPH_API_DIFF")),
             graph_flows=is_true(os.getenv("GRAPH_FLOWS")),
             graph_arch=is_true(os.getenv("GRAPH_ARCH")),
+            scope_workers=require_uint("REVIEW_SCOPE_WORKERS", os.getenv("REVIEW_SCOPE_WORKERS", "8")),
             graph_context_max_bytes=require_uint(
                 "GRAPH_CONTEXT_MAX_BYTES", os.getenv("GRAPH_CONTEXT_MAX_BYTES", "12288")
             ),
@@ -632,7 +635,7 @@ def _coerce_cli_value(field_name: str, value: Any) -> Any:
                       "ac_coverage_llm"}:
         return is_true(raw)
     if field_name in {"max_diff_bytes", "chunk_trigger_diff_bytes", "pi_timeout_secs",
-                      "ac_coverage_llm_max_acs"}:
+                      "ac_coverage_llm_max_acs", "scope_workers"}:
         return require_uint(field_name.upper(), raw)
     if field_name.endswith("_path") or field_name in {"workspace", "clone_root",
                                                       "review_artifact_root", "standards_path"}:
@@ -697,6 +700,7 @@ def _source_numbers(
         "context_search_max_matches": require_uint("CONTEXT_SEARCH_MAX_MATCHES", _source_value(cli, env, "context_search_max_matches", "CONTEXT_SEARCH_MAX_MATCHES", "40")),
         "collect_context_workers": require_uint("COLLECT_CONTEXT_WORKERS", _source_value(cli, env, "collect_context_workers", "COLLECT_CONTEXT_WORKERS", "8")),
         "ac_coverage_llm_max_acs": require_uint("AC_COVERAGE_LLM_MAX_ACS", _source_value(cli, env, "ac_coverage_llm_max_acs", "AC_COVERAGE_LLM_MAX_ACS", "10")),
+        "scope_workers": require_uint("REVIEW_SCOPE_WORKERS", _source_value(cli, env, "scope_workers", "REVIEW_SCOPE_WORKERS", "8")),
         "ado_retry_attempts": require_uint("ADO_RETRY_ATTEMPTS", _source_value(cli, env, "ado_retry_attempts", "ADO_RETRY_ATTEMPTS", "3")),
         "ado_retry_base_delay": float(_source_value(cli, env, "ado_retry_base_delay", "ADO_RETRY_BASE_DELAY", "1")),
         "ado_retry_cap_delay": float(_source_value(cli, env, "ado_retry_cap_delay", "ADO_RETRY_CAP_DELAY", "30")),
@@ -787,6 +791,7 @@ def _build_from_sources(
     context_file_max_lines = numbers["context_file_max_lines"]
     context_search_max_matches = numbers["context_search_max_matches"]
     collect_context_workers = numbers["collect_context_workers"]
+    scope_workers = numbers["scope_workers"]
     ac_coverage_llm_max_acs = numbers["ac_coverage_llm_max_acs"]
     ado_retry_attempts = numbers["ado_retry_attempts"]
     ado_retry_base_delay = numbers["ado_retry_base_delay"]
@@ -872,9 +877,9 @@ def _build_from_sources(
         pi_retry_cap_delay=pi_retry_cap_delay,
         model_backend=model_backend,
         context_file_max_lines=context_file_max_lines,
-        context_search_max_matches=context_search_max_matches,
         collect_context_workers=collect_context_workers,
         ac_coverage_llm=ac_coverage_llm,
+        scope_workers=scope_workers,
         ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
         ac_coverage_prompt_path=to_path(
             cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), str(DEFAULT_AC_COVERAGE_PROMPT_PATH)

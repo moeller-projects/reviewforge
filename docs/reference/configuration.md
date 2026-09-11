@@ -35,6 +35,8 @@ Precedence is CLI override > process environment > `.env` file for most fields. 
 
 Posting fields are `POST_MIN_SEVERITY`, `DROP_LOW_CONFIDENCE`, `REQUIRE_CONTEXT_FOR`, `MAX_FINDINGS`, `VOTE_WAITING_ON`, `FAIL_ON`, and `ANNOTATE_STALE`. `POST_MIN_SEVERITY` defaults to `none` in both the pipeline and the legacy `python -m reviewforge.ado.cli post-findings` helper. Other defaults are `DROP_LOW_CONFIDENCE=false`, `REQUIRE_CONTEXT_FOR` empty, `MAX_FINDINGS` unset, `VOTE_WAITING_ON=none`, `FAIL_ON=none`, and `ANNOTATE_STALE=1`. Setting `ANNOTATE_STALE=0` disables stale-anchor reconciliation.
 
+Large-diff review uses existing `CHUNK_TRIGGER_DIFF_BYTES` and `MAX_DIFF_BYTES` limits. When CRG-aware scopes are available, `REVIEW_SCOPE_WORKERS` bounds concurrent scope reviews and defaults to `8`; it is not a file-count trigger.
+
 AC coverage fields: `AC_COVERAGE_LLM=false`, `AC_COVERAGE_LLM_MAX_ACS=10`, and `AC_COVERAGE_PROMPT_PATH=/app/prompts/ac-coverage.md`. Prompt path variables are `REVIEW_PROMPT_PATH`, `INTENT_PROMPT_PATH`, `CONTEXT_PLAN_PROMPT_PATH`, `CONTEXT_DIGEST_PROMPT_PATH`, `VERIFY_PROMPT_PATH`, `SEVERITY_PROMPT_PATH`, `FAST_REVIEW_PROMPT_PATH`, `CHUNK_SYNTHESIS_PROMPT_PATH`, and `REVIEW_STANDARDS_PATH`. `COMMENT_TEMPLATE_PATH` optionally selects a custom Jinja2 Markdown comment formatter; see [ADO integration](ado-integration.md).
 
 Token aliases: `SYSTEM_ACCESSTOKEN`, `ADO_AUTH_TOKEN`, `ADO_MCP_AUTH_TOKEN`, `ADO_API_KEY`. PR identity aliases: `PR_ID`, `PR_URL`. `FAST_REVIEW=1` selects `single_pi` only when `REASONING_ENGINE` is unset; an explicit `REASONING_ENGINE` value wins.

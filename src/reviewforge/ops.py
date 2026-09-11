@@ -207,6 +207,33 @@ def _append_mounts(
             command.extend(["-e", f"{key}={value}"])
 
 
+def _container_name(args: argparse.Namespace) -> str | None:
+    overrides = _run_overrides(args)
+    return _value(args.container_name, "CONTAINER_NAME") or (
+        f"review-pr-{overrides['PR_ID']}" if overrides["PR_ID"] else None
+    )
+
+
+def _container_status(selected_runtime: str, name: str) -> str | None:
+    result = subprocess.run(
+        [
+            selected_runtime,
+            "ps",
+            "--all",
+            "--filter",
+            f"name=^{name}$",
+            "--format",
+            "{{.Status}}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise RuntimeError(f"[review][ERROR] failed to inspect container {name!r}")
+    return result.stdout.strip() or None
+
+
 def _append_run_options(
     command: list[str],
     args: argparse.Namespace,
@@ -220,7 +247,9 @@ def _append_run_options(
         else ["--network", "host"]
     )
     command.append("-d")
-    if not args.keep_container:
+    if args.restart:
+        command.extend(["--restart", args.restart])
+    elif not args.keep_container:
         command.append("--rm")
     name = _value(args.container_name, "CONTAINER_NAME") or (
         f"review-pr-{overrides['PR_ID']}" if overrides["PR_ID"] else None
@@ -267,6 +296,18 @@ def cmd_build(args: argparse.Namespace) -> int:
     if not args.dry_run:
         _assert_build_capable(command[0])
     return _execute(command, args.dry_run)
+def _reuse_existing_container(
+    args: argparse.Namespace, selected_runtime: str, name: str | None
+) -> int | None:
+    if not name or args.dry_run:
+        return None
+    status = _container_status(selected_runtime, name)
+    if not status:
+        return None
+    if status.lower().startswith("up "):
+        print(f"{selected_runtime} container {name} is already running")
+        return 0
+    return _execute([selected_runtime, "restart", name], args.print_command)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -274,6 +315,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         build = argparse.Namespace(**vars(args), pi_version=None, uv_version=None)
         if cmd_build(build):
             return 1
+    selected_runtime = runtime(args.runtime)
+    existing = _reuse_existing_container(args, selected_runtime, _container_name(args))
+    if existing is not None:
+        return existing
     command, env_file, temporary = run_command(args)
     try:
         return _execute(command, args.print_command)
@@ -426,6 +471,7 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--uv-version")
     build.add_argument("--dry-run", action="store_true")
     run = argparse.ArgumentParser(add_help=False, parents=[common])
+    run.add_argument("--restart", default=None, help="container restart policy, e.g. on-failure:3")
     run.add_argument("--pr-url")
     run.add_argument("--org")
     run.add_argument("--project")

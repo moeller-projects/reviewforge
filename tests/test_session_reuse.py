@@ -174,7 +174,7 @@ class TestSubprocessCommandShape:
         assert "--session-id" not in calls[0]
         assert "--clear-session" not in calls[0]
 
-    def test_chunked_single_pi_calls_share_session_id(self, cfg, tmp_path, monkeypatch):
+    def test_chunked_single_pi_calls_use_isolated_scope_sessions(self, cfg, tmp_path, monkeypatch):
         prompt = tmp_path / "fast.md"
         prompt.write_text("prompt", encoding="utf-8")
         cfg = replace(cfg, max_diff_bytes=55, fast_review_prompt_path=prompt, chunk_synthesis_prompt_path=prompt)
@@ -198,7 +198,9 @@ class TestSubprocessCommandShape:
         SinglePiReasoningEngine().execute(ctx)
 
         assert len(calls) == 3
-        assert all(cmd[cmd.index("--session-id") + 1] == "pr-42-review-r1" for cmd in calls)
+        sessions = [cmd[cmd.index("--session-id") + 1] for cmd in calls]
+        assert len(set(sessions[:2])) == 2
+        assert sessions[2] == "pr-42-review-r1"
 
 
 class TestSubsequentStageShorterInput:

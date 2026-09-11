@@ -304,14 +304,23 @@ def run_reply_only(cfg: Config) -> RunOutcome:
 
 def _record_results(summary: RunSummary, results: list) -> None:
     for r in results:
-        _log(f"stage {r.name} {r.status} in {r.duration_ms}ms")
+        reason = getattr(r, "reason", None)
+        if r.status == "skipped":
+            _log(f"stage {r.name} skipped: {reason}")
+        else:
+            _log(f"stage {r.name} {r.status} in {r.duration_ms}ms")
+        details = dict(r.details or {})
+        if r.error:
+            details.setdefault("error", r.error)
+        if reason:
+            details.setdefault("reason", reason)
         summary.add_stage(
             StageRecord(
                 name=r.name,
                 status=r.status,
                 started_at=r.started_at,
                 duration_ms=r.duration_ms,
-                details=r.details or {},
+                details=details,
                 token_usage=getattr(r, "token_usage", {}) or {},
             )
         )

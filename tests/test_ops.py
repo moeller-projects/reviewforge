@@ -247,6 +247,77 @@ class TestRunCommand:
         finally:
             Path(env_file).unlink(missing_ok=True)
 
+    def test_restart_policy_is_added_and_retains_container(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        args = _run_args(tmp_path, "--runtime", "docker", "--restart", "on-failure:3")
+        command, env_file, _temporary = ops.run_command(args)
+        try:
+            assert ["--restart", "on-failure:3"] == command[command.index("--restart"):command.index("--restart") + 2]
+            assert "--rm" not in command
+        finally:
+            Path(env_file).unlink(missing_ok=True)
+
+    def test_existing_running_named_container_is_reused(self, tmp_path, monkeypatch, capsys):
+        args = _run_args(tmp_path, "--runtime", "docker", "--container-name", "review-pr-7")
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="Up 2 minutes")
+
+        monkeypatch.setattr(ops.subprocess, "run", fake_run)
+        monkeypatch.setattr(ops, "_execute", lambda *_args: pytest.fail("must not launch a second container"))
+
+        assert ops.cmd_run(args) == 0
+        assert calls[0][:3] == ["docker", "ps", "--all"]
+        assert "already running" in capsys.readouterr().out
+
+    def test_existing_stopped_named_container_is_restarted(self, tmp_path, monkeypatch):
+        args = _run_args(tmp_path, "--runtime", "docker", "--container-name", "review-pr-7")
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="Exited (1) 2 minutes ago")
+
+        monkeypatch.setattr(ops.subprocess, "run", fake_run)
+        executed = []
+        monkeypatch.setattr(ops, "_execute", lambda command, preview: executed.append(command) or 0)
+
+        assert ops.cmd_run(args) == 0
+        assert executed == [["docker", "restart", "review-pr-7"]]
+
+
+    def test_existing_container_lookup_failure_is_reported(self, monkeypatch):
+        def failed_run(*_args, **_kwargs):
+            return subprocess.CompletedProcess([], 1, stdout="", stderr="daemon unavailable")
+
+        monkeypatch.setattr(ops.subprocess, "run", failed_run)
+        with pytest.raises(RuntimeError, match="failed to inspect container"):
+            ops._container_status("docker", "review-pr-7")
+
+    def test_missing_named_container_starts_new_container(self, tmp_path, monkeypatch):
+        args = _run_args(tmp_path, "--runtime", "docker", "--container-name", "review-pr-7")
+
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, stdout=""),
+        )
+        executed = []
+        monkeypatch.setattr(ops, "_execute", lambda command, preview: executed.append(command) or 0)
+
+        assert ops.cmd_run(args) == 0
+        assert executed and executed[0][:2] == ["docker", "run"]
+
+    def test_temporary_env_file_is_removed_when_command_build_fails(self, tmp_path, monkeypatch):
+        env_file = tmp_path / "absent.env"
+        args = _run_args(tmp_path)
+        monkeypatch.setattr(ops, "runtime", lambda _explicit: (_ for _ in ()).throw(RuntimeError("runtime down")))
+
+        with pytest.raises(RuntimeError, match="runtime down"):
+            ops.run_command(args)
+        assert not env_file.exists()
 
     def test_cache_dir_from_env_file_is_mounted_at_same_path(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))

@@ -10,7 +10,8 @@ param(
     [switch] $Interactive,
     [switch] $Build,
     [string] $EnvFile = ".env",
-    [switch] $KeepContainer
+    [switch] $KeepContainer,
+    [string] $Restart = "on-failure:3"
 )
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
@@ -25,5 +26,6 @@ if ($Interactive) { $args += "--interactive" }
 if ($DryRun) { $args += "--dry-run" }
 if ($Build) { $args += "--build" }
 if ($KeepContainer) { $args += "--keep-container" }
+if ($Restart) { $args += @("--restart", $Restart) }
 Invoke-ReviewForgeOps -Arguments $args
 exit $LASTEXITCODE

@@ -6,16 +6,16 @@ repair is tracked by ``PiRunner``. The model may read nearby files through
 read-only tools and returns a structured ``ReviewResult``. Compatibility
 artifacts are synthesized from the result.
 """
-from __future__ import annotations
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import time
 from typing import Any, Callable
 
 from pydantic import ValidationError
 
-from ..artifacts.builder import read_json
+from ..artifacts.builder import read_json, write_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
+from ..git.chunker import DiffChunk, build_scopes, scope_document
 from ..git import ops as git_ops
 from ..ado.posting import _normalize_title
 from ..pipeline.schemas import (
@@ -235,21 +235,32 @@ def _build_single_pi_instruction(ctx: StageContext) -> str:
         parts += ["\nUnified diff:\n", diff_text]
     return "\n".join(parts) + "\nReturn only the ReviewResult JSON object defined in the system prompt.\n"
 
-
 def _build_chunk_instruction(
     ctx: StageContext,
-    chunk: str,
+    scope: DiffChunk | str,
     index: int,
     total: int,
     *,
     include_shared_prefix: bool,
 ) -> str:
+    if isinstance(scope, str):
+        scope = DiffChunk(diff_text=scope, files_text="", scope_id=f"scope-{index:02d}")
     prefix = _build_single_pi_prefix(ctx) if include_shared_prefix or index == 1 else ""
+    scope_meta = [
+        f"Review scope {scope.scope_id or f'scope-{index:02d}'}/{total}.",
+        f"Primary files: {scope.files_text.strip() or '(none)'}",
+        f"Context-only files: {', '.join(scope.context_files) or '(none)'}",
+        f"Affected flows: {', '.join(scope.affected_flows) or '(none)'}",
+        f"Bridge files: {', '.join(scope.bridge_files) or '(none)'}",
+        "Report findings for primary files. Use context-only and bridge files "
+        "to understand behavior; do not duplicate findings for them.",
+        "Unified diff scope:",
+        scope.diff_text,
+    ]
     body = (
-        f"Review chunk {index}/{total} of the same PR diff. "
-        "Return only a JSON object with findings, test_gaps, uncertainties, "
+        "\n".join(scope_meta)
+        + "\nReturn only a JSON object with findings, test_gaps, uncertainties, "
         "escalation_hints, and discarded_findings; do not summarize the PR.\n"
-        f"Unified diff chunk:\n{chunk}"
     )
     return f"{prefix}\n\n{body}" if prefix else body
 
@@ -330,9 +341,10 @@ def _build_synthesis_instruction(
     """Build the whole-PR synthesis request; no diff is re-sent."""
     lines = [
         f"You reviewed this pull request in {chunk_count} coherent diff chunks.",
-        "Base the summaries on your prior chunk analyses in this session and the merged results below.",
+        "Base the synthesis on the merged scope results below. Scope workers "
+        "may use isolated sessions, so this merged data is authoritative.",
         "",
-        "Merged findings across all chunks:",
+        "Merged findings across all scopes:",
     ]
     lines.extend(
         _synthesis_lines(
@@ -347,18 +359,26 @@ def _build_synthesis_instruction(
     return "\n".join(lines)
 
 
-def _select_chunks(ctx: StageContext, diff_text: str) -> list[str]:
+def _select_chunks(ctx: StageContext, diff_text: str) -> list[DiffChunk]:
     cfg = ctx.cfg
+    files = list(getattr(ctx.state, "files", []) if ctx.state is not None else [])
     if cfg.disable_chunk_review:
         log_warning("DISABLE_CHUNK_REVIEW enabled; forcing single-pass reasoning")
-        return [diff_text]
+        return [DiffChunk(diff_text, "\n".join(files) + ("\n" if files else ""), scope_id="scope-01")]
     if len(diff_text.encode("utf-8")) <= cfg.chunk_trigger_diff_bytes:
-        return [diff_text]
+        return [DiffChunk(diff_text, "\n".join(files) + ("\n" if files else ""), scope_id="scope-01")]
     log_warning(
         f"diff exceeds CHUNK_TRIGGER_DIFF_BYTES ({cfg.chunk_trigger_diff_bytes}); "
-        "using chunked single-pi reasoning"
+        "using CRG-aware chunked single-pi reasoning"
     )
-    return _diff_chunks(diff_text, cfg.max_diff_bytes)
+    scopes, _ = build_scopes(
+        diff_text,
+        files,
+        cfg.max_diff_bytes,
+        crg_analysis=ctx.extras.get("crg_analysis"),
+        graph_context=ctx.extras.get("graph_context"),
+    )
+    return scopes
 
 
 def _format_validation_error(exc: Exception) -> str:
@@ -455,45 +475,87 @@ def _cap_and_order_hints(hints: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ordered[:3]
 
 
-def _chunked_pass(
-    engine: Any, ctx: StageContext, cfg: Any, chunks: list[str]
-) -> tuple[ReviewResult, list[TokenUsage]]:
+def _fork_scope_runner(ctx: StageContext, worker_id: int) -> Any:
+    if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
+        session_id = f"{ctx.pi.session_id}-scope-{worker_id}"
+        return type(ctx.pi)(ctx.pi.cfg.with_overrides(pi_session_id=session_id))
+    return ctx.pi
+
+
+def _review_scope(
+    ctx: StageContext,
+    cfg: Any,
+    scope: DiffChunk,
+    index: int,
+    total: int,
+) -> tuple[ChunkResult, TokenUsage]:
+    output_path = ctx.artifacts.raw_dir / f"fast-review-{index}.json"
+    runner = _fork_scope_runner(ctx, index)
+    before = _runner_usage(runner)
+    runner.run_json(
+        cfg.fast_review_prompt_path,
+        _build_chunk_instruction(ctx, scope, index, total, include_shared_prefix=True),
+        output_path,
+        f"single-pi chunk/scope {index}/{total}",
+    )
+    try:
+        partial = ChunkResult.model_validate(read_json(output_path))
+    except Exception as exc:
+        raise SchemaValidationError(
+            f"single-pi scope response does not match ChunkResult schema: "
+            f"{_format_validation_error(exc)}",
+            details={"scope_id": scope.scope_id, "output_path": str(output_path)},
+        ) from exc
+    after = _runner_usage(runner)
+    return partial, TokenUsage(
+        input=max(0, after.get("in", 0) - before.get("in", 0)),
+        output=max(0, after.get("out", 0) - before.get("out", 0)),
+        total=max(0, after.get("total", 0) - before.get("total", 0)),
+    )
+
+
+def _run_scope_workers(
+    ctx: StageContext, cfg: Any, scopes: list[DiffChunk]
+) -> list[tuple[ChunkResult, TokenUsage] | None]:
+    ordered: list[tuple[ChunkResult, TokenUsage] | None] = [None] * len(scopes)
+    workers = max(1, min(len(scopes), int(getattr(cfg, "scope_workers", 8) or 1)))
+    if type(ctx.pi).__name__ not in {"PiCliRunner", "PiRunner"}:
+        workers = 1
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_review_scope, ctx, cfg, scope, index, len(scopes)): index - 1
+            for index, scope in enumerate(scopes, 1)
+        }
+        for future in as_completed(futures):
+            ordered[futures[future]] = future.result()
+    return ordered
+
+
+def _merge_scope_results(
+    ordered: list[tuple[ChunkResult, TokenUsage] | None],
+) -> tuple[dict[str, Any], list[TokenUsage]]:
     state = _new_merge_state()
     usage: list[TokenUsage] = []
-    previous_tokens = _runner_usage(ctx.pi)
-    repeat_prefix = not cfg.pi_session_enabled or cfg.pi_session_clear
-    for index, chunk in enumerate(chunks, 1):
-        output_path = ctx.artifacts.raw_dir / f"fast-review-{index}.json"
-        ctx.pi.run_json(
-            cfg.fast_review_prompt_path,
-            _build_chunk_instruction(ctx, chunk, index, len(chunks), include_shared_prefix=repeat_prefix),
-            output_path,
-            f"single-pi chunk {index}/{len(chunks)}",
-        )
-        try:
-            partial = ChunkResult.model_validate(read_json(output_path))
-        except Exception as exc:
-            raise SchemaValidationError(
-                f"single-pi chunk response does not match ChunkResult schema: {_format_validation_error(exc)}",
-                details={"error": str(exc), "output_path": str(output_path)},
-            ) from exc
-        current = _runner_usage(ctx.pi)
-        usage.append(
-            TokenUsage(
-                input=max(0, current.get("in", 0) - previous_tokens.get("in", 0)),
-                output=max(0, current.get("out", 0) - previous_tokens.get("out", 0)),
-                total=max(0, current.get("total", 0) - previous_tokens.get("total", 0)),
-            )
-        )
-        previous_tokens = current
+    for item in ordered:
+        if item is None:
+            raise ReasoningEngineError("scope review completed without a result")
+        partial, tokens = item
+        usage.append(tokens)
         _merge_chunk(partial, state)
+    return state, usage
+
+
+def _chunked_pass(
+    engine: Any, ctx: StageContext, cfg: Any, scopes: list[DiffChunk]
+) -> tuple[ReviewResult, list[TokenUsage]]:
+    state, usage = _merge_scope_results(_run_scope_workers(ctx, cfg, scopes))
     findings = state["findings"]
     test_gaps = state["test_gaps"][:5]
     escalation_hints = _cap_and_order_hints(state["escalation_hints"])
     uncertainties = state["uncertainties"]
     discarded_findings = state["discarded_findings"]
     synthesis = engine._synthesize(
-        ctx, len(chunks), findings, uncertainties, test_gaps, escalation_hints, discarded_findings
+        ctx, len(scopes), findings, uncertainties, test_gaps, escalation_hints, discarded_findings
     )
     payload = (
         {
@@ -504,13 +566,13 @@ def _chunked_pass(
         }
         if synthesis is not None
         else {
-            "review_summary": {"summary": f"Reviewed {len(chunks)} coherent diff chunks."},
-            "verification_summary": {"summary": "Reviewed each deterministic unified-diff chunk.", "approach": "chunked diff review"},
+            "review_summary": {"summary": f"Reviewed {len(scopes)} coherent diff chunks."},
+            "verification_summary": {"summary": "Reviewed each deterministic diff scope.", "approach": "parallel scoped diff review"},
             "pr_summary": {
-                "intent": f"Pull request reviewed across {len(chunks)} unified-diff chunks.",
-                "work_type": "mixed",
-                "biggest_unknown": "chunk synthesis unavailable",
-                "implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks.",
+                "intent": f"Pull request reviewed across {len(scopes)} coherent scopes.",
+                "work_type": "change",
+                "biggest_unknown": "scope synthesis unavailable",
+                "implementation_summary": f"Reviewed {len(scopes)} coherent diff chunks.",
             },
         }
     )
@@ -710,7 +772,7 @@ def _merge_escalation(base: ReviewResult, focused: ReviewResult) -> ReviewResult
 
 def _update_metrics(
     result: ReviewResult, ctx: StageContext, started_at: float,
-    finished_at: float, reasoning_duration_ms: int, chunks: list[str], chunk_usage: list[TokenUsage],
+    finished_at: float, reasoning_duration_ms: int, chunks: list[DiffChunk], chunk_usage: list[TokenUsage],
 ) -> ReviewResult:
     tokens = _runner_usage(ctx.pi)
     escalation = ctx.extras.get("_escalation_usage") or {}
@@ -745,6 +807,16 @@ class SinglePiReasoningEngine(ReasoningEngine):
             ctx.artifacts.diff.read_text(encoding="utf-8") if ctx.artifacts.diff.exists() else ""
         )
         chunks = _select_chunks(ctx, diff_text)
+        crg = ctx.extras.get("crg_analysis")
+        crg_status = crg.get("status") if isinstance(crg, dict) else None
+        write_json(
+            ctx.artifacts.review_scopes,
+            scope_document(
+                chunks,
+                crg_used=crg_status in {"ok", "degraded"},
+                max_bytes=cfg.max_diff_bytes,
+            ),
+        )
         started_at = time.time()
         reasoning_started = time.perf_counter()
         if len(chunks) == 1:
