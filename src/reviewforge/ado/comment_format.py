@@ -108,43 +108,23 @@ def join_list(value: Any, sep: str = ", ") -> str:
 
 
 def fence(value: Any, language: str = "") -> str:
-    """Wrap ``value`` in a Markdown fenced code block.
-
-    Returns an empty string for falsy input or Jinja2 ``Undefined`` so
-    ``{{ suggestion | fence }}`` produces nothing when there is no
-    suggestion. ``language`` is appended after the opening fence
-    (e.g. ``fence(s, "ts")`` → `` ```ts ``).
-
-    The fence width adapts to the input: if the body already contains
-    a run of ``N`` backticks, the fence uses ``N+1`` backticks so the
-    block still terminates cleanly. This matches the smart-fence logic
-    in the original ``comment_body``.
-    """
+    """Wrap ``value`` in a Markdown fenced code block."""
     if value is None:
         return ""
-    # jinja2.Undefined
     try:
         body = str(value)
     except Exception:  # pragma: no cover - defensive
         return ""
+    body = body.rstrip()
     if not body or body.startswith("<undefined"):
         return ""
-    body = body.rstrip()
-    if not body:
-        return ""
-
-    longest = current = 0
-    for ch in body:
-        if ch == "`":
-            current += 1
-            if current > longest:
-                longest = current
-        else:
-            current = 0
+    longest = max((len(run) for run in re.findall(r"`+", body)), default=0)
     ticks = "`" * max(3, longest + 1)
     lang = language.strip()
     opener = f"{ticks}{lang}" if lang else ticks
     return f"{opener}\n{body}\n{ticks}"
+
+
 
 
 def marker_line(key: str) -> str:
@@ -176,6 +156,33 @@ class CommentFormatter(Protocol):
 
 # --- Default formatter (back-compat) ---------------------------------------
 
+def _meta_parts(formatter: DefaultCommentFormatter, finding: Mapping[str, Any]) -> list[str]:
+    meta_parts: list[str] = []
+    if confidence := finding.get("confidence"):
+        meta_parts.append(formatter._confidence_label(confidence))
+    if context_basis := finding.get("context_basis") or finding.get("contextBasis"):
+        meta_parts.append(f"basis: {formatter._context_basis_label(context_basis)}")
+    return meta_parts
+
+
+def _evidence_parts(evidence: Mapping[str, Any]) -> list[str]:
+    parts: list[str] = []
+    if evidence.get("whyNewInThisPr"):
+        parts.append(f"> **Why introduced by this PR:** {evidence['whyNewInThisPr']}")
+    if evidence.get("whyNotIntentional"):
+        parts.append(f"> **Why unlikely to be intentional:** {evidence['whyNotIntentional']}")
+    if evidence.get("changedLines"):
+        lines = ", ".join(str(line) for line in evidence["changedLines"][:20])
+        parts.append(f"> **Affected lines:** {lines}")
+    if evidence.get("contextFilesRead"):
+        files = join_list(list(evidence["contextFilesRead"])[:10])
+        parts.append(f"> **Context read:** {files}")
+    if evidence.get("threads"):
+        threads = join_list(list(evidence["threads"])[:10])
+        parts.append(f"> **Prior threads:** {threads}")
+    return parts
+
+
 @dataclass(frozen=True)
 class DefaultCommentFormatter:
     """The original hardcoded formatter.
@@ -194,64 +201,17 @@ class DefaultCommentFormatter:
         summary: str | None = None,  # noqa: ARG002 - accepted for API parity
     ) -> str:
         severity = str(finding.get("severity", ""))
-        title = finding.get("title", "")
-        confidence = finding.get("confidence")
-        context_basis = finding.get("context_basis") or finding.get("contextBasis")
         evidence = finding.get("evidence") or {}
-    
-        # ── Header ────────────────────────────────────────────────────────────
-        parts: list[str] = [
-            f"#### {SEVERITY_LABEL.get(severity, severity)} — {title}",
-        ]
-    
-        # ── Meta subtitle (confidence + context basis) ─────────────────────
-        meta_parts: list[str] = []
-        if confidence:
-            meta_parts.append(self._confidence_label(confidence))
-        if context_basis:
-            meta_parts.append(f"basis: {self._context_basis_label(context_basis)}")
-        if meta_parts:
+        parts = [f"#### {SEVERITY_LABEL.get(severity, severity)} — {finding.get('title', '')}"]
+        if meta_parts := _meta_parts(self, finding):
             parts.append(f"<sub>{' · '.join(meta_parts)}</sub>")
-    
-        parts.append("")
-    
-        # ── Message ────────────────────────────────────────────────────────
-        parts.append(truncate(finding.get("message", ""), 5000))
-    
-        # ── Evidence block ────────────────────────────────────────────────
-        evidence_parts: list[str] = []
-        if evidence.get("whyNewInThisPr"):
-            evidence_parts.append(
-                f"> **Why introduced by this PR:** {evidence['whyNewInThisPr']}"
-            )
-        if evidence.get("whyNotIntentional"):
-            evidence_parts.append(
-                f"> **Why unlikely to be intentional:** {evidence['whyNotIntentional']}"
-            )
-        if evidence.get("changedLines"):
-            lines = ", ".join(str(ln) for ln in evidence["changedLines"][:20])
-            evidence_parts.append(f"> **Affected lines:** {lines}")
-        if evidence.get("contextFilesRead"):
-            files = join_list(list(evidence["contextFilesRead"])[:10])
-            evidence_parts.append(f"> **Context read:** {files}")
-    
-        if evidence_parts:
+        parts.extend(["", truncate(finding.get("message", ""), 5000)])
+        if evidence_parts := _evidence_parts(evidence):
             parts.extend(["", *evidence_parts])
-    
-        # ── Suggested fix ─────────────────────────────────────────────────
         if finding.get("suggestion"):
-            parts.extend([
-                "",
-                "**Suggested fix:**",
-                "",
-                fence(finding["suggestion"]),
-            ])
-    
-        # ── Assemble, truncate, stamp ─────────────────────────────────────
-        body = "\n".join(parts)
-        body = truncate(body, max_chars - 64)
-        body += f"\n\n{_feedback_line(finding)}\n{marker_line(key)}"
-        return body
+            parts.extend(["", "**Suggested fix:**", "", fence(finding["suggestion"])])
+        body = truncate("\n".join(parts), max_chars - 64)
+        return f"{body}\n\n{_feedback_line(finding)}\n{marker_line(key)}"
     
     
     # ── Private label helpers (mirror the Jinja2 macros exactly) ──────────────
@@ -349,7 +309,7 @@ class TemplateCommentFormatter:
             "severity": severity,
             "severity_label": SEVERITY_LABEL.get(severity, severity),
             "confidence": str(finding.get("confidence") or ""),
-            "context_basis": str(finding.get("contextBasis") or ""),
+            "context_basis": str(finding.get("contextBasis") or finding.get("context_basis") or ""),
             "suggestion": str(finding.get("suggestion") or ""),
             "file": str(finding.get("file") or ""),
             "line": finding.get("line"),

@@ -19,4 +19,6 @@ Container build and review orchestration currently requires PowerShell and repea
 
 ## Impact
 
+
+The batch operator workflow is extended so interactive selection accepts exact pull-request IDs, while container retention is corrected to remove only automatic cleanup and preserve detached execution.
 - Docker build arguments, Azure Pipelines, GitHub Actions, root PowerShell wrappers, tests, and operator documentation.

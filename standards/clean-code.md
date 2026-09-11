@@ -14,6 +14,9 @@
 * Security-sensitive code must fail closed, not open.
 * Authorization, authentication, and permission checks must not be weakened.
 * Data parsing must handle malformed, empty, partial, or unexpected input.
+* Database migrations and schema changes are reversible or explicitly guarded; destructive writes (drops, truncates, mass updates/deletes without a narrowing WHERE) require evident justification.
+* Data ingestion paths handle malformed, duplicate, and out-of-order input.
+* Billing, payment, and revenue-affecting code paths fail closed and are covered by tests.
 
 ## Clarity & structure
 

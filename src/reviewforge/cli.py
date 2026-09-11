@@ -23,6 +23,7 @@ from .config import Config, ConfigError
 from .exceptions import ReviewForgeError, emit_domain_error
 from .pipeline.orchestrator import (
     run_post_only,
+    run_reply_only,
     run_review_only,
     run_full,
 )
@@ -105,6 +106,7 @@ def _build_config(args: argparse.Namespace) -> Config:
         "review_language", "review_artifact_dir", "review_run_id",
         "pi_session_id", "pi_session_enabled", "pi_session_clear",
         "dry_run", "force_review", "force_full_review", "fast_review", "reasoning_engine",
+        "reply_comments",
     ):
         v = getattr(args, field, None)
         if v not in (None, ""):
@@ -158,6 +160,17 @@ def cmd_post(args: argparse.Namespace) -> int:
         print("[review][ERROR] --input is required for `post`", file=sys.stderr)
         return 2
     outcome = run_post_only(cfg, input_path=Path(args.input))
+    return outcome.exit_code
+
+
+def cmd_reply(args: argparse.Namespace) -> int:
+    cfg = _build_config(args)
+    problems = cfg.validate_for_command("reply")
+    if problems:
+        for p in problems:
+            print(f"[review][ERROR] {p}", file=sys.stderr)
+        return 2
+    outcome = run_reply_only(cfg)
     return outcome.exit_code
 
 
@@ -257,9 +270,9 @@ def cmd_validate_config(args: argparse.Namespace) -> int:
         for p in problems:
             print(f"[review][ERROR] {p}", file=sys.stderr)
         return 1
-    if command in {"review", "post"}:
+    if command in {"review", "post", "reply"}:
         try:
-            cfg.validate_files()
+            cfg.validate_files(include_reply_prompt=cfg.reply_comments and command in {"review", "reply"})
         except ConfigError as exc:
             print(f"[review][ERROR] {exc}", file=sys.stderr)
             return 1
@@ -301,7 +314,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate findings only; do not post to ADO",
     )
+    review.add_argument(
+        "--no-reply",
+        dest="reply_comments",
+        action="store_false",
+        default=None,
+        help="Do not answer pending human replies on bot threads (env: REPLY_COMMENTS)",
+    )
     review.set_defaults(func=cmd_review, _command="review")
+    reply = sub.add_parser(
+        "reply",
+        parents=[common],
+        help="Answer pending human replies on bot comment threads.",
+    )
+    reply.set_defaults(func=cmd_reply, _command="reply")
 
     post = sub.add_parser(
         "post",

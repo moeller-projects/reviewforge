@@ -24,6 +24,7 @@ from .fetch_pr_metadata import FetchPrMetadataStage
 from .plan_context import PlanContextStage
 from .post_to_ado import PostToAdoStage
 from .prepare_repository import PrepareRepositoryStage
+from .reply_to_comments import ReplyToCommentsStage
 from .reconstruct_intent import ReconstructIntentStage
 from .review_diff import ReviewDiffStage
 from .verify_findings import VerifyFindingsStage
@@ -36,6 +37,15 @@ DEFAULT_PIPELINE: list = [
     ExecuteReasoningEngineStage(),
     ValidateAnchorsStage(),
     PostToAdoStage(),
+    ReplyToCommentsStage(),
+]
+#: Minimal pipeline for ``reviewforge reply``: fetch context, prepare the
+#: checkout (Pi reads code while drafting), then answer pending replies.
+#: No new findings are generated or posted.
+REPLY_PIPELINE: list = [
+    FetchPrMetadataStage(),
+    PrepareRepositoryStage(),
+    ReplyToCommentsStage(),
 ]
 
 #: Same as :data:`DEFAULT_PIPELINE` minus the final posting stage. Use this
@@ -90,6 +100,8 @@ __all__ = [
     "PostToAdoStage",
     "PrepareRepositoryStage",
     "REVIEW_ONLY_PIPELINE",
+    "REPLY_PIPELINE",
+    "ReplyToCommentsStage",
     "ReconstructIntentStage",
     "ReviewDiffStage",
     "VerifyFindingsStage",

@@ -31,6 +31,9 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "run.log",
     "crg-analysis.json",
     "graph-context.json",
+    "comment-replies.json",
+    "pi-invocations.json",
+    "review-scopes.json",
 )
 
 
@@ -58,6 +61,7 @@ class Artifacts:
     review_result: Path
     sarif: Path
     posted: Path
+    comment_replies: Path
     summary: Path
     system_prompt: Path
     raw_dir: Path
@@ -66,6 +70,8 @@ class Artifacts:
     run_log: Path
     crg_analysis: Path
     graph_context: Path
+    review_scopes: Path
+    pi_invocations: Path
 
     def as_dict(self) -> dict[str, str]:
         """Return a dict mapping artifact name → absolute path string.
@@ -84,6 +90,7 @@ class Artifacts:
             "review-result.json": str(self.review_result),
             "sarif-findings.json": str(self.sarif),
             "posted-comments.json": str(self.posted),
+            "comment-replies.json": str(self.comment_replies),
             "run-summary.json": str(self.summary),
             "review-system.combined.md": str(self.system_prompt),
             "work-items.json": str(self.work_items),
@@ -91,6 +98,8 @@ class Artifacts:
             "run.log": str(self.run_log),
             "graph-context.json": str(self.graph_context),
             "crg-analysis.json": str(self.crg_analysis),
+            "review-scopes.json": str(self.review_scopes),
+            "pi-invocations.json": str(self.pi_invocations),
         }
 
 
@@ -140,6 +149,7 @@ def create(cfg: Config) -> Artifacts:
         review_result=root / "review-result.json",
         sarif=root / "sarif-findings.json",
         posted=root / "posted-comments.json",
+        comment_replies=root / "comment-replies.json",
         summary=root / "run-summary.json",
         system_prompt=root / "review-system.combined.md",
         raw_dir=root / "raw",
@@ -148,6 +158,8 @@ def create(cfg: Config) -> Artifacts:
         run_log=root / "run.log",
         crg_analysis=root / "crg-analysis.json",
         graph_context=root / "graph-context.json",
+        review_scopes=root / "review-scopes.json",
+        pi_invocations=root / "pi-invocations.json",
     )
 
 

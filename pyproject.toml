@@ -39,3 +39,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 reviewforge = ["py.typed"]
+
+[dependency-groups]
+dev = [
+    "complexipy==7.0.1",
+]

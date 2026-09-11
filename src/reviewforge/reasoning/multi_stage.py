@@ -52,6 +52,119 @@ def _finding_count(doc: dict[str, Any] | None) -> int:
     return 0
 
 
+def _check_stage_results(results: list[Any]) -> None:
+    for stage_result in results:
+        if stage_result.status == "failed":
+            raise ReasoningEngineError(
+                f"reasoning stage {stage_result.name} failed",
+                details={"error": stage_result.error or "", "stage": stage_result.name},
+            )
+
+
+def _run_review_stages(ctx: StageContext) -> list[Any]:
+    stages = [
+        BuildArtifactsStage(),
+        ReconstructIntentStage(),
+        PlanContextStage(),
+        CollectContextStage(),
+        ContextDigestStage(),
+        ReviewDiffStage(),
+        VerifyFindingsStage(),
+        CalibrateSeverityStage(),
+    ]
+    results = run_stages(stages, ctx)
+    _check_stage_results(results)
+    ctx.final = ctx.severity or {"summary": "", "findings": []}
+    ac_results = run_stages([AcceptanceCriteriaCoverageStage()], ctx)
+    _check_stage_results(ac_results)
+    return results + ac_results
+
+
+def _record_finding_counts(ctx: StageContext) -> None:
+    ctx.extras["_finding_counts"] = {
+        "candidate": _finding_count(ctx.candidate),
+        "verified": _finding_count(ctx.verified),
+        "severity": _finding_count(ctx.severity),
+        "final": _finding_count(ctx.final),
+    }
+
+
+def _cleanup_intermediates(ctx: StageContext) -> None:
+    if ctx.cfg.debug_intermediates:
+        return
+    for path in (
+        ctx.artifacts.intent, ctx.artifacts.plan, ctx.artifacts.collected,
+        ctx.artifacts.digest, ctx.artifacts.candidate, ctx.artifacts.verified,
+        ctx.artifacts.severity,
+    ):
+        path.unlink(missing_ok=True)
+
+
+def _token_totals(ctx: StageContext, results: list[Any]) -> tuple[int, int]:
+    worker_tokens = ctx.extras.get("_worker_token_usage", {})
+    token_in = sum(int(r.token_usage.get("in", 0) or 0) for r in results)
+    token_out = sum(int(r.token_usage.get("out", 0) or 0) for r in results)
+    return (
+        token_in + int(worker_tokens.get("in", 0) or 0),
+        token_out + int(worker_tokens.get("out", 0) or 0),
+    )
+
+
+def _invocation_counts(ctx: StageContext) -> tuple[int, int]:
+    invocation_count = getattr(ctx.pi, "invocation_count", 0)
+    repair_count = getattr(ctx.pi, "repair_invocation_count", 0)
+    return (
+        invocation_count if isinstance(invocation_count, int) else 0,
+        repair_count if isinstance(repair_count, int) else 0,
+    )
+
+
+def _build_result(
+    engine: Any, ctx: StageContext, started_at: float,
+    finished_at: float, results: list[Any],
+) -> ReviewResult:
+    cfg = ctx.cfg
+    final = ctx.final or {"summary": "", "findings": []}
+    findings = final.get("findings", [])
+    token_in, token_out = _token_totals(ctx, results)
+    invocation_count, repair_count = _invocation_counts(ctx)
+    return ReviewResult(
+        metadata=ReviewMetadata(
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started_at)),
+            finished_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(finished_at)),
+            duration_ms=int((finished_at - started_at) * 1000),
+            model=ModelMetadata(model=cfg.pi_model, reasoning_engine=engine.name),
+            tokens=TokenUsage(input=token_in, output=token_out, total=token_in + token_out),
+        ),
+        review_summary=ReviewSummary(summary=final.get("summary", "") or "Review completed."),
+        verification_summary=VerificationSummary(summary="Findings verified through the multi-stage verification stage."),
+        pr_summary=engine._build_pr_summary(ctx),
+        findings=[engine._legacy_to_rich(f) for f in findings],
+        discarded_findings=[],
+        good_practices=[],
+        uncertainties=[],
+        test_gaps=[],
+        escalation_hints=[],
+        metrics=ReviewMetrics(
+            changedFilesReviewed=len(getattr(ctx.state, "files", [])),
+            testsRead=len(ctx.collected.get("tests", [])) if ctx.collected else 0,
+            confidence="high" if ctx.cfg.verify_findings else "medium",
+            reviewDepth="deep",
+            piInputTokens=token_in,
+            piOutputTokens=token_out,
+            piTotalTokens=token_in + token_out,
+            invocationCount=invocation_count,
+            repairInvocationCount=repair_count,
+            wallClockDurationMs=int((finished_at - started_at) * 1000),
+            reasoningDurationMs=sum(r.duration_ms for r in results),
+        ),
+        review_confidence=ReviewConfidence(
+            level="high" if ctx.cfg.verify_findings else "medium",
+            reasons=["verification enabled"] if ctx.cfg.verify_findings else ["verification skipped"],
+        ),
+    )
+
+
 class MultiStageReasoningEngine(ReasoningEngine):
     """Run the original multi-stage review pipeline as one reasoning unit.
 
@@ -68,103 +181,12 @@ class MultiStageReasoningEngine(ReasoningEngine):
         return "multi_stage"
 
     def execute(self, ctx: StageContext) -> ReviewResult:
-        cfg = ctx.cfg
         started_at = time.time()
-
-        stages = [
-            BuildArtifactsStage(),
-            ReconstructIntentStage(),
-            PlanContextStage(),
-            CollectContextStage(),
-            ContextDigestStage(),
-            ReviewDiffStage(),
-            VerifyFindingsStage(),
-            CalibrateSeverityStage(),
-        ]
-        results = run_stages(stages, ctx)
-        for result in results:
-            if result.status == "failed":
-                raise ReasoningEngineError(
-                    f"reasoning stage {result.name} failed",
-                    details={"error": result.error or "", "stage": result.name},
-                )
-        ctx.final = ctx.severity or {"summary": "", "findings": []}
-        ac_results = run_stages([AcceptanceCriteriaCoverageStage()], ctx)
-        results.extend(ac_results)
-        for result in ac_results:
-            if result.status == "failed":
-                raise ReasoningEngineError(
-                    f"reasoning stage {result.name} failed",
-                    details={"error": result.error or "", "stage": result.name},
-                )
-        ctx.extras["_finding_counts"] = {
-            "candidate": _finding_count(ctx.candidate),
-            "verified": _finding_count(ctx.verified),
-            "severity": _finding_count(ctx.severity),
-            "final": _finding_count(ctx.final),
-        }
-        if not cfg.debug_intermediates:
-            for path in (
-                ctx.artifacts.intent, ctx.artifacts.plan, ctx.artifacts.collected,
-                ctx.artifacts.digest, ctx.artifacts.candidate, ctx.artifacts.verified,
-                ctx.artifacts.severity,
-            ):
-                path.unlink(missing_ok=True)
+        results = _run_review_stages(ctx)
+        _record_finding_counts(ctx)
+        _cleanup_intermediates(ctx)
         finished_at = time.time()
-        final = ctx.final or {"summary": "", "findings": []}
-        findings = final.get("findings", [])
-        worker_tokens = ctx.extras.get("_worker_token_usage", {})
-        token_in = sum(int(r.token_usage.get("in", 0) or 0) for r in results)
-        token_out = sum(int(r.token_usage.get("out", 0) or 0) for r in results)
-        token_in += int(worker_tokens.get("in", 0) or 0)
-        token_out += int(worker_tokens.get("out", 0) or 0)
-        invocation_count = getattr(ctx.pi, "invocation_count", 0)
-        repair_count = getattr(ctx.pi, "repair_invocation_count", 0)
-        invocation_count = invocation_count if isinstance(invocation_count, int) else 0
-        repair_count = repair_count if isinstance(repair_count, int) else 0
-        result = ReviewResult(
-            metadata=ReviewMetadata(
-                started_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started_at)),
-                finished_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(finished_at)),
-                duration_ms=int((finished_at - started_at) * 1000),
-                model=ModelMetadata(
-                    model=cfg.pi_model,
-                    reasoning_engine=self.name,
-                ),
-                tokens=TokenUsage(
-                    input=token_in,
-                    output=token_out,
-                    total=token_in + token_out,
-                ),
-            ),
-            review_summary=ReviewSummary(summary=final.get("summary", "") or "Review completed."),
-            verification_summary=VerificationSummary(
-                summary="Findings verified through the multi-stage verification stage."
-            ),
-            pr_summary=self._build_pr_summary(ctx),
-            findings=[self._legacy_to_rich(f) for f in findings],
-            discarded_findings=[],
-            good_practices=[],
-            uncertainties=[],
-            metrics=ReviewMetrics(
-                changedFilesReviewed=len(getattr(ctx.state, "files", [])),
-                testsRead=len(ctx.collected.get("tests", [])) if ctx.collected else 0,
-                confidence="high" if ctx.cfg.verify_findings else "medium",
-                reviewDepth="deep",
-                piInputTokens=token_in,
-                piOutputTokens=token_out,
-                piTotalTokens=token_in + token_out,
-                invocationCount=invocation_count,
-                repairInvocationCount=repair_count,
-                wallClockDurationMs=int((finished_at - started_at) * 1000),
-                reasoningDurationMs=sum(r.duration_ms for r in results),
-            ),
-            review_confidence=ReviewConfidence(
-                level="high" if ctx.cfg.verify_findings else "medium",
-                reasons=["verification enabled"] if ctx.cfg.verify_findings else ["verification skipped"],
-            ),
-        )
-        return result
+        return _build_result(self, ctx, started_at, finished_at, results)
 
     @staticmethod
     def _build_pr_summary(ctx: StageContext) -> PrSummary:
@@ -172,6 +194,8 @@ class MultiStageReasoningEngine(ReasoningEngine):
         digest = ctx.digest or {}
         return PrSummary(
             intent=intent.get("pr_intent", ""),
+            work_type="mixed",
+            biggest_unknown=None,
             implementation_summary=intent.get("pr_intent", ""),
             architectural_impact="\n".join(intent.get("risk_areas", [])),
             risk_assessment="\n".join(intent.get("risk_areas", [])),

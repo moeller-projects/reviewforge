@@ -131,6 +131,14 @@ class TestTemplateCommentFormatter:
         # Marker line appended at the end, regardless of `{{ marker }}` in template.
         assert body.rstrip().splitlines()[-1] == f"<!-- prb:{key} -->"
 
+    def test_snake_case_context_basis_accepted(self, key):
+        finding = {"severity": "minor", "title": "T", "message": "M",
+                   "context_basis": "legacy snake case"}
+        body = TemplateCommentFormatter("{{ context_basis }}").format(
+            finding, key=key, max_chars=20000
+        )
+        assert "legacy snake case" in body
+
     def test_summary_placeholder(self, finding, key):
         tmpl = "{{ summary }}\n\n---\n\n{{ title }}"
         body = TemplateCommentFormatter(tmpl).format(

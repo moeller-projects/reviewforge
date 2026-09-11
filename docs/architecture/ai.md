@@ -8,7 +8,7 @@
 
 Session reuse is enabled by default for the Pi backend. The default identifier is `pr-<pr_id>-review`; `--pi-session-id` overrides it, `--no-pi-session` disables reuse, and `--pi-session-clear` starts fresh state under the same id. The session behavior matters most to the multi-stage engine and chunked calls.
 
-Prompts are files, not embedded Python templates. Runtime augmentation adds language and standards where applicable. See [prompt reference](../reference/prompts.md) and [prompt development](../guides/prompt-development.md).
+Prompts are files, not embedded Python templates. Runtime augmentation appends the review language to every prompt and the coding standards to the fast-review and legacy review prompts only. See [prompt reference](../reference/prompts.md) and [prompt development](../guides/prompt-development.md).
 
 When `CRG_ENABLED` is set, `EnrichWithCrgStage` prepends deterministic graph context before the diff and refreshes the complete graph artifact in `.reviewforge-context/`. The section is produced Python-side by the `code-review-graph` package — no model call, no MCP server, no extra Pi tools — and is capped and ordered. CRG failure still degrades the graph section without failing the review; the context-file preamble may remain when repository staging succeeded.
 

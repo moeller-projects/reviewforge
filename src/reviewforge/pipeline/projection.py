@@ -33,27 +33,31 @@ def _symbol_files(symbols: list[RichSymbol]) -> list[str]:
     return out
 
 
-def _legacy_evidence(evidence: Any) -> dict[str, Any]:
-    """Convert rich evidence into the legacy evidence shape."""
-    changed_lines = list(evidence.changedLines) if evidence else []
-    related_files = list(evidence.relatedFiles) if evidence else []
-    tests_read = list(evidence.testsRead) if evidence else []
-    work_items = list(evidence.workItems) if evidence else []
-    symbol_files = _symbol_files(list(evidence.symbols) if evidence else [])
-
-    context_files_read: list[str] = []
+def _context_files(evidence: Any) -> list[str]:
+    paths = []
     seen: set[str] = set()
-    for path in related_files + tests_read + work_items + symbol_files:
+    values = (
+        list(evidence.relatedFiles) if evidence else [],
+        list(evidence.testsRead) if evidence else [],
+        list(evidence.workItems) if evidence else [],
+        _symbol_files(list(evidence.symbols) if evidence else []),
+    )
+    for path in sum(values, []):
         if path and path not in seen:
             seen.add(path)
-            context_files_read.append(path)
+            paths.append(path)
+    return paths
 
+
+def _legacy_evidence(evidence: Any) -> dict[str, Any]:
+    """Convert rich evidence into the legacy evidence shape."""
     return {
-        "changedLines": changed_lines,
-        "contextFilesRead": context_files_read,
+        "changedLines": list(evidence.changedLines) if evidence else [],
+        "contextFilesRead": _context_files(evidence),
         "whyNewInThisPr": evidence.whyNewInThisPr if evidence else "",
         "whyNotIntentional": evidence.whyNotIntentional if evidence else "",
         "classification": evidence.classification if evidence else "",
+        "threads": list(evidence.threads) if evidence else [],
     }
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 import json
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -20,6 +21,20 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 Severity = Literal["nit", "minor", "major", "blocker"]
 Confidence = Literal["high", "medium", "low"]
 ContextBasis = Literal["diff-only", "surrounding-code-read", "full-module-review"]
+WorkType = Literal[
+    "feature", "change", "bug", "refactor", "test-only", "docs-config", "mixed"
+]
+Classification = Literal[
+    "work-item", "architectural", "repository-wide", "prior-thread", "other"
+]
+SuggestedFocus = Literal[
+    "security-audit", "deep-logic", "concurrency", "data-integrity"
+]
+Danger = Literal["high", "critical"]
+
+#: Title prefix identifying a work-item requirement finding. Kept in sync with
+#: :data:`reviewforge.ado.posting.WORK_ITEM_TITLE_RE` without importing it.
+_WORK_ITEM_TITLE_RE = re.compile(r"^\s*work\s+item\s+#\d+", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # Base
@@ -126,6 +141,18 @@ class AcCoverageLlmResult(_Base):
     covered: bool
     reason: str = ""
 
+class CommentReply(_Base):
+    """A model-drafted reply to one existing PR comment thread."""
+
+    thread_id: int
+    reply: str
+
+
+class CommentReplies(_Base):
+    """Model output for the reply-to-comments stage."""
+
+    replies: list[CommentReply] = Field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Reasoning Engine: canonical rich review result
@@ -161,10 +188,19 @@ class PrSummary(_Base):
     """High-level summary of the PR produced by the reasoning engine."""
 
     intent: str = ""
+    work_type: WorkType = "mixed"
+    biggest_unknown: str | None = None
     implementation_summary: str = ""
     architectural_impact: str = ""
     risk_assessment: str = ""
     positive_observations: list[str] = Field(default_factory=list)
+
+    @field_validator("positive_observations")
+    @classmethod
+    def _cap_positive(cls, v: list[str]) -> list[str]:
+        if len(v) > 3:
+            raise ValueError("positive_observations is capped at 3 entries")
+        return v
 
 
 class ReviewSummary(_Base):
@@ -212,9 +248,27 @@ class RichEvidence(_Base):
     testsRead: list[str] = Field(default_factory=list)
     workItems: list[str] = Field(default_factory=list)
     symbols: list[RichSymbol] = Field(default_factory=list)
+    threads: list[str] = Field(default_factory=list)
     whyNewInThisPr: str = ""
     whyNotIntentional: str = ""
     classification: str = ""
+
+    @field_validator("changedLines")
+    @classmethod
+    def _positive_lines(cls, v: list[int]) -> list[int]:
+        if any(line < 1 for line in v):
+            raise ValueError("changedLines must be positive line numbers")
+        return v
+
+    @field_validator("classification")
+    @classmethod
+    def _known_classification(cls, v: str) -> str:
+        value = v.strip()
+        if value and value not in Classification.__args__:
+            raise ValueError(
+                f"classification must be one of {Classification.__args__}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _meaningful(self) -> "RichEvidence":
@@ -224,6 +278,7 @@ class RichEvidence(_Base):
             or self.testsRead
             or self.workItems
             or self.symbols
+            or self.threads
         )
         if not has_reference:
             raise ValueError("evidence must contain at least one reference")
@@ -246,7 +301,7 @@ class RichFinding(_Base):
     severity: Severity
     confidence: Confidence | None = None
     file: str | None = None
-    line: int | None = None
+    line: int | None = Field(default=None, ge=1)
     contextBasis: ContextBasis | None = None
     regression: bool = False
     evidence: RichEvidence = Field(default_factory=RichEvidence)
@@ -257,6 +312,56 @@ class RichFinding(_Base):
         if not v or not v.strip():
             raise ValueError("must be a non-empty string")
         return v
+
+    @field_validator("file")
+    @classmethod
+    def _repo_relative(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        raw = str(v)
+        if raw.startswith(("/", "\\")):
+            raise ValueError("file must be repo-relative with no leading slash")
+        normalized = raw.replace("\\", "/")
+        if not normalized:
+            raise ValueError("file must be a non-empty repo-relative path")
+        if re.match(r"^[A-Za-z]:", normalized) or normalized.startswith("//"):
+            raise ValueError("file must be repo-relative with no leading slash")
+        if any(part == ".." for part in normalized.split("/")):
+            raise ValueError("file must not contain parent-directory traversal")
+        return normalized
+
+    @model_validator(mode="after")
+    def _constraints(self) -> "RichFinding":
+        _validate_regression_constraint(self)
+        _validate_work_item_constraint(self)
+        _validate_prior_thread_constraint(self)
+        return self
+
+def _validate_regression_constraint(finding: Any) -> None:
+    if finding.regression and not finding.evidence.changedLines:
+        raise ValueError("regression findings must cite changed lines")
+
+
+def _is_work_item_finding(finding: Any) -> bool:
+    return bool(
+        _WORK_ITEM_TITLE_RE.match(finding.title or "")
+        or finding.evidence.classification == "work-item"
+    )
+
+
+def _validate_work_item_constraint(finding: Any) -> None:
+    if not _is_work_item_finding(finding):
+        return
+    if finding.file is not None or finding.line is not None:
+        raise ValueError("work-item findings must not anchor to a file or line")
+    if finding.severity not in ("major", "blocker"):
+        raise ValueError("work-item findings require severity major or blocker")
+
+
+def _validate_prior_thread_constraint(finding: Any) -> None:
+    if finding.evidence.classification == "prior-thread" and not finding.evidence.threads:
+        raise ValueError("prior-thread findings must cite the thread id")
+
 
 
 class DiscardedFinding(_Base):
@@ -303,11 +408,62 @@ class Uncertainty(_Base):
             raise ValueError("topic must be a non-empty string")
         return v
 
+    @model_validator(mode="after")
+    def _resolvable(self) -> "Uncertainty":
+        if self.topic.startswith("cross-chunk:") and self.confidence != "low":
+            raise ValueError("cross-chunk uncertainties must set confidence to low")
+        return self
+
+
+class CoverageGap(_Base):
+    """A changed behavior without test coverage."""
+
+    behavior: str
+    suggested_test: str
+    file: str
+
+    @field_validator("behavior", "suggested_test", "file")
+    @classmethod
+    def _non_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v
+
+    @field_validator("file")
+    @classmethod
+    def _repo_relative(cls, v: str) -> str:
+        normalized = v.replace("\\", "/")
+        if normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized):
+            raise ValueError("file must be a repo-relative path")
+        if not normalized or any(part == ".." for part in normalized.split("/")):
+            raise ValueError("file must be a repo-relative path")
+        return normalized
+
+
+class EscalationHint(_Base):
+    """A request for a deeper or specialised review pass."""
+
+    files: list[str] = Field(default_factory=list, min_length=1)
+    reason: str
+    suggested_focus: SuggestedFocus
+    danger: Danger
+
+    @field_validator("reason")
+    @classmethod
+    def _non_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("reason must be a non-empty string")
+        return v
+
+
 class ChunkResult(_Base):
     """Partial finding output from one coherent unified-diff chunk."""
 
     findings: list[RichFinding] = Field(default_factory=list)
+    test_gaps: list[CoverageGap] = Field(default_factory=list)
     uncertainties: list[Uncertainty] = Field(default_factory=list)
+    escalation_hints: list[EscalationHint] = Field(default_factory=list)
+    discarded_findings: list[DiscardedFinding] = Field(default_factory=list)
 
 
 class ChunkSynthesis(_Base):
@@ -322,6 +478,17 @@ class ChunkSynthesis(_Base):
     )
     pr_summary: PrSummary = Field(default_factory=PrSummary)
     good_practices: list[GoodPractice] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_framing(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data:
+            pr_summary = data.get("pr_summary")
+            if not isinstance(pr_summary, dict) or "work_type" not in pr_summary:
+                raise ValueError("chunk synthesis pr_summary.work_type is required")
+            if not str(pr_summary.get("intent", "")).strip():
+                raise ValueError("chunk synthesis pr_summary.intent is required")
+        return data
 
 
 
@@ -377,6 +544,10 @@ class ReviewResult(_Base):
     discarded_findings: list[DiscardedFinding] = Field(default_factory=list)
     good_practices: list[GoodPractice] = Field(default_factory=list)
     uncertainties: list[Uncertainty] = Field(default_factory=list)
+    test_gaps: list[CoverageGap] = Field(default_factory=list)
+    escalation_hints: list[EscalationHint] = Field(default_factory=list)
+    metrics: ReviewMetrics = Field(default_factory=ReviewMetrics)
+    review_confidence: ReviewConfidence = Field(default_factory=ReviewConfidence)
 
     @model_validator(mode="before")
     @classmethod
@@ -384,8 +555,27 @@ class ReviewResult(_Base):
         if isinstance(data, dict) and data and "review_summary" not in data:
             raise ValueError("review_summary is required in a supplied review document")
         return data
-    metrics: ReviewMetrics = Field(default_factory=ReviewMetrics)
-    review_confidence: ReviewConfidence = Field(default_factory=ReviewConfidence)
+
+    @field_validator("test_gaps")
+    @classmethod
+    def _cap_test_gaps(cls, v: list[CoverageGap]) -> list[CoverageGap]:
+        if len(v) > 5:
+            raise ValueError("test_gaps is capped at 5 entries")
+        return v
+
+    @field_validator("escalation_hints")
+    @classmethod
+    def _cap_hints(cls, v: list[EscalationHint]) -> list[EscalationHint]:
+        if len(v) > 3:
+            raise ValueError("escalation_hints is capped at 3 entries")
+        return v
+
+    @field_validator("good_practices")
+    @classmethod
+    def _cap_good(cls, v: list[GoodPractice]) -> list[GoodPractice]:
+        if len(v) > 3:
+            raise ValueError("good_practices is capped at 3 entries")
+        return v
 
 
 # ---------------------------------------------------------------------------
@@ -410,11 +600,17 @@ def load_and_validate(path: Path, schema: type[_Base]) -> _Base:
 __all__ = [
     "AcCoverageLlmResult",
     "ChunkSynthesis",
+    "ChunkResult",
+    "Classification",
+    "CommentReplies",
+    "CommentReply",
     "Confidence",
     "ContextBasis",
     "ContextDigest",
     "ContextPlan",
+    "Danger",
     "DiscardedFinding",
+    "EscalationHint",
     "Evidence",
     "Finding",
     "GoodPractice",
@@ -431,9 +627,12 @@ __all__ = [
     "RichFinding",
     "RichSymbol",
     "Severity",
+    "SuggestedFocus",
+    "CoverageGap",
     "TokenUsage",
     "Uncertainty",
     "VerificationSummary",
+    "WorkType",
     "load_and_validate",
     "validate_payload",
 ]

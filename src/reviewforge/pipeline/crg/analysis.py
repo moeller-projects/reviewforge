@@ -26,15 +26,20 @@ def _entry_file(item: dict[str, Any]) -> str | None:
     return str(path) if path else None
 
 
+def _analysis_paths(items: Any) -> set[str]:
+    return {
+        path
+        for item in items or []
+        if isinstance(item, dict)
+        if (path := _entry_file(item))
+    }
+
+
 def _impacted_files(analysis: dict[str, Any]) -> list[str]:
     """Return the sorted unique file set touched by the analysis."""
-    files: set[str] = set()
-    for key in ("changed_functions", "review_priorities", "test_gaps"):
-        for item in analysis.get(key) or []:
-            if isinstance(item, dict):
-                path = _entry_file(item)
-                if path:
-                    files.add(path)
+    files = set().union(*(_analysis_paths(analysis.get(key)) for key in (
+        "changed_functions", "review_priorities", "test_gaps"
+    )))
     return sorted(files)
 
 

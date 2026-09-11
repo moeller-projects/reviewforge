@@ -207,6 +207,23 @@ class TestCheckAcCoverage:
         assert check_ac_coverage(None, "", []) == []
 
 
+class TestCoverageInputs:
+    def test_missing_changed_files_artifact_yields_empty_list(self, tmp_path):
+        from reviewforge.pipeline.stages.ac_coverage import _coverage_inputs
+
+        artifacts = SimpleNamespace(
+            work_items=tmp_path / "work-items.json",
+            diff=tmp_path / "diff.patch",
+            changed_files=tmp_path / "changed-files.json",
+        )
+
+        work_items, diff_text, changed_files = _coverage_inputs(artifacts)
+
+        assert work_items == []
+        assert diff_text == ""
+        assert changed_files == []
+
+
 # ---------------------------------------------------------------------------
 # uncovered_findings
 # ---------------------------------------------------------------------------

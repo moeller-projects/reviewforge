@@ -154,6 +154,52 @@ def _stage_finding_counts(summary: RunSummary) -> dict[str, int]:
     return {}
 
 
+def _set_duration(summary: RunSummary) -> None:
+    if not summary.started_at or not summary.finished_at:
+        return
+    try:
+        start = datetime.fromisoformat(summary.started_at)
+        end = datetime.fromisoformat(summary.finished_at)
+    except ValueError:
+        summary.duration_ms = 0
+        return
+    summary.duration_ms = max(0, int((end - start).total_seconds() * 1000))
+
+
+def _token_usage(summary: RunSummary) -> dict[str, int]:
+    total_in = total_out = 0
+    found = False
+    for rec in summary.stages:
+        usage = rec.token_usage or {}
+        total_in += int(usage.get("in", 0) or 0)
+        total_out += int(usage.get("out", 0) or 0)
+        found |= bool(usage.get("in") or usage.get("out"))
+    return {"in": total_in, "out": total_out, "total": total_in + total_out} if found else {}
+
+
+def _runtime_metrics(summary: RunSummary) -> tuple[int, int, int, int, int]:
+    totals = [0, 0, 0, 0, 0]
+    for rec in summary.stages:
+        metrics = rec.details.get("metrics") if isinstance(rec.details, dict) else None
+        if not isinstance(metrics, dict):
+            continue
+        for index, key in enumerate(
+            ("invocationCount", "repairInvocationCount", "reasoningDurationMs", "projectionDurationMs", "validationDurationMs")
+        ):
+            totals[index] += int(metrics.get(key, 0) or 0)
+    return tuple(totals)  # type: ignore[return-value]
+
+
+def _anchor_counts(summary: RunSummary) -> tuple[int, int]:
+    downgraded = dropped = 0
+    for rec in summary.stages:
+        if rec.name != "validate_anchors":
+            continue
+        downgraded += int(rec.details.get("downgraded", 0) or 0)
+        dropped += int(rec.details.get("dropped", 0) or 0)
+    return downgraded, dropped
+
+
 def finalize_run_summary(
     summary: RunSummary,
     *,
@@ -170,64 +216,26 @@ def finalize_run_summary(
         summary.posted = posted
     if skipped_reason is not None:
         summary.skipped_reason = skipped_reason
-    if summary.started_at and summary.finished_at:
-        try:
-            start = datetime.fromisoformat(summary.started_at)
-            end = datetime.fromisoformat(summary.finished_at)
-            summary.duration_ms = max(0, int((end - start).total_seconds() * 1000))
-        except ValueError:
-            summary.duration_ms = 0
-
+    _set_duration(summary)
     stage_counts = _stage_finding_counts(summary)
     summary.finding_counts = {
-        "candidate": _safe_count_findings(artifacts.candidate) or stage_counts.get("candidate", 0),
-        "verified": _safe_count_findings(artifacts.verified) or stage_counts.get("verified", 0),
-        "severity": _safe_count_findings(artifacts.severity) or stage_counts.get("severity", 0),
-        "final": _safe_count_findings(artifacts.final) or stage_counts.get("final", 0),
+        key: _safe_count_findings(path) or stage_counts.get(key, 0)
+        for key, path in {
+            "candidate": artifacts.candidate,
+            "verified": artifacts.verified,
+            "severity": artifacts.severity,
+            "final": artifacts.final,
+        }.items()
     }
-    # Aggregate token usage across all stage records.
-    total_in = 0
-    total_out = 0
-    any_tokens = False
-    for rec in summary.stages:
-        tu = rec.token_usage or {}
-        if tu.get("in"):
-            total_in += int(tu["in"])
-            any_tokens = True
-        if tu.get("out"):
-            total_out += int(tu["out"])
-            any_tokens = True
-    summary.invocation_count = 0
-    summary.repair_invocation_count = 0
-    summary.reasoning_duration_ms = 0
-    summary.projection_duration_ms = 0
-    summary.validation_duration_ms = 0
-    for rec in summary.stages:
-        metrics = rec.details.get("metrics") if isinstance(rec.details, dict) else None
-        if isinstance(metrics, dict):
-            summary.invocation_count += int(metrics.get("invocationCount", 0) or 0)
-            summary.repair_invocation_count += int(
-                metrics.get("repairInvocationCount", 0) or 0
-            )
-            summary.reasoning_duration_ms += int(
-                metrics.get("reasoningDurationMs", 0) or 0
-            )
-            summary.projection_duration_ms += int(
-                metrics.get("projectionDurationMs", 0) or 0
-            )
-            summary.validation_duration_ms += int(
-                metrics.get("validationDurationMs", 0) or 0
-            )
-    for rec in summary.stages:
-        if rec.name == "validate_anchors":
-            summary.anchor_downgraded += int(rec.details.get("downgraded", 0) or 0)
-            summary.anchor_dropped += int(rec.details.get("dropped", 0) or 0)
-    if any_tokens:
-        summary.token_usage = {
-            "in": total_in,
-            "out": total_out,
-            "total": total_in + total_out,
-        }
+    (
+        summary.invocation_count,
+        summary.repair_invocation_count,
+        summary.reasoning_duration_ms,
+        summary.projection_duration_ms,
+        summary.validation_duration_ms,
+    ) = _runtime_metrics(summary)
+    summary.anchor_downgraded, summary.anchor_dropped = _anchor_counts(summary)
+    summary.token_usage = _token_usage(summary)
     return summary.to_dict()
 
 

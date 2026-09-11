@@ -70,6 +70,7 @@ class StageResult:
     duration_ms: int
     details: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    reason: str | None = None
     token_usage: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -81,8 +82,21 @@ class StageResult:
             "duration_ms": self.duration_ms,
             "details": self.details,
             "error": self.error,
+            "reason": self.reason,
             "token_usage": self.token_usage,
         }
+
+def _skip_reason(ctx: StageContext, stage_name: str) -> str:
+    if ctx.skip_reason:
+        return ctx.skip_reason.replace("\n\nSkipping review.", "").strip()
+    review_state = ctx.extras.get("review_state")
+    state_reason = getattr(review_state, "reason", None)
+    if state_reason:
+        return str(state_reason)
+    mode = getattr(review_state, "mode", None)
+    if mode:
+        return f"review mode is {getattr(mode, 'value', mode)}"
+    return f"{stage_name} precondition was not satisfied"
 
 
 class Stage:
@@ -109,6 +123,7 @@ class Stage:
         invocation_count = getattr(ctx.pi, "invocation_count", None)
         try:
             if not self.should_run(ctx):
+                reason = _skip_reason(ctx, self.name)
                 finished_at = _now_iso()
                 return StageResult(
                     name=self.name,
@@ -116,6 +131,7 @@ class Stage:
                     started_at=started_at,
                     finished_at=finished_at,
                     duration_ms=int((time.monotonic() - t0) * 1000),
+                    reason=reason,
                 )
             details = self.run(ctx) or {}
             if not isinstance(details, dict):
@@ -185,7 +201,10 @@ def run_stages(stages: list[Stage], ctx: StageContext) -> list[StageResult]:
         log_info(f"stage {stage.name} started")
         result = stage(ctx)
         results.append(result)
-        log_info(f"stage {result.name} finished: {result.status} in {result.duration_ms}ms")
+        if result.status == StageStatus.SKIPPED:
+            log_info(f"stage {result.name} skipped: {result.reason}")
+        else:
+            log_info(f"stage {result.name} finished: {result.status} in {result.duration_ms}ms")
         if result.status == StageStatus.FAILED:
             log_error(f"stage {result.name} failed: {result.error}")
             break

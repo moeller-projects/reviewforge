@@ -23,7 +23,8 @@ param(
     [switch] $DryRun,
     [switch] $PrintCommand,
     [switch] $Build,
-    [switch] $KeepContainer
+    [switch] $KeepContainer,
+    [string] $Restart = ""
 )
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force
@@ -51,5 +52,6 @@ if ($PrintCommand) { $args += "--print-command" }
 if ($DryRun) { $args += "--dry-run" }
 if ($Build) { $args += "--build" }
 if ($KeepContainer) { $args += "--keep-container" }
+if ($Restart) { $args += @("--restart", $Restart) }
 Invoke-ReviewForgeOps -Arguments $args
 exit $LASTEXITCODE

@@ -38,19 +38,19 @@ def diff_snapshots(base: dict[str, Any], source: dict[str, Any]) -> dict[str, An
     }
 
 
-def api_surface(base: dict[str, Any], source: dict[str, Any], changed_files: list[str]) -> dict[str, Any]:
-    del changed_files
-    result = diff_snapshots(base, source)
+def _watched_nodes(base: dict[str, Any], source: dict[str, Any]) -> set[str]:
     base_nodes, source_nodes = base.get("nodes", {}), source.get("nodes", {})
-    watched = (
-        (set(base_nodes) - set(source_nodes))
+    return (
+        set(base_nodes) - set(source_nodes)
         | {
-            name
-            for name in set(base_nodes) & set(source_nodes)
+            name for name in set(base_nodes) & set(source_nodes)
             if base_nodes[name] != source_nodes[name]
         }
     )
-    candidates: list[dict[str, Any]] = []
+
+
+def _breaking_candidates(source: dict[str, Any], watched: set[str]) -> list[dict[str, Any]]:
+    candidates: dict[str, dict[str, Any]] = {}
     for edge in source.get("edges", {}):
         parts = edge.split(":", 1)
         if len(parts) != 2 or parts[1] != "CALLS":
@@ -58,16 +58,16 @@ def api_surface(base: dict[str, Any], source: dict[str, Any], changed_files: lis
         endpoints = parts[0].split("->", 1)
         if len(endpoints) != 2 or endpoints[1] not in watched:
             continue
-        candidate = next((item for item in candidates if item["symbol"] == endpoints[1]), None)
-        if candidate is None:
-            candidate = {
-                "symbol": endpoints[1],
-                "reason": "removed or changed node with surviving incoming call edges",
-                "caller_count": 0,
-            }
-            candidates.append(candidate)
+        candidate = candidates.setdefault(
+            endpoints[1],
+            {"symbol": endpoints[1], "reason": "removed or changed node with surviving incoming call edges", "caller_count": 0},
+        )
         candidate["caller_count"] += 1
-    candidates.sort(key=lambda item: (item["symbol"], item["reason"]))
+    return sorted(candidates.values(), key=lambda item: (item["symbol"], item["reason"]))
+def api_surface(base: dict[str, Any], source: dict[str, Any], changed_files: list[str]) -> dict[str, Any]:
+    del changed_files
+    result = diff_snapshots(base, source)
+    candidates = _breaking_candidates(source, _watched_nodes(base, source))
     if len(candidates) > 50:
         result["truncated"] = True
     result["breaking_candidates"] = candidates[:50]

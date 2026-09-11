@@ -27,54 +27,26 @@ call_helper = fetch_pr_context
 
 
 
+def _load_list(path: Any) -> list[Any] | None:
+    if not path.exists():
+        return None
+    try:
+        value = read_json(path)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, list) else None
+
+
 def _load_fetched_context(artifacts: Any) -> dict[str, Any]:
-    """Load the four fetch-context artifacts into a dict for ``ctx.extras``.
-
-    The fetch-context subprocess writes:
-
-    * ``work-items.json`` → list of work item dicts (``wi_context``)
-    * ``work-item-comments.json`` → list of
-      ``{"workItemId": str, "comments": [...]}`` (``wi_comments_context``)
-    * ``threads.json`` → list of simplified thread dicts (``thread_context``)
-
-    Returns a dict that can be ``update()``-ed into ``ctx.extras``. Missing
-    or malformed files are skipped silently — downstream stages default to
-    empty lists via ``ctx.extras.get(..., [])`` so the pipeline still runs
-    when the fetch-context step was skipped (e.g., a rerun with cached
-    metadata, or a fetch failure).
-
-    Note: ``work-item-comments.json`` is not declared in
-    :data:`reviewforge.artifacts.manager.ARTIFACT_NAMES` and therefore
-    not on the :class:`Artifacts` dataclass. It is derived from the
-    ``work_items`` path here. If the artifact contract is later updated
-    to declare the comments file, replace this with
-    ``artifacts.work_item_comments``.
-    """
+    """Load fetch-context artifacts into stage extras."""
     extras: dict[str, Any] = {}
-    if artifacts.work_items.exists():
-        try:
-            wi = read_json(artifacts.work_items)
-        except (OSError, ValueError):
-            wi = None
-        if isinstance(wi, list):
-            extras["wi_context"] = wi
-    # work-item-comments.json is not on the Artifacts dataclass (see note
-    # above). Derive its path from the sibling work-items.json.
-    wi_comments_path = artifacts.work_items.with_name("work-item-comments.json")
-    if wi_comments_path.exists():
-        try:
-            wic = read_json(wi_comments_path)
-        except (OSError, ValueError):
-            wic = None
-        if isinstance(wic, list):
-            extras["wi_comments_context"] = wic
-    if artifacts.threads.exists():
-        try:
-            th = read_json(artifacts.threads)
-        except (OSError, ValueError):
-            th = None
-        if isinstance(th, list):
-            extras["thread_context"] = th
+    for key, path in (
+        ("wi_context", artifacts.work_items),
+        ("wi_comments_context", artifacts.work_items.with_name("work-item-comments.json")),
+        ("thread_context", artifacts.threads),
+    ):
+        if (value := _load_list(path)) is not None:
+            extras[key] = value
     return extras
 
 

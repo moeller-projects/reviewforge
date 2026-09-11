@@ -79,63 +79,68 @@ def validate_stage(doc: Any, stage: StageLabel | str) -> None:
         raise SchemaValidationError(_STAGE_SCHEMA_ERRORS[label], details={"stage": label.value})
 
 
+def _validate_finding(finding: Any) -> None:
+    if not isinstance(finding, dict):
+        raise SchemaValidationError("[review][ERROR] finding is not an object")
+    if finding.get("severity") not in SEVERITIES:
+        raise SchemaValidationError(
+            f"[review][ERROR] invalid severity {finding.get('severity')!r}; expected one of {sorted(SEVERITIES)}"
+        )
+    for field, message in (("title", "finding missing non-empty title"), ("message", "finding missing non-empty message")):
+        if not isinstance(finding.get(field), str) or not finding[field].strip():
+            raise SchemaValidationError(f"[review][ERROR] {message}")
+
+
 def validate_review_doc(doc: Any) -> None:
     """Validate the top-level review document: ``summary`` + ``findings`` list."""
-    if (
-        not isinstance(doc, dict)
-        or not isinstance(doc.get("summary"), str)
-        or not isinstance(doc.get("findings"), list)
-    ):
+    if not isinstance(doc, dict) or not isinstance(doc.get("summary"), str) or not isinstance(doc.get("findings"), list):
         raise SchemaValidationError("[review][ERROR] review doc schema invalid")
-    for f in doc["findings"]:
-        if not isinstance(f, dict):
-            raise SchemaValidationError("[review][ERROR] finding is not an object")
-        if f.get("severity") not in SEVERITIES:
-            raise SchemaValidationError(
-                f"[review][ERROR] invalid severity {f.get('severity')!r}; "
-                f"expected one of {sorted(SEVERITIES)}"
+    for finding in doc["findings"]:
+        _validate_finding(finding)
+
+
+def _evidence_rationale(evidence: dict[str, Any]) -> str:
+    return next(
+        (
+            evidence.get(key)
+            for key in (
+                "whyNewInThisPr", "why_new_in_this_pr",
+                "whyNotIntentional", "why_not_intentional",
             )
-        if not isinstance(f.get("title"), str) or not f["title"].strip():
-            raise SchemaValidationError("[review][ERROR] finding missing non-empty title")
-        if not isinstance(f.get("message"), str) or not f["message"].strip():
-            raise SchemaValidationError("[review][ERROR] finding missing non-empty message")
+            if evidence.get(key)
+        ),
+        "",
+    )
+
+
+def _has_evidence_reference(evidence: dict[str, Any]) -> bool:
+    return any(
+        evidence.get(key)
+        for key in (
+            "changedLines", "changed_lines", "contextFilesRead", "context_files_read",
+            "testsRead", "tests_read", "workItems", "work_items", "symbols", "threads",
+        )
+    )
+def _validate_postable_finding(finding: dict[str, Any]) -> None:
+    suggestion = finding.get("suggestion")
+    if not isinstance(suggestion, str) or not suggestion.strip():
+        raise SchemaValidationError("[review][ERROR] finding missing non-empty recommendation")
+    evidence = finding.get("evidence")
+    if not isinstance(evidence, dict):
+        raise SchemaValidationError("[review][ERROR] finding missing evidence")
+    has_lines = evidence.get("changedLines") or evidence.get("changed_lines")
+    if not _has_evidence_reference(evidence) or not has_lines and not str(evidence.get("classification") or "").strip():
+        raise SchemaValidationError("[review][ERROR] finding evidence is incomplete")
+    rationale = _evidence_rationale(evidence)
+    if not isinstance(rationale, str) or not rationale.strip():
+        raise SchemaValidationError("[review][ERROR] finding evidence missing rationale")
 
 
 def validate_postable_review_doc(doc: Any) -> None:
     """Validate the stricter contract required immediately before posting."""
     validate_review_doc(doc)
     for finding in doc["findings"]:
-        suggestion = finding.get("suggestion")
-        if not isinstance(suggestion, str) or not suggestion.strip():
-            raise SchemaValidationError("[review][ERROR] finding missing non-empty recommendation")
-        evidence = finding.get("evidence")
-        if not isinstance(evidence, dict):
-            raise SchemaValidationError("[review][ERROR] finding missing evidence")
-        references = (
-            evidence.get("changedLines")
-            or evidence.get("changed_lines")
-            or evidence.get("contextFilesRead")
-            or evidence.get("context_files_read")
-            or evidence.get("testsRead")
-            or evidence.get("tests_read")
-            or evidence.get("workItems")
-            or evidence.get("work_items")
-            or evidence.get("symbols")
-        )
-        classification = str(evidence.get("classification") or "").strip()
-        rationale = (
-            evidence.get("whyNewInThisPr")
-            or evidence.get("why_new_in_this_pr")
-            or evidence.get("whyNotIntentional")
-            or evidence.get("why_not_intentional")
-        )
-        if not references or (
-            not (evidence.get("changedLines") or evidence.get("changed_lines"))
-            and not classification
-        ):
-            raise SchemaValidationError("[review][ERROR] finding evidence is incomplete")
-        if not isinstance(rationale, str) or not rationale.strip():
-            raise SchemaValidationError("[review][ERROR] finding evidence missing rationale")
+        _validate_postable_finding(finding)
 
 
 __all__ = [

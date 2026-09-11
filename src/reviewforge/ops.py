@@ -80,45 +80,44 @@ def runtime(explicit: str | None = None) -> str:
     raise RuntimeError("[review][ERROR] neither docker nor podman found on PATH")
 
 
+def _assert_docker_buildkit() -> None:
+    if os.environ.get("DOCKER_BUILDKIT") == "0":
+        raise RuntimeError(
+            "[review][ERROR] DOCKER_BUILDKIT=0 disables BuildKit, which the "
+            "Dockerfile requires (cache/bind mounts). Unset it or set "
+            "DOCKER_BUILDKIT=1."
+        )
+    probe = subprocess.run(["docker", "buildx", "version"], capture_output=True, text=True, check=False)
+    if probe.returncode != 0:
+        raise RuntimeError(
+            "[review][ERROR] 'docker buildx' is unavailable. Install Docker >= 23.0 "
+            "(BuildKit is required for the Dockerfile's cache/bind mounts)."
+        )
+
+
+def _assert_podman_buildah() -> None:
+    probe = subprocess.run(
+        ["podman", "version", "--format", "{{.Client.Version}}"],
+        capture_output=True, text=True, check=False,
+    )
+    try:
+        major = int((probe.stdout.strip() or "0").split(".")[0])
+    except ValueError:
+        major = 0
+    if probe.returncode != 0 or major < 4:
+        raise RuntimeError(
+            "[review][ERROR] podman >= 4.0 (buildah >= 1.24) is required for the "
+            "Dockerfile's cache/bind mounts."
+        )
+    os.environ["BUILDAH_FORMAT"] = "docker"
+
+
 def _assert_build_capable(selected_runtime: str) -> None:
-    """Fail loudly before a build that requires BuildKit cache/bind mounts.
-
-    The Dockerfile uses RUN --mount=type=cache|bind, which needs BuildKit
-    (docker) or a recent buildah in docker format (podman). Without this
-    guard the failure surfaces as a cryptic Dockerfile parse error.
-    """
+    """Fail loudly before a build that requires BuildKit cache/bind mounts."""
     if selected_runtime == "docker":
-        if os.environ.get("DOCKER_BUILDKIT") == "0":
-            raise RuntimeError(
-                "[review][ERROR] DOCKER_BUILDKIT=0 disables BuildKit, which the "
-                "Dockerfile requires (cache/bind mounts). Unset it or set "
-                "DOCKER_BUILDKIT=1."
-            )
-        probe = subprocess.run(
-            ["docker", "buildx", "version"], capture_output=True, text=True, check=False
-        )
-        if probe.returncode != 0:
-            raise RuntimeError(
-                "[review][ERROR] 'docker buildx' is unavailable. Install Docker >= 23.0 "
-                "(BuildKit is required for the Dockerfile's cache/bind mounts)."
-            )
-    else:  # podman
-        probe = subprocess.run(
-            ["podman", "version", "--format", "{{.Client.Version}}"],
-            capture_output=True, text=True, check=False,
-        )
-        try:
-            major = int((probe.stdout.strip() or "0").split(".")[0])
-        except ValueError:
-            major = 0
-        if probe.returncode != 0 or major < 4:
-            raise RuntimeError(
-                "[review][ERROR] podman >= 4.0 (buildah >= 1.24) is required for the "
-                "Dockerfile's cache/bind mounts."
-            )
-        # buildah only honours RUN --mount in docker format.
-        os.environ["BUILDAH_FORMAT"] = "docker"
-
+        _assert_docker_buildkit()
+    else:
+        _assert_podman_buildah()
 
 def build_command(args: argparse.Namespace) -> list[str]:
     pins = load_pins(Path(args.pin_file))
@@ -140,6 +139,8 @@ def _env_file(path: str) -> tuple[str, bool]:
     try:
         for key, value in os.environ.items():
             if key in _ENV_ALLOWLIST_KEYS or key.startswith(_ENV_ALLOWLIST_PREFIXES):
+                if "\n" in value or "\r" in value:
+                    continue
                 handle.write(f"{key}={value}\n")
     finally:
         handle.close()
@@ -161,11 +162,8 @@ def _auth_json_mount_source() -> str | None:
 
 
 
-def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
-    env_file, temporary = _env_file(args.env_file)
-    selected_runtime = runtime(args.runtime)
-    image = _value(args.image, "IMAGE_NAME", _value(None, "IMAGE", "reviewforge:latest"))
-    overrides = {
+def _run_overrides(args: argparse.Namespace) -> dict[str, str | None]:
+    return {
         "ADO_AUTH_TOKEN": _value(args.ado_token, "ADO_AUTH_TOKEN", os.environ.get("ADO_API_KEY")),
         "PR_URL": _value(args.pr_url, "PR_URL"),
         "ADO_ORG": _value(args.org, "ADO_ORG"),
@@ -178,39 +176,102 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
         "PI_MODEL": _value(args.pi_model, "PI_MODEL", load_pins(Path(args.pin_file))["PI_MODEL"]),
         "DRY_RUN": "1" if args.dry_run else _value(None, "DRY_RUN"),
     }
-    command = [selected_runtime, "run"]
-    command.extend(["--network", "bridge", "--dns", "8.8.8.8", "--dns", "1.1.1.1"] if selected_runtime == "podman" else ["--network", "host"])
-    if not args.keep_container:
-        command.extend(["--rm", "-d"])
-    name = _value(args.container_name, "CONTAINER_NAME") or (f"review-pr-{overrides['PR_ID']}" if overrides["PR_ID"] else None)
-    if name:
-        command.extend(["--name", name])
+
+
+def _append_mounts(
+    command: list[str],
+    args: argparse.Namespace,
+    selected_runtime: str,
+    overrides: dict[str, str | None],
+    env_file: str,
+) -> None:
     auth_json_mount = _auth_json_mount_source()
     if auth_json_mount:
-        # Read-only: the container never needs to write the host's auth file.
         command.extend(["--volume", f"{auth_json_mount}:/home/review/.pi/agent/auth.json:ro"])
     artifact_path = _value(args.artifact_path, "ARTIFACT_PATH")
     if artifact_path:
         Path(artifact_path).mkdir(parents=True, exist_ok=True)
-        resolved_artifact_path = Path(artifact_path).resolve()
-        mount_source = _podman_artifact_mount_source(resolved_artifact_path) if selected_runtime == "podman" else resolved_artifact_path.as_posix()
+        resolved = Path(artifact_path).resolve()
+        mount_source = _podman_artifact_mount_source(resolved) if selected_runtime == "podman" else resolved.as_posix()
         command.extend(["--volume", f"{mount_source}:/workspace/artifacts"])
     else:
-        command.extend(["--volume", f"{_value(None, 'REVIEW_ARTIFACT_VOLUME_NAME', 'reviewforge-artifacts')}:/workspace/artifacts"])
-    # Dedicated CRG graph-cache volume. It is intentionally mounted for every
-    # run per the operator contract; CRG may be enabled later without changing
-    # container wiring. Respect a configured container cache path and mount the
-    # named volume at that same path.
+        volume = _value(None, "REVIEW_ARTIFACT_VOLUME_NAME", "reviewforge-artifacts")
+        command.extend(["--volume", f"{volume}:/workspace/artifacts"])
     dotenv = parse_dotenv(env_file)
     cache_dir = os.environ.get("CRG_CACHE_DIR") or dotenv.get("CRG_CACHE_DIR") or "/workspace/crg-cache"
     cache_volume = _value(None, "REVIEW_CRG_CACHE_VOLUME_NAME", "reviewforge-crg-cache")
-    command.extend(["--volume", f"{cache_volume}:{cache_dir}"])
-    command.extend(["-e", f"CRG_CACHE_DIR={cache_dir}"])
+    command.extend(["--volume", f"{cache_volume}:{cache_dir}", "-e", f"CRG_CACHE_DIR={cache_dir}"])
     command.extend(["--env-file", env_file])
     for key, value in overrides.items():
         if value:
             command.extend(["-e", f"{key}={value}"])
-    command.append(image)
+
+
+def _container_name(args: argparse.Namespace) -> str | None:
+    overrides = _run_overrides(args)
+    return _value(args.container_name, "CONTAINER_NAME") or (
+        f"review-pr-{overrides['PR_ID']}" if overrides["PR_ID"] else None
+    )
+
+
+def _container_status(selected_runtime: str, name: str) -> str | None:
+    result = subprocess.run(
+        [
+            selected_runtime,
+            "ps",
+            "--all",
+            "--filter",
+            f"name=^{name}$",
+            "--format",
+            "{{.Status}}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise RuntimeError(f"[review][ERROR] failed to inspect container {name!r}")
+    return result.stdout.strip() or None
+
+
+def _append_run_options(
+    command: list[str],
+    args: argparse.Namespace,
+    selected_runtime: str,
+    overrides: dict[str, str | None],
+    env_file: str,
+) -> None:
+    command.extend(
+        ["--network", "bridge", "--dns", "8.8.8.8", "--dns", "1.1.1.1"]
+        if selected_runtime == "podman"
+        else ["--network", "host"]
+    )
+    command.append("-d")
+    if args.restart:
+        command.extend(["--restart", args.restart])
+    elif not args.keep_container:
+        command.append("--rm")
+    name = _value(args.container_name, "CONTAINER_NAME") or (
+        f"review-pr-{overrides['PR_ID']}" if overrides["PR_ID"] else None
+    )
+    if name:
+        command.extend(["--name", name])
+    _append_mounts(command, args, selected_runtime, overrides, env_file)
+
+
+def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
+    env_file, temporary = _env_file(args.env_file)
+    try:
+        selected_runtime = runtime(args.runtime)
+        image = _value(args.image, "IMAGE_NAME", _value(None, "IMAGE", "reviewforge:latest"))
+        overrides = _run_overrides(args)
+        command = [selected_runtime, "run"]
+        _append_run_options(command, args, selected_runtime, overrides, env_file)
+        command.append(image)
+    except Exception:
+        if temporary:
+            Path(env_file).unlink(missing_ok=True)
+        raise
     return command, env_file, temporary
 
 
@@ -235,6 +296,18 @@ def cmd_build(args: argparse.Namespace) -> int:
     if not args.dry_run:
         _assert_build_capable(command[0])
     return _execute(command, args.dry_run)
+def _reuse_existing_container(
+    args: argparse.Namespace, selected_runtime: str, name: str | None
+) -> int | None:
+    if not name or args.dry_run:
+        return None
+    status = _container_status(selected_runtime, name)
+    if not status:
+        return None
+    if status.lower().startswith("up "):
+        print(f"{selected_runtime} container {name} is already running")
+        return 0
+    return _execute([selected_runtime, "restart", name], args.print_command)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -242,6 +315,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         build = argparse.Namespace(**vars(args), pi_version=None, uv_version=None)
         if cmd_build(build):
             return 1
+    selected_runtime = runtime(args.runtime)
+    existing = None if args.print_command else _reuse_existing_container(args, selected_runtime, _container_name(args))
+    if existing is not None:
+        return existing
     command, env_file, temporary = run_command(args)
     try:
         return _execute(command, args.print_command)
@@ -250,28 +327,129 @@ def cmd_run(args: argparse.Namespace) -> int:
             Path(env_file).unlink(missing_ok=True)
 
 
+def _selection_token_indices(
+    token: str, pull_request_ids: dict[int, int]
+) -> set[int]:
+    if token.startswith("#"):
+        if not token[1:].isdigit():
+            raise ValueError(token)
+        pull_request_id = int(token[1:])
+        if pull_request_id not in pull_request_ids:
+            raise RuntimeError(
+                f"[review][ERROR] pull-request ID not found: {pull_request_id}"
+            )
+        return {pull_request_ids[pull_request_id]}
+    start, separator, end = token.partition("-")
+    if separator:
+        first = int(start)
+        last = int(end)
+        return set(range(min(first, last), max(first, last) + 1))
+    return {int(token)}
+
+
+def _selection_indices(
+    raw: str, items: list[tuple[str, dict[str, object]]]
+) -> set[int]:
+    selected: set[int] = set()
+    size = len(items)
+    pull_request_ids = {
+        int(pr["pullRequestId"]): index
+        for index, (_project, pr) in enumerate(items, start=1)
+    }
+    try:
+        for part in raw.split(","):
+            selected.update(_selection_token_indices(part.strip(), pull_request_ids))
+    except ValueError as exc:
+        raise RuntimeError(
+            "[review][ERROR] invalid selection; use all, none, indexes, "
+            "index ranges, or #<PR ID>"
+        ) from exc
+    if not selected or min(selected) < 1 or max(selected) > size:
+        raise RuntimeError("[review][ERROR] selection index is out of range")
+    return selected
+
+
 def _select_pull_requests(items: list[tuple[str, dict[str, object]]], interactive: bool) -> list[tuple[str, dict[str, object]]]:
     if not interactive:
         return items
     for index, (project, pr) in enumerate(items, start=1):
         print(f"  [{index:2}] PR #{pr['pullRequestId']}  {project}/{pr.get('repositoryId', '')} -> {pr.get('targetRefName', '')}  {pr.get('title', '')}")
-    raw = input("==> Select PRs to review [all/none/1,3-5]: ").strip().lower()
+    raw = input("==> Select PRs [all/none/indexes/index ranges/#PR-ID]: ").strip().lower()
     if raw in {"all", "a"}:
         return items
     if raw in {"none", "n"}:
         return []
-    selected: set[int] = set()
-    try:
-        for part in raw.split(","):
-            start, _, end = part.strip().partition("-")
-            first = int(start)
-            last = int(end or start)
-            selected.update(range(min(first, last), max(first, last) + 1))
-    except ValueError:
-        raise RuntimeError("[review][ERROR] invalid selection; use all, none, or 1,3-5")
-    if not selected or min(selected) < 1 or max(selected) > len(items):
-        raise RuntimeError("[review][ERROR] selection is out of range")
+    selected = _selection_indices(raw, items)
     return [item for index, item in enumerate(items, start=1) if index in selected]
+
+
+def _discover_project(
+    org: str, project: str, branches: list[str]
+) -> list[tuple[str, dict[str, object]]]:
+    discover = [
+        sys.executable, "-m", "reviewforge", "discover",
+        "--org", org, "--project", project, "--target-branches", ",".join(branches),
+    ]
+    result = subprocess.run(discover, check=False, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "[review][ERROR] pull-request discovery failed")
+    return [
+        (project, pr)
+        for pr in json.loads(result.stdout)
+        if not pr.get("isDraft")
+        and pr.get("targetRefName", "").removeprefix("refs/heads/") in branches
+    ]
+
+
+def _run_open_pr(
+    args: argparse.Namespace, org: str, project: str, pr: dict[str, object]
+) -> int:
+    values = vars(args).copy()
+    values.update(
+        org=org,
+        project=project,
+        repo_id=str(pr["repositoryId"]),
+        pr_id=str(pr["pullRequestId"]),
+        pr_url=None,
+        language=None,
+        fail_on=None,
+        vote_waiting_on=None,
+        pi_model=None,
+        container_name=None,
+        artifact_path=None,
+        build=False,
+    )
+    return cmd_run(argparse.Namespace(**values))
+
+
+def _run_selected_open_prs(
+    args: argparse.Namespace, org: str, selected: list[tuple[str, dict[str, object]]]
+) -> int:
+    failures = sum(
+        bool(_run_open_pr(args, org, project, pr)) for project, pr in selected
+    )
+    return int(failures > 0)
+
+
+def _selected_open_prs(
+    projects: list[str],
+    branches: list[str],
+    org: str,
+    limit: int,
+    interactive: bool,
+) -> list[tuple[str, dict[str, object]]]:
+    selected = [item for project in projects for item in _discover_project(org, project, branches)]
+    selected.sort(
+        key=lambda item: (
+            item[0],
+            str(item[1].get("repositoryId", "")),
+            str(item[1].get("targetRefName", "")),
+            int(item[1]["pullRequestId"]),
+        )
+    )
+    if limit:
+        selected = selected[:limit]
+    return _select_pull_requests(selected, interactive)
 
 
 def cmd_run_open_prs(args: argparse.Namespace) -> int:
@@ -280,44 +458,12 @@ def cmd_run_open_prs(args: argparse.Namespace) -> int:
     org = _value(args.organization, "ADO_ORGANIZATION")
     if not org or not projects or not branches:
         raise RuntimeError("[review][ERROR] ADO_ORGANIZATION, ADO_PROJECTS, and ADO_TARGET_BRANCHES are required")
-    selected: list[tuple[str, dict[str, object]]] = []
-    for project in projects:
-        discover = [sys.executable, "-m", "reviewforge", "discover", "--org", org, "--project", project, "--target-branches", ",".join(branches)]
-        result = subprocess.run(discover, check=False, capture_output=True, text=True)
-        if result.returncode:
-            raise RuntimeError(result.stderr.strip() or "[review][ERROR] pull-request discovery failed")
-        selected.extend(
-            (project, pr)
-            for pr in json.loads(result.stdout)
-            if not pr.get("isDraft") and pr.get("targetRefName", "").removeprefix("refs/heads/") in branches
-        )
-    selected.sort(key=lambda item: (item[0], str(item[1].get("repositoryId", "")), str(item[1].get("targetRefName", "")), int(item[1]["pullRequestId"])))
-    if args.max_pull_requests:
-        selected = selected[:args.max_pull_requests]
-    selected = _select_pull_requests(selected, args.interactive)
+    selected = _selected_open_prs(projects, branches, org, args.max_pull_requests, args.interactive)
     if args.build:
         build = argparse.Namespace(**vars(args), pi_version=None, uv_version=None)
         if cmd_build(build):
             return 1
-    failures = 0
-    for project, pr in selected:
-        values = vars(args).copy()
-        values.update(
-            org=org,
-            project=project,
-            repo_id=str(pr["repositoryId"]),
-            pr_id=str(pr["pullRequestId"]),
-            pr_url=None,
-            language=None,
-            fail_on=None,
-            vote_waiting_on=None,
-            pi_model=None,
-            container_name=None,
-            artifact_path=None,
-            build=False,
-        )
-        failures += bool(cmd_run(argparse.Namespace(**values)))
-    return int(failures > 0)
+    return _run_selected_open_prs(args, org, selected)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -330,6 +476,7 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--uv-version")
     build.add_argument("--dry-run", action="store_true")
     run = argparse.ArgumentParser(add_help=False, parents=[common])
+    run.add_argument("--restart", default=None, help="container restart policy, e.g. on-failure:3")
     run.add_argument("--pr-url")
     run.add_argument("--org")
     run.add_argument("--project")

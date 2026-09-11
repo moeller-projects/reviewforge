@@ -20,13 +20,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from reviewforge.artifacts import builder, manager  # noqa: E402
-from reviewforge.config import Config  # noqa: E402
+from reviewforge.config import Config, ConfigError  # noqa: E402
 from reviewforge.exceptions import ReviewForgeError  # noqa: E402
 from reviewforge.pipeline import orchestrator  # noqa: E402
 from reviewforge.pipeline.orchestrator import (  # noqa: E402
     ensure_tools,
     run_full,
     run_post_only,
+    run_reply_only,
     run_review_only,
     should_skip,
 )
@@ -246,6 +247,34 @@ class TestRunFull:
         assert log.index("stage pi started") < log.index("[pi review] streamed stderr") < log.index("stage pi finished")
         assert "[pi review] streamed stderr" in capsys.readouterr().err
 
+    def test_writes_pi_invocations_artifact(self, cfg, monkeypatch):
+        stubs = [_make_stub("a")]
+        monkeypatch.setattr(orchestrator, "DEFAULT_PIPELINE", stubs)
+        expected = [{"stage": "a", "returncode": 0}]
+
+        class FakePi:
+            invocations = expected
+
+        real_make_ctx = orchestrator._make_stage_context
+
+        def fake_make_ctx(cfg, artifacts, pi):
+            ctx = real_make_ctx(cfg, artifacts, pi)
+            ctx.pi = FakePi()
+            return ctx
+
+        monkeypatch.setattr(orchestrator, "_make_stage_context", fake_make_ctx)
+        run_full(cfg)
+        path = cfg.review_artifact_root / "pr-42" / "runs" / "run-1" / "pi-invocations.json"
+        assert path.exists()
+        assert json.loads(path.read_text()) == expected
+
+    def test_skips_write_when_no_invocations(self, cfg, monkeypatch):
+        stubs = [_make_stub("a")]
+        monkeypatch.setattr(orchestrator, "DEFAULT_PIPELINE", stubs)
+        run_full(cfg)
+        path = cfg.review_artifact_root / "pr-42" / "runs" / "run-1" / "pi-invocations.json"
+        assert not path.exists()
+
 # ---------------------------------------------------------------------------
 # run_review_only
 # ---------------------------------------------------------------------------
@@ -289,6 +318,62 @@ class TestRunReviewOnly:
         outcome = run_review_only(cfg)
         assert outcome.exit_code == 1
 
+
+
+# ---------------------------------------------------------------------------
+# run_reply_only
+# ---------------------------------------------------------------------------
+
+
+class TestRunReplyOnly:
+    def test_runs_reply_stage_when_env_disables_automatic_replies(
+        self, tmp_path, monkeypatch
+    ):
+        from reviewforge.pipeline.stage import Stage
+
+        reply_prompt = tmp_path / "comment-reply.md"
+        reply_prompt.write_text("reply prompt", encoding="utf-8")
+        cfg = Config.from_sources(
+            env={
+                "ADO_AUTH_TOKEN": "tok",
+                "REPLY_COMMENTS": "0",
+                "COMMENT_REPLY_PROMPT_PATH": str(reply_prompt),
+                "REVIEW_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "DRY_RUN": "1",
+            }
+        )
+        called = []
+
+        class ReplyStage(Stage):
+            name = "reply"
+
+            def should_run(self, ctx):
+                return ctx.cfg.reply_comments
+
+            def run(self, ctx):
+                called.append(ctx.cfg.reply_comments)
+                return {}
+
+        monkeypatch.setattr(orchestrator, "REPLY_PIPELINE", [ReplyStage()])
+
+        outcome = run_reply_only(cfg)
+
+        assert [result.status for result in outcome.stages] == ["ok"]
+        assert called == [True]
+
+    def test_validates_reply_prompt_when_automatic_replies_are_disabled(
+        self, tmp_path
+    ):
+        cfg = Config.from_sources(
+            env={
+                "ADO_AUTH_TOKEN": "tok",
+                "REPLY_COMMENTS": "0",
+                "COMMENT_REPLY_PROMPT_PATH": str(tmp_path / "missing-reply.md"),
+            }
+        )
+
+        with pytest.raises(ConfigError, match="missing-reply.md"):
+            run_reply_only(cfg)
 
 # ---------------------------------------------------------------------------
 # run_post_only

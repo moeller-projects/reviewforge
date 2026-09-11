@@ -52,6 +52,116 @@ from .analysis import (
 _CRG_DISTRIBUTION = "code-review-graph"
 
 
+def _load_crg_modules() -> tuple[Any, Any, Any, Any] | None:
+    try:
+        from code_review_graph.graph import GraphStore
+        import code_review_graph.incremental as crg_inc
+        from code_review_graph.changes import analyze_changes, parse_git_diff_ranges
+    except ImportError:
+        return None
+    return GraphStore, crg_inc, analyze_changes, parse_git_diff_ranges
+
+
+def _build_graph(
+    ctx: StageContext,
+    repo_dir: Path,
+    changed_files: list[str],
+    graph_store: Any,
+    crg_inc: Any,
+    tool_version: str,
+) -> tuple[Any, str, int, int]:
+    db_path = _crg_db_path(ctx, tool_version)
+    db_existed = db_path.exists()
+    store = graph_store(db_path)
+    started = time.monotonic()
+    incremental = getattr(crg_inc, "incremental_update", None)
+    if db_existed and incremental is not None:
+        try:
+            result = incremental(repo_dir, store, changed_files=changed_files)
+            mode = "incremental"
+        except Exception as exc:
+            log_warning(f"CRG incremental update failed ({type(exc).__name__}: {exc}); falling back to full build")
+            result = crg_inc.full_build(repo_dir, store)
+            mode = "full"
+    else:
+        result = crg_inc.full_build(repo_dir, store)
+        mode = "full"
+    duration = int((time.monotonic() - started) * 1000)
+    nodes = result.get("nodes", result.get("total_nodes", 0)) if isinstance(result, dict) else 0
+    _log(f"CRG graph {mode} build: {nodes} nodes from {repo_dir}")
+    return store, mode, duration, nodes
+
+
+def _analyze_graph(
+    store: Any,
+    repo_dir: Path,
+    changed_files: list[str],
+    range_spec: str,
+    analyze_changes: Any,
+    parse_git_diff_ranges: Any,
+) -> dict[str, Any]:
+    root = str(repo_dir)
+    ranges = parse_git_diff_ranges(root, range_spec) if range_spec else None
+    changed_ranges = {str(repo_dir / key): value for key, value in ranges.items()} if ranges is not None else None
+    absolute_files = [str(repo_dir / path) if not Path(path).is_absolute() else path for path in changed_files]
+    analysis = analyze_changes(store, absolute_files, changed_ranges=changed_ranges, repo_root=root)
+    if not isinstance(analysis, dict):
+        raise ValueError("CRG analysis returned a non-object payload")
+    return analysis
+
+
+def _optional_analysis(
+    ctx: StageContext,
+    store: Any,
+    changed_files: list[str],
+    tool_version: str,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    graph_context: dict[str, Any] = {}
+    details: dict[str, int] = {}
+    analyses = (
+        ("graph_api_diff", "graph_api_diff_ms", "api_surface", "CRG API-surface analysis degraded"),
+        ("graph_flows", "graph_flows_ms", "flows", "CRG flow analysis degraded"),
+        ("graph_arch", "graph_arch_ms", "architecture", "CRG architecture analysis degraded"),
+    )
+    for flag, metric, key, message in analyses:
+        if not getattr(ctx.cfg, flag, False):
+            continue
+        started = time.monotonic()
+        try:
+            value = _run_analysis(key, ctx, store, changed_files, tool_version)
+        except Exception as exc:
+            log_warning(f"{message} ({type(exc).__name__}: {exc})")
+            value = _degraded_value(key, ctx, exc)
+        graph_context[key] = value
+        details[metric] = int((time.monotonic() - started) * 1000)
+    return graph_context, details
+
+
+def _run_analysis(
+    key: str,
+    ctx: StageContext,
+    store: Any,
+    changed_files: list[str],
+    tool_version: str,
+) -> dict[str, Any]:
+    if key == "api_surface":
+        from .snapshots import api_surface, build_base_snapshot, snapshot
+        base = build_base_snapshot(ctx, tool_version)
+        return {"status": "ok", "base_commit": getattr(ctx.state, "base_commit", ""), **api_surface(base, snapshot(store), changed_files)}
+    if key == "flows":
+        from .flows import flows
+        return flows(store, changed_files)
+    from .architecture import architecture
+    return architecture(store, changed_files)
+
+
+def _degraded_value(key: str, ctx: StageContext, exc: Exception) -> dict[str, Any]:
+    base_commit = getattr(ctx.state, "base_commit", "")
+    if key == "api_surface":
+        return {"status": "degraded", "base_commit": base_commit, "added_nodes": [], "removed_nodes": [], "changed_nodes": [], "added_edges": [], "removed_edges": [], "truncated": False, "breaking_candidates": [], "error": str(exc)}
+    if key == "flows":
+        return {"status": "degraded", "affected_count": 0, "top": [], "error": str(exc)}
+    return {"status": "degraded", "hubs_touched": [], "bridges_touched": [], "communities_crossed": 0, "community_labels": {}, "error": str(exc)}
 class EnrichWithCrgStage(Stage):
     """Build a Tree-sitter knowledge graph and analyse the PR diff."""
 
@@ -66,152 +176,61 @@ class EnrichWithCrgStage(Stage):
             return False
         return True
 
-    def run(self, ctx: StageContext) -> dict[str, Any]:  # noqa: PLR0912 - graceful-degrade
+    def run(self, ctx: StageContext) -> dict[str, Any]:
         repo_dir: Path = ctx.state.repo_dir
-        changed_files: list[str] = list(getattr(ctx.state, "files", []))
-        range_spec: str = getattr(ctx.state, "range_spec", "")
-
-        try:
-            from code_review_graph.graph import GraphStore
-            import code_review_graph.incremental as _crg_inc
-            from code_review_graph.changes import analyze_changes, parse_git_diff_ranges
-        except ImportError:
+        changed_files = list(getattr(ctx.state, "files", []))
+        range_spec = getattr(ctx.state, "range_spec", "")
+        modules = _load_crg_modules()
+        if modules is None:
             log_warning(
                 "CRG enrichment skipped: 'code-review-graph' package is not installed. "
                 "Install it with: pip install code-review-graph"
             )
             _write_failure_document(ctx, tool_version=None, error="package unavailable")
             return {"crg_status": "package_unavailable"}
-
-        tool_version = "unknown"
-        build_mode = "full"
-        build_duration_ms = 0
-        node_count = 0
+        graph_store, crg_inc, analyze_changes, parse_git_diff_ranges = modules
+        tool_version = _crg_version()
+        if tool_version == "unknown":
+            # Modules import but the distribution metadata is missing: broken
+            # install — disable CRG instead of cache-keying under "unknown".
+            log_warning("CRG enrichment skipped: 'code-review-graph' distribution metadata is missing.")
+            _write_failure_document(ctx, tool_version=None, error="package metadata unavailable")
+            return {"crg_status": "package_unavailable"}
         try:
-            tool_version = _crg_version()
-            db_path = _crg_db_path(ctx, tool_version)
-            # Decide cold vs warm BEFORE constructing GraphStore: opening the
-            # SQLite database creates the file eagerly, so an existence check
-            # afterwards would always report "warm" and the cold full build
-            # would never run.
-            db_existed = db_path.exists()
-            store = GraphStore(db_path)
-            incremental_update = getattr(_crg_inc, "incremental_update", None)
-            started = time.monotonic()
-            if db_existed and incremental_update is not None:
-                try:
-                    # Pass the PR's changed files explicitly. The package
-                    # default diffs against HEAD~1, which is unreliable in
-                    # our shallow, detached checkouts and silently re-parses
-                    # the wrong file set.
-                    build_result = incremental_update(repo_dir, store, changed_files=changed_files)
-                    build_mode = "incremental"
-                except Exception as exc:  # noqa: BLE001
-                    log_warning(
-                        f"CRG incremental update failed ({type(exc).__name__}: {exc}); "
-                        "falling back to full build"
-                    )
-                    build_result = _crg_inc.full_build(repo_dir, store)
-                    build_mode = "full"
-            else:
-                build_result = _crg_inc.full_build(repo_dir, store)
-                build_mode = "full"
-            build_duration_ms = int((time.monotonic() - started) * 1000)
-            node_count = (
-                build_result.get("nodes", build_result.get("total_nodes", 0))
-                if isinstance(build_result, dict)
-                else 0
+            store, build_mode, build_duration_ms, node_count = _build_graph(
+                ctx, repo_dir, changed_files, graph_store, crg_inc, tool_version
             )
-            _log(f"CRG graph {build_mode} build: {node_count} nodes from {repo_dir}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log_warning(f"CRG graph build failed ({type(exc).__name__}: {exc}); skipping enrichment")
             _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
             stage_context_files(ctx)
             return {"crg_status": "build_failed", "crg_error": str(exc)}
-
         try:
-            # Parse line ranges from the diff so CRG can pinpoint changed nodes
-            # precisely. Pass the range_spec (e.g. "abc..def") as the git base.
-            # Absolute paths are required by analyze_changes for correct lookup.
-            root_str = str(repo_dir)
-            if range_spec:
-                raw_ranges = parse_git_diff_ranges(root_str, range_spec)
-                # Remap relative keys to absolute paths for GraphStore lookups.
-                changed_ranges: dict[str, list[tuple[int, int]]] | None = {
-                    str(repo_dir / key): ranges
-                    for key, ranges in raw_ranges.items()
-                }
-            else:
-                changed_ranges = None
-
-            abs_changed_files = [
-                str(repo_dir / f) if not Path(f).is_absolute() else f
-                for f in changed_files
-            ]
-            analysis = analyze_changes(
-                store,
-                abs_changed_files,
-                changed_ranges=changed_ranges,
-                repo_root=root_str,
+            analysis = _analyze_graph(
+                store, repo_dir, changed_files, range_spec, analyze_changes, parse_git_diff_ranges
             )
-            if not isinstance(analysis, dict):
-                raise ValueError("CRG analysis returned a non-object payload")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log_warning(f"CRG analysis failed ({type(exc).__name__}: {exc}); skipping enrichment")
             _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
             stage_context_files(ctx)
             return {"crg_status": "analysis_failed", "crg_error": str(exc)}
-
         status = "degraded" if analysis.get("functions_truncated") else "ok"
         document = _build_document(
-            analysis,
-            status=status,
-            tool_version=tool_version,
+            analysis, status=status, tool_version=tool_version,
             build={"mode": build_mode, "duration_ms": build_duration_ms},
             repo_root=str(repo_dir),
         )
-        # Wave-two analyses are deliberately isolated: a missing optional API
-        # or a malformed graph can only degrade its own context section.
-        graph_context = dict(document)
-        details: dict[str, Any] = {}
-        if getattr(ctx.cfg, "graph_api_diff", False):
-            started = time.monotonic()
+        graph_context, details = _optional_analysis(ctx, store, changed_files, tool_version)
+        graph_context = {**document, **graph_context}
+        for writer, label, value in (
+            (_write_artifact, "CRG artifact", document),
+            (_write_graph_context, "Graph-context artifact", graph_context),
+        ):
             try:
-                from .snapshots import api_surface, build_base_snapshot, snapshot
-                base_snapshot = build_base_snapshot(ctx, tool_version)
-                graph_context["api_surface"] = {"status": "ok", "base_commit": getattr(ctx.state, "base_commit", ""), **api_surface(base_snapshot, snapshot(store), changed_files)}
-            except Exception as exc:  # noqa: BLE001
-                log_warning(f"CRG API-surface analysis degraded ({type(exc).__name__}: {exc})")
-                graph_context["api_surface"] = {"status": "degraded", "base_commit": getattr(ctx.state, "base_commit", ""), "error": str(exc)}
-            details["graph_api_diff_ms"] = int((time.monotonic() - started) * 1000)
-        if getattr(ctx.cfg, "graph_flows", False):
-            started = time.monotonic()
-            try:
-                from .flows import flows
-                graph_context["flows"] = flows(store, changed_files)
-            except Exception as exc:  # noqa: BLE001
-                log_warning(f"CRG flow analysis degraded ({type(exc).__name__}: {exc})")
-                graph_context["flows"] = {"status": "degraded", "affected_count": 0, "top": [], "error": str(exc)}
-            details["graph_flows_ms"] = int((time.monotonic() - started) * 1000)
-        if getattr(ctx.cfg, "graph_arch", False):
-            started = time.monotonic()
-            try:
-                from .architecture import architecture
-                graph_context["architecture"] = architecture(store, changed_files)
-            except Exception as exc:  # noqa: BLE001
-                log_warning(f"CRG architecture analysis degraded ({type(exc).__name__}: {exc})")
-                graph_context["architecture"] = {"status": "degraded", "hubs_touched": [], "bridges_touched": [], "communities_crossed": 0, "community_labels": {}, "error": str(exc)}
-            details["graph_arch_ms"] = int((time.monotonic() - started) * 1000)
-        try:
-            _write_artifact(ctx, document)
-        except Exception as exc:  # noqa: BLE001
-            log_warning(f"CRG artifact write failed ({type(exc).__name__}: {exc}); continuing without artifact")
-        try:
-            _write_graph_context(ctx, graph_context)
-        except Exception as exc:  # noqa: BLE001
-            log_warning(f"Graph-context artifact write failed ({type(exc).__name__}: {exc}); continuing without artifact")
+                writer(ctx, value)
+            except Exception as exc:
+                log_warning(f"{label} write failed ({type(exc).__name__}: {exc}); continuing without artifact")
         stage_context_files(ctx)
-
         ctx.extras["crg_analysis"] = document
         ctx.extras["graph_context"] = graph_context
         _log(

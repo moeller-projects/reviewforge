@@ -1,7 +1,6 @@
 """Git operations subpackage."""
 from __future__ import annotations
-
-from .chunker import DiffChunk, build_chunks
+from .chunker import DiffChunk, build_chunks, build_scopes, scope_document
 from .ops import (
     GIT_ASKPASS_SCRIPT,
     RepoState,
@@ -17,6 +16,8 @@ __all__ = [
     "GIT_ASKPASS_SCRIPT",
     "RepoState",
     "build_chunks",
+    "build_scopes",
+    "scope_document",
     "cleanup",
     "git_log",
     "prepare_repo",

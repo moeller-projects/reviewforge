@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from reviewforge.ai.runner import PiRunner, _parse_context_file_reads
+from conftest import FakePopen
 from reviewforge.config import Config
 from reviewforge.artifacts import manager
 from reviewforge.pipeline.stage import StageContext
@@ -164,16 +165,16 @@ def test_runner_sets_review_cwd_and_counts_context_reads(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     calls: list[dict] = []
 
-    def fake_run(cmd, **kwargs):
-        calls.append(kwargs)
-        return subprocess.CompletedProcess(
+    def fake_popen(cmd, cwd=None, **kwargs):
+        calls.append({"cwd": cwd})
+        return FakePopen(
             cmd,
-            0,
-            b'{"ok": true}',
-            b'read .reviewforge-context/metadata.json\nread .reviewforge-context/metadata.json\n',
+            returncode=0,
+            stdout=b'{"ok": true}',
+            stderr=b'read .reviewforge-context/metadata.json\nread .reviewforge-context/metadata.json\n',
         )
 
-    monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
     runner = PiRunner(cfg)
     runner.set_working_dir(tmp_path)
     runner.run_json(cfg.review_prompt_path, "first", tmp_path / "one.json", "one")

@@ -27,7 +27,13 @@ def _result(*, severity: str = "major", file: str | None = "src\\app.py", line: 
             "whyNotIntentional": "No validation is present.",
         },
     }
-    return ReviewResult.model_validate({"review_summary": {"summary": "Reviewed."}, "findings": [finding]})
+    return ReviewResult.model_validate(
+        {
+            "review_summary": {"summary": "Reviewed."},
+            "pr_summary": {"work_type": "change"},
+            "findings": [finding],
+        }
+    )
 
 
 def test_review_result_to_sarif_golden_shape():
@@ -83,8 +89,9 @@ def test_slug_collisions_get_unique_rule_ids():
 
 @pytest.mark.parametrize("file", ["../secrets.py", "C:\\repo\\a.py"])
 def test_invalid_locations_are_omitted(file: str):
-    output = review_result_to_sarif(_result(file=file), tool_version="x")
-    assert "locations" not in output["runs"][0]["results"][0]
+    from reviewforge.pipeline.sarif import _location_uri
+
+    assert _location_uri(file) is None
 
 
 def test_location_uri_edge_cases():

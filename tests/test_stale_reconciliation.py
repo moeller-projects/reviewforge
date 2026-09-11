@@ -134,6 +134,27 @@ class TestFindStaleBotThreads:
         assert len(stale) == 1
         assert stale[0]["reason"] == "file_no_longer_in_diff"
 
+    @pytest.mark.parametrize("status", ["fixed", "wontFix", "wontfix", "byDesign", "closed"])
+    def test_terminal_thread_status_is_not_stale(self, status):
+        thread = _bot_thread(1, "/src/app.py", 6, "abc123def456")
+        thread["status"] = status
+        stale = posting.find_stale_bot_threads(
+            [thread],
+            {"abc123def456"},
+            {"src/app.py": {1, 2, 3, 4, 5}},
+        )
+        assert stale == []
+
+    def test_deleted_thread_is_not_stale(self):
+        thread = _bot_thread(1, "/src/app.py", 6, "abc123def456")
+        thread["isDeleted"] = True
+        assert posting.find_stale_bot_threads(
+            [thread],
+            {"abc123def456"},
+            {"src/app.py": {1, 2, 3, 4, 5}},
+        ) == []
+
+
     def test_general_comment_never_stale(self):
         # Work-item findings are posted as general PR comments (no threadContext).
         threads = [{"id": 1, "threadContext": None, "comments": [
@@ -152,15 +173,18 @@ class TestFindStaleBotThreads:
         stale = posting.find_stale_bot_threads(threads, {"abc123def456"}, {})
         assert stale == []
 
-    def test_human_thread_skipped(self):
-        # No marker in comment body → human thread, never stale.
+    @pytest.mark.parametrize(
+        "content",
+        ["Just a comment, no marker.", "Body\n<!-- prb:unknown000001 -->\n"],
+    )
+    def test_human_or_unknown_marker_thread_skipped(self, content):
+        # An anchored thread without a known bot marker must never be annotated.
         threads = [{
             "id": 1,
             "threadContext": {"filePath": "/x.py", "rightFileStart": {"line": 99}},
-            "comments": [{"content": "Just a comment, no marker."}],
+            "comments": [{"content": content}],
         }]
-        stale = posting.find_stale_bot_threads(threads, {"abc123def456"}, {"x.py": {99}})
-        assert stale == []
+        assert posting.find_stale_bot_threads(threads, {"abc123def456"}, {}) == []
 
     def test_just_posted_threads_skipped(self):
         # A thread created in this run obviously matches the current diff.
@@ -173,25 +197,45 @@ class TestFindStaleBotThreads:
         )
         assert stale == []
 
-    def test_mixed_set_of_threads(self):
-        # Multiple threads, mix of stale and current.
-        threads = [
-            _bot_thread(1, "/src/app.py", 4, "aaaaaaaaaaaa"),   # current
-            _bot_thread(2, "/src/app.py", 99, "bbbbbbbbbbbb"),  # stale (line)
-            _bot_thread(3, "/src/old.py", 1, "cccccccccccc"),   # stale (file)
-            {"id": 4, "threadContext": None, "comments": [
-                {"content": "Body\n<!-- prb:dddddddddddd -->\n"}
-            ]},                                                  # general → skip
-            {"id": 5, "threadContext": {"filePath": "/x.py"},
-             "comments": [{"content": "no marker"}]},            # human → skip
-        ]
+    def test_already_annotated_thread_not_stale_again(self):
+        # A stale thread that already carries a prb-stale follow-up (from a
+        # prior run) must not be re-flagged, so a re-run is idempotent.
+        threads = [{
+            "id": 1,
+            "threadContext": {"filePath": "/src/app.py",
+                              "rightFileStart": {"line": 6, "offset": 1}},
+            "comments": [
+                {"content": "Body\n<!-- prb:abc123def456 -->\n"},
+                {"content": "stale note\nprb-stale:abc123def456\n"},
+            ],
+        }]
         stale = posting.find_stale_bot_threads(
             threads,
-            {"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc", "dddddddddddd"},
-            {"src/app.py": {1, 2, 3, 4, 5}, "src/other.py": {1, 2}},
+            {"abc123def456"},
+            {"src/app.py": {1, 2, 3, 4, 5}},
         )
-        ids = sorted(e["threadId"] for e in stale)
-        assert ids == [2, 3]
+        assert stale == []
+
+    def test_annotated_thread_with_other_key_not_skipped(self):
+        # The stale-marker idempotency is per-thread, not global: a stale
+        # marker with a *different* key must not suppress this thread.
+        threads = [{
+            "id": 1,
+            "threadContext": {"filePath": "/src/app.py",
+                              "rightFileStart": {"line": 6, "offset": 1}},
+            "comments": [
+                {"content": "Body\n<!-- prb:abc123def456 -->\n"},
+                {"content": "stale note\nprb-stale:ffffffffffff\n"},
+            ],
+        }]
+        stale = posting.find_stale_bot_threads(
+            threads,
+            {"abc123def456"},
+            {"src/app.py": {1, 2, 3, 4, 5}},
+        )
+        assert len(stale) == 1
+        assert stale[0]["threadId"] == 1
+        assert stale[0]["key"] == "abc123def456"
 
 
 # ---------------------------------------------------------------------------
@@ -199,20 +243,38 @@ class TestFindStaleBotThreads:
 # ---------------------------------------------------------------------------
 
 
-class TestStaleCommentBody:
-    def test_includes_short_sha_when_given(self):
+    def test_append_stale_marker_when_key_given(self):
+        body = posting.stale_comment_body(short_sha="abcdef12", key="abc123def456")
+        assert "stale anchor" in body
+        assert "re-evaluate it against the new code" in body
+        assert f"\n{posting.stale_marker('abc123def456')}" in body
+        # The marker sits on its own final line.
+        assert body.rstrip().endswith(posting.stale_marker("abc123def456"))
+
+    def test_no_stale_marker_without_key(self):
         body = posting.stale_comment_body(short_sha="abcdef12")
-        assert "abcdef12" in body
-        assert "stale" in body.lower()
-        assert "🤖" in body
+        assert posting.stale_marker("abc123def456") not in body
 
-    def test_falls_back_to_current_head(self):
-        body = posting.stale_comment_body(short_sha="")
-        assert "current HEAD" in body
 
-    def test_none_sha_uses_current_head(self):
-        body = posting.stale_comment_body(short_sha=None)
-        assert "current HEAD" in body
+class TestStaleMarkerHelpers:
+    def test_stale_marker_grammar_is_distinct(self):
+        marker = posting.stale_marker("abc123def456")
+        assert marker == "prb-stale:abc123def456"
+        # It must NOT match the finding-dedupe regex, so a stale note is
+        # never mistaken for (or collected as) a finding marker.
+        assert posting._MARKER_RE.search(marker) is None  # noqa: SLF001
+
+    def test_existing_bot_markers_ignores_stale_notes(self):
+        # A thread with only a stale follow-up (plus original) yields only the
+        # original finding key from existing_bot_markers.
+        thread = {
+            "id": 1,
+            "comments": [
+                {"content": "Body\n<!-- prb:abc123def456 -->\n"},
+                {"content": "stale note\nprb-stale:abc123def456\n"},
+            ],
+        }
+        assert posting.existing_bot_markers([thread]) == {"abc123def456"}
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +408,25 @@ class TestCommandPostFindingsStalePass:
         assert rc == 0
         client.add_comment.assert_not_called()
 
+    def test_missing_diff_skips_stale_reconciliation(self, tmp_path, monkeypatch):
+        findings_file = _findings_file(tmp_path, [])
+        out_file = tmp_path / "out.json"
+
+        bot_thread = _bot_thread(7, "/src/app.py", 6, "abc123def456")
+        client = MagicMock()
+        client.get_pr.return_value = {"reviewers": []}
+        client.get_threads.return_value = [bot_thread]
+
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("ANNOTATE_STALE", raising=False)
+        monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
+        monkeypatch.delenv("FAIL_ON", raising=False)
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
+        assert rc == 0
+        client.add_comment.assert_not_called()
+
     def test_just_posted_thread_not_flagged_stale(self, tmp_path, monkeypatch):
         # A finding posted in this run on line 6 would be marked stale
         # by the rule if we did not exclude just-posted threads.
@@ -401,3 +482,54 @@ class TestCommandPostFindingsStalePass:
         # The run still succeeds; stale annotation is best-effort.
         assert rc == 0
         client.add_comment.assert_called_once()
+
+    def test_failed_stale_write_not_counted(self, tmp_path, monkeypatch):
+        findings_file = _findings_file(tmp_path, [])
+        out_file = tmp_path / "out.json"
+        _diff_file(tmp_path, DIFF_V1)
+
+        bot_thread = _bot_thread(7, "/src/app.py", 6, "abc123def456")
+        client = MagicMock()
+        client.get_pr.return_value = {"reviewers": []}
+        client.get_threads.return_value = [bot_thread]
+        client.add_comment.side_effect = RuntimeError("network down")
+
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
+        monkeypatch.delenv("FAIL_ON", raising=False)
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
+        assert rc == 0
+        result = __import__("json").loads(out_file.read_text())
+        # A failed write is not reported as a successful annotation.
+        assert result.get("annotated_stale", 0) == 0
+        assert result.get("stale_thread_ids", []) == []
+
+    def test_rerun_does_not_duplicate_stale_comment(self, tmp_path, monkeypatch):
+        # A thread that already carries a stale follow-up (from a prior run)
+        # must not be annotated again on a re-run.
+        findings_file = _findings_file(tmp_path, [])
+        out_file = tmp_path / "out.json"
+        _diff_file(tmp_path, DIFF_V1)
+
+        bot_thread = _bot_thread(7, "/src/app.py", 6, "abc123def456")
+        # The thread already contains the stale follow-up from a prior run.
+        bot_thread["comments"].append(
+            {"content": "stale note\nprb-stale:abc123def456\n"}
+        )
+        client = MagicMock()
+        client.get_pr.return_value = {"reviewers": []}
+        client.get_threads.return_value = [bot_thread]
+
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
+        monkeypatch.delenv("FAIL_ON", raising=False)
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = cli.command_post_findings(_args(findings_file, out_file))
+        assert rc == 0
+        client.add_comment.assert_not_called()
+        result = __import__("json").loads(out_file.read_text())
+        assert result.get("annotated_stale", 0) == 0
+        assert result.get("stale_thread_ids", []) == []

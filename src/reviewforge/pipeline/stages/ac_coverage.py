@@ -42,6 +42,23 @@ def _sum_tokens(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
     return out
 
 
+def _coverage_inputs(artifacts: Any) -> tuple[Any, str, list[str]]:
+    work_items = read_json(artifacts.work_items) if artifacts.work_items.exists() else []
+    diff_text = artifacts.diff.read_text(encoding="utf-8") if artifacts.diff.exists() else ""
+    changed_files = ([f.get("file", "") for f in (read_json(artifacts.changed_files) or [])] if artifacts.changed_files.exists() else [])
+    return work_items, diff_text, changed_files
+
+
+def _append_coverage_findings(
+    ctx: StageContext, uncovered: list[AcCoverageResult]
+) -> tuple[int, int]:
+    findings = uncovered_findings(uncovered)
+    final = ctx.final or {"summary": "", "findings": []}
+    before = len(final.get("findings", []))
+    final.setdefault("findings", []).extend(findings)
+    validate_review_doc(final)
+    ctx.final = final
+    return before, len(findings)
 class AcceptanceCriteriaCoverageStage(Stage):
     """Append ``Work item #N AC not covered`` findings for uncovered ACs."""
 
@@ -143,51 +160,29 @@ class AcceptanceCriteriaCoverageStage(Stage):
         return still_uncovered + uncovered[len(to_check):]
 
     def run(self, ctx: StageContext) -> dict[str, Any]:
-        artifacts = ctx.artifacts
-        work_items = read_json(artifacts.work_items) if artifacts.work_items.exists() else []
-        diff_text = artifacts.diff.read_text(encoding="utf-8") if artifacts.diff.exists() else ""
+        work_items, diff_text, changed_files = _coverage_inputs(ctx.artifacts)
         if not work_items:
             return {"skipped": "no work items", "uncovered": 0}
         if not diff_text:
             return {"skipped": "no diff on disk", "uncovered": 0}
-
-        results = check_ac_coverage(
-            work_items,
-            diff_text,
-            [f.get("file", "") for f in (read_json(artifacts.changed_files) or [])],
-        )
-        all_results = results
-        uncovered = [r for r in results if not r.is_covered]
+        all_results = check_ac_coverage(work_items, diff_text, changed_files)
+        uncovered = [result for result in all_results if not result.is_covered]
         if not uncovered:
             return {"checked": len(all_results), "uncovered": 0}
-
         if ctx.cfg.ac_coverage_llm:
             uncovered = self._reassess_with_llm(ctx, uncovered, diff_text)
-
         if not uncovered:
-            return {
-                "checked": len(all_results),
-                "uncovered": 0,
-                "llm_reassessed": ctx.cfg.ac_coverage_llm,
-            }
-
-        findings = uncovered_findings(uncovered)
-        # Keep AC findings in the postable document held on the context.
-        final = ctx.final or {"summary": "", "findings": []}
-        before = len(final.get("findings", []))
-        final.setdefault("findings", []).extend(findings)
-        validate_review_doc(final)
-        ctx.final = final
-
+            return {"checked": len(all_results), "uncovered": 0, "llm_reassessed": ctx.cfg.ac_coverage_llm}
+        before, appended = _append_coverage_findings(ctx, uncovered)
         _log(
             f"AC coverage: {len(uncovered)} uncovered of {len(all_results)} checked "
-            f"across {len(work_items)} work item(s); appended {len(findings)} finding(s)."
+            f"across {len(work_items)} work item(s); appended {appended} finding(s)."
         )
         return {
             "checked": len(all_results),
             "uncovered": len(uncovered),
-            "appended": len(findings),
-            "total_findings": before + len(findings),
+            "appended": appended,
+            "total_findings": before + appended,
             "llm_reassessed": ctx.cfg.ac_coverage_llm,
         }
 

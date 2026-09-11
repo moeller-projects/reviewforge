@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
+import math
 import os
 import re
 import sys
@@ -44,6 +45,7 @@ DEFAULT_VERIFY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "verify-findings.md", 
 DEFAULT_SEVERITY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "severity.md", "/app/prompts/severity.md")
 DEFAULT_AC_COVERAGE_PROMPT_PATH = _default_file(_PROMPTS_DIR / "ac-coverage.md", "/app/prompts/ac-coverage.md")
 DEFAULT_FAST_REVIEW_PROMPT_PATH = _default_file(_PROMPTS_DIR / "fast-review-system.md", "/app/prompts/fast-review-system.md")
+DEFAULT_COMMENT_REPLY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "comment-reply.md", "/app/prompts/comment-reply.md")
 DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH = _default_file(_PROMPTS_DIR / "chunk-synthesis.md", "/app/prompts/chunk-synthesis.md")
 DEFAULT_STANDARDS_PATH = _default_file(_STANDARDS_DIR / "clean-code.md", "/app/standards/clean-code.md")
 
@@ -72,6 +74,23 @@ def require_uint(name: str, value: str) -> int:
     if not re.fullmatch(r"\d+", value or ""):
         raise ConfigError(f"{name} must be a non-negative integer, got: {value!r}")
     return int(value)
+
+
+def require_positive_uint(name: str, value: str) -> int:
+    parsed = require_uint(name, value)
+    if parsed < 1:
+        raise ConfigError(f"{name} must be at least 1, got: {value!r}")
+    return parsed
+
+
+def require_nonnegative_float(name: str, value: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a non-negative number, got: {value!r}") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise ConfigError(f"{name} must be a non-negative number, got: {value!r}")
+    return parsed
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -164,6 +183,27 @@ def _read_env_with_aliases(key: str, env: Mapping[str, str] | None = None) -> st
 # ---------------------------------------------------------------------------
 
 
+def _legacy_optional_int(name: str, default: int | None = None) -> int | None:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _legacy_context_caps() -> tuple[int, int, int]:
+    return tuple(
+        v if (v := _legacy_optional_int(name, default)) is not None else default
+        for name, default in (
+            ("CONTEXT_FILE_MAX_LINES", 260),
+            ("CONTEXT_SEARCH_MAX_MATCHES", 40),
+            ("COLLECT_CONTEXT_WORKERS", 8),
+        )
+    )  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class Config:
     ado_org: str
@@ -252,6 +292,20 @@ class Config:
     fast_review_prompt_path: Path = field(default=DEFAULT_FAST_REVIEW_PROMPT_PATH, compare=False)
     #: System prompt for the whole-PR synthesis call after chunked reviews.
     chunk_synthesis_prompt_path: Path = field(default=DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH, compare=False)
+    # --- Escalation review -------------------------------------------------
+    #: When ``True``, run a focused second review pass over the files named by
+    #: ``escalation_hints``. Default off; hints are still recorded as artifacts.
+    escalation_review_enabled: bool = field(default=False, compare=False)
+    #: Optional model for the focused escalation pass. Defaults to ``pi_model``.
+    escalation_model: str | None = field(default=None, compare=False)
+    #: Pi reasoning effort passed via ``--thinking``. Default ``medium``.
+    pi_thinking: str = field(default="medium", compare=False)
+    # --- Comment replies ---------------------------------------------------
+    #: When ``True`` (default), answer unanswered human replies on bot
+    #: threads after posting findings, and enable ``reviewforge reply``.
+    reply_comments: bool = field(default=True, compare=False)
+    #: System prompt for the comment-reply generation call.
+    comment_reply_prompt_path: Path = field(default=DEFAULT_COMMENT_REPLY_PROMPT_PATH, compare=False)
     #: Maximum commit subjects supplied as intent evidence to single_pi.
     commit_context_max: int = field(default=50, compare=False)
     #: Handling for findings whose inline anchor is absent from the current diff.
@@ -267,6 +321,15 @@ class Config:
     #: Session id used by Pi. Defaults to ``pr-{pr_id}-review`` (with
     #: ``-{run_id}`` appended when a run id is set) so re-runs resume.
     pi_session_id: str | None = field(default=None, compare=False)
+    # --- Pi subprocess retry ----------------------------------------------
+    #: Total Pi attempts per primary reasoning call (>=1). A non-zero exit
+    #: (e.g. a transient "terminated" session failure) is retried with
+    #: exponential backoff. ``1`` disables retry.
+    pi_retry_attempts: int = field(default=2, compare=False)
+    #: Seconds before the first retry; doubles per attempt up to the cap.
+    pi_retry_base_delay: float = field(default=5.0, compare=False)
+    #: Maximum seconds to wait before a retry.
+    pi_retry_cap_delay: float = field(default=60.0, compare=False)
     # --- CRG context enrichment -------------------------------------------
     #: When ``True``, run the CRG Tree-sitter enrichment stage between
     #: PrepareRepository and ExecuteReasoningEngine. Requires the optional
@@ -286,6 +349,8 @@ class Config:
     graph_api_diff: bool = field(default=False, compare=False)
     graph_flows: bool = field(default=False, compare=False)
     graph_arch: bool = field(default=False, compare=False)
+    #: Maximum concurrent CRG-aware review scopes. Defaults to eight.
+    scope_workers: int = field(default=8, compare=False)
     graph_context_max_bytes: int = field(default=12288, compare=False)
 
     # ------------------------------------------------------------------ env --
@@ -309,10 +374,7 @@ class Config:
         review_artifact_root = Path(os.getenv("REVIEW_ARTIFACT_ROOT", "/workspace/artifacts"))
         review_run_id = os.getenv("REVIEW_RUN_ID") or None
         max_diff_bytes = require_uint("MAX_DIFF_BYTES", os.getenv("MAX_DIFF_BYTES", "200000"))
-        chunk_trigger_raw = os.getenv("CHUNK_TRIGGER_DIFF_BYTES")
-        if not chunk_trigger_raw:
-            chunk_trigger_raw = str(max_diff_bytes)
-
+        chunk_trigger_raw = os.getenv("CHUNK_TRIGGER_DIFF_BYTES") or str(max_diff_bytes)
         # Pi session controls.
         pi_session_id = os.getenv("PI_SESSION_ID") or None
         pi_session_enabled = (os.getenv("PI_SESSION_ENABLED", "1").lower() not in {"0", "false", "no", "off"})
@@ -323,32 +385,12 @@ class Config:
         drop_low_confidence = is_true(os.getenv("DROP_LOW_CONFIDENCE"))
         require_context_for = os.getenv("REQUIRE_CONTEXT_FOR", "")
         max_findings_raw = os.getenv("MAX_FINDINGS")
-        if max_findings_raw is None or max_findings_raw == "":
-            max_findings = None
-        else:
-            try:
-                max_findings = int(max_findings_raw)
-            except ValueError:
-                max_findings = None
+        max_findings = _legacy_optional_int("MAX_FINDINGS")
         vote_waiting_on = os.getenv("VOTE_WAITING_ON", "none")
         fail_on = os.getenv("FAIL_ON", "none")
 
         # Context collection caps.
-        context_file_max_lines_raw = os.getenv("CONTEXT_FILE_MAX_LINES", "260")
-        context_search_max_matches_raw = os.getenv("CONTEXT_SEARCH_MAX_MATCHES", "40")
-        collect_context_workers_raw = os.getenv("COLLECT_CONTEXT_WORKERS", "8")
-        try:
-            context_file_max_lines = int(context_file_max_lines_raw)
-        except ValueError:
-            context_file_max_lines = 260
-        try:
-            context_search_max_matches = int(context_search_max_matches_raw)
-        except ValueError:
-            context_search_max_matches = 40
-        try:
-            collect_context_workers = int(collect_context_workers_raw)
-        except ValueError:
-            collect_context_workers = 8
+        context_file_max_lines, context_search_max_matches, collect_context_workers = _legacy_context_caps()
 
         # AC coverage LLM re-check.
         ac_coverage_llm = is_true(os.getenv("AC_COVERAGE_LLM"))
@@ -367,6 +409,12 @@ class Config:
         )
         chunk_synthesis_prompt_path = _resolve_prompt_path(
             "CHUNK_SYNTHESIS_PROMPT_PATH", str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH)
+        )
+        reply_comments = _coerce_bool(
+            None, default=True, env_value=os.getenv("REPLY_COMMENTS")
+        )
+        comment_reply_prompt_path = _resolve_prompt_path(
+            "COMMENT_REPLY_PROMPT_PATH", str(DEFAULT_COMMENT_REPLY_PROMPT_PATH)
         )
         commit_context_max = require_uint(
             "COMMIT_CONTEXT_MAX", os.getenv("COMMIT_CONTEXT_MAX", "50")
@@ -394,10 +442,18 @@ class Config:
             severity_prompt_path=_resolve_prompt_path("SEVERITY_PROMPT_PATH", str(DEFAULT_SEVERITY_PROMPT_PATH)),
             standards_path=Path(os.getenv("REVIEW_STANDARDS_PATH", str(DEFAULT_STANDARDS_PATH))),
             pi_model=os.getenv("PI_MODEL", "openai/gpt-5.5"),
+            pi_thinking=os.getenv("PI_THINKING", "medium"),
             max_diff_bytes=max_diff_bytes,
             chunk_trigger_diff_bytes=require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk_trigger_raw),
             disable_chunk_review=is_true(os.getenv("DISABLE_CHUNK_REVIEW")),
             pi_timeout_secs=require_uint("PI_TIMEOUT_SECS", os.getenv("PI_TIMEOUT_SECS", "600")),
+            pi_retry_attempts=require_positive_uint("PI_RETRY_ATTEMPTS", os.getenv("PI_RETRY_ATTEMPTS", "2")),
+            pi_retry_base_delay=require_nonnegative_float(
+                "PI_RETRY_BASE_DELAY", os.getenv("PI_RETRY_BASE_DELAY", "5")
+            ),
+            pi_retry_cap_delay=require_nonnegative_float(
+                "PI_RETRY_CAP_DELAY", os.getenv("PI_RETRY_CAP_DELAY", "60")
+            ),
             dry_run=is_true(os.getenv("DRY_RUN")),
             include_work_items=is_true(os.getenv("INCLUDE_WORK_ITEMS", "1")),
             include_existing_comments=is_true(os.getenv("INCLUDE_EXISTING_COMMENTS", "1")),
@@ -431,6 +487,10 @@ class Config:
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
+            escalation_review_enabled=is_true(os.getenv("ESCALATION_REVIEW_ENABLED")),
+            escalation_model=os.getenv("ESCALATION_REVIEW_MODEL") or None,
+            reply_comments=reply_comments,
+            comment_reply_prompt_path=comment_reply_prompt_path,
             crg_enabled=is_true(os.getenv("CRG_ENABLED")),
             crg_cache_dir=Path(os.environ["CRG_CACHE_DIR"]) if os.getenv("CRG_CACHE_DIR") else None,
             crg_context_max_bytes=require_uint(
@@ -439,6 +499,7 @@ class Config:
             graph_api_diff=is_true(os.getenv("GRAPH_API_DIFF")),
             graph_flows=is_true(os.getenv("GRAPH_FLOWS")),
             graph_arch=is_true(os.getenv("GRAPH_ARCH")),
+            scope_workers=require_uint("REVIEW_SCOPE_WORKERS", os.getenv("REVIEW_SCOPE_WORKERS", "8")),
             graph_context_max_bytes=require_uint(
                 "GRAPH_CONTEXT_MAX_BYTES", os.getenv("GRAPH_CONTEXT_MAX_BYTES", "12288")
             ),
@@ -489,16 +550,17 @@ class Config:
 
     # -------------------------------------------------------- validation --
 
-    def validate_files(self) -> None:
-        """Ensure all required prompt/standards files exist.
+    def validate_files(self, *, include_reply_prompt: bool = False) -> None:
+        """Ensure prompt/standards files required by a pipeline exist.
 
-        The ``single_pi`` engine only needs the fast-review prompt and the
-        coding standards. The ``multi_stage`` engine needs the full set of
-        legacy stage prompts as well.
+        The reply prompt is validated only when the caller's pipeline can
+        execute replies and ``reply_comments`` is enabled.
         """
         paths = [self.standards_path]
         paths.append(self.fast_review_prompt_path)
         paths.append(self.chunk_synthesis_prompt_path)
+        if include_reply_prompt and self.reply_comments:
+            paths.append(self.comment_reply_prompt_path)
         legacy_paths = [
             self.review_prompt_path,
             self.intent_prompt_path,
@@ -529,34 +591,20 @@ class Config:
                 raise ConfigError(f"Required file not found: {path}")
 
     def validate_for_command(self, command: str) -> list[str]:
-        """Return a list of human-readable error messages for ``command``.
-
-        Commands have different requirements (e.g. ``open-prs`` does not need
-        ``pr_id``; ``review`` does). Returns ``[]`` when valid.
-        """
-        problems: list[str] = []
-        # Universal: token + org + project + repo are required for any ADO call.
-        if not self.ado_token:
-            problems.append(self._missing("ADO_AUTH_TOKEN", command, "--ado-token"))
-        if not self.ado_org:
-            problems.append(self._missing("ADO_ORG", command, "--ado-org"))
-        if not self.ado_project:
-            problems.append(self._missing("ADO_PROJECT", command, "--ado-project"))
-        if not self.ado_repo_id:
-            problems.append(self._missing("ADO_REPO_ID", command, "--ado-repo-id"))
-
-        if command in {"review", "post", "fetch-context"}:
-            if not self.pr_id:
-                problems.append(self._missing("PR_ID (or PR_URL)", command, "--pr"))
-        if command in {"post"}:
-            # The post path needs branches resolved or fetched.
-            if not self.source_branch and not self.target_branch:
-                # Not fatal — resolve_branches() can fetch from the API — but warn.
-                pass
-        if command in {"review"}:
-            if not self.ado_token:
-                # already covered
-                pass
+        """Return a list of human-readable error messages for ``command``."""
+        required = (
+            ("ADO_AUTH_TOKEN", self.ado_token, "--ado-token"),
+            ("ADO_ORG", self.ado_org, "--ado-org"),
+            ("ADO_PROJECT", self.ado_project, "--ado-project"),
+            ("ADO_REPO_ID", self.ado_repo_id, "--ado-repo-id"),
+        )
+        problems = [
+            self._missing(name, command, flag)
+            for name, value, flag in required
+            if not value
+        ]
+        if command in {"review", "post", "reply", "fetch-context"} and not self.pr_id:
+            problems.append(self._missing("PR_ID (or PR_URL)", command, "--pr"))
         return problems
 
     @staticmethod
@@ -609,12 +657,138 @@ def _coerce_cli_value(field_name: str, value: Any) -> Any:
                       "ac_coverage_llm"}:
         return is_true(raw)
     if field_name in {"max_diff_bytes", "chunk_trigger_diff_bytes", "pi_timeout_secs",
-                      "ac_coverage_llm_max_acs"}:
+                      "ac_coverage_llm_max_acs", "scope_workers"}:
         return require_uint(field_name.upper(), raw)
     if field_name.endswith("_path") or field_name in {"workspace", "clone_root",
                                                       "review_artifact_root", "standards_path"}:
         return Path(raw)
     return raw
+
+
+def _source_value(
+    cli: Mapping[str, Any], env: Mapping[str, str], field: str, key: str, default: str = ""
+) -> str:
+    if field in cli and cli[field] not in (None, ""):
+        return str(cli[field])
+    return env.get(key) or default
+
+
+def _source_token(cli: Mapping[str, Any], env: Mapping[str, str]) -> str:
+    token = str(cli["ado_token"]) if cli.get("ado_token") else _read_env_with_aliases("ado_token", env)
+    if token:
+        return token
+    raise ConfigError(
+        "Missing required config: ADO_AUTH_TOKEN (aliases: ADO_MCP_AUTH_TOKEN, ADO_API_KEY). "
+        "Set it in .env, as an environment variable, or pass --ado-token."
+    )
+
+
+def _source_identity(
+    cli: Mapping[str, Any], env: Mapping[str, str]
+) -> tuple[str, str, str, str, str | None]:
+    pr_id = _source_value(cli, env, "pr_id", "PR_ID")
+    pr_url = _source_value(cli, env, "pr_url", "PR_URL") or None
+    url_org = url_project = url_repo = url_pr_id = ""
+    if pr_url:
+        try:
+            from .ado.client import parse_pr_url
+            from .exceptions import AdoApiError
+
+            url_org, url_project, url_repo, url_pr_id = parse_pr_url(pr_url)
+        except AdoApiError:
+            pass
+    return (
+        pr_id or url_pr_id,
+        url_org,
+        url_project,
+        url_repo,
+        pr_url,
+    )
+
+
+def _source_numbers(
+    cli: Mapping[str, Any], env: Mapping[str, str]
+) -> dict[str, int | float]:
+    max_diff = require_uint("MAX_DIFF_BYTES", _source_value(cli, env, "max_diff_bytes", "MAX_DIFF_BYTES", "200000"))
+    chunk = _source_value(cli, env, "chunk_trigger_diff_bytes", "CHUNK_TRIGGER_DIFF_BYTES") or str(max_diff)
+    return {
+        "max_diff_bytes": max_diff,
+        "chunk_trigger_diff_bytes": require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk),
+        "pi_timeout_secs": require_uint("PI_TIMEOUT_SECS", _source_value(cli, env, "pi_timeout_secs", "PI_TIMEOUT_SECS", "600")),
+        "pi_retry_attempts": require_positive_uint("PI_RETRY_ATTEMPTS", _source_value(cli, env, "pi_retry_attempts", "PI_RETRY_ATTEMPTS", "2")),
+        "pi_retry_base_delay": require_nonnegative_float(
+            "PI_RETRY_BASE_DELAY", _source_value(cli, env, "pi_retry_base_delay", "PI_RETRY_BASE_DELAY", "5")
+        ),
+        "pi_retry_cap_delay": require_nonnegative_float(
+            "PI_RETRY_CAP_DELAY", _source_value(cli, env, "pi_retry_cap_delay", "PI_RETRY_CAP_DELAY", "60")
+        ),
+        "context_file_max_lines": require_uint("CONTEXT_FILE_MAX_LINES", _source_value(cli, env, "context_file_max_lines", "CONTEXT_FILE_MAX_LINES", "260")),
+        "context_search_max_matches": require_uint("CONTEXT_SEARCH_MAX_MATCHES", _source_value(cli, env, "context_search_max_matches", "CONTEXT_SEARCH_MAX_MATCHES", "40")),
+        "collect_context_workers": require_uint("COLLECT_CONTEXT_WORKERS", _source_value(cli, env, "collect_context_workers", "COLLECT_CONTEXT_WORKERS", "8")),
+        "ac_coverage_llm_max_acs": require_uint("AC_COVERAGE_LLM_MAX_ACS", _source_value(cli, env, "ac_coverage_llm_max_acs", "AC_COVERAGE_LLM_MAX_ACS", "10")),
+        "scope_workers": require_uint("REVIEW_SCOPE_WORKERS", _source_value(cli, env, "scope_workers", "REVIEW_SCOPE_WORKERS", "8")),
+        "ado_retry_attempts": require_uint("ADO_RETRY_ATTEMPTS", _source_value(cli, env, "ado_retry_attempts", "ADO_RETRY_ATTEMPTS", "3")),
+        "ado_retry_base_delay": float(_source_value(cli, env, "ado_retry_base_delay", "ADO_RETRY_BASE_DELAY", "1")),
+        "ado_retry_cap_delay": float(_source_value(cli, env, "ado_retry_cap_delay", "ADO_RETRY_CAP_DELAY", "30")),
+        "ado_retry_budget_secs": float(_source_value(cli, env, "ado_retry_budget_secs", "ADO_RETRY_BUDGET_SECS", "90")),
+        "commit_context_max": require_uint("COMMIT_CONTEXT_MAX", _source_value(cli, env, "commit_context_max", "COMMIT_CONTEXT_MAX", "50")),
+    }
+
+
+def _source_runtime(
+    cli: Mapping[str, Any], env: Mapping[str, str]
+) -> dict[str, Any]:
+    fast_review = is_true(_source_value(cli, env, "fast_review", "FAST_REVIEW"))
+    engine = _resolve_reasoning_engine(_source_value(cli, env, "reasoning_engine", "REASONING_ENGINE"), fast_review)
+    model_backend = _source_value(cli, env, "model_backend", "MODEL_BACKEND", "pi").lower()
+    if model_backend != "pi":
+        raise ConfigError(f"MODEL_BACKEND must be 'pi', got: {model_backend!r}")
+    anchor_policy = _source_value(cli, env, "anchor_policy", "ANCHOR_POLICY", "downgrade").lower()
+    if anchor_policy not in {"downgrade", "drop", "off"}:
+        raise ConfigError("ANCHOR_POLICY must be 'downgrade', 'drop', or 'off'")
+    return {"fast_review": fast_review, "reasoning_engine": engine, "model_backend": model_backend, "anchor_policy": anchor_policy}
+
+
+def _source_posting(
+    cli: Mapping[str, Any], env: Mapping[str, str]
+) -> dict[str, Any]:
+    raw = _source_value(cli, env, "max_findings", "MAX_FINDINGS")
+    try:
+        max_findings = int(raw) if raw else None
+    except ValueError:
+        max_findings = None
+    return {
+        "post_min_severity": _source_value(cli, env, "post_min_severity", "POST_MIN_SEVERITY", "none"),
+        "drop_low_confidence": is_true(_source_value(cli, env, "drop_low_confidence", "DROP_LOW_CONFIDENCE")),
+        "require_context_for": _source_value(cli, env, "require_context_for", "REQUIRE_CONTEXT_FOR"),
+        "max_findings": max_findings,
+        "vote_waiting_on": _source_value(cli, env, "vote_waiting_on", "VOTE_WAITING_ON", "none"),
+        "fail_on": _source_value(cli, env, "fail_on", "FAIL_ON", "none"),
+    }
+
+
+def _source_path(
+    cli: Mapping[str, Any], env: Mapping[str, str], field: str, key: str, default: str
+) -> Path:
+    return Path(_source_value(cli, env, field, key) or default)
+
+
+def _source_paths(cli: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Path]:
+    defaults = {
+        "workspace": ("/workspace", "WORKSPACE"),
+        "clone_root": ("/workspace/repo", "CLONE_ROOT"),
+        "review_prompt_path": (str(DEFAULT_REVIEW_PROMPT_PATH), "REVIEW_PROMPT_PATH"),
+        "intent_prompt_path": (str(DEFAULT_INTENT_PROMPT_PATH), "INTENT_PROMPT_PATH"),
+        "context_plan_prompt_path": (str(DEFAULT_CONTEXT_PLAN_PROMPT_PATH), "CONTEXT_PLAN_PROMPT_PATH"),
+        "context_digest_prompt_path": (str(DEFAULT_CONTEXT_DIGEST_PROMPT_PATH), "CONTEXT_DIGEST_PROMPT_PATH"),
+        "verify_prompt_path": (str(DEFAULT_VERIFY_PROMPT_PATH), "VERIFY_PROMPT_PATH"),
+        "severity_prompt_path": (str(DEFAULT_SEVERITY_PROMPT_PATH), "SEVERITY_PROMPT_PATH"),
+        "standards_path": (str(DEFAULT_STANDARDS_PATH), "REVIEW_STANDARDS_PATH"),
+        "ac_coverage_prompt_path": (str(DEFAULT_AC_COVERAGE_PROMPT_PATH), "AC_COVERAGE_PROMPT_PATH"),
+        "fast_review_prompt_path": (str(DEFAULT_FAST_REVIEW_PROMPT_PATH), "FAST_REVIEW_PROMPT_PATH"),
+        "chunk_synthesis_prompt_path": (str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH), "CHUNK_SYNTHESIS_PROMPT_PATH"),
+    }
+    return {name: _source_path(cli, env, name, key, default) for name, (default, key) in defaults.items()}
 
 
 def _build_from_sources(
@@ -623,121 +797,50 @@ def _build_from_sources(
     env: Mapping[str, str],
 ) -> Config:
     """Build a :class:`Config` from CLI + env, with alias resolution."""
-
-    def cli_or_env(field: str, key: str, default: str = "") -> str:
-        if field in cli and cli[field] not in (None, ""):
-            return str(cli[field])
-        v = env.get(key)
-        if v:
-            return v
-        return default
-
-    # Token: CLI wins; else try each alias in order.
-    token = ""
-    if cli.get("ado_token"):
-        token = str(cli["ado_token"])
-    else:
-        for alias in _ENV_ALIASES["ado_token"]:
-            v = env.get(alias)
-            if v:
-                token = v
-                break
-    if not token:
-        raise ConfigError(
-            "Missing required config: ADO_AUTH_TOKEN (aliases: ADO_MCP_AUTH_TOKEN, ADO_API_KEY). "
-            "Set it in .env, as an environment variable, or pass --ado-token."
-        )
-
+    cli_or_env = lambda field, key, default="": _source_value(cli, env, field, key, default)
+    to_path = lambda value, default: Path(value or default)
+    token = _source_token(cli, env)
     review_artifact_dir = cli_or_env("review_artifact_dir", "REVIEW_ARTIFACT_DIR") or None
     review_artifact_root = cli_or_env("review_artifact_root", "REVIEW_ARTIFACT_ROOT") or "/workspace/artifacts"
     review_run_id = cli_or_env("review_run_id", "REVIEW_RUN_ID") or None
-
-    # Pi session controls (Phase A + E).
     pi_session_id = cli.get("pi_session_id") or env.get("PI_SESSION_ID") or None
-    pi_session_enabled = _coerce_bool(cli.get("pi_session_enabled"), default=True,
-                                       env_value=env.get("PI_SESSION_ENABLED"))
-    pi_session_clear = _coerce_bool(cli.get("pi_session_clear"), default=False,
-                                     env_value=env.get("PI_SESSION_CLEAR"))
-
-    # PR id: prefer explicit CLI ``--pr``; fall back to PR_ID env, then PR_URL.
-    pr_id = cli_or_env("pr_id", "PR_ID")
-    pr_url = cli_or_env("pr_url", "PR_URL") or None
-    # Allow the URL to populate org/project/repo/pr_id when no other source has them.
-    url_org = url_proj = url_repo = url_pr_id = ""
-    if pr_url:
-        try:
-            from .ado.client import parse_pr_url
-            from .exceptions import AdoApiError
-
-            url_org, url_proj, url_repo, url_pr_id = parse_pr_url(pr_url)
-        except AdoApiError:
-            url_org = url_proj = url_repo = url_pr_id = ""
-    if not pr_id and url_pr_id:
-        pr_id = url_pr_id
-    pr_id = pr_id or ""
+    pi_session_enabled = _coerce_bool(cli.get("pi_session_enabled"), default=True, env_value=env.get("PI_SESSION_ENABLED"))
+    pi_session_clear = _coerce_bool(cli.get("pi_session_clear"), default=False, env_value=env.get("PI_SESSION_CLEAR"))
+    pr_id, url_org, url_project, url_repo, pr_url = _source_identity(cli, env)
     org_value = cli_or_env("ado_org", "ADO_ORG") or url_org
-    project_value = cli_or_env("ado_project", "ADO_PROJECT") or url_proj
+    project_value = cli_or_env("ado_project", "ADO_PROJECT") or url_project
     repo_value = cli_or_env("ado_repo_id", "ADO_REPO_ID") or url_repo
-
-    max_diff_bytes = require_uint("MAX_DIFF_BYTES", cli_or_env("max_diff_bytes", "MAX_DIFF_BYTES", "200000"))
-    chunk_trigger = cli_or_env("chunk_trigger_diff_bytes", "CHUNK_TRIGGER_DIFF_BYTES")
-    if not chunk_trigger:
-        chunk_trigger = str(max_diff_bytes)
-    chunk_trigger_diff_bytes = require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk_trigger)
-    pi_timeout = require_uint("PI_TIMEOUT_SECS", cli_or_env("pi_timeout_secs", "PI_TIMEOUT_SECS", "600"))
-    context_file_max_lines = require_uint(
-        "CONTEXT_FILE_MAX_LINES", cli_or_env("context_file_max_lines", "CONTEXT_FILE_MAX_LINES", "260")
-    )
-    context_search_max_matches = require_uint(
-        "CONTEXT_SEARCH_MAX_MATCHES", cli_or_env("context_search_max_matches", "CONTEXT_SEARCH_MAX_MATCHES", "40")
-    )
-    collect_context_workers = require_uint(
-        "COLLECT_CONTEXT_WORKERS", cli_or_env("collect_context_workers", "COLLECT_CONTEXT_WORKERS", "8")
-    )
+    numbers = _source_numbers(cli, env)
+    max_diff_bytes = numbers["max_diff_bytes"]
+    chunk_trigger_diff_bytes = numbers["chunk_trigger_diff_bytes"]
+    pi_timeout = numbers["pi_timeout_secs"]
+    context_file_max_lines = numbers["context_file_max_lines"]
+    context_search_max_matches = numbers["context_search_max_matches"]
+    collect_context_workers = numbers["collect_context_workers"]
+    scope_workers = numbers["scope_workers"]
+    ac_coverage_llm_max_acs = numbers["ac_coverage_llm_max_acs"]
+    ado_retry_attempts = numbers["ado_retry_attempts"]
+    ado_retry_base_delay = numbers["ado_retry_base_delay"]
+    ado_retry_cap_delay = numbers["ado_retry_cap_delay"]
+    ado_retry_budget_secs = numbers["ado_retry_budget_secs"]
+    commit_context_max = numbers["commit_context_max"]
+    pi_retry_attempts = numbers["pi_retry_attempts"]
+    pi_retry_base_delay = numbers["pi_retry_base_delay"]
+    pi_retry_cap_delay = numbers["pi_retry_cap_delay"]
+    runtime = _source_runtime(cli, env)
+    model_backend = runtime["model_backend"]
+    reasoning_engine = runtime["reasoning_engine"]
+    fast_review = runtime["fast_review"]
+    anchor_policy = runtime["anchor_policy"]
+    posting = _source_posting(cli, env)
+    post_min_severity = posting["post_min_severity"]
+    drop_low_confidence = posting["drop_low_confidence"]
+    require_context_for = posting["require_context_for"]
+    max_findings = posting["max_findings"]
+    vote_waiting_on = posting["vote_waiting_on"]
+    fail_on = posting["fail_on"]
     ac_coverage_llm = is_true(cli_or_env("ac_coverage_llm", "AC_COVERAGE_LLM"))
-    ac_coverage_llm_max_acs = require_uint(
-        "AC_COVERAGE_LLM_MAX_ACS", cli_or_env("ac_coverage_llm_max_acs", "AC_COVERAGE_LLM_MAX_ACS", "10")
-    )
-    fast_review = is_true(cli_or_env("fast_review", "FAST_REVIEW"))
-    reasoning_engine = _resolve_reasoning_engine(
-        cli_or_env("reasoning_engine", "REASONING_ENGINE"), fast_review
-    )
-    ado_retry_attempts = require_uint(
-        "ADO_RETRY_ATTEMPTS", cli_or_env("ado_retry_attempts", "ADO_RETRY_ATTEMPTS", "3")
-    )
-    ado_retry_base_delay = float(
-        cli_or_env("ado_retry_base_delay", "ADO_RETRY_BASE_DELAY", "1")
-    )
-    ado_retry_cap_delay = float(
-        cli_or_env("ado_retry_cap_delay", "ADO_RETRY_CAP_DELAY", "30")
-    )
-    ado_retry_budget_secs = float(
-        cli_or_env("ado_retry_budget_secs", "ADO_RETRY_BUDGET_SECS", "90")
-    )
-    model_backend = cli_or_env("model_backend", "MODEL_BACKEND", "pi").lower()
-    commit_context_max = require_uint(
-        "COMMIT_CONTEXT_MAX", cli_or_env("commit_context_max", "COMMIT_CONTEXT_MAX", "50")
-    )
-    anchor_policy = cli_or_env("anchor_policy", "ANCHOR_POLICY", "downgrade").lower()
-    if anchor_policy not in {"downgrade", "drop", "off"}:
-        raise ConfigError("ANCHOR_POLICY must be 'downgrade', 'drop', or 'off'")
-    # Posting thresholds (env-only; no CLI flags exist). Mirrors from_env.
-    post_min_severity = cli_or_env("post_min_severity", "POST_MIN_SEVERITY", "none")
-    drop_low_confidence = is_true(cli_or_env("drop_low_confidence", "DROP_LOW_CONFIDENCE"))
-    require_context_for = cli_or_env("require_context_for", "REQUIRE_CONTEXT_FOR")
-    max_findings_raw = cli_or_env("max_findings", "MAX_FINDINGS")
-    try:
-        max_findings = int(max_findings_raw) if max_findings_raw else None
-    except ValueError:
-        max_findings = None
-    vote_waiting_on = cli_or_env("vote_waiting_on", "VOTE_WAITING_ON", "none")
-    fail_on = cli_or_env("fail_on", "FAIL_ON", "none")
-    if model_backend != "pi":
-        raise ConfigError(f"MODEL_BACKEND must be 'pi', got: {model_backend!r}")
-
-    def to_path(value: str, default: str) -> Path:
-        return Path(value) if value else Path(default)
-
+    crg_cache_dir_raw = cli_or_env("crg_cache_dir", "CRG_CACHE_DIR")
     return cls(
         ado_org=org_value,
         ado_project=project_value,
@@ -774,6 +877,7 @@ def _build_from_sources(
             str(DEFAULT_STANDARDS_PATH),
         ),
         pi_model=cli_or_env("pi_model", "PI_MODEL", "openai/gpt-5.5"),
+        pi_thinking=cli_or_env("pi_thinking", "PI_THINKING", "medium"),
         max_diff_bytes=max_diff_bytes,
         chunk_trigger_diff_bytes=chunk_trigger_diff_bytes,
         disable_chunk_review=is_true(cli_or_env("disable_chunk_review", "DISABLE_CHUNK_REVIEW")),
@@ -794,11 +898,15 @@ def _build_from_sources(
         ado_retry_base_delay=ado_retry_base_delay,
         ado_retry_cap_delay=ado_retry_cap_delay,
         ado_retry_budget_secs=ado_retry_budget_secs,
+        pi_retry_attempts=pi_retry_attempts,
+        pi_retry_base_delay=pi_retry_base_delay,
+        pi_retry_cap_delay=pi_retry_cap_delay,
         model_backend=model_backend,
         context_file_max_lines=context_file_max_lines,
         context_search_max_matches=context_search_max_matches,
         collect_context_workers=collect_context_workers,
         ac_coverage_llm=ac_coverage_llm,
+        scope_workers=scope_workers,
         ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
         ac_coverage_prompt_path=to_path(
             cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), str(DEFAULT_AC_COVERAGE_PROMPT_PATH)
@@ -812,6 +920,13 @@ def _build_from_sources(
         chunk_synthesis_prompt_path=to_path(
             cli_or_env("chunk_synthesis_prompt_path", "CHUNK_SYNTHESIS_PROMPT_PATH"),
             str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH),
+        ),
+        escalation_review_enabled=is_true(cli_or_env("escalation_review_enabled", "ESCALATION_REVIEW_ENABLED")),
+        escalation_model=cli_or_env("escalation_model", "ESCALATION_REVIEW_MODEL") or None,
+        reply_comments=_coerce_bool(cli.get("reply_comments"), default=True, env_value=env.get("REPLY_COMMENTS")),
+        comment_reply_prompt_path=to_path(
+            cli_or_env("comment_reply_prompt_path", "COMMENT_REPLY_PROMPT_PATH"),
+            str(DEFAULT_COMMENT_REPLY_PROMPT_PATH),
         ),
         commit_context_max=commit_context_max,
         anchor_policy=anchor_policy,

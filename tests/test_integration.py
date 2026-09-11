@@ -171,32 +171,31 @@ class AdoStub:
         self.pr = PR_PAYLOAD
         self.commits: list[dict] = []
 
+    def _route(self, url: str, method: str, body: dict | None) -> dict:
+        if url.rstrip("/").endswith("/pullRequests/42/threads") and method == "POST":
+            self.created_threads.append(body)
+            return {"id": 100 + len(self.created_threads)}
+        if "pullRequests/42/threads" in url and method == "POST":
+            self.added_comments.append(body)
+            return {"id": 1}
+        if "pullRequests/42/threads" in url:
+            return {"value": self.threads}
+        if "pullRequests/42/commits" in url:
+            return {"value": self.commits}
+        if "pullRequests/42" in url:
+            return self.pr
+        if "connectionData" in url:
+            return {"authenticatedUser": {"id": "reviewer-1", "displayName": "Bot"}}
+        if "workItemsBatch" in url or "workItems" in url:
+            return {"value": []}
+        raise AssertionError(f"unexpected ADO URL: {method} {url}")
+
     def __call__(self, req, *args, **kwargs):
         url = req.full_url
         method = req.get_method()
         body = json.loads(req.data.decode()) if req.data else None
         self.requests.append((method, url, body))
-        if url.rstrip("/").endswith("/pullRequests/42/threads") and method == "POST":
-            self.created_threads.append(body)
-            payload: dict = {"id": 100 + len(self.created_threads)}
-        elif "pullRequests/42/threads" in url and method == "POST":
-            self.added_comments.append(body)
-            payload = {"id": 1}
-        elif "pullRequests/42/threads" in url:
-            payload = {"value": self.threads}
-        elif "pullRequests/42/commits" in url:
-            payload = {"value": self.commits}
-        elif "pullRequests/42" in url:
-            payload = self.pr
-        elif "connectionData" in url:
-            payload = {"authenticatedUser": {"id": "reviewer-1", "displayName": "Bot"}}
-        elif "workItemsBatch" in url:
-            payload = {"value": []}
-        elif "workItems" in url:
-            payload = {"value": []}
-        else:  # pragma: no cover - defensive
-            raise AssertionError(f"unexpected ADO URL: {method} {url}")
-        return _FakeResponse(payload)
+        return _FakeResponse(self._route(url, method, body))
 
 
 class _FakeResponse:
@@ -247,7 +246,12 @@ def _review_result(findings: list[dict]) -> dict:
     return {
         "review_summary": {"summary": "reviewed"},
         "verification_summary": {"summary": "verified", "approach": "single pi"},
-        "pr_summary": {"implementation_summary": "did things"},
+        "pr_summary": {
+            "intent": "did things",
+            "work_type": "change",
+            "biggest_unknown": None,
+            "implementation_summary": "did things",
+        },
         "findings": findings,
         "uncertainties": [],
     }
@@ -325,7 +329,12 @@ class TestFullRunEndToEnd:
                 return {
                     "review_summary": {"summary": "synthesized whole-PR summary"},
                     "verification_summary": {"summary": "verified across chunks"},
-                    "pr_summary": {"implementation_summary": "synthesized implementation"},
+                    "pr_summary": {
+                        "intent": "synthesized implementation",
+                        "work_type": "change",
+                        "biggest_unknown": None,
+                        "implementation_summary": "synthesized implementation",
+                    },
                 }
             return {"findings": [finding], "uncertainties": []}
 

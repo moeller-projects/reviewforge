@@ -148,6 +148,20 @@ class AcCoverageResult:
         return plain if len(plain) <= 80 else plain[:77] + "..."
 
 
+def _matched_identifiers(
+    identifiers: set[str],
+    changed_files: list[str],
+    diff_lower: str,
+) -> tuple[str, ...]:
+    changed_lower = tuple(path.lower() for path in changed_files)
+    return tuple(sorted({
+        ident
+        for ident in identifiers
+        if any(ident.lower() in path for path in changed_lower)
+        or ident.lower() in diff_lower
+    }))
+
+
 def check_ac_coverage(
     work_items: Iterable[dict],
     diff_text: str,
@@ -161,7 +175,7 @@ def check_ac_coverage(
     uncovered by definition — there is nothing to match.
     """
     changed_list = list(changed_files or [])
-    diff_blob = diff_text or ""
+    diff_lower = (diff_text or "").lower()
     results: list[AcCoverageResult] = []
     for ac in iter_acceptance_criteria(work_items):
         idents = extract_identifiers(ac["ac_text"])
@@ -177,21 +191,14 @@ def check_ac_coverage(
                 )
             )
             continue
-        matched: list[str] = []
-        for ident in idents:
-            ident_lower = ident.lower()
-            if any(ident_lower in f.lower() for f in changed_list):
-                matched.append(ident)
-                continue
-            if ident_lower in diff_blob.lower():
-                matched.append(ident)
+        matched = _matched_identifiers(idents, changed_list, diff_lower)
         results.append(
             AcCoverageResult(
                 work_item_id=ac["work_item_id"],
                 ac_text=ac["ac_text"],
                 identifiers=tuple(sorted(idents)),
                 is_covered=bool(matched),
-                matched=tuple(sorted(set(matched))),
+                matched=matched,
                 reason="" if matched else "no_identifier_in_diff",
             )
         )

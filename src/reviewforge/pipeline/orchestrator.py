@@ -20,6 +20,7 @@ import json
 import shutil
 import sys
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from .stage import Stage, StageContext, run_stages
 from .stages import (
     DEFAULT_PIPELINE,
     POST_ONLY_PIPELINE,
+    REPLY_PIPELINE,
     REVIEW_ONLY_PIPELINE,
 )
 from .validation import validate_postable_review_doc
@@ -70,6 +72,23 @@ def ensure_tools(cfg: Config | None = None) -> None:
             )
 
 
+def _branch_skip(cfg: Config, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    if not cfg.review_target_branches:
+        return None
+    allowed = {
+        x.strip().removeprefix("refs/heads/")
+        for x in cfg.review_target_branches.split(",")
+        if x.strip()
+    }
+    target = str(metadata.get("targetRefName") or "").removeprefix("refs/heads/")
+    if target and allowed and target not in allowed:
+        return {
+            "summary": f"Skipped: target branch {target!r} not in review policy {sorted(allowed)}.",
+            "findings": [],
+        }
+    return None
+
+
 def should_skip(cfg: Config, metadata: dict[str, Any]) -> dict[str, Any] | None:
     """Return a skip reason dict (or ``None``) for the current PR."""
     if cfg.force_review:
@@ -78,22 +97,7 @@ def should_skip(cfg: Config, metadata: dict[str, Any]) -> dict[str, Any] | None:
         return {"summary": "Skipped: PR is draft.", "findings": []}
     if (metadata.get("status") or "active") != "active":
         return {"summary": f"Skipped: PR status {metadata.get('status')}.", "findings": []}
-    if cfg.review_target_branches:
-        allowed = {
-            x.strip().removeprefix("refs/heads/")
-            for x in cfg.review_target_branches.split(",")
-            if x.strip()
-        }
-        target = str(metadata.get("targetRefName") or "").removeprefix("refs/heads/")
-        if target and allowed and target not in allowed:
-            return {
-                "summary": (
-                    f"Skipped: target branch {target!r} not in review policy "
-                    f"{sorted(allowed)}."
-                ),
-                "findings": [],
-            }
-    return None
+    return _branch_skip(cfg, metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +159,7 @@ def run(cfg: Config) -> int:
 
 def run_full(cfg: Config) -> RunOutcome:
     """Run the full review pipeline (review + post)."""
-    cfg.validate_files()
+    cfg.validate_files(include_reply_prompt=cfg.reply_comments)
     artifacts = create_artifacts(cfg)
     configure_runlog(artifacts.run_log)
     log_info("run started")
@@ -178,6 +182,7 @@ def run_full(cfg: Config) -> RunOutcome:
         write_json(artifacts.summary, finalize)
         return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
     finally:
+        _write_pi_invocations(ctx)
         _cleanup_repo_state(ctx)
 
 
@@ -212,6 +217,7 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
             shutil.copyfile(artifacts.final, output)
         return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
     finally:
+        _write_pi_invocations(ctx)
         _cleanup_repo_state(ctx)
 
 
@@ -255,6 +261,42 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
         _cleanup_repo_state(ctx)
 
 
+
+def run_reply_only(cfg: Config) -> RunOutcome:
+    """Answer pending human replies on bot threads without new findings.
+
+    Forces full-review mode so the repository checkout is prepared even when
+    review-mode detection would consider the PR unchanged.
+    """
+    cfg = dataclass_replace(cfg, force_full_review=True, reply_comments=True)
+    cfg.validate_files(include_reply_prompt=True)
+    artifacts = create_artifacts(cfg)
+    configure_runlog(artifacts.run_log)
+    log_info("reply-only run started")
+    pi = create_model_runner(cfg)
+    summary = new_run_summary(cfg, artifacts)
+    ctx = _make_stage_context(cfg, artifacts, pi)
+    ctx.extras["explicit_reply_command"] = True
+
+    try:
+        results = run_stages(REPLY_PIPELINE, ctx)
+        _record_results(summary, results)
+        exit_code = _exit_code_for(results)
+        finalize = finalize_run_summary(
+            summary,
+            cfg=cfg,
+            artifacts=artifacts,
+            posted={"reply_only": 1, "created": 0, "skipped": 0},
+            skipped_reason=ctx.skip_reason,
+            exit_code=exit_code,
+        )
+        write_json(artifacts.summary, finalize)
+        return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    finally:
+        _write_pi_invocations(ctx)
+        _cleanup_repo_state(ctx)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -262,14 +304,23 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
 
 def _record_results(summary: RunSummary, results: list) -> None:
     for r in results:
-        _log(f"stage {r.name} {r.status} in {r.duration_ms}ms")
+        reason = getattr(r, "reason", None)
+        if r.status == "skipped":
+            _log(f"stage {r.name} skipped: {reason}")
+        else:
+            _log(f"stage {r.name} {r.status} in {r.duration_ms}ms")
+        details = dict(r.details or {})
+        if r.error:
+            details.setdefault("error", r.error)
+        if reason:
+            details.setdefault("reason", reason)
         summary.add_stage(
             StageRecord(
                 name=r.name,
                 status=r.status,
                 started_at=r.started_at,
                 duration_ms=r.duration_ms,
-                details=r.details or {},
+                details=details,
                 token_usage=getattr(r, "token_usage", {}) or {},
             )
         )
@@ -290,12 +341,26 @@ def _cleanup_repo_state(ctx: StageContext) -> None:
         log_info(f"repository cleanup failed: {type(exc).__name__}: {exc}")
 
 
+def _write_pi_invocations(ctx: StageContext) -> None:
+    """Persist per-invocation Pi outcome records to ``pi-invocations.json``."""
+    pi = getattr(ctx, "pi", None)
+    if pi is None:
+        return
+    invocations = getattr(pi, "invocations", None)
+    if not isinstance(invocations, list) or not invocations:
+        return
+    try:
+        write_json(ctx.artifacts.pi_invocations, invocations)
+    except Exception as exc:  # noqa: BLE001 - best-effort diagnostics
+        log_info(f"failed to write pi-invocations.json: {type(exc).__name__}: {exc}")
+
 __all__ = [
     "RunOutcome",
     "ensure_tools",
     "run",
     "run_full",
     "run_post_only",
+    "run_reply_only",
     "run_review_only",
     "should_skip",
 ]

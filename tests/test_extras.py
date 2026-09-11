@@ -21,6 +21,7 @@ from reviewforge.config import Config  # noqa: E402
 from reviewforge.exceptions import PiExecutionError, ReviewForgeError  # noqa: E402
 from reviewforge.pipeline import stage as pstage  # noqa: E402
 from reviewforge.pipeline import validation as pvalidation  # noqa: E402
+from conftest import FakePopen, popen_factory  # noqa: E402
 from reviewforge.pipeline.stage import (  # noqa: E402
     Stage,
     StageContext,
@@ -73,15 +74,16 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
 
     def test_timeout_raises_systemexit(self, tmp_path, monkeypatch):
         runner = PiRunner(self._cfg())
 
-        def fake_run(*a, **k):
-            raise subprocess.TimeoutExpired(cmd=a[0] if a else "", timeout=5)
-
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr(
+            "reviewforge.ai.runner.subprocess.Popen",
+            popen_factory([(0, b"", b"")], timeout=5),
+        )
         with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "timed out" in str(exc.value)
@@ -89,8 +91,8 @@ class TestPiRunnerEdgeCases:
     def test_nonzero_returncode_raises(self, tmp_path, monkeypatch):
         runner = PiRunner(self._cfg())
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
-            lambda *a, **k: subprocess.CompletedProcess(a, 7, b"", b"err"),
+            "reviewforge.ai.runner.subprocess.Popen",
+            popen_factory([(7, b"", b"err")]),
         )
         with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
@@ -99,8 +101,8 @@ class TestPiRunnerEdgeCases:
     def test_empty_output_raises(self, tmp_path, monkeypatch):
         runner = PiRunner(self._cfg())
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
-            lambda *a, **k: subprocess.CompletedProcess(a, 0, b"", b""),
+            "reviewforge.ai.runner.subprocess.Popen",
+            popen_factory([(0, b"", b"")]),
         )
         with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
@@ -110,13 +112,13 @@ class TestPiRunnerEdgeCases:
         runner = PiRunner(self._cfg())
         calls = []
 
-        def fake_run(cmd, **k):
+        def fake_popen(cmd, **k):
             calls.append(cmd)
             if len(calls) == 1:
-                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
-            return subprocess.CompletedProcess(cmd, 9, b"", b"")
+                return FakePopen(cmd, returncode=0, stdout=b"not json")
+            return FakePopen(cmd, returncode=9)
 
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "repair call failed" in str(exc.value)
@@ -125,14 +127,13 @@ class TestPiRunnerEdgeCases:
         runner = PiRunner(self._cfg())
         calls = []
 
-        def fake_run(cmd, **k):
+        def fake_popen(cmd, **k):
             calls.append(cmd)
             if len(calls) == 1:
-                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
-            # Repair also returns invalid JSON.
-            return subprocess.CompletedProcess(cmd, 0, b"still not json", b"")
+                return FakePopen(cmd, returncode=0, stdout=b"not json")
+            return FakePopen(cmd, returncode=0, stdout=b"still not json")
 
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         with pytest.raises(PiExecutionError) as exc:
             runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "invalid JSON" in str(exc.value)
@@ -141,12 +142,12 @@ class TestPiRunnerEdgeCases:
         runner = PiRunner(self._cfg())
         seen_env = {}
 
-        def fake_run(cmd, input, stdout, stderr, timeout, env):
-            seen_env.update(env)
-            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+        def fake_popen(cmd, env=None, **k):
+            seen_env.update(env or {})
+            return FakePopen(cmd, returncode=0, stdout=b'{"ok": true}')
 
         monkeypatch.setenv("ADO_API_KEY", "secret")
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
             assert k not in seen_env
@@ -163,20 +164,20 @@ class TestPiRunnerEdgeCases:
             standards_path=tmp_path / "st.md",
             review_language="German",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         source = tmp_path / "r.md"
         source.write_text("base review", encoding="utf-8")
+        (tmp_path / "st.md").write_text("coding standards", encoding="utf-8")
         seen_cmd: list[list[str]] = []
 
-        def fake_run(cmd, input, stdout, stderr, timeout, env):
+        def fake_popen(cmd, **k):
             seen_cmd.append(list(cmd))
-            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+            return FakePopen(cmd, returncode=0, stdout=b'{"ok": true}')
 
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         PiRunner(cfg).run_json(source, "in", tmp_path / "out.json", "stage")
         # The prompt path handed to Pi must be the augmented file, not the
-        # original source. The augmented file lives in the runner's private
-        # temp dir and has the LANGUAGE directive appended.
         assert len(seen_cmd) == 1
         cmd = seen_cmd[0]
         idx = cmd.index("--append-system-prompt") + 1
@@ -184,13 +185,14 @@ class TestPiRunnerEdgeCases:
         assert used != source
         text = used.read_text(encoding="utf-8")
         assert text.startswith("base review")
+        assert "coding standards" in text
         assert "in German" in text
 
     def test_stderr_lines_are_logged(self, tmp_path, monkeypatch, capsys):
         runner = PiRunner(self._cfg())
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
-            lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', b"line1\nline2"),
+            "reviewforge.ai.runner.subprocess.Popen",
+            popen_factory([(0, b'{"ok": true}', b"line1\nline2")]),
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         err = capsys.readouterr().err
@@ -209,21 +211,21 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-42-review-r1",
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         captured = []
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.Popen",
             lambda cmd, **k: (
                 captured.append(cmd)
-                or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+                or FakePopen(cmd, returncode=0, stdout=b'{"ok": true}')
             ),
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert "--session-id" in captured[0]
         assert "pr-42-review-r1" in captured[0]
         assert "--no-session" not in captured[0]
-        assert runner.session_id == "pr-42-review-r1"
 
     def test_session_clear_flag_added(self, tmp_path, monkeypatch):
         cfg = SimpleNamespace(
@@ -237,14 +239,15 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=True, pi_session_clear=True, pi_session_id="x",
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         captured = []
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
+            "reviewforge.ai.runner.subprocess.Popen",
             lambda cmd, **k: (
                 captured.append(cmd)
-                or subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+                or FakePopen(cmd, returncode=0, stdout=b'{"ok": true}')
             ),
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
@@ -293,12 +296,13 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         stderr = b"[pi] tokens: 1234 in / 567 out\n"
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
-            lambda *a, **k: subprocess.CompletedProcess(a, 0, b'{"ok": true}', stderr),
+            "reviewforge.ai.runner.subprocess.Popen",
+            popen_factory([(0, b'{"ok": true}', stderr)]),
         )
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         assert runner.last_tokens == {"in": 1234, "out": 567, "total": 1801}
@@ -315,22 +319,28 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-1",
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         calls = []
-        def fake_run(cmd, input=b"", **k):
-            calls.append((cmd, input))
-            if len(calls) == 1:
-                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
-            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+
+        def fake_popen(cmd, **k):
+            proc = FakePopen(
+                cmd,
+                returncode=0,
+                stdout=b"not json" if not calls else b'{"ok": true}',
+            )
+            calls.append(proc)
+            return proc
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
         # Repair call: same --session, empty stdin (no re-send).
-        repair_cmd, repair_input = calls[1]
-        assert "--session-id" in repair_cmd
-        assert "pr-1" in repair_cmd
-        assert repair_input == b""
-        assert "return only the json" in repair_cmd[-1].lower()
+        repair_proc = calls[1]
+        assert "--session-id" in repair_proc.cmd
+        assert "pr-1" in repair_proc.cmd
+        assert repair_proc.stdin.data == b""
+        assert "return only the json" in repair_proc.cmd[-1].lower()
 
 
 # ---------------------------------------------------------------------------

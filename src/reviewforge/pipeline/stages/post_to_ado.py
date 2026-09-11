@@ -24,35 +24,36 @@ def call_helper(cfg, command, artifact_dir, *, findings=None):
 
 
 
+def _ensure_final(ctx: StageContext) -> None:
+    if ctx.final is None:
+        if ctx.review_result is None:
+            raise RuntimeError("[review][ERROR] no postable review document in context")
+        from ..projection import review_result_to_final_doc
+        ctx.final = review_result_to_final_doc(ctx.review_result)
+    if not ctx.artifacts.final.exists():
+        from ...artifacts.builder import write_json
+        write_json(ctx.artifacts.final, ctx.final)
+
+
 class PostToAdoStage(Stage):
     """Post the calibrated findings to Azure DevOps, or short-circuit on dry-run."""
 
     name = "post_to_ado"
 
     def should_run(self, ctx: StageContext) -> bool:
-        # Always run so the summary captures the outcome (posted / skipped).
         return True
 
     def run(self, ctx: StageContext) -> dict[str, Any]:
         cfg = ctx.cfg
-        if ctx.final is None:
-            if ctx.review_result is None:
-                raise RuntimeError("[review][ERROR] no postable review document in context")
-            from ..projection import review_result_to_final_doc
-            ctx.final = review_result_to_final_doc(ctx.review_result)
-        if not ctx.artifacts.final.exists():
-            from ...artifacts.builder import write_json
-            write_json(ctx.artifacts.final, ctx.final)
-
+        _ensure_final(ctx)
         validate_postable_review_doc(ctx.final)
         if cfg.dry_run:
             _log("DRY_RUN=1; printing findings JSON (not posting)")
             print(json.dumps(ctx.final, ensure_ascii=False))
             ctx.posted = {"created": 0, "skipped": 0, "dry_run": 1}
-            from ...artifacts.builder import write_json as _write
-            _write(ctx.artifacts.posted, ctx.posted)
+            from ...artifacts.builder import write_json
+            write_json(ctx.artifacts.posted, ctx.posted)
             return {"dry_run": True, "findings": len(ctx.final.get("findings", []))}
-
         _log(f"posting findings PR #{cfg.pr_id} via Python ADO helper")
         try:
             posted = call_helper(cfg, "post-findings", ctx.artifacts.dir, findings=ctx.artifacts.final)
@@ -65,10 +66,7 @@ class PostToAdoStage(Stage):
             path = ctx.artifacts.dir / "posted-comments.json"
             posted = read_json(path) if path.exists() else {}
         ctx.posted = posted
-        return {
-            "posted": ctx.posted,
-            "findings": len(ctx.final.get("findings", [])),
-        }
+        return {"posted": ctx.posted, "findings": len(ctx.final.get("findings", []))}
 
 
 __all__ = ["PostToAdoStage"]

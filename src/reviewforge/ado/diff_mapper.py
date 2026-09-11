@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Iterable
 import re
 
+from reviewforge.git.chunker import unquote_git_path
+
 
 @dataclass(frozen=True)
 class AdoThreadContext:
@@ -93,52 +95,91 @@ class _FileDiff:
         self.hunks[-1]["lines"].append((kind, content))
 
 
+def _parse_file_header(raw_line: str) -> _FileDiff | None:
+    match = _FILE_HEADER_RE.match(raw_line)
+    if not match:
+        return None
+    path = unquote_git_path(match.group("path").strip())
+    if path == "/dev/null":
+        return None
+    return _FileDiff(path=path[2:] if path.startswith("b/") else path)
+
+
+def _parse_hunk_header(raw_line: str, current: _FileDiff | None) -> bool:
+    if not raw_line.startswith("@@"):
+        return False
+    match = _HUNK_RE.match(raw_line)
+    if not match or current is None:
+        return True
+    current.add_hunk(
+        old_start=int(match.group("old_start")),
+        old_count=int(match.group("old_count") or 1),
+        new_start=int(match.group("new_start")),
+        new_count=int(match.group("new_count") or 1),
+    )
+    return True
+
+
+def _add_content_line(raw_line: str, current: _FileDiff | None) -> None:
+    if current is None or not current.hunks or raw_line.startswith("\\"):
+        return
+    kind = raw_line[:1]
+    if kind in {" ", "+", "-"}:
+        current.add_line(kind, raw_line[1:])
+
+
 def parse_unified_diff(diff_text: str) -> list[_FileDiff]:
     """Parse a unified diff into one :class:`_FileDiff` per file."""
     files: list[_FileDiff] = []
     current: _FileDiff | None = None
     for raw_line in diff_text.splitlines():
         if raw_line.startswith("+++ "):
-            m = _FILE_HEADER_RE.match(raw_line)
-            if not m:
-                continue
-            path = m.group("path").strip()
-            if path.startswith("b/"):
-                path = path[2:]
-            current = _FileDiff(path=path)
-            files.append(current)
+            current = _parse_file_header(raw_line)
+            if current is not None:
+                files.append(current)
             continue
         if raw_line.startswith("--- "):
-            # ignore old-file headers; the new-file header carries the path
             continue
-        if raw_line.startswith("@@"):
-            m = _HUNK_RE.match(raw_line)
-            if not m or current is None:
-                continue
-            current.add_hunk(
-                old_start=int(m.group("old_start")),
-                old_count=int(m.group("old_count") or 1),
-                new_start=int(m.group("new_start")),
-                new_count=int(m.group("new_count") or 1),
-            )
+        if _parse_hunk_header(raw_line, current):
             continue
-        if current is None or not current.hunks:
-            continue
-        if raw_line.startswith("+"):
-            current.add_line("+", raw_line[1:])
-        elif raw_line.startswith("-"):
-            current.add_line("-", raw_line[1:])
-        elif raw_line.startswith(" "):
-            current.add_line(" ", raw_line[1:])
-        elif raw_line.startswith("\\"):
-            # "\ No newline at end of file" — ignored for line mapping.
-            continue
+        _add_content_line(raw_line, current)
     return files
 
 
 # ---------------------------------------------------------------------------
 # Mapping
 # ---------------------------------------------------------------------------
+
+
+def _index_hunk(
+    hunk: dict[str, Any],
+    hunk_index: int,
+) -> dict[int, tuple[int, int, int]]:
+    indexed: dict[int, tuple[int, int, int]] = {}
+    line = hunk["new_start"]
+    block_start: int | None = None
+    block_end: int | None = None
+    for kind, _ in hunk["lines"]:
+        if kind not in {" ", "+"}:
+            continue
+        if kind == "+":
+            block_start = line if block_start is None else block_start
+            block_end = line
+            indexed[line] = (line, line, hunk_index + 1)
+        line += 1
+    if block_start is not None and block_end is not None:
+        indexed[block_start] = (block_start, block_end, hunk_index + 1)
+    return indexed
+
+
+def _hunk_line_set(hunk: dict[str, Any]) -> set[int]:
+    lines: set[int] = set()
+    line = hunk["new_start"]
+    for kind, _ in hunk["lines"]:
+        if kind in {" ", "+"}:
+            lines.add(line)
+            line += 1
+    return lines
 
 
 @dataclass
@@ -164,33 +205,13 @@ class DiffLineMapper:
         return [f.path for f in self._files]
 
     def _build_file_index(self, file_diff: _FileDiff) -> dict[int, tuple[int, int, int]]:
-        """Return a map ``new_line → (right_file_start, right_file_end, hunk_index)``.
-
-        Each line in the new file maps to itself (start = end = new_line). For
-        added lines, the entire contiguous block of added lines is also
-        recorded under the block's start, so a fallback lookup can land on
-        the start of the block when the exact line is not found.
-        """
+        """Return a map ``new_line → (right_file_start, right_file_end, hunk_index)``."""
         out: dict[int, tuple[int, int, int]] = {}
         for hunk_index, hunk in enumerate(file_diff.hunks):
-            new_line = hunk["new_start"]
-            block_start: int | None = None
-            block_end: int | None = None
-            for kind, _ in hunk["lines"]:
-                if kind in {" ", "+"}:
-                    if kind == "+":
-                        if block_start is None:
-                            block_start = new_line
-                        block_end = new_line
-                        out[new_line] = (new_line, new_line, hunk_index + 1)
-                    new_line += 1
-                # "-" lines do not advance the new-file line counter.
-            # Expose the start of the added block under itself for fast
-            # fallback (e.g. when the reviewer references the block as a
-            # whole but provides a non-added line number).
-            if block_start is not None and block_end is not None:
-                out[block_start] = (block_start, block_end, hunk_index + 1)
+            out.update(_index_hunk(hunk, hunk_index))
         return out
+
+
 
     def _index_for(self, file_path: str) -> dict[int, tuple[int, int, int]] | None:
         normalized = _normalize_path(file_path)
@@ -246,28 +267,12 @@ class DiffLineMapper:
         )
 
     def line_set(self, file_path: str) -> set[int]:
-        """Return all new-file line numbers touched in any hunk for ``file_path``.
-
-        Used by the stale-comment reconciliation pass: a bot thread
-        anchored at ``(file, line)`` is considered current when
-        ``line in line_set(file)``. Empty set when the file is not in
-        the diff at all (i.e. the file was removed entirely → every
-        prior anchor on it is stale).
-        """
+        """Return all new-file line numbers touched in any hunk for ``file_path``."""
         normalized = _normalize_path(file_path)
-        out: set[int] = set()
-        for f in self._files:
-            if _normalize_path(f.path) != normalized:
-                continue
-            for hunk in f.hunks:
-                line = hunk["new_start"]
-                for kind, _content in hunk["lines"]:
-                    if kind in {" ", "+"}:
-                        out.add(line)
-                        line += 1
-                    # "-" lines do not advance the new-file line counter.
-            break
-        return out
+        for file_diff in self._files:
+            if _normalize_path(file_diff.path) == normalized:
+                return set().union(*(_hunk_line_set(hunk) for hunk in file_diff.hunks))
+        return set()
 
     def file_level_context(self, file_path: str) -> AdoThreadContext | None:
         """Return a file-level thread context for ``file_path`` if the file appears in the diff.

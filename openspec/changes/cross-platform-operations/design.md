@@ -16,4 +16,9 @@ Docker cannot evaluate an env-format file in an ARG default at parse time. The P
 
 ## Risks / Trade-offs
 
+
+## Follow-up behavior decisions
+
+- Interactive selectors resolve exact displayed PR IDs in addition to positional indexes and index ranges. Exact ID matches take precedence for a numeric token; unresolved values retain index-range validation and produce a clear ID-not-found error when outside the displayed index set.
+- Container execution remains detached for all runs. `--keep-container` changes cleanup only: it omits `--rm` and retains `-d`.
 - `run-open-prs` uses the existing `reviewforge discover` CLI subprocess, preserving its authentication and filtering behavior.

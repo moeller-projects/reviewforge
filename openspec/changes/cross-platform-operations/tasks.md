@@ -12,3 +12,10 @@
 ## 3. Verification
 
 - [x] 3.1 Add regression tests and run smoke, suite, coverage, and OpenSpec validation.
+
+## 4. Batch selection and lifecycle corrections
+- [x] 4.1 Accept exact pull-request IDs alongside interactive indexes and ranges.
+
+- [x] 4.2 Keep container execution detached while omitting `--rm` for `--keep-container`.
+- [x] 4.3 Add regression coverage for ID selection and lifecycle flags.
+- [x] 4.4 Update operator documentation and validate the OpenSpec change.

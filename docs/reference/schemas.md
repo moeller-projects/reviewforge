@@ -2,13 +2,15 @@
 
 **Purpose:** document public JSON contracts. **Audience:** integrators and maintainers. **Mode:** reference.
 
-Pydantic models live in `pipeline.schemas`. Literal values are `severity: nit|minor|major|blocker`, `confidence: high|medium|low`, and `contextBasis: diff-only|surrounding-code-read|full-module-review`.
+Pydantic models live in `pipeline.schemas`. Literal values are `severity: nit|minor|major|blocker`, `confidence: high|medium|low`, `contextBasis: diff-only|surrounding-code-read|full-module-review`, `work_type: feature|change|bug|refactor|test-only|docs-config|mixed`, `suggested_focus: security-audit|deep-logic|concurrency|data-integrity`, and `danger: high|critical`.
 
 ## Canonical `ReviewResult`
 
-Fields: `metadata`, `review_summary`, `verification_summary`, `pr_summary`, `findings`, `discarded_findings`, `good_practices`, `uncertainties`, `metrics`, and `review_confidence`. A supplied non-empty document must include `review_summary`.
+Fields: `metadata`, `review_summary`, `verification_summary`, `pr_summary`, `findings`, `discarded_findings`, `good_practices`, `uncertainties`, `test_gaps`, `escalation_hints`, `metrics`, and `review_confidence`. A supplied non-empty document must include `review_summary` and `pr_summary.work_type`. `test_gaps` is capped at 5, `escalation_hints` at 3, and `good_practices` at 3.
 
-`RichFinding` contains `title`, `observation`, `impact`, `recommendation`, `severity`, optional `confidence`, `file`, `line`, `contextBasis`, `regression` (default `false`), and `evidence`. Evidence requires at least one reference, a changed line or classification, and rationale.
+`RichFinding` contains `title`, `observation`, `impact`, `recommendation`, `severity`, optional `confidence`, `file`, `line`, `contextBasis`, `regression` (default `false`), and `evidence`. Evidence requires at least one reference, a changed line or classification, and rationale; `evidence.classification` is one of `work-item`, `architectural`, `repository-wide`, `prior-thread`, or `other`, and prior-thread evidence must cite `evidence.threads`.
+
+`CoverageGap` is `{behavior, suggested_test, file}`. `EscalationHint` is `{files, reason, suggested_focus, danger}`.
 
 `ReviewState.previousFeedback` contains deterministic entries with a normalized finding fingerprint, thread status, latest human reply (truncated), disposition (`dismissed`, `fixed`, or `unresolved`), and thread ID. `regression` may be true only when changed lines reintroduce a prior issue.
 

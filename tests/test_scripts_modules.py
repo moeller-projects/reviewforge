@@ -22,6 +22,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from conftest import FakePopen
 
 import pytest
 
@@ -749,12 +750,12 @@ class TestPiRunner:
         cfg = make_cfg(tmp_path)
         seen_env = {}
 
-        def fake_run(cmd, input, stdout, stderr, timeout, env):
-            seen_env.update(env)
-            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"warn\n")
+        def fake_popen(cmd, env=None, **k):
+            seen_env.update(env or {})
+            return FakePopen(cmd, returncode=0, stdout=b'{"ok": true}', stderr=b"warn\n")
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
@@ -767,13 +768,13 @@ class TestPiRunner:
         cfg = make_cfg(tmp_path)
         calls = []
 
-        def fake_run(cmd, input, stdout, stderr, timeout, env):
+        def fake_popen(cmd, **k):
             calls.append(cmd)
             if len(calls) == 1:
-                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
-            return subprocess.CompletedProcess(cmd, 0, b'{"repaired": true}', b"")
+                return FakePopen(cmd, returncode=0, stdout=b"not json")
+            return FakePopen(cmd, returncode=0, stdout=b'{"repaired": true}')
 
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
@@ -784,8 +785,8 @@ class TestPiRunner:
     def test_run_json_raises_on_nonzero(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path)
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
-            lambda *a, **k: subprocess.CompletedProcess([], 9, b"", b"bad"),
+            "reviewforge.ai.runner.subprocess.Popen",
+            lambda cmd, **k: FakePopen(cmd, returncode=9, stdout=b"", stderr=b"bad"),
         )
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
@@ -901,6 +902,19 @@ class TestDiffMapper:
     def test_parse_collects_changed_files(self):
         files = diff_mapper.collect_changed_files(self.DIFF)
         assert files == ["src/app.py"]
+
+    def test_deleted_file_diff_does_not_yield_dev_null(self):
+        deletion = (
+            "diff --git a/old.py b/old.py\n"
+            "deleted file mode 100644\n"
+            "--- a/old.py\n"
+            "+++ /dev/null\n"
+            "@@ -1,2 +0,0 @@\n"
+            "-gone\n"
+            "-away\n"
+        )
+        files = diff_mapper.collect_changed_files(deletion)
+        assert "/dev/null" not in files
 
     def test_exact_line_maps_to_hunk_start(self):
         ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 3, diff_text=self.DIFF)
@@ -1262,6 +1276,44 @@ class TestCli:
 # ---------------------------------------------------------------------------
 
 
+class _DeepeningRepoSim:
+    def __init__(self):
+        self.commands: list[list[str]] = []
+        self.merge_base_calls = 0
+
+    def run_logged(self, desc, cmd, cwd):
+        self.commands.append(cmd)
+
+    def run(self, cmd, cwd=None, stdout=None, stderr=None, env=None):
+        self.commands.append(cmd)
+        if cmd[:2] == ["git", "merge-base"]:
+            self.merge_base_calls += 1
+            status = 0 if self.merge_base_calls >= 3 else 1
+            return subprocess.CompletedProcess(cmd, status, b"base123\n", b"")
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, b"commit123\n", b"")
+        if cmd[:2] == ["git", "diff"] and "--name-only" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, b"src/a.py\n", b"")
+        if cmd[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(cmd, 0, b"difftext", b"")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+
+def _prepare_repo_subprocess(commands: list[list[str]]):
+    def fake_run(cmd, cwd=None, stdout=None, stderr=None, env=None):
+        commands.append(cmd)
+        if cmd[:2] == ["git", "merge-base"]:
+            return subprocess.CompletedProcess(cmd, 0, b"base123\n", b"")
+        if cmd[:2] == ["git", "rev-parse"]:
+            output = b"target123\n" if "target" in cmd[-1] else b"source123\n"
+            return subprocess.CompletedProcess(cmd, 0, output, b"")
+        if cmd[:2] == ["git", "diff"] and "--name-only" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, b"src/a.py\n", b"")
+        if cmd[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(cmd, 0, b"difftext", b"")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    return fake_run
 class TestGitOps:
     def test_run_git_returns_stdout(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
@@ -1305,22 +1357,11 @@ class TestGitOps:
     def test_prepare_repo_uses_full_range_when_reviewed_commit_is_current_source(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
         commands: list[list[str]] = []
-
-        def fake_run(cmd, cwd=None, stdout=None, stderr=None, env=None):
-            commands.append(cmd)
-            if cmd[:2] == ["git", "merge-base"]:
-                return subprocess.CompletedProcess(cmd, 0, b"base123\n", b"")
-            if cmd[:2] == ["git", "rev-parse"]:
-                if "target" in cmd[-1]:
-                    return subprocess.CompletedProcess(cmd, 0, b"target123\n", b"")
-                return subprocess.CompletedProcess(cmd, 0, b"source123\n", b"")
-            if cmd[:2] == ["git", "diff"] and "--name-only" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, b"src/a.py\n", b"")
-            if cmd[:2] == ["git", "diff"]:
-                return subprocess.CompletedProcess(cmd, 0, b"difftext", b"")
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-
-        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            git_ops.subprocess,
+            "run",
+            _prepare_repo_subprocess(commands),
+        )
         state = git_ops.prepare_repo(cfg, "feature/x", "main", reviewed_commit="source123")
         assert state.range_spec == "base123..source123"
         assert state.files == ["src/a.py"]
@@ -1330,64 +1371,31 @@ class TestGitOps:
         )
         git_ops.cleanup(state)
 
+    def test_prepare_repo_uses_depth_when_reviewed_commit_is_absent(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
         commands: list[list[str]] = []
-
-
-        def fake_run(cmd, cwd=None, stdout=None, stderr=None, env=None):
-            commands.append(cmd)
-            if cmd[:2] == ["git", "merge-base"]:
-                return subprocess.CompletedProcess(cmd, 0, b"base123\n", b"")
-            if cmd[:2] == ["git", "rev-parse"]:
-                if "target" in cmd[-1]:
-                    return subprocess.CompletedProcess(cmd, 0, b"target123\n", b"")
-                return subprocess.CompletedProcess(cmd, 0, b"source123\n", b"")
-            if cmd[:2] == ["git", "diff"] and "--name-only" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, b"src/a.py\n", b"")
-            if cmd[:2] == ["git", "diff"]:
-                return subprocess.CompletedProcess(cmd, 0, b"difftext", b"")
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-
-        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        monkeypatch.setattr(git_ops, "run_logged", lambda desc, cmd, cwd: commands.append(cmd))
+        monkeypatch.setattr(git_ops.subprocess, "run", _prepare_repo_subprocess(commands))
         state = git_ops.prepare_repo(cfg, "feature/x", "main")
         assert state.base_commit == "base123"
         assert state.files == ["src/a.py"]
         assert sum("--depth=200" in cmd for cmd in commands) == 2
         assert not any("--deepen=" in " ".join(cmd) or "--unshallow" in cmd for cmd in commands)
         git_ops.cleanup(state)
-
     def test_prepare_repo_deepens_until_merge_base_exists(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path, clone_root=tmp_path / "clones")
-        commands: list[list[str]] = []
-        merge_base_calls = 0
-
-        def fake_logged(desc, cmd, cwd):
-            commands.append(cmd)
-
-        def fake_run(cmd, cwd=None, stdout=None, stderr=None, env=None):
-            nonlocal merge_base_calls
-            if cmd[:2] == ["git", "merge-base"]:
-                merge_base_calls += 1
-                return subprocess.CompletedProcess(cmd, 0 if merge_base_calls >= 3 else 1, b"base123\n", b"")
-            if cmd[:2] == ["git", "rev-parse"]:
-                return subprocess.CompletedProcess(cmd, 0, b"commit123\n", b"")
-            if cmd[:2] == ["git", "diff"] and "--name-only" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, b"src/a.py\n", b"")
-            if cmd[:2] == ["git", "diff"]:
-                return subprocess.CompletedProcess(cmd, 0, b"difftext", b"")
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-
-        monkeypatch.setattr(git_ops, "run_logged", fake_logged)
-        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        sim = _DeepeningRepoSim()
+        monkeypatch.setattr(git_ops, "run_logged", sim.run_logged)
+        monkeypatch.setattr(git_ops.subprocess, "run", sim.run)
         state = git_ops.prepare_repo(cfg, "feature/x", "main")
         assert state.base_commit == "base123"
-        assert [cmd[3] for cmd in commands if "--deepen=1000" in cmd or "--deepen=5000" in cmd] == [
+        assert [cmd[3] for cmd in sim.commands if "--deepen=1000" in cmd or "--deepen=5000" in cmd] == [
             "--deepen=1000",
             "--deepen=1000",
             "--deepen=5000",
             "--deepen=5000",
         ]
-        assert not any("--unshallow" in cmd for cmd in commands)
+        assert not any("--unshallow" in cmd for cmd in sim.commands)
         git_ops.cleanup(state)
 
     def test_prepare_repo_reports_missing_merge_base_after_unshallow(self, tmp_path, monkeypatch):
@@ -1420,6 +1428,9 @@ class TestGitOps:
         assert sum("--unshallow" in cmd for cmd in commands) == 2
 
 
+
+
+
 # ---------------------------------------------------------------------------
 # Default pipeline shape
 # ---------------------------------------------------------------------------
@@ -1435,6 +1446,7 @@ class TestDefaultPipeline:
             "execute_reasoning_engine",
             "validate_anchors",
             "post_to_ado",
+            "reply_to_comments",
         ]
 
     def test_review_only_pipeline_excludes_posting(self):
@@ -1451,8 +1463,9 @@ class TestPlatformOperations:
         command = ops.build_command(
             ops.parser().parse_args(["build", "--runtime", "docker", "--dry-run"])
         )
-        assert "PI_VERSION=0.80.7" in command
-        assert "UV_VERSION=0.11.28" in command
+        pins = ops.load_pins()
+        assert f"PI_VERSION={pins['PI_VERSION']}" in command
+        assert f"UV_VERSION={pins['UV_VERSION']}" in command
 
     def test_run_explicit_values_override_environment(self, monkeypatch, tmp_path):
         from reviewforge import ops

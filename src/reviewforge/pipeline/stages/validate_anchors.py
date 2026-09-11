@@ -10,6 +10,33 @@ from ..schemas import DiscardedFinding
 from ..stage import Stage, StageContext
 
 
+def _filter_anchor_finding(
+    finding: dict[str, Any], ctx: StageContext, mapper: DiffLineMapper
+) -> tuple[dict[str, Any] | None, str | None]:
+    if is_work_item_finding(finding) or not finding.get("file") or not finding.get("line"):
+        return finding, None
+    if int(finding["line"]) in mapper.line_set(str(finding["file"])):
+        return finding, None
+    if ctx.cfg.anchor_policy == "drop":
+        return None, "drop"
+    return {**finding, "anchorDowngraded": True}, "downgrade"
+
+
+def _remove_dropped_results(ctx: StageContext, dropped_keys: set[tuple[str | None, int | None, str]]) -> None:
+    if ctx.review_result is None or not dropped_keys:
+        return
+    result = ctx.review_result
+    retained = []
+    for finding in result.findings:
+        key = (finding.file, finding.line, finding.title.casefold().strip())
+        if key in dropped_keys:
+            result.discarded_findings.append(DiscardedFinding(reason="anchor not present in diff", category="anchor"))
+        else:
+            retained.append(finding)
+    result.findings = retained
+    write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
+
+
 class ValidateAnchorsStage(Stage):
     """Downgrade or drop findings whose inline anchors are not in the diff."""
 
@@ -29,34 +56,17 @@ class ValidateAnchorsStage(Stage):
         dropped = downgraded = 0
         dropped_keys: set[tuple[str | None, int | None, str]] = set()
         for finding in ctx.final.get("findings", []):
-            if is_work_item_finding(finding) or not finding.get("file") or not finding.get("line"):
-                kept.append(finding)
-                continue
-            valid = int(finding["line"]) in mapper.line_set(str(finding["file"]))
-            if valid:
-                kept.append(finding)
-            elif ctx.cfg.anchor_policy == "drop":
+            result, action = _filter_anchor_finding(finding, ctx, mapper)
+            if result is not None:
+                kept.append(result)
+            if action == "drop":
                 dropped += 1
                 dropped_keys.add((finding.get("file"), finding.get("line"), str(finding.get("title", "")).casefold().strip()))
-            else:
+            elif action == "downgrade":
                 downgraded += 1
-                # Preserve the code anchor so posting can classify it as no_line_mapping.
-                kept.append({**finding, "anchorDowngraded": True})
         ctx.final = {**ctx.final, "findings": kept}
         write_json(ctx.artifacts.final, ctx.final)
-        if ctx.review_result is not None and dropped_keys:
-            result = ctx.review_result
-            retained = []
-            for finding in result.findings:
-                key = (finding.file, finding.line, finding.title.casefold().strip())
-                if key in dropped_keys:
-                    result.discarded_findings.append(
-                        DiscardedFinding(reason="anchor not present in diff", category="anchor")
-                    )
-                else:
-                    retained.append(finding)
-            result.findings = retained
-            write_json(ctx.artifacts.review_result, result.model_dump(by_alias=True, exclude_none=False))
+        _remove_dropped_results(ctx, dropped_keys)
         return {"downgraded": downgraded, "dropped": dropped}
 
 

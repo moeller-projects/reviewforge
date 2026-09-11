@@ -252,12 +252,36 @@ def review_thread(thread: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_work_item(item: dict[str, Any]) -> dict[str, Any]:
+    fields = item.get("fields") or {}
+    return {
+        "id": item.get("id"),
+        "type": fields.get("System.WorkItemType") or "Unknown",
+        "title": fields.get("System.Title") or "(untitled)",
+        "state": fields.get("System.State") or "",
+        "description": fields.get("System.Description") or "(none)",
+        "acceptanceCriteria": fields.get("Microsoft.VSTS.Common.AcceptanceCriteria") or "(none)",
+    }
+
+
+def _normalize_work_item_comments(raw: dict[str, Any], work_item_id: str) -> dict[str, Any] | None:
+    comments = [
+        {
+            "id": comment.get("id"),
+            "author": ((comment.get("author") or {}).get("displayName")) or "unknown",
+            "text": comment.get("text") or "",
+        }
+        for comment in raw.get("comments", [])
+    ]
+    return {"workItemId": work_item_id, "comments": comments} if comments else None
+
+
 def fetch_work_items(
     client: AdoClient, pr: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch linked work items + comments. Returns (work_items, comments_by_item)."""
     refs = pr.get("workItemRefs") or []
-    ids = [str(r.get("id")) for r in refs if r.get("id") is not None]
+    ids = [str(ref.get("id")) for ref in refs if ref.get("id") is not None]
     if not ids:
         return [], []
     body = {
@@ -271,34 +295,14 @@ def fetch_work_items(
         ],
     }
     batch = client.post("/_apis/wit/workItemsBatch?api-version=7.1-preview.1", body)
-    work_items: list[dict[str, Any]] = []
-    for item in batch.get("value", []):
-        fields = item.get("fields") or {}
-        work_items.append(
-            {
-                "id": item.get("id"),
-                "type": fields.get("System.WorkItemType") or "Unknown",
-                "title": fields.get("System.Title") or "(untitled)",
-                "state": fields.get("System.State") or "",
-                "description": fields.get("System.Description") or "(none)",
-                "acceptanceCriteria": fields.get("Microsoft.VSTS.Common.AcceptanceCriteria") or "(none)",
-            }
-        )
-    comments_by_item: list[dict[str, Any]] = []
-    for wid in ids:
+    work_items = [_normalize_work_item(item) for item in batch.get("value", [])]
+    comments_by_item = []
+    for work_item_id in ids:
         raw = client.get(
-            f"/_apis/wit/workItems/{urllib.parse.quote(wid)}/comments?api-version=7.1-preview.4"
+            f"/_apis/wit/workItems/{urllib.parse.quote(work_item_id)}/comments?api-version=7.1-preview.4"
         )
-        comments = [
-            {
-                "id": c.get("id"),
-                "author": ((c.get("author") or {}).get("displayName")) or "unknown",
-                "text": c.get("text") or "",
-            }
-            for c in raw.get("comments", [])
-        ]
-        if comments:
-            comments_by_item.append({"workItemId": wid, "comments": comments})
+        if comments := _normalize_work_item_comments(raw, work_item_id):
+            comments_by_item.append(comments)
     return work_items, comments_by_item
 
 
@@ -340,6 +344,58 @@ def extract_json(path: Path) -> dict[str, Any]:
         return json.loads(stripped)
 
 
+def _normalize_finding_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "changedLines": [
+            value for value in (evidence.get("changed_lines") or []) if isinstance(value, int)
+        ],
+        "contextFilesRead": [
+            value for value in (evidence.get("context_files_read") or []) if isinstance(value, str)
+        ],
+        "whyNewInThisPr": str(evidence.get("why_new_in_this_pr") or "").strip(),
+        "whyNotIntentional": str(evidence.get("why_not_intentional") or "").strip(),
+    }
+
+
+def _normalized_finding(
+    finding: dict[str, Any],
+    severity: str,
+    confidence: str | None,
+) -> dict[str, Any]:
+    normalized = {
+        "severity": severity,
+        "title": finding["title"].strip(),
+        "message": finding["message"],
+        "file": finding.get("file"),
+        "line": finding.get("line"),
+        "confidence": confidence,
+        "contextBasis": finding.get("contextBasis"),
+        "suggestion": finding.get("suggestion"),
+        "anchorDowngraded": bool(finding.get("anchorDowngraded")),
+    }
+    if isinstance(normalized["file"], str) and normalized["file"].startswith("/"):
+        normalized["file"] = normalized["file"].lstrip("/")
+    if evidence := finding.get("evidence") or {}:
+        normalized["evidence"] = _normalize_finding_evidence(evidence)
+    return normalized
+
+
+def _validate_finding(finding: Any) -> dict[str, Any]:
+    if not isinstance(finding, dict):
+        fail("finding is not an object")
+    severity = finding.get("severity")
+    if severity not in SEV_RANK:
+        fail(f"invalid severity {severity!r}; expected one of {list(SEV_RANK)}")
+    if not isinstance(finding.get("title"), str) or not finding["title"].strip():
+        fail("finding missing non-empty title")
+    if not isinstance(finding.get("message"), str) or not finding["message"].strip():
+        fail("finding missing non-empty message")
+    confidence = finding.get("confidence")
+    if confidence is not None and confidence not in ("high", "medium", "low"):
+        fail(f"invalid confidence {confidence!r}")
+    return _normalized_finding(finding, severity, confidence)
+
+
 def validate_findings(
     doc: dict[str, Any],
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -352,47 +408,7 @@ def validate_findings(
     findings_raw = doc.get("findings") or []
     if not isinstance(findings_raw, list):
         fail("findings must be a list")
-    out: list[dict[str, Any]] = []
-    for f in findings_raw:
-        if not isinstance(f, dict):
-            fail("finding is not an object")
-        sev = f.get("severity")
-        if sev not in SEV_RANK:
-            fail(f"invalid severity {sev!r}; expected one of {list(SEV_RANK)}")
-        if not isinstance(f.get("title"), str) or not f["title"].strip():
-            fail("finding missing non-empty title")
-        if not isinstance(f.get("message"), str) or not f["message"].strip():
-            fail("finding missing non-empty message")
-        confidence = f.get("confidence")
-        if confidence is not None and confidence not in ("high", "medium", "low"):
-            fail(f"invalid confidence {confidence!r}")
-        normalized = {
-            "severity": sev,
-            "title": f["title"].strip(),
-            "message": f["message"],
-            "file": f.get("file"),
-            "line": f.get("line"),
-            "confidence": confidence,
-            "contextBasis": f.get("contextBasis"),
-            "suggestion": f.get("suggestion"),
-            "anchorDowngraded": bool(f.get("anchorDowngraded")),
-        }
-        if isinstance(normalized["file"], str) and normalized["file"].startswith("/"):
-            normalized["file"] = normalized["file"].lstrip("/")
-        evidence = f.get("evidence") or {}
-        if evidence:
-            normalized["evidence"] = {
-                "changedLines": [
-                    x for x in (evidence.get("changed_lines") or []) if isinstance(x, int)
-                ],
-                "contextFilesRead": [
-                    x for x in (evidence.get("context_files_read") or []) if isinstance(x, str)
-                ],
-                "whyNewInThisPr": str(evidence.get("why_new_in_this_pr") or "").strip(),
-                "whyNotIntentional": str(evidence.get("why_not_intentional") or "").strip(),
-            }
-        out.append(normalized)
-    return summary, out
+    return summary, [_validate_finding(finding) for finding in findings_raw]
 
 
 def worst_rank(findings: list[dict[str, Any]]) -> int:
@@ -417,51 +433,55 @@ def should_threshold(findings: list[dict[str, Any]], threshold: str) -> bool:
 key_of = dedupe_key
 
 
-def command_fetch_context(args: argparse.Namespace) -> int:
-    """Fetch normalized PR metadata and review history."""
-    client = AdoClient(args.org, args.project, args.repo, **_client_kwargs(args))
-    out = Path(args.out)
-    log(f"fetching PR #{args.pr} context")
-    pr = client.get_pr(args.pr, include_work_item_refs=True)
-    work_items, work_item_comments = fetch_work_items(client, pr)
-    raw_threads = client.get_threads(args.pr)
-    threads = [simplify_thread(t) for t in raw_threads]
+def _authenticated_user(client: AdoClient) -> dict[str, Any]:
     try:
-        auth_payload = client.connection_data()
-        authenticated = (
-            auth_payload.get("authenticatedUser")
-            if isinstance(auth_payload, dict)
-            else {}
-        ) or {}
+        payload = client.connection_data()
     except Exception:
-        authenticated = {}
+        return {}
+    return (payload.get("authenticatedUser") if isinstance(payload, dict) else {}) or {}
+
+
+def _commit_context(client: AdoClient, pr_id: int | str) -> list[dict[str, Any]]:
     try:
-        commit_payload = client.get_commits(args.pr)
-        raw_commits = commit_payload if isinstance(commit_payload, list) else []
+        payload = client.get_commits(pr_id)
     except Exception:
-        raw_commits = []
-    commits = [
+        return []
+    return [
         {
-            "commitId": c.get("commitId") or c.get("id"),
-            "authorId": (c.get("author") or {}).get("id"),
-            "authorDate": (c.get("author") or {}).get("date"),
-            "committerDate": (c.get("committer") or {}).get("date"),
+            "commitId": commit.get("commitId") or commit.get("id"),
+            "authorId": (commit.get("author") or {}).get("id"),
+            "authorDate": (commit.get("author") or {}).get("date"),
+            "committerDate": (commit.get("committer") or {}).get("date"),
         }
-        for c in raw_commits if isinstance(c, dict)
-    ]
+        for commit in payload
+        if isinstance(commit, dict)
+    ] if isinstance(payload, list) else []
+
+
+def _reviewer_context(authenticated: dict[str, Any]) -> dict[str, Any] | None:
+    if not authenticated.get("id"):
+        return None
+    return {
+        "id": authenticated.get("id"),
+        "displayName": authenticated.get("displayName") or "",
+        "uniqueName": authenticated.get("uniqueName") or "",
+        "descriptor": authenticated.get("descriptor") or "",
+    }
+
+
+def _context_metadata(
+    client: AdoClient,
+    args: argparse.Namespace,
+    pr: dict[str, Any],
+    raw_threads: list[dict[str, Any]],
+    authenticated: dict[str, Any],
+    commits: list[dict[str, Any]],
+) -> dict[str, Any]:
     source_commit = (
         (pr.get("lastMergeSourceCommit") or {}).get("commitId")
         or (pr.get("lastMergeCommit") or {}).get("commitId")
     )
-    reviewer = None
-    if authenticated.get("id"):
-        reviewer = {
-            "id": authenticated.get("id"),
-            "displayName": authenticated.get("displayName") or "",
-            "uniqueName": authenticated.get("uniqueName") or "",
-            "descriptor": authenticated.get("descriptor") or "",
-        }
-    metadata = {
+    return {
         "org": client.org_name,
         "project": args.project,
         "repositoryId": args.repo,
@@ -476,25 +496,120 @@ def command_fetch_context(args: argparse.Namespace) -> int:
         "createdBy": pr.get("createdBy") or None,
         "reviewers": pr.get("reviewers") or [],
         "reviewState": {
-            "reviewer": reviewer,
-            "threads": [review_thread(t) for t in raw_threads],
+            "reviewer": _reviewer_context(authenticated),
+            "threads": [review_thread(thread) for thread in raw_threads],
             "commits": commits,
             "currentCommit": source_commit,
         },
     }
+
+
+def command_fetch_context(args: argparse.Namespace) -> int:
+    """Fetch normalized PR metadata and review history."""
+    client = AdoClient(args.org, args.project, args.repo, **_client_kwargs(args))
+    out = Path(args.out)
+    log(f"fetching PR #{args.pr} context")
+    pr = client.get_pr(args.pr, include_work_item_refs=True)
+    work_items, work_item_comments = fetch_work_items(client, pr)
+    raw_threads = client.get_threads(args.pr)
+    metadata = _context_metadata(
+        client,
+        args,
+        pr,
+        raw_threads,
+        _authenticated_user(client),
+        _commit_context(client, args.pr),
+    )
     context = {
         "pr": metadata,
         "workItems": work_items,
         "workItemComments": work_item_comments,
-        "existingThreads": threads,
+        "existingThreads": [simplify_thread(thread) for thread in raw_threads],
     }
-    write_json(out / "metadata.json", metadata)
-    write_json(out / "work-items.json", work_items)
-    write_json(out / "work-item-comments.json", work_item_comments)
-    write_json(out / "threads.json", threads)
-    write_json(out / "context.json", context)
+    for name, value in {
+        "metadata.json": metadata,
+        "work-items.json": work_items,
+        "work-item-comments.json": work_item_comments,
+        "threads.json": context["existingThreads"],
+        "context.json": context,
+    }.items():
+        write_json(out / name, value)
     log(f"wrote ADO context to {out}")
     return 0
+
+
+def _severity_rank(value: str | None) -> int | None:
+    severity = (value or "none").strip().lower()
+    if severity == "none":
+        return None
+    if severity in SEV_RANK:
+        return SEV_RANK[severity]
+    fail(f"POST_MIN_SEVERITY must be one of: {list(SEV_RANK)}")
+
+
+def _required_context_severities(raw: str) -> set[str]:
+    required = {item.strip() for item in raw.split(",") if item.strip()}
+    invalid = required - SEV_RANK.keys()
+    if invalid:
+        fail(f"REQUIRE_CONTEXT_FOR contains invalid severity(s): {invalid}")
+    return required
+
+
+def _has_required_context(finding: dict[str, Any]) -> bool:
+    evidence = finding.get("evidence") or {}
+    return bool(evidence.get("contextFilesRead")) or finding.get("contextBasis") in {
+        "surrounding-code-read",
+        "full-module-review",
+    }
+
+
+def _keep_context_finding(
+    finding: dict[str, Any],
+    required: set[str],
+    raw: str,
+) -> bool:
+    if finding["severity"] not in required or _has_required_context(finding):
+        return True
+    log(
+        f"dropped finding '{finding['title']}' ({finding['severity']}): "
+        f"REQUIRE_CONTEXT_FOR={raw} but no context files read"
+    )
+    return False
+
+
+def _max_findings_value(raw: str | None) -> int | None:
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        fail(f"MAX_FINDINGS must be an integer, got {raw!r}")
+    if value < 0:
+        fail("MAX_FINDINGS must be non-negative")
+    return value
+
+
+def _passes_finding_filters(
+    finding: dict[str, Any],
+    post_min_rank: int | None,
+    drop_low: bool,
+) -> bool:
+    return (
+        (post_min_rank is None or SEV_RANK[finding["severity"]] >= post_min_rank)
+        and not (drop_low and finding.get("confidence") == "low")
+    )
+
+
+def _filter_context_findings(
+    findings: list[dict[str, Any]],
+    required: set[str],
+    raw: str,
+) -> list[dict[str, Any]]:
+    return [
+        finding
+        for finding in findings
+        if _keep_context_finding(finding, required, raw)
+    ]
 
 
 def _filter_findings(
@@ -506,72 +621,198 @@ def _filter_findings(
     max_findings: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply POST_MIN_SEVERITY / DROP_LOW_CONFIDENCE / REQUIRE_CONTEXT_FOR / MAX_FINDINGS."""
-    post_min = (post_min_severity or os.getenv("POST_MIN_SEVERITY", "none") or "none").strip().lower()
-    if post_min == "none":
-        post_min_rank: int | None = None
-    elif post_min in SEV_RANK:
-        post_min_rank = SEV_RANK[post_min]
-    else:
-        fail(f"POST_MIN_SEVERITY must be one of: {list(SEV_RANK)}")
+    post_min = post_min_severity or os.getenv("POST_MIN_SEVERITY", "none") or "none"
+    post_min_rank = _severity_rank(post_min)
     drop_low = (
         bool(drop_low_confidence)
         if drop_low_confidence is not None
         else is_true(os.getenv("DROP_LOW_CONFIDENCE"))
     )
-    require_context_for_raw = require_context_for if require_context_for is not None else os.getenv("REQUIRE_CONTEXT_FOR", "")
-    require_context_for = {
-        s.strip() for s in require_context_for_raw.split(",") if s.strip()
-    } - {""}
-    if require_context_for - SEV_RANK.keys():
-        fail(
-            f"REQUIRE_CONTEXT_FOR contains invalid severity(s): "
-            f"{require_context_for - SEV_RANK.keys()}"
-        )
+    context_raw = require_context_for if require_context_for is not None else os.getenv("REQUIRE_CONTEXT_FOR", "")
+    required = _required_context_severities(context_raw)
     filtered = [
-        f
-        for f in findings
-        if (post_min_rank is None or SEV_RANK[f["severity"]] >= post_min_rank)
-        and not (drop_low and f.get("confidence") == "low")
+        finding
+        for finding in findings
+        if _passes_finding_filters(finding, post_min_rank, drop_low)
     ]
-    if require_context_for:
-        kept: list[dict[str, Any]] = []
-        for f in filtered:
-            if f["severity"] in require_context_for:
-                ctx_files = (f.get("evidence") or {}).get("contextFilesRead") or []
-                ctx_basis = f.get("contextBasis")
-                if not ctx_files and ctx_basis not in {
-                    "surrounding-code-read",
-                    "full-module-review",
-                }:
-                    log(
-                        f"dropped finding '{f['title']}' ({f['severity']}): "
-                        f"REQUIRE_CONTEXT_FOR={require_context_for_raw} but no context files read"
-                    )
-                    continue
-            kept.append(f)
-        filtered = kept
-    max_findings_raw = max_findings if max_findings is not None else os.getenv("MAX_FINDINGS")
-    max_findings: int | None = None
-    if max_findings_raw:
-        try:
-            max_findings = int(max_findings_raw)
-        except ValueError:
-            fail(f"MAX_FINDINGS must be an integer, got {max_findings_raw!r}")
-        if max_findings is not None and max_findings < 0:
-            fail("MAX_FINDINGS must be non-negative")
-    if max_findings is not None and len(filtered) > max_findings:
+    if required:
+        filtered = _filter_context_findings(filtered, required, context_raw)
+    limit = _max_findings_value(
+        max_findings if max_findings is not None else os.getenv("MAX_FINDINGS")
+    )
+    if limit is not None and len(filtered) > limit:
         filtered = sorted(
-            filtered, key=lambda f: SEV_RANK[f["severity"]], reverse=True
-        )[:max_findings]
-        log(f"capped findings MAX_FINDINGS={max_findings}")
+            filtered, key=lambda finding: SEV_RANK[finding["severity"]], reverse=True
+        )[:limit]
+        log(f"capped findings MAX_FINDINGS={limit}")
     return filtered
+
+
+def _legacy_file_line_context(finding: dict[str, Any]) -> dict[str, Any] | None:
+    if not (finding.get("file") and finding.get("line")):
+        return None
+    line = finding["line"]
+    return {
+        "filePath": "/" + str(finding["file"]).lstrip("/"),
+        "rightFileStart": {"line": line, "offset": 1},
+        "rightFileEnd": {"line": line, "offset": 1},
+    }
+
+
+def _finding_thread_context(
+    finding: dict[str, Any],
+    mapper: DiffLineMapper | None,
+) -> tuple[dict[str, Any] | None, bool, bool]:
+    if not finding.get("file"):
+        return None, False, False
+    context = map_file_line_to_diff_position(
+        finding.get("file"), finding.get("line"), mapper=mapper
+    )
+    if context is not None:
+        return context.to_thread_context(), False, False
+    fallback = map_file_to_fallback(finding["file"], mapper=mapper)
+    if fallback is not None:
+        return fallback.to_thread_context(), True, False
+    if mapper is None:
+        return _legacy_file_line_context(finding), False, False
+    return None, False, True
+
+
+def _skip_finding(result: dict[str, Any], finding: dict[str, Any], key: str, reason: str) -> None:
+    result["skipped"] += 1
+    result["skipped_reasons"][reason] += 1
+    log(f"skipped finding '{finding['title']}' (key={key}): {reason.replace('_', ' ')}")
+
+
+def _post_one_finding(
+    client: AdoClient,
+    pr_id: int | str,
+    finding: dict[str, Any],
+    existing: set[str],
+    mapper: DiffLineMapper | None,
+    summary: str,
+    result: dict[str, Any],
+) -> None:
+    if is_work_item_finding(finding):
+        finding = as_general_comment(finding)
+    key = key_of(finding)
+    if finding.get("anchorDowngraded"):
+        _skip_finding(result, finding, key, "no_line_mapping")
+        return
+    if not should_post(finding, existing):
+        result["skipped"] += 1
+        result["skipped_reasons"]["duplicate"] += 1
+        log(f"skipping duplicate finding '{finding['title']}' (key={key})")
+        return
+    thread_body: dict[str, Any] = {
+        "comments": [
+            {
+                "content": build_formatter().format(
+                    finding, key=key, max_chars=20000, summary=summary
+                ),
+                "commentType": "text",
+            }
+        ],
+        "status": "active",
+    }
+    context, fallback, unmappable = _finding_thread_context(finding, mapper)
+    if unmappable:
+        _skip_finding(result, finding, key, "no_line_mapping")
+        return
+    if context is not None:
+        thread_body["threadContext"] = context
+    if fallback:
+        result["skipped_reasons"]["file_fallback"] += 1
+    response = client.create_thread(pr_id, thread_body)
+    result["created"] += 1
+    result["comments"].append(
+        {
+            "key": key,
+            "threadId": (response or {}).get("id"),
+            "title": finding["title"],
+            "severity": finding["severity"],
+        }
+    )
+
+
+def _annotate_stale(
+    client: AdoClient,
+    pr_id: int | str,
+    pr: dict[str, Any],
+    threads: list[dict[str, Any]],
+    existing: set[str],
+    mapper: DiffLineMapper | None,
+    result: dict[str, Any],
+) -> None:
+    if os.getenv("ANNOTATE_STALE", "1") == "0" or mapper is None:
+        return
+    just_posted = {comment["threadId"] for comment in result["comments"] if comment.get("threadId")}
+    stale = find_stale_bot_threads(
+        threads,
+        existing,
+        _build_diff_anchors(mapper),
+        just_posted_thread_ids=just_posted,
+    )
+    if not stale:
+        return
+    short_sha = _short_sha(pr) or ""
+    annotated: list[int | str] = []
+    for entry in stale:
+        try:
+            client.add_comment(
+                pr_id,
+                entry["threadId"],
+                stale_comment_body(short_sha=short_sha, key=entry.get("key")),
+            )
+            annotated.append(entry["threadId"])
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log(f"failed to annotate stale thread {entry['threadId']}: {exc}")
+    result["annotated_stale"] = len(annotated)
+    result["stale_thread_ids"] = annotated
+    log(f"annotated {len(annotated)} stale thread(s)")
+
+
+def _apply_vote(
+    client: AdoClient,
+    pr_id: int | str,
+    pr: dict[str, Any],
+    findings: list[dict[str, Any]],
+    args: argparse.Namespace,
+    result: dict[str, Any],
+) -> None:
+    value = (getattr(args, "vote_waiting_on", None) or os.getenv("VOTE_WAITING_ON", "none")).strip().lower()
+    if value == "none":
+        return
+    if value not in SEV_RANK:
+        fail(f"VOTE_WAITING_ON must be one of: {list(SEV_RANK)}")
+    if not any(SEV_RANK[finding["severity"]] >= SEV_RANK[value] for finding in findings):
+        return
+    reviewer_id = current_reviewer_id(client, pr)
+    if reviewer_id:
+        client.vote(pr_id, reviewer_id, VOTE_WAITING)
+        result["vote"] = {"reviewer_id": reviewer_id, "value": VOTE_WAITING}
+        result["votedWaitingForAuthor"] = True
+
+
+def _apply_fail_on(
+    findings: list[dict[str, Any]],
+    args: argparse.Namespace,
+    result: dict[str, Any],
+) -> bool:
+    value = (getattr(args, "fail_on", None) or os.getenv("FAIL_ON", "none")).strip().lower()
+    if value == "none" or not any(
+        SEV_RANK[finding["severity"]] >= SEV_RANK.get(value, 99) for finding in findings
+    ):
+        return False
+    log(f"FAIL_ON={value} threshold met; exiting 1")
+    result["failOnTriggered"] = True
+    return True
 
 
 def command_post_findings(args: argparse.Namespace) -> int:
     """Post findings to ADO. Idempotent: skips findings already present."""
     client = AdoClient(args.org, args.project, args.repo, **_client_kwargs(args))
-    doc = extract_json(Path(args.findings))
-    summary, findings = validate_findings(doc)
+    summary, findings = validate_findings(extract_json(Path(args.findings)))
     parsed_count = len(findings)
     findings = _filter_findings(
         findings,
@@ -580,30 +821,12 @@ def command_post_findings(args: argparse.Namespace) -> int:
         require_context_for=getattr(args, "require_context_for", None),
         max_findings=getattr(args, "max_findings", None),
     )
-
     pr = client.get_pr(args.pr)
     threads = client.get_threads(args.pr)
     existing = existing_bot_markers(threads)
-
-    diff_text = ""
     diff_path = Path(args.out).parent / "diff.patch"
-    if diff_path.exists():
-        diff_text = diff_path.read_text(encoding="utf-8")
+    diff_text = diff_path.read_text(encoding="utf-8") if diff_path.exists() else ""
     mapper = DiffLineMapper.from_text(diff_text) if diff_text else None
-
-    # Helper: build a minimal file/line thread context when the diff mapper
-    # is unavailable (no diff.patch on disk). Matches the original
-    # ADO CLI behavior so callers that ran the legacy CLI
-    # outside the full pipeline still get a posted thread.
-    def _legacy_file_line_context(finding: dict[str, Any]) -> dict[str, Any] | None:
-        if not (finding.get("file") and finding.get("line")):
-            return None
-        return {
-            "filePath": "/" + str(finding["file"]).lstrip("/"),
-            "rightFileStart": {"line": finding["line"], "offset": 1},
-            "rightFileEnd": {"line": finding["line"], "offset": 1},
-        }
-
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     result: dict[str, Any] = {
@@ -617,144 +840,13 @@ def command_post_findings(args: argparse.Namespace) -> int:
         "votedWaitingForAuthor": False,
         "failOnTriggered": False,
     }
-    for f in findings:
-        # Defense in depth: work item findings are always general PR
-        # comments. The review prompt says file: null, line: null, but a
-        # model that "helps" by guessing a file would otherwise be
-        # silently dropped at the no_line_mapping branch below, or posted
-        # inline against the wrong line. Strip file/line up front so the
-        # dedupe key is also computed against the general-comment form
-        # (i.e. a guessed "src/payments/charge.ts" + 87 and the same
-        # finding with file=None produce the same dedupe key, so reruns
-        # dedupe cleanly).
-        if is_work_item_finding(f):
-            f = as_general_comment(f)
-        key = key_of(f)
-        if f.get("anchorDowngraded"):
-            result["skipped"] += 1
-            result["skipped_reasons"]["no_line_mapping"] += 1
-            log(
-                f"skipped finding '{f['title']}' (key={key}): anchor downgraded; no line mapping available"
-            )
-            continue
-        if not should_post(f, existing):
-            result["skipped"] += 1
-            result["skipped_reasons"]["duplicate"] += 1
-            log(f"skipping duplicate finding '{f['title']}' (key={key})")
-            continue
-        thread_body: dict[str, Any] = {
-            "comments": [
-                {"content": build_formatter().format(f, key=key, max_chars=20000, summary=summary), "commentType": "text"}
-            ],
-            "status": "active",
-        }
-        ctx = None
-        if f.get("file"):
-            ctx = map_file_line_to_diff_position(
-                f.get("file"), f.get("line"), mapper=mapper
-            )
-        if ctx is not None:
-            thread_body["threadContext"] = ctx.to_thread_context()
-        elif f.get("file") and (
-            fb := map_file_to_fallback(f.get("file"), mapper=mapper)
-        ) is not None:
-            thread_body["threadContext"] = fb.to_thread_context()
-            result["skipped_reasons"]["file_fallback"] += 1
-        elif not f.get("file"):
-            # Findings without a file are intentional PR-level comments.
-            # They must not be treated as unmappable inline findings just
-            # because a diff mapper is available for other findings.
-            pass
-        elif mapper is None:
-            # No diff mapper available (legacy callers that ran this CLI
-            # outside the full pipeline). Fall back to posting with a
-            # minimal file/line context, matching the original
-            # ADO CLI behavior.
-            legacy_ctx = _legacy_file_line_context(f)
-            if legacy_ctx is not None:
-                thread_body["threadContext"] = legacy_ctx
-            else:
-                # Truly file-less: post as a PR-level comment.
-                pass
-        else:
-            # Have a mapper but no usable mapping; skip to avoid HTTP 400.
-            result["skipped"] += 1
-            result["skipped_reasons"]["no_line_mapping"] += 1
-            log(
-                f"skipped finding '{f['title']}' (key={key}): no line mapping available"
-            )
-            continue
-        resp = client.create_thread(args.pr, thread_body)
-        result["created"] += 1
-        result["comments"].append(
-            {
-                "key": key,
-                "threadId": (resp or {}).get("id"),
-                "title": f["title"],
-                "severity": f["severity"],
-            }
-        )
-
-    # --- Stale-comment reconciliation ------------------------------
-    # When the source branch has moved on, previously-posted inline
-    # findings may anchor to lines that no longer exist in the current
-    # diff. Walk the existing bot threads, find any whose (file, line)
-    # is no longer in the current diff, and append a "stale" comment
-    # so reviewers don't trust an outdated inline finding. Disabled
-    # when ANNOTATE_STALE=0.
-    if os.getenv("ANNOTATE_STALE", "1") != "0" and mapper is not None:
-        diff_anchors = _build_diff_anchors(mapper)
-        just_posted_ids = {
-            c["threadId"] for c in result["comments"] if c.get("threadId")
-        }
-        stale = find_stale_bot_threads(
-            threads,
-            existing,
-            diff_anchors,
-            just_posted_thread_ids=just_posted_ids,
-        )
-        if stale:
-            short_sha = _short_sha(pr) or ""
-            for entry in stale:
-                try:
-                    client.add_comment(
-                        args.pr,
-                        entry["threadId"],
-                        stale_comment_body(short_sha=short_sha),
-                    )
-                except Exception as exc:  # noqa: BLE001 — best-effort
-                    log(
-                        f"failed to annotate stale thread {entry['threadId']}: {exc}"
-                    )
-                    continue
-            result["annotated_stale"] = len(stale)
-            result["stale_thread_ids"] = [e["threadId"] for e in stale]
-            log(f"annotated {len(stale)} stale thread(s)")
-
-    vote_waiting_on = (
-        getattr(args, "vote_waiting_on", None) or os.getenv("VOTE_WAITING_ON", "none")
-    )
-    vote_waiting_on = vote_waiting_on.strip().lower()
-    if vote_waiting_on != "none":
-        if vote_waiting_on not in SEV_RANK:
-            fail(f"VOTE_WAITING_ON must be one of: {list(SEV_RANK)}")
-        threshold = SEV_RANK[vote_waiting_on]
-        if any(SEV_RANK[f["severity"]] >= threshold for f in findings):
-            reviewer_id = current_reviewer_id(client, pr)
-            if reviewer_id:
-                client.vote(args.pr, reviewer_id, VOTE_WAITING)
-                result["vote"] = {"reviewer_id": reviewer_id, "value": VOTE_WAITING}
-                result["votedWaitingForAuthor"] = True
-
-    fail_on = (getattr(args, "fail_on", None) or os.getenv("FAIL_ON", "none")).strip().lower()
-    if fail_on != "none" and any(
-        SEV_RANK[f["severity"]] >= SEV_RANK.get(fail_on, 99) for f in findings
-    ):
-        log(f"FAIL_ON={fail_on} threshold met; exiting 1")
-        result["failOnTriggered"] = True
+    for finding in findings:
+        _post_one_finding(client, args.pr, finding, existing, mapper, summary, result)
+    _annotate_stale(client, args.pr, pr, threads, existing, mapper, result)
+    _apply_vote(client, args.pr, pr, findings, args, result)
+    if _apply_fail_on(findings, args, result):
         write_json(out, result)
         return 1
-
     write_json(out, result)
     log(
         f"parsed {parsed_count} finding(s); {len(findings)} accepted for posting; "
@@ -872,10 +964,9 @@ def main(argv: list[str] | None = None) -> int:
 def _build_diff_anchors(mapper: DiffLineMapper | None) -> dict[str, set[int]]:
     """Build ``{file_path: set_of_new_file_lines}`` from a diff mapper.
 
-    A ``None`` mapper (no diff.patch on disk) yields an empty mapping,
-    which causes every existing bot anchor to be flagged stale — the
-    safe failure mode, since we'd rather over-annotate than miss a
-    stale finding.
+    A missing mapper produces an empty mapping, but callers skip reconciliation
+    before invoking this helper. Missing diff data therefore fails closed:
+    existing bot anchors are not treated as stale without a current diff.
     """
     if mapper is None:
         return {}

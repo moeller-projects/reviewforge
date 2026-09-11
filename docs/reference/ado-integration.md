@@ -33,3 +33,19 @@ deduplication, handles comments whose line anchors move after a push.
 ## Other posting controls
 
 `POST_MIN_SEVERITY`, `DROP_LOW_CONFIDENCE`, `REQUIRE_CONTEXT_FOR`, `MAX_FINDINGS`, `VOTE_WAITING_ON`, and `FAIL_ON` control filtering, voting, and exit behavior. Both the pipeline and the legacy `post-findings` helper default `POST_MIN_SEVERITY` to `none`. See [configuration](configuration.md) and [artifacts](artifacts.md).
+
+## Stale-anchor reconciliation
+
+When a previously posted bot finding is anchored to a file and line that no
+longer appears in the current diff, ReviewForge may append one stale-anchor
+notification to the existing thread. This reports that the old location is no
+longer current; it does not prove that the finding itself is invalid. The
+original comment is preserved and the follow-up carries a `prb-stale:<key>`
+marker so repeated runs do not duplicate it.
+
+Notifications are emitted only for actionable inline bot threads. Threads
+already marked `fixed`, `wontFix`, or `closed` are not annotated. General PR
+comments and file-level comments without a line anchor are not candidates.
+`ANNOTATE_STALE=0` disables the pass. If the current `diff.patch` is
+unavailable, reconciliation is skipped rather than treating every existing
+anchor as stale.

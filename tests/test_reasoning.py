@@ -16,6 +16,8 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from reviewforge.artifacts import builder, manager  # noqa: E402
+from conftest import FakePopen  # noqa: E402
+from reviewforge.ai.runner import PiCliRunner  # noqa: E402
 from reviewforge.config import Config  # noqa: E402
 from reviewforge.exceptions import ReasoningEngineError, ReviewForgeError, SchemaValidationError  # noqa: E402
 from reviewforge.pipeline.schemas import (  # noqa: E402
@@ -120,6 +122,8 @@ def _valid_review_result_payload() -> dict[str, Any]:
         },
         "pr_summary": {
             "intent": "Add a new helper.",
+            "work_type": "change",
+            "biggest_unknown": None,
             "implementation_summary": "Clean change.",
             "architectural_impact": "",
             "risk_assessment": "",
@@ -209,14 +213,32 @@ class TestChunkSynthesisHelpers:
             3,
             [{"severity": "major", "title": "Bug", "file": "a.py", "line": 7}],
             [{"topic": "Rollout risk"}],
+            pr_title="Prevent duplicate payment processing",
+            pr_description="Add idempotency checks to the charge endpoint.",
+            changed_files=["src/payments/charge.py", "tests/test_charge.py"],
         )
         assert "3 coherent diff chunks" in text
         assert "[major] Bug (a.py:7)" in text
-        assert "- Rollout risk" in text
+        assert "Prevent duplicate payment processing" in text
+        assert "Add idempotency checks to the charge endpoint." in text
+        assert "- src/payments/charge.py" in text
+        assert "- tests/test_charge.py" in text
 
-    def test_synthesis_instruction_handles_empty_merges(self):
-        text = _build_synthesis_instruction(2, [], [])
-        assert text.count("- none") == 2
+    def test_synthesis_instruction_supplies_framing_for_clean_pr(self):
+        text = _build_synthesis_instruction(
+            2,
+            [],
+            [],
+            pr_title="Refresh package constraints",
+            pr_description="Update dependencies for a security release.",
+            changed_files=["pyproject.toml", "uv.lock"],
+        )
+
+        assert "Refresh package constraints" in text
+        assert "Update dependencies for a security release." in text
+        assert "- pyproject.toml" in text
+        assert "- uv.lock" in text
+
 
 class TestEngineRegistry:
     def test_built_in_engines_registered(self):
@@ -418,18 +440,17 @@ class TestSinglePiReasoningEngine:
         with pytest.raises(ReasoningEngineError, match="produced no JSON"):
             engine.execute(ctx)
 
-    def test_invalid_schema_raises_schema_validation_error(self, tmp_path: Path):
+    def test_missing_model_framing_raises_schema_validation_error(self, tmp_path: Path):
         cfg = _cfg(tmp_path)
         pi = MagicMock()
         pi.run_json.side_effect = lambda p, s, out, st: builder.write_json(
-            out, {"not": "valid"}
+            out, {"findings": [], "uncertainties": []}
         )
         pi.last_tokens = {}
         ctx = _stage_context(cfg, pi)
 
-        engine = SinglePiReasoningEngine()
-        with pytest.raises(SchemaValidationError, match="ReviewResult schema"):
-            engine.execute(ctx)
+        with pytest.raises(SchemaValidationError, match="required model framing"):
+            SinglePiReasoningEngine().execute(ctx)
 
     def test_instruction_includes_bounded_commit_context(self, tmp_path: Path):
         cfg = replace(_cfg(tmp_path), commit_context_max=1)
@@ -495,7 +516,12 @@ class TestSinglePiReasoningEngine:
                 builder.write_json(out, {
                     "review_summary": {"summary": "Solid chunk synthesis."},
                     "verification_summary": {"summary": "Verified per chunk."},
-                    "pr_summary": {"implementation_summary": "Did the thing."},
+                    "pr_summary": {
+                        "intent": "Did the thing.",
+                        "work_type": "change",
+                        "biggest_unknown": None,
+                        "implementation_summary": "Did the thing.",
+                    },
                 })
                 return
             builder.write_json(out, partials[len(calls)])
@@ -523,6 +549,7 @@ class TestSinglePiReasoningEngine:
         cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1, pi_session_enabled=False)
         pi = MagicMock()
         prompts: list[str] = []
+        synthesis_prompts: list[str] = []
         token_usage = [
             {"in": 10, "out": 5, "total": 15},
             {"in": 17, "out": 7, "total": 24},
@@ -533,9 +560,16 @@ class TestSinglePiReasoningEngine:
 
         def fake_run_json(_prompt_path, stdin, out, stage):
             if stage == "single-pi synthesis":
+                synthesis_prompts.append(stdin)
                 pi.token_usage = token_usage[2]
                 builder.write_json(out, {
                     "review_summary": {"summary": "Synthesized."},
+                    "pr_summary": {
+                        "intent": "Add a helper.",
+                        "work_type": "change",
+                        "biggest_unknown": None,
+                        "implementation_summary": "Clean change.",
+                    },
                 })
                 return
             idx = len(prompts)
@@ -548,7 +582,12 @@ class TestSinglePiReasoningEngine:
         pi.invocation_count = 0
         pi.repair_invocation_count = 0
         ctx = _stage_context(cfg, pi)
-        ctx.metadata = {"repository": "payments", "pullRequestId": 42}
+        ctx.metadata = {
+            "repository": "payments",
+            "pullRequestId": 42,
+            "title": "Add payment idempotency",
+            "description": "Reject duplicate payment submissions.",
+        }
         ctx.files_text = "a.py\nb.py\n"
         ctx.extras["wi_context"] = [{"id": 7}]
         ctx.extras["thread_context"] = [{"id": 9}]
@@ -558,6 +597,7 @@ class TestSinglePiReasoningEngine:
             "summary": "deterministic graph context",
             "risk_score": 0.4,
         }
+        ctx.state.files = ["a.py", "b.py"]
         ctx.state.diff_text = (
             "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
             "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
@@ -565,6 +605,10 @@ class TestSinglePiReasoningEngine:
 
         result = SinglePiReasoningEngine().execute(ctx)
 
+        assert "Add payment idempotency" in synthesis_prompts[0]
+        assert "Reject duplicate payment submissions." in synthesis_prompts[0]
+        assert "- a.py" in synthesis_prompts[0]
+        assert "- b.py" in synthesis_prompts[0]
         assert len(prompts) == 2
         assert prompts[0].startswith("Single-call reasoning review for Azure DevOps PR #42.")
         assert "Repository/project metadata:" in prompts[0]
@@ -580,6 +624,54 @@ class TestSinglePiReasoningEngine:
             {"input": 7, "output": 2, "total": 9},
         ]
         assert result.metadata.tokens.model_dump() == {"input": 25, "output": 10, "total": 35}
+
+    def test_chunked_execution_aggregates_forked_runner_telemetry(self, tmp_path: Path, monkeypatch):
+        cfg = replace(
+            _cfg(tmp_path),
+            max_diff_bytes=55,
+            chunk_trigger_diff_bytes=1,
+            chunk_synthesis_prompt_path=_cfg(tmp_path).fast_review_prompt_path,
+        )
+        partial = b'{"findings":[],"uncertainties":[]}'
+        synthesis = json.dumps({
+            "review_summary": {"summary": "Synthesized."},
+            "pr_summary": {
+                "intent": "Add a helper.",
+                "work_type": "change",
+                "biggest_unknown": None,
+                "implementation_summary": "Clean change.",
+            },
+        }).encode()
+        scope_attempts: dict[str, int] = {}
+
+        def fake_popen(cmd, **_kwargs):
+            session_id = cmd[cmd.index("--session-id") + 1]
+            scope_attempts[session_id] = scope_attempts.get(session_id, 0) + 1
+            if session_id.endswith("-scope-1"):
+                return FakePopen(cmd, stdout=partial, stderr=b"tokens: 10 in / 5 out")
+            if session_id.endswith("-scope-2") and scope_attempts[session_id] == 1:
+                return FakePopen(cmd, stdout=b"not json", stderr=b"tokens: 20 in / 10 out")
+            if session_id.endswith("-scope-2"):
+                return FakePopen(cmd, stdout=partial, stderr=b"tokens: 3 in / 2 out")
+            return FakePopen(cmd, stdout=synthesis, stderr=b"tokens: 30 in / 15 out")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
+        ctx = _stage_context(cfg, PiCliRunner(cfg))
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        expected_tokens = {"input": 63, "output": 32, "total": 95}
+        assert result.metadata.tokens.model_dump() == expected_tokens
+        assert result.metrics.piInputTokens == 63
+        assert result.metrics.piOutputTokens == 32
+        assert result.metrics.piTotalTokens == 95
+        assert result.metrics.invocationCount == 4
+        assert result.metrics.repairInvocationCount == 1
+        assert ctx.last_token_usage == {"in": 63, "out": 32, "total": 95}
 
     def test_chunked_synthesis_failure_falls_back_to_boilerplate(self, tmp_path: Path):
         cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
@@ -657,6 +749,174 @@ class TestSinglePiReasoningEngine:
 
         assert details["synthesisFallback"] is True
 
+
+
+class TestChunkSectionMerge:
+    def test_merges_gaps_hints_and_discarded(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
+        pi = MagicMock()
+        partials = [
+            {
+                "findings": [],
+                "test_gaps": [{"behavior": "edge case", "suggested_test": "add test", "file": "a.py"}],
+                "uncertainties": [],
+                "escalation_hints": [
+                    {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+                ],
+                "discarded_findings": [{"reason": "out of scope", "category": "out-of-scope", "count": 1}],
+            },
+            {
+                "findings": [],
+                "test_gaps": [{"behavior": "edge case", "suggested_test": "add test", "file": "a.py"}],
+                "uncertainties": [],
+                "escalation_hints": [
+                    {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+                ],
+                "discarded_findings": [{"reason": "out of scope", "category": "out-of-scope", "count": 1}],
+            },
+        ]
+        calls = []
+
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "single-pi synthesis":
+                builder.write_json(out, {
+                    "review_summary": {"summary": "Synthesized."},
+                    "pr_summary": {
+                        "intent": "Add auth.",
+                        "work_type": "feature",
+                        "biggest_unknown": None,
+                        "implementation_summary": "Add auth.",
+                    },
+                })
+                return
+            builder.write_json(out, partials[len(calls)])
+            calls.append(_s)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.token_usage = {"in": 0, "out": 0, "total": 0}
+        pi.invocation_count = 0
+        pi.repair_invocation_count = 0
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(result.test_gaps) == 1
+        assert len(result.escalation_hints) == 1
+        assert result.escalation_hints[0].danger == "critical"
+        assert len(result.discarded_findings) == 1
+
+
+class TestDeterministicNormalization:
+    def _payload(self, *, biggest_unknown: str | None) -> dict:
+        payload = _valid_review_result_payload()
+        payload["pr_summary"]["biggest_unknown"] = biggest_unknown
+        payload["pr_summary"]["architectural_impact"] = "invented impact"
+        return payload
+
+    def test_missing_architecture_is_normalized_and_confidence_downgrades(self, tmp_path: Path):
+        cfg = _cfg(tmp_path)
+        pi = MagicMock()
+        payload = self._payload(biggest_unknown="reachability unclear")
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, payload)
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert result.pr_summary.architectural_impact == "no significant architectural impact"
+        assert result.review_confidence.level == "medium"
+        assert result.metrics.confidence == "medium"
+
+
+class TestEscalationPolicy:
+    def test_escalation_disabled_makes_no_extra_call(self, tmp_path: Path):
+        cfg = _cfg(tmp_path)
+        pi = MagicMock()
+        payload = _valid_review_result_payload()
+        payload["escalation_hints"] = [
+            {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+        ]
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, payload)
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(result.escalation_hints) == 1
+        assert pi.run_json.call_count == 1
+
+    def test_escalation_enabled_runs_focused_pass(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), escalation_review_enabled=True)
+        pi = MagicMock()
+        payload = _valid_review_result_payload()
+        payload["escalation_hints"] = [
+            {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+        ]
+
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "escalation review":
+                builder.write_json(out, _valid_review_result_payload())
+                return
+            builder.write_json(out, payload)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert pi.run_json.call_count == 2
+        assert len(result.findings) == 1
+
+def _write_debug_first_pass(c):
+    for path, n in [
+        (c.artifacts.intent, 0),
+        (c.artifacts.plan, 0),
+        (c.artifacts.collected, 0),
+        (c.artifacts.digest, 0),
+        (c.artifacts.candidate, 5),
+        (c.artifacts.verified, 3),
+    ]:
+        builder.write_json(path, {"summary": "", "findings": [{"i": i} for i in range(n)]})
+    severity_finding = {
+        "title": "Bug",
+        "message": "It breaks.",
+        "severity": "minor",
+        "suggestion": "Fix it.",
+        "file": "b.py",
+        "line": 5,
+        "evidence": {
+            "changedLines": [5],
+            "contextFilesRead": ["b.py"],
+            "whyNewInThisPr": "Introduced here.",
+            "whyNotIntentional": "No equivalent guard exists.",
+        },
+    }
+    builder.write_json(c.artifacts.severity, {"summary": "", "findings": [severity_finding]})
+    c.intent = {"pr_intent": "debug", "risk_areas": []}
+    c.plan = {"pr_intent": "debug", "files_to_read": [], "searches_to_run": [], "tests_to_inspect": []}
+    c.collected = {"tests": []}
+    c.digest = {"possible_intentional_choices": []}
+    c.candidate = {"summary": "", "findings": [{"i": i} for i in range(5)]}
+    c.verified = {"summary": "", "findings": [{"i": i} for i in range(3)]}
+    c.severity = {"summary": "", "findings": [severity_finding]}
+
+
+def _debug_intermediate_stages(call_count: list[int]):
+    def fake_run_stages(stages, c):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            _write_debug_first_pass(c)
+        return [
+            StageResult(name=s.name, status=StageStatus.OK, started_at="t1", finished_at="t2", duration_ms=1)
+            for s in stages
+        ]
+
+    return fake_run_stages
 
 
 class TestMultiStageReasoningEngine:
@@ -775,60 +1035,12 @@ class TestMultiStageReasoningEngine:
     def test_debug_intermediates_captures_fragment_counts(self, tmp_path: Path, monkeypatch):
         cfg = _cfg(tmp_path)
         ctx = _stage_context(cfg, MagicMock())
-        call_count = 0
-
-        def fake_run_stages(stages, c):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                for path, n in [
-                    (c.artifacts.intent, 0),
-                    (c.artifacts.plan, 0),
-                    (c.artifacts.collected, 0),
-                    (c.artifacts.digest, 0),
-                    (c.artifacts.candidate, 5),
-                    (c.artifacts.verified, 3),
-                ]:
-                    builder.write_json(path, {"summary": "", "findings": [{"i": i} for i in range(n)]})
-                severity_finding = {
-                    "title": "Bug",
-                    "message": "It breaks.",
-                    "severity": "minor",
-                    "suggestion": "Fix it.",
-                    "file": "b.py",
-                    "line": 5,
-                    "evidence": {
-                        "changedLines": [5],
-                        "contextFilesRead": ["b.py"],
-                        "whyNewInThisPr": "Introduced here.",
-                        "whyNotIntentional": "No equivalent guard exists.",
-                    },
-                }
-                builder.write_json(
-                    c.artifacts.severity,
-                    {"summary": "", "findings": [severity_finding]},
-                )
-                c.intent = {"pr_intent": "debug", "risk_areas": []}
-                c.plan = {"pr_intent": "debug", "files_to_read": [], "searches_to_run": [], "tests_to_inspect": []}
-                c.collected = {"tests": []}
-                c.digest = {"possible_intentional_choices": []}
-                c.candidate = {"summary": "", "findings": [{"i": i} for i in range(5)]}
-                c.verified = {"summary": "", "findings": [{"i": i} for i in range(3)]}
-                c.severity = {"summary": "", "findings": [severity_finding]}
-            return [
-                StageResult(
-                    name=s.name,
-                    status=StageStatus.OK,
-                    started_at="t1",
-                    finished_at="t2",
-                    duration_ms=1,
-                )
-                for s in stages
-            ]
+        call_count = [0]
+        fake_run_stages = _debug_intermediate_stages(call_count)
 
         monkeypatch.setattr("reviewforge.reasoning.multi_stage.run_stages", fake_run_stages)
         MultiStageReasoningEngine().execute(ctx)
-        assert call_count == 2
+        assert call_count[0] == 2
         assert ctx.extras["_finding_counts"] == {
             "candidate": 5,
             "verified": 3,

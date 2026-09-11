@@ -24,6 +24,11 @@ from typing import Any, Iterable
 #: The literal marker prefix used in posted comments.
 MARKER_PREFIX = "prb"
 
+#: The marker prefix used by stale-reconciliation follow-up comments. Kept
+#: distinct from :data:`MARKER_PREFIX` so a stale note is never mistaken for
+#: (or mistaken as) the finding's dedupe marker.
+STALE_MARKER_PREFIX = f"{MARKER_PREFIX}-stale"
+
 #: Regex matching a bot marker inside any comment body. Markers always appear
 #: on a line of their own so they are easy to detect and to remove.
 #:
@@ -35,6 +40,16 @@ MARKER_PREFIX = "prb"
 #:   are tolerated so the dedupe scanner recognizes its own comments.
 _MARKER_RE = re.compile(
     rf"(?m)^(?:\s*<!--\s*)?{re.escape(MARKER_PREFIX)}:([a-zA-Z0-9]{{6,32}})(?:\s*-->)?\s*$"
+)
+
+#: Regex matching a stale-reconciliation marker inside a comment body. This is
+#: deliberately a *separate* grammar from :data:`_MARKER_RE` so a stale note
+#: (``prb-stale:<key>``) is never mistaken for the finding's dedupe marker and
+#: vice versa. Presence of this marker on a thread is what makes a re-run
+#: idempotent: once a "stale" follow-up has been appended, it is not appended
+#: again.
+_STALE_MARKER_RE = re.compile(
+    rf"(?m)^(?:\s*<!--\s*)?{re.escape(STALE_MARKER_PREFIX)}:([a-zA-Z0-9]{{6,32}})(?:\s*-->)?\s*$"
 )
 
 #: Field names excluded from the v2 dedupe key. These are noisy or display-only.
@@ -120,6 +135,11 @@ def make_marker(key: str) -> str:
     return f"{MARKER_PREFIX}:{key}"
 
 
+def stale_marker(key: str) -> str:
+    """Return the full stale-reconciliation marker (``prb-stale:<key>``)."""
+    return f"{STALE_MARKER_PREFIX}:{key}"
+
+
 def existing_bot_markers(threads: Iterable[dict[str, Any]]) -> set[str]:
     """Return v1 and v2 bot markers present in the given PR threads.
 
@@ -165,6 +185,11 @@ def should_post(finding: dict[str, Any], existing_markers: set[str]) -> bool:
 # stale by this definition. File-level anchors (no line) → never
 # stale. New threads posted in this run → never stale (their anchor
 # was just chosen against the current diff).
+#
+# A thread is annotated at most once: the stale follow-up carries a
+# ``prb-stale:<key>`` marker (a distinct grammar from the finding's
+# ``prb:<key>`` marker), so a re-run that finds the thread stale again
+# does not append a duplicate.
 
 
 def _extract_thread_anchor(thread: dict[str, Any]) -> tuple[str | None, int | None]:
@@ -201,6 +226,69 @@ def _thread_has_bot_marker(
     return False
 
 
+def _thread_stale_marker(thread: dict[str, Any]) -> str | None:
+    """Return the stale marker key already present on a thread, if any."""
+    for comment in thread.get("comments") or []:
+        match = _STALE_MARKER_RE.search(comment.get("content") or "")
+        if match:
+            return match.group(1)
+    return None
+
+
+_TERMINAL_THREAD_STATUSES = frozenset({"fixed", "wontfix", "bydesign", "closed"})
+
+
+def _thread_has_terminal_status(thread: dict[str, Any]) -> bool:
+    """Return whether ADO reports a status that needs no further bot action."""
+    return str(thread.get("status") or "").casefold() in _TERMINAL_THREAD_STATUSES
+
+
+def _thread_is_actionable(thread: dict[str, Any]) -> bool:
+    """Return whether a thread can still benefit from stale-anchor notice.
+
+    A stale-anchor notice is useful only for unresolved discussions. Explicitly
+    terminal ADO states are ignored; unknown or missing states remain eligible
+    to preserve the existing conservative behavior.
+    """
+    if thread.get("isDeleted") or thread.get("thread_is_deleted"):
+        return False
+    return not _thread_has_terminal_status(thread)
+
+
+def _stale_thread_entry(
+    thread: dict[str, Any],
+    existing_markers: set[str],
+    diff_anchors: dict[str, set[int]],
+    just_posted: set[int | str],
+) -> dict[str, Any] | None:
+    thread_id = thread.get("id")
+    if (
+        thread_id is None
+        or thread_id in just_posted
+        or not _thread_is_actionable(thread)
+        or not _thread_has_bot_marker(thread, existing_markers)
+    ):
+        return None
+    finding_key = _thread_marker(thread)
+    # A stale follow-up for this finding already exists → annotated before.
+    if finding_key is not None and _thread_stale_marker(thread) == finding_key:
+        return None
+    file_path, line = _extract_thread_anchor(thread)
+    if file_path is None or line is None:
+        return None
+    normalized = file_path.lstrip("/")
+    anchors = diff_anchors.get(normalized) or diff_anchors.get(file_path)
+    if anchors is not None and line in anchors:
+        return None
+    return {
+        "threadId": thread_id,
+        "file": normalized,
+        "line": line,
+        "key": finding_key,
+        "reason": "file_no_longer_in_diff" if anchors is None else "line_no_longer_in_diff",
+    }
+
+
 def find_stale_bot_threads(
     threads: Iterable[dict[str, Any]],
     existing_markers: set[str],
@@ -210,59 +298,36 @@ def find_stale_bot_threads(
 ) -> list[dict[str, Any]]:
     """Return bot threads whose ``(file, line)`` is no longer in the current diff.
 
-    Parameters
-    ----------
-    threads
-        Threads as returned by :meth:`AdoClient.get_threads`.
-    existing_markers
-        Set of bot dedupe keys currently on the PR. Threads without a
-        key in this set are human / other-bot threads and skipped.
-    diff_anchors
-        ``{file_path: set_of_new_file_lines}`` mapping derived from
-        the current diff. Built with :meth:`DiffLineMapper.line_set`.
-    just_posted_thread_ids
-        Threads the bot created during this run. By definition their
-        anchors match the current diff → always skipped. Optional.
+    Threads that already carry a stale marker are skipped so a re-run does not
+    append a duplicate "stale" follow-up.
     """
     just_posted = just_posted_thread_ids or set()
-    stale: list[dict[str, Any]] = []
-    for thread in threads:
-        thread_id = thread.get("id")
-        if thread_id is None or thread_id in just_posted:
-            continue
-        if not _thread_has_bot_marker(thread, existing_markers):
-            continue
-        file_path, line = _extract_thread_anchor(thread)
-        if file_path is None or line is None:
-            continue  # general or file-level comment → never stale
-        normalized = file_path.lstrip("/")
-        anchors = diff_anchors.get(normalized) or diff_anchors.get(file_path)
-        if anchors is None:
-            # File no longer in the diff → every line on it is stale.
-            stale.append({
-                "threadId": thread_id,
-                "file": normalized,
-                "line": line,
-                "reason": "file_no_longer_in_diff",
-            })
-            continue
-        if line not in anchors:
-            stale.append({
-                "threadId": thread_id,
-                "file": normalized,
-                "line": line,
-                "reason": "line_no_longer_in_diff",
-            })
+    stale = [
+        entry
+        for thread in threads
+        if (entry := _stale_thread_entry(thread, existing_markers, diff_anchors, just_posted))
+        is not None
+    ]
     return stale
 
 
-def stale_comment_body(*, short_sha: str | None = None) -> str:
-    """Return the canonical body of the "stale" follow-up comment."""
+
+
+def stale_comment_body(*, short_sha: str | None = None, key: str | None = None) -> str:
+    """Return the canonical stale-anchor follow-up comment.
+
+    When ``key`` is given, the body ends with the ``prb-stale:<key>`` marker on
+    its own line so a later run can tell this thread has already been
+    annotated and avoid appending a duplicate.
+    """
     sha = (short_sha or "").strip() or "current HEAD"
+    marker_line = f"\n{stale_marker(key)}" if key else ""
     return (
-        "🤖 stale — this finding no longer anchors to a line that exists in "
-        f"the current diff at {sha}. The original comment is kept for "
-        "audit trail; resolve or close this thread once the discussion is done."
+        "🤖 stale anchor — this finding was posted against a line that is no "
+        "longer present in the current diff at "
+        f"{sha}. The original finding is preserved for context; re-evaluate "
+        "it against the new code before acting."
+        + marker_line
     )
 
 
@@ -282,24 +347,78 @@ class BotMarkers:
         return len(self.bot)
 
 
+def _thread_marker(thread: dict[str, Any]) -> str | None:
+    for comment in thread.get("comments") or []:
+        match = _MARKER_RE.search(comment.get("content") or "")
+        if match:
+            return match.group(1)
+    return None
+
+
 def classify_threads(threads: Iterable[dict[str, Any]]) -> BotMarkers:
     """Split threads into bot-authored (carrying a marker) and others."""
     bot: set[str] = set()
     human = 0
     for thread in threads or []:
-        comments = thread.get("comments") or []
-        marker = None
-        for c in comments:
-            text = c.get("content") or ""
-            match = _MARKER_RE.search(text)
-            if match:
-                marker = match.group(1)
-                break
+        marker = _thread_marker(thread)
         if marker:
             bot.add(marker)
         else:
             human += 1
     return BotMarkers(bot=bot, human=human)
+
+# ---------------------------------------------------------------------------
+# Awaiting-reply detection
+# ---------------------------------------------------------------------------
+#
+# A bot thread awaits a reply when a human had the last word. "Bot-authored"
+# is determined without an identity lookup: a comment is bot-authored when it
+# carries a marker itself or its author matches the author of the thread's
+# marker-carrying comment. That makes stale-reconciliation notes and previous
+# bot replies count as bot-authored, so the bot never replies to itself and
+# re-runs are idempotent without extra state.
+
+
+def _comment_author_keys(comment: dict[str, Any]) -> set[str]:
+    """Return all available author identifiers."""
+    author = comment.get("author")
+    if not isinstance(author, dict):
+        value = str(author or comment.get("authorId") or "").strip().lower()
+        return {value} if value else set()
+    return {
+        value.lower()
+        for key in ("id", "uniqueName", "displayName")
+        if (value := str(author.get(key) or "").strip())
+    }
+
+
+def _is_bot_comment(comment: dict[str, Any], bot_authors: set[str]) -> bool:
+    if _MARKER_RE.search(comment.get("content") or ""):
+        return True
+    return bool(_comment_author_keys(comment) & bot_authors)
+
+
+def _marker_authors(comments: Iterable[dict[str, Any]]) -> set[str]:
+    """Return author keys for comments carrying a bot marker."""
+    authors: set[str] = set()
+    for comment in comments:
+        if not _MARKER_RE.search(comment.get("content") or ""):
+            continue
+        authors.update(_comment_author_keys(comment))
+    return authors
+
+
+def _thread_awaits_reply(thread: dict[str, Any]) -> bool:
+    """Return whether a single bot thread ends with a human comment."""
+    comments = thread.get("comments") or []
+    if not comments or not _thread_marker(thread) or _thread_has_terminal_status(thread):
+        return False
+    return not _is_bot_comment(comments[-1], _marker_authors(comments))
+
+
+def find_awaiting_replies(threads: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return bot threads whose last comment is a human reply."""
+    return [thread for thread in threads or [] if _thread_awaits_reply(thread)]
 
 
 def attach_marker(finding: dict[str, Any]) -> tuple[str, str]:
@@ -369,16 +488,19 @@ __all__ = [
     "BotMarkers",
     "DedupeKey",
     "MARKER_PREFIX",
+    "STALE_MARKER_PREFIX",
     "WORK_ITEM_TITLE_RE",
     "as_general_comment",
     "attach_marker",
     "classify_threads",
     "dedupe_key_v1",
     "existing_bot_markers",
+    "find_awaiting_replies",
     "finding_fingerprint",
     "find_stale_bot_threads",
     "is_work_item_finding",
     "make_marker",
     "should_post",
     "stale_comment_body",
+    "stale_marker",
 ]

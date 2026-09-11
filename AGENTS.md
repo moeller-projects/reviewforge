@@ -31,14 +31,22 @@ Prompts are data contracts, not prose-only configuration. Preserve JSON-only out
 
 ## Testing expectations
 
-Run the narrowest relevant test first, then the full suite for permanent behavior changes:
+Use the repository's uv environment. Before running the complete suite, sync
+all optional dependencies, including CRG:
 
 ```bash
-pytest -q
-pytest --cov=reviewforge --cov-report=term-missing
+uv sync --all-extras
+uv run --all-extras pytest tests/ --cov=reviewforge --cov-fail-under=97
+uv run complexipy src --max-complexity-allowed 10 --failed --plain
 ```
 
-Tests cover CLI parsing, configuration, stages, reasoning, ADO behavior, posting, stale reconciliation, session reuse, and entry points. A change is not complete if the implementation works only through an untested happy path.
+Run the narrowest relevant test first, then the complete suite for permanent
+behavior changes. `uv run --all-extras` is required for the complete suite;
+without it, optional CRG tests may fail during collection.
+
+Tests cover CLI parsing, configuration, stages, reasoning, ADO behavior,
+posting, stale reconciliation, session reuse, and entry points. A change is
+not complete if the implementation works only through an untested happy path.
 
 ## Review workflow
 

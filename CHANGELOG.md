@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Context sections now keep curated inline summaries and point to complete redacted data staged under `.reviewforge-context/` when staging succeeds; unavailable staging remains a bounded, pointer-free degraded path.
+- `single_pi` now receives the configured coding standards, and the canonical `ReviewResult` retains a `PrSummary` with `work_type` and `biggest_unknown`, plus `test_gaps`, `escalation_hints`, and `discarded_findings`. Escalation hints are recorded and, when `ESCALATION_REVIEW_ENABLED=1`, trigger a focused second pass.
 - CRG internals are consolidated under `reviewforge.pipeline.crg`; shipped configuration, artifact, marker, and stage contracts are unchanged.
 
 ### Added

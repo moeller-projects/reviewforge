@@ -133,6 +133,52 @@ def _normalize_org(org: str) -> tuple[str, str]:
     return f"https://dev.azure.com/{raw}", raw
 
 
+def _error_body(exc: urllib.error.HTTPError) -> str:
+    try:
+        return exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _attempt_request(
+    req: urllib.request.Request,
+    method: str,
+    url: str,
+) -> tuple[dict[str, Any] | None, AdoApiError | None, bool, str | None]:
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:  # nosec - trusted URL
+            raw = response.read().decode("utf-8")
+            return (json.loads(raw) if raw else {}), None, False, None
+    except urllib.error.HTTPError as exc:
+        error_body = _error_body(exc)
+        retryable = method == "GET" and exc.code in {429, 500, 502, 503, 504}
+        return (
+            None,
+            AdoApiError(
+                f"[review][ERROR] ADO API {method} {url} returned {exc.code} {exc.reason}",
+                details={
+                    "method": method,
+                    "url": url,
+                    "status_code": exc.code,
+                    "response_body": error_body,
+                },
+            ),
+            retryable,
+            exc.headers.get("Retry-After") if exc.headers else None,
+        )
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return (
+            None,
+            AdoApiError(
+                f"[review][ERROR] ADO API {method} {url} failed: "
+                f"{exc.reason if isinstance(exc, urllib.error.URLError) else exc}",
+                details={"method": method, "url": url},
+            ),
+            True,
+            None,
+        )
+
+
 class AdoClient:
     """Minimal Azure DevOps REST client for the reviewer."""
 
@@ -187,33 +233,21 @@ class AdoClient:
                 **({"Content-Type": "application/json"} if data is not None else {}),
             },
         )
+        return self._request_with_retries(req, method, url)
+
+    def _request_with_retries(
+        self,
+        req: urllib.request.Request,
+        method: str,
+        url: str,
+    ) -> dict[str, Any]:
         started = self._monotonic()
         retryable_method = method in {"GET", "PUT"}
         for attempt in range(1, self.retry_attempts + 1):
-            try:
-                with urllib.request.urlopen(req, timeout=60) as response:  # nosec - trusted URL
-                    raw = response.read().decode("utf-8")
-                    return json.loads(raw) if raw else {}
-            except urllib.error.HTTPError as exc:
-                error_body = ""
-                try:
-                    error_body = exc.read().decode("utf-8", errors="replace")
-                except Exception:
-                    pass
-                retryable = method == "GET" and exc.code in {429, 500, 502, 503, 504}
-                error = AdoApiError(
-                    f"[review][ERROR] ADO API {method} {url} returned {exc.code} {exc.reason}",
-                    details={"method": method, "url": url, "status_code": exc.code, "response_body": error_body},
-                )
-                retry_after = exc.headers.get("Retry-After") if exc.headers else None
-            except (urllib.error.URLError, TimeoutError) as exc:
-                retryable = retryable_method
-                retry_after = None
-                error = AdoApiError(
-                    f"[review][ERROR] ADO API {method} {url} failed: {exc.reason if isinstance(exc, urllib.error.URLError) else exc}",
-                    details={"method": method, "url": url},
-                )
-            if not retryable or attempt == self.retry_attempts:
+            payload, error, retryable, retry_after = _attempt_request(req, method, url)
+            if error is None:
+                return payload or {}
+            if not retryable or not retryable_method or attempt == self.retry_attempts:
                 raise error
             delay = self._retry_delay(attempt, retry_after)
             if self._monotonic() - started + delay > self.retry_budget_secs:
@@ -223,6 +257,7 @@ class AdoClient:
                 f"{error.message}; retrying in {delay:g}s"
             )
             self._sleep(delay)
+        raise RuntimeError("request retry loop exhausted")
 
     # ----- paths ------------------------------------------------------------
 
@@ -326,6 +361,86 @@ def resolve_branches(cfg: Config) -> tuple[str, str]:
     return source.removeprefix("refs/heads/"), target.removeprefix("refs/heads/")
 
 
+def _active_pr_matches(pr: dict[str, Any], target_set: set[str] | None) -> bool:
+    return target_set is None or normalize_branch_name(pr.get("targetRefName") or "") in target_set
+
+
+def _active_pr_output(pr: dict[str, Any], project_name: str) -> dict[str, Any]:
+    output = dict(pr)
+    output["project"] = project_name
+    if "repositoryId" not in output:
+        output["repositoryId"] = pr.get("repository", {}).get("id") or ""
+    return output
+
+
+def _active_pr_page(client: AdoClient, skip: int, page_size: int) -> list[dict[str, Any]]:
+    url = (
+        f"{client.base}/_apis/git/pullRequests"
+        f"?searchCriteria.status=active&api-version=7.0"
+        f"&$top={page_size}&$skip={skip}"
+    )
+    return client._request("GET", url).get("value", [])  # noqa: SLF001 — internal
+
+
+def _append_active_prs(
+    page: list[dict[str, Any]],
+    project_name: str,
+    target_set: set[str] | None,
+    max_results: int,
+    output: list[dict[str, Any]],
+) -> bool:
+    for pr in page:
+        if not _active_pr_matches(pr, target_set):
+            continue
+        output.append(_active_pr_output(pr, project_name))
+        if max_results and len(output) >= max_results:
+            return True
+    return False
+
+
+def _client_for_project(cfg: Config, project_name: str) -> AdoClient:
+    return AdoClient(
+        cfg.ado_org,
+        project_name,
+        cfg.ado_repo_id,
+        token=cfg.ado_token,
+        retry_attempts=cfg.ado_retry_attempts,
+        retry_base_delay=cfg.ado_retry_base_delay,
+        retry_cap_delay=cfg.ado_retry_cap_delay,
+        retry_budget_secs=cfg.ado_retry_budget_secs,
+    )
+
+
+def _target_branch_set(target_branches: list[str] | None) -> set[str] | None:
+    if not target_branches:
+        return None
+    return {
+        branch
+        for branch in (normalize_branch_name(value) for value in target_branches if value)
+        if branch
+    }
+
+
+def _collect_active_prs(
+    client: AdoClient,
+    project_name: str,
+    target_set: set[str] | None,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    page_size = 100
+    skip = 0
+    output: list[dict[str, Any]] = []
+    while True:
+        page = _active_pr_page(client, skip, page_size)
+        if not page:
+            return output
+        if _append_active_prs(page, project_name, target_set, max_results, output):
+            return output
+        if len(page) < page_size:
+            return output
+        skip += page_size
+
+
 def list_active_pull_requests(
     cfg: Config,
     *,
@@ -343,47 +458,13 @@ def list_active_pull_requests(
     Returns a list of PR dicts (the same shape ``AdoClient.get_pr`` returns
     plus the project name).
     """
-    project_name = project or cfg.ado_project
-    project_name = normalize_ado_segment(project_name, "ADO project")
-    client = AdoClient(
-        cfg.ado_org, project_name, cfg.ado_repo_id, token=cfg.ado_token,
-        retry_attempts=cfg.ado_retry_attempts, retry_base_delay=cfg.ado_retry_base_delay,
-        retry_cap_delay=cfg.ado_retry_cap_delay, retry_budget_secs=cfg.ado_retry_budget_secs,
+    project_name = normalize_ado_segment(project or cfg.ado_project, "ADO project")
+    return _collect_active_prs(
+        _client_for_project(cfg, project_name),
+        project_name,
+        _target_branch_set(target_branches),
+        max_results,
     )
-    target_set: set[str] | None = None
-    if target_branches:
-        target_set = {normalize_branch_name(b) for b in target_branches if b}
-        target_set = {b for b in target_set if b}
-
-    page_size = 100
-    skip = 0
-    out: list[dict[str, Any]] = []
-    while True:
-        url = (
-            f"{client.base}/_apis/git/pullRequests"
-            f"?searchCriteria.status=active&api-version=7.0"
-            f"&$top={page_size}&$skip={skip}"
-        )
-        page = client._request("GET", url).get("value", [])  # noqa: SLF001 — internal
-        if not page:
-            break
-        for pr in page:
-            target_ref = pr.get("targetRefName") or ""
-            if target_set is not None:
-                short = normalize_branch_name(target_ref)
-                if short not in target_set:
-                    continue
-            pr_out = dict(pr)
-            pr_out["project"] = project_name
-            if "repositoryId" not in pr_out:
-                pr_out["repositoryId"] = pr.get("repository", {}).get("id") or ""
-            out.append(pr_out)
-            if max_results and len(out) >= max_results:
-                return out
-        if len(page) < page_size:
-            break
-        skip += page_size
-    return out
 
 
 

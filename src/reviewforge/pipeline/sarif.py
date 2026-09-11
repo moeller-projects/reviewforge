@@ -141,6 +141,8 @@ def review_result_to_sarif(
             "inputTokens": tokens.input or metrics.piInputTokens,
             "outputTokens": tokens.output or metrics.piOutputTokens,
             "totalTokens": tokens.total or metrics.piTotalTokens,
+            "testGaps": len(result.test_gaps),
+            "escalationHints": len(result.escalation_hints),
         },
     }
     log = {"version": "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "runs": [run]}
