@@ -1,4 +1,4 @@
-from reviewforge.git.chunker import _analysis_files, build_scopes, scope_document
+from reviewforge.git.chunker import _analysis_files, build_scopes, scope_document, unquote_git_path
 
 
 DIFF = (
@@ -61,12 +61,18 @@ def test_crg_related_file_records_use_supported_path_fields():
     assert _analysis_files({"files": [{"file": "related.py"}]}, "files") == ["related.py"]
 
 def test_malformed_or_missing_crg_uses_file_scopes():
-    scopes, truncated = build_scopes(DIFF, ["a.py", "b.py", "c.py"], 10_000, crg_analysis={"bad": object()})
+    scopes, truncated = build_scopes(
+        DIFF,
+        ["a.py", "b.py", "c.py"],
+        10_000,
+        crg_analysis={"impacted_files": object(), "affected_flows": object()},
+    )
 
     assert truncated is False
     assert len(scopes) == 1
     assert scopes[0].files_text.splitlines() == ["a.py", "b.py", "c.py"]
     assert scopes[0].context_files == ()
+    assert scopes[0].affected_flows == ()
 
 
 
@@ -78,19 +84,44 @@ def test_unparsed_diff_gets_a_bounded_scope():
     assert small[0].files_text == "a.py\n"
     assert large_truncated is True
     assert large[0].truncated is True
-    assert len(large[0].diff_text.encode()) > 20
+    assert len(large[0].diff_text.encode()) <= 20
 
 
-def test_oversized_file_is_truncated_without_dropping_other_files():
+def test_oversized_file_is_truncated_without_exceeding_budget_or_dropping_other_files():
     oversized = "diff --git a/a.py b/a.py\n" + ("+x\n" * 100)
     normal = "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+new\n"
-    scopes, truncated = build_scopes(oversized + normal, ["a.py", "b.py"], 80)
+    scopes, truncated = build_scopes(oversized + normal, ["a.py", "b.py"], 100)
 
     assert truncated is True
     assert scopes[0].truncated is True
+    assert "[FILE DIFF TRUNCATED:" in scopes[0].diff_text
+    assert all(len(scope.diff_text.encode()) <= 100 for scope in scopes)
     assert any("b.py" in scope.files_text for scope in scopes)
 
 
+
+def test_mixed_quoted_and_unquoted_diff_paths_each_get_one_scope_assignment():
+    diff = (
+        'diff --git "a/foo bar.py" "b/foo bar.py"\n'
+        '--- "a/foo bar.py"\n'
+        '+++ "b/foo bar.py"\n'
+        "@@ -1 +1 @@\n-old\n+new\n"
+        "diff --git a/plain.py b/plain.py\n"
+        "--- a/plain.py\n"
+        "+++ b/plain.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n"
+    )
+
+    scopes, truncated = build_scopes(diff, ["foo bar.py", "plain.py"], 10_000)
+    assignments = [path for scope in scopes for path in scope.files_text.splitlines()]
+
+    assert truncated is False
+    assert assignments.count("foo bar.py") == 1
+    assert assignments.count("plain.py") == 1
+
+
+def test_unquote_git_path_decodes_c_style_escapes():
+    assert unquote_git_path(r'"b/quote\"and\040space.py"') == 'b/quote"and space.py'
 def test_single_file_diff_uses_one_scope_without_chunking():
     scopes, truncated = build_scopes(
         "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+new\n",

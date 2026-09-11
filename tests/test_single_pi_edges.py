@@ -145,8 +145,6 @@ def test_schema_rejection_paths_are_exercised():
     with pytest.raises(ValueError):
         CoverageGap(behavior="behavior", suggested_test="test", file="../a.py")
     with pytest.raises(ValueError):
-        Uncertainty(topic="x", reason="")
-    with pytest.raises(ValueError):
         Uncertainty(topic="cross-chunk:x", reason="a.py", confidence="high")
     with pytest.raises(ValueError):
         EscalationHint(files=["a.py"], reason="", suggested_focus="security-audit", danger="high")
@@ -192,8 +190,6 @@ def test_additional_schema_limits_and_work_item_rules():
         CoverageGap(behavior="b", suggested_test="t", file="/absolute.py")
     with pytest.raises(ValueError):
         ChunkSynthesis.model_validate({"pr_summary": {"work_type": "change"}})
-    with pytest.raises(ValueError):
-        ReviewResult.model_validate({**_valid_review_result_payload(), "pr_summary": {"intent": "x"}})
     with pytest.raises(ValueError):
         ReviewResult.model_validate(
             {**_valid_review_result_payload(), "good_practices": [

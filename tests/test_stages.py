@@ -882,8 +882,8 @@ class TestReviewDiffStage:
     def test_duplicate_finding_merges_missing_extras(self):
         from reviewforge.pipeline.stages.review_diff import _merge_finding
 
-        first = {"severity": "major", "title": "T", "message": "M", "file": "a.py", "line": 5}
-        duplicate = dict(first, evidence=[{"quote": "x"}], regression=True)
+        first = {"severity": "major", "title": "T", "message": "M", "file": "/a.py", "line": 5}
+        duplicate = dict(first, file="a.py", evidence=[{"quote": "x"}], regression=True)
         findings: list[dict] = []
         seen: dict = {}
 
@@ -891,6 +891,7 @@ class TestReviewDiffStage:
         _merge_finding(duplicate, findings, seen)
 
         assert len(findings) == 1
+        assert findings[0]["file"] == "a.py"
         assert findings[0]["evidence"] == [{"quote": "x"}]
         assert findings[0]["regression"] is True
 
@@ -951,7 +952,7 @@ class TestReviewDiffStage:
         result = ReviewDiffStage()(ctx)
         assert result.status == StageStatus.OK
         assert len(calls) == 2
-        assert result.details["chunks"] == 1
+        assert result.details["chunks"] == 2
         doc = builder.read_json(artifacts.candidate)
         assert len(doc["findings"]) == 1  # dedup'd across chunks
         assert "(across 2 diff chunks)" in doc["summary"]
@@ -1054,6 +1055,7 @@ class TestReviewDiffStage:
         ctx.extras["system_prompt"] = "sys"
         result = ReviewDiffStage()(ctx)
         assert result.status == StageStatus.OK
+        assert result.details["chunks"] == 2
         doc = builder.read_json(artifacts.candidate)
         assert "Reviewed 2 diff chunks" in doc["summary"]
 

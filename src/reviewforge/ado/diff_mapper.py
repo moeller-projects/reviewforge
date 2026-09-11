@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Iterable
 import re
 
+from reviewforge.git.chunker import unquote_git_path
+
 
 @dataclass(frozen=True)
 class AdoThreadContext:
@@ -97,7 +99,7 @@ def _parse_file_header(raw_line: str) -> _FileDiff | None:
     match = _FILE_HEADER_RE.match(raw_line)
     if not match:
         return None
-    path = match.group("path").strip()
+    path = unquote_git_path(match.group("path").strip())
     if path == "/dev/null":
         return None
     return _FileDiff(path=path[2:] if path.startswith("b/") else path)

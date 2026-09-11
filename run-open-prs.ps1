@@ -11,7 +11,7 @@ param(
     [switch] $Build,
     [string] $EnvFile = ".env",
     [switch] $KeepContainer,
-    [string] $Restart = "on-failure:3"
+    [string] $Restart = ""
 )
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot 'common.psm1') -Force

@@ -845,6 +845,12 @@ class TestRefactoredWrappers:
         )
         assert len(param_names) <= 14, f"run-open-prs.ps1 has too many params: {sorted(param_names)}"
 
+    def test_powershell_wrappers_default_to_automatic_container_cleanup(self):
+        for script in ("run.ps1", "run-open-prs.ps1"):
+            text = self._read(script)
+            assert '[string] $Restart = ""' in text
+            assert 'if ($Restart) { $args += @("--restart", $Restart) }' in text
+
     def test_no_hardcoded_aveato_default(self):
         # The refactor removed the hardcoded ``https://dev.azure.com/aveato/``
         # default and the hardcoded project list. Both scripts must

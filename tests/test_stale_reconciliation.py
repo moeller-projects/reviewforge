@@ -134,7 +134,7 @@ class TestFindStaleBotThreads:
         assert len(stale) == 1
         assert stale[0]["reason"] == "file_no_longer_in_diff"
 
-    @pytest.mark.parametrize("status", ["fixed", "wontFix", "wontfix", "closed"])
+    @pytest.mark.parametrize("status", ["fixed", "wontFix", "wontfix", "byDesign", "closed"])
     def test_terminal_thread_status_is_not_stale(self, status):
         thread = _bot_thread(1, "/src/app.py", 6, "abc123def456")
         thread["status"] = status
@@ -173,15 +173,18 @@ class TestFindStaleBotThreads:
         stale = posting.find_stale_bot_threads(threads, {"abc123def456"}, {})
         assert stale == []
 
-    def test_human_thread_skipped(self):
-        # No marker in comment body → human thread, never stale.
+    @pytest.mark.parametrize(
+        "content",
+        ["Just a comment, no marker.", "Body\n<!-- prb:unknown000001 -->\n"],
+    )
+    def test_human_or_unknown_marker_thread_skipped(self, content):
+        # An anchored thread without a known bot marker must never be annotated.
         threads = [{
             "id": 1,
             "threadContext": {"filePath": "/x.py", "rightFileStart": {"line": 99}},
-            "comments": [{"content": "Just a comment, no marker."}],
+            "comments": [{"content": content}],
         }]
-        stale = posting.find_stale_bot_threads(threads, {"abc123def456"}, {"x.py": {99}})
-        assert stale == []
+        assert posting.find_stale_bot_threads(threads, {"abc123def456"}, {}) == []
 
     def test_just_posted_threads_skipped(self):
         # A thread created in this run obviously matches the current diff.

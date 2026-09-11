@@ -132,10 +132,6 @@ def _initialize_repo(
         log(f"initializing reviewed repo in {repo_dir}")
         run_logged("git init", ["git", "init"], repo_dir)
         run_logged("git remote add origin", ["git", "remote", "add", "origin", repo_url], repo_dir)
-        subprocess.run(
-            ["git", "config", "--global", "--add", "safe.directory", str(repo_dir)],
-            cwd=str(repo_dir),
-        )
         target_ref, source_ref = "refs/pr-review/target", "refs/pr-review/source"
         for desc, branch, ref in (
             ("git fetch target", target_branch, target_ref),

@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- `single_pi` now receives the configured coding standards, and the canonical `ReviewResult`/`ChunkResult` retain `work_type`, `biggest_unknown`, `test_gaps`, and `escalation_hints`. Escalation hints are recorded and, when `ESCALATION_REVIEW_ENABLED=1`, trigger a focused second pass.
+- `single_pi` now receives the configured coding standards, and the canonical `ReviewResult` retains a `PrSummary` with `work_type` and `biggest_unknown`, plus `test_gaps`, `escalation_hints`, and `discarded_findings`. Escalation hints are recorded and, when `ESCALATION_REVIEW_ENABLED=1`, trigger a focused second pass.
 - CRG internals are consolidated under `reviewforge.pipeline.crg`; shipped configuration, artifact, marker, and stage contracts are unchanged.
 
 ### Added

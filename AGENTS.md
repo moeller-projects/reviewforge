@@ -37,7 +37,7 @@ all optional dependencies, including CRG:
 ```bash
 uv sync --all-extras
 uv run --all-extras pytest tests/ --cov=reviewforge --cov-fail-under=97
-uv run complexipy src/reviewforge
+uv run complexipy src --max-complexity-allowed 10 --failed --plain
 ```
 
 Run the narrowest relevant test first, then the complete suite for permanent

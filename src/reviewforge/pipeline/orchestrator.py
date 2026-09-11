@@ -268,8 +268,8 @@ def run_reply_only(cfg: Config) -> RunOutcome:
     Forces full-review mode so the repository checkout is prepared even when
     review-mode detection would consider the PR unchanged.
     """
-    cfg = dataclass_replace(cfg, force_full_review=True)
-    cfg.validate_files(include_reply_prompt=cfg.reply_comments)
+    cfg = dataclass_replace(cfg, force_full_review=True, reply_comments=True)
+    cfg.validate_files(include_reply_prompt=True)
     artifacts = create_artifacts(cfg)
     configure_runlog(artifacts.run_log)
     log_info("reply-only run started")

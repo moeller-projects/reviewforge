@@ -360,48 +360,7 @@ class PiCliRunner:
             env=env,
             **({"cwd": str(self._working_dir)} if self._working_dir else {}),
         )
-        try:
-            proc.stdin.write(input_data)
-        except BrokenPipeError:
-            pass
-        finally:
-            proc.stdin.close()
-
-        # Stream stderr lines to the run log as they arrive, while
-        # accumulating them for post-hoc token/context parsing. stdout is
-        # drained concurrently so a large response cannot deadlock the child,
-        # and the main thread enforces the timeout via ``proc.wait``.
-        stderr_lines: list[str] = []
-        stdout_holder: list[bytes] = []
-
-        def _stream_stderr() -> None:
-            assert proc.stderr is not None
-            for raw in proc.stderr:
-                line = raw.decode(errors="replace").rstrip("\n")
-                stderr_lines.append(line)
-                _log(f"[pi {stage}{marker}] {line}")
-
-        def _drain_stdout() -> None:
-            assert proc.stdout is not None
-            stdout_holder.append(proc.stdout.read())
-
-        err_thread = threading.Thread(target=_stream_stderr, daemon=True)
-        out_thread = threading.Thread(target=_drain_stdout, daemon=True)
-        err_thread.start()
-        out_thread.start()
-
-        timed_out = False
-        try:
-            proc.wait(timeout=self.cfg.pi_timeout_secs)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            proc.kill()
-            proc.wait()
-        err_thread.join()
-        out_thread.join()
-        stdout_bytes = stdout_holder[0] if stdout_holder else b""
-
-        stderr_text = "\n".join(stderr_lines)
+        stdout_bytes, stderr_text, timed_out = self._pump_pipes(proc, input_data, stage, marker)
         duration_ms = int((time.monotonic() - started) * 1000)
         if timed_out:
             self._record_timeout(
@@ -428,6 +387,68 @@ class PiCliRunner:
             duration_ms=duration_ms,
         )
         return subprocess.CompletedProcess(cmd, proc.returncode, stdout_bytes, stderr_text.encode(errors="replace"))
+
+    def _pump_pipes(
+        self,
+        proc: subprocess.Popen[bytes],
+        input_data: bytes,
+        stage: str,
+        marker: str,
+    ) -> tuple[bytes, str, bool]:
+        """Drain both output pipes while stdin is being sent; enforce the timeout.
+
+        Pi can produce enough diagnostics or response data to fill a pipe
+        before consuming all of a large review input, so a synchronous stdin
+        write here would deadlock both processes.
+        """
+        stderr_lines: list[str] = []
+        stdout_holder: list[bytes] = []
+
+        def _write_stdin() -> None:
+            assert proc.stdin is not None
+            try:
+                proc.stdin.write(input_data)
+            except BrokenPipeError:
+                pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except BrokenPipeError:
+                    pass
+
+        # Stream stderr lines to the run log as they arrive, while
+        # accumulating them for post-hoc token/context parsing.
+        def _stream_stderr() -> None:
+            assert proc.stderr is not None
+            for raw in proc.stderr:
+                line = raw.decode(errors="replace").rstrip("\n")
+                stderr_lines.append(line)
+                _log(f"[pi {stage}{marker}] {line}")
+
+        def _drain_stdout() -> None:
+            assert proc.stdout is not None
+            stdout_holder.append(proc.stdout.read())
+
+        threads = [
+            threading.Thread(target=target, daemon=True)
+            for target in (_stream_stderr, _drain_stdout, _write_stdin)
+        ]
+        for thread in threads:
+            thread.start()
+
+        timed_out = False
+        try:
+            proc.wait(timeout=self.cfg.pi_timeout_secs)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            proc.wait()
+        threads[0].join()
+        threads[1].join()
+        threads[2].join(timeout=1)
+        stdout_bytes = stdout_holder[0] if stdout_holder else b""
+        return stdout_bytes, "\n".join(stderr_lines), timed_out
+
 
     def _record_timeout(
         self,

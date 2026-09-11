@@ -337,10 +337,22 @@ def _build_synthesis_instruction(
     test_gaps: list[dict[str, Any]] | None = None,
     escalation_hints: list[dict[str, Any]] | None = None,
     discarded_findings: list[dict[str, Any]] | None = None,
+    *,
+    pr_title: str = "",
+    pr_description: str = "",
+    changed_files: list[str] | None = None,
 ) -> str:
     """Build the whole-PR synthesis request; no diff is re-sent."""
     lines = [
         f"You reviewed this pull request in {chunk_count} coherent diff chunks.",
+        "Use the PR framing evidence below for pr_summary.intent and pr_summary.work_type.",
+        "PR title:",
+        pr_title or "(untitled)",
+        "PR description:",
+        pr_description or "(no description provided)",
+        "Changed files:",
+        *(f"- {path}" for path in changed_files or ["(no changed files)"]),
+        "",
         "Base the synthesis on the merged scope results below. Scope workers "
         "may use isolated sessions, so this merged data is authoritative.",
         "",
@@ -393,12 +405,32 @@ def _format_validation_error(exc: Exception) -> str:
     return "; ".join(parts) or str(exc)
 
 
+def _require_model_review_framing(raw: Any, output_path: Any) -> None:
+    """Reject model output that omits framing legacy artifacts may lack."""
+    if not isinstance(raw, dict):
+        return
+    missing: list[str] = []
+    if not isinstance(raw.get("review_summary"), dict):
+        missing.append("review_summary")
+    pr_summary = raw.get("pr_summary")
+    if not isinstance(pr_summary, dict):
+        missing.append("pr_summary")
+    elif not pr_summary.get("work_type"):
+        missing.append("pr_summary.work_type")
+    if missing:
+        raise SchemaValidationError(
+            "single-pi response is missing required model framing: " + ", ".join(missing),
+            details={"missing": missing, "output_path": str(output_path)},
+        )
+
+
 def _single_pass(ctx: StageContext, cfg: Any) -> ReviewResult:
     output_path = ctx.artifacts.raw_dir / "fast-review.json"
     ctx.pi.run_json(cfg.fast_review_prompt_path, _build_single_pi_instruction(ctx), output_path, "single-pi reasoning")
     raw = read_json(output_path)
     if raw is None:
         raise ReasoningEngineError("single-pi reasoning produced no JSON", details={"output_path": str(output_path)})
+    _require_model_review_framing(raw, output_path)
     try:
         return ReviewResult.model_validate(raw)
     except Exception as exc:
@@ -488,10 +520,14 @@ def _review_scope(
     scope: DiffChunk,
     index: int,
     total: int,
-) -> tuple[ChunkResult, TokenUsage]:
+) -> tuple[ChunkResult, TokenUsage, dict[str, int]]:
     output_path = ctx.artifacts.raw_dir / f"fast-review-{index}.json"
     runner = _fork_scope_runner(ctx, index)
     before = _runner_usage(runner)
+    before_counts = {
+        "invocation_count": _runner_count(runner, "invocation_count"),
+        "repair_invocation_count": _runner_count(runner, "repair_invocation_count"),
+    }
     runner.run_json(
         cfg.fast_review_prompt_path,
         _build_chunk_instruction(ctx, scope, index, total, include_shared_prefix=True),
@@ -507,17 +543,31 @@ def _review_scope(
             details={"scope_id": scope.scope_id, "output_path": str(output_path)},
         ) from exc
     after = _runner_usage(runner)
-    return partial, TokenUsage(
+    usage = TokenUsage(
         input=max(0, after.get("in", 0) - before.get("in", 0)),
         output=max(0, after.get("out", 0) - before.get("out", 0)),
         total=max(0, after.get("total", 0) - before.get("total", 0)),
     )
+    telemetry = (
+        {
+            "in": usage.input,
+            "out": usage.output,
+            "total": usage.total,
+            **{
+                name: max(0, _runner_count(runner, name) - before_counts[name])
+                for name in before_counts
+            },
+        }
+        if runner is not ctx.pi
+        else {}
+    )
+    return partial, usage, telemetry
 
 
 def _run_scope_workers(
     ctx: StageContext, cfg: Any, scopes: list[DiffChunk]
-) -> list[tuple[ChunkResult, TokenUsage] | None]:
-    ordered: list[tuple[ChunkResult, TokenUsage] | None] = [None] * len(scopes)
+) -> list[tuple[ChunkResult, TokenUsage, dict[str, int]] | None]:
+    ordered: list[tuple[ChunkResult, TokenUsage, dict[str, int]] | None] = [None] * len(scopes)
     workers = max(1, min(len(scopes), int(getattr(cfg, "scope_workers", 8) or 1)))
     if type(ctx.pi).__name__ not in {"PiCliRunner", "PiRunner"}:
         workers = 1
@@ -532,23 +582,26 @@ def _run_scope_workers(
 
 
 def _merge_scope_results(
-    ordered: list[tuple[ChunkResult, TokenUsage] | None],
-) -> tuple[dict[str, Any], list[TokenUsage]]:
+    ordered: list[tuple[ChunkResult, TokenUsage, dict[str, int]] | None],
+) -> tuple[dict[str, Any], list[TokenUsage], dict[str, int]]:
     state = _new_merge_state()
     usage: list[TokenUsage] = []
+    telemetry = {"in": 0, "out": 0, "total": 0, "invocation_count": 0, "repair_invocation_count": 0}
     for item in ordered:
         if item is None:
             raise ReasoningEngineError("scope review completed without a result")
-        partial, tokens = item
+        partial, tokens, scope_telemetry = item
         usage.append(tokens)
+        for name in telemetry:
+            telemetry[name] += scope_telemetry.get(name, 0)
         _merge_chunk(partial, state)
-    return state, usage
+    return state, usage, telemetry
 
 
 def _chunked_pass(
     engine: Any, ctx: StageContext, cfg: Any, scopes: list[DiffChunk]
-) -> tuple[ReviewResult, list[TokenUsage]]:
-    state, usage = _merge_scope_results(_run_scope_workers(ctx, cfg, scopes))
+) -> tuple[ReviewResult, list[TokenUsage], dict[str, int]]:
+    state, usage, telemetry = _merge_scope_results(_run_scope_workers(ctx, cfg, scopes))
     findings = state["findings"]
     test_gaps = state["test_gaps"][:5]
     escalation_hints = _cap_and_order_hints(state["escalation_hints"])
@@ -585,7 +638,7 @@ def _chunked_pass(
         escalation_hints=escalation_hints,
         discarded_findings=discarded_findings,
     )
-    return ReviewResult.model_validate(payload), usage
+    return ReviewResult.model_validate(payload), usage, telemetry
 
 
 def _graph_architecture_present(ctx: StageContext) -> bool:
@@ -724,7 +777,11 @@ def _run_escalation_pass(
     if focused is None:
         return None
     if runner is not ctx.pi:
-        ctx.extras["_escalation_usage"] = _runner_usage(runner)
+        ctx.extras["_escalation_telemetry"] = {
+            **_runner_usage(runner),
+            "invocation_count": _runner_count(runner, "invocation_count"),
+            "repair_invocation_count": _runner_count(runner, "repair_invocation_count"),
+        }
     return focused
 
 
@@ -770,21 +827,29 @@ def _merge_escalation(base: ReviewResult, focused: ReviewResult) -> ReviewResult
     return ReviewResult.model_validate(payload)
 
 
+def _aggregate_telemetry(ctx: StageContext, scope_telemetry: dict[str, int]) -> dict[str, int]:
+    telemetry = {
+        "in": 0,
+        "out": 0,
+        "total": 0,
+        "invocation_count": _runner_count(ctx.pi, "invocation_count"),
+        "repair_invocation_count": _runner_count(ctx.pi, "repair_invocation_count"),
+    }
+    telemetry.update(_runner_usage(ctx.pi))
+    for additional in (scope_telemetry, ctx.extras.get("_escalation_telemetry") or {}):
+        for name in telemetry:
+            telemetry[name] += int(additional.get(name, 0) or 0)
+    return telemetry
+
+
 def _update_metrics(
-    result: ReviewResult, ctx: StageContext, started_at: float,
+    result: ReviewResult, ctx: StageContext, telemetry: dict[str, int], started_at: float,
     finished_at: float, reasoning_duration_ms: int, chunks: list[DiffChunk], chunk_usage: list[TokenUsage],
 ) -> ReviewResult:
-    tokens = _runner_usage(ctx.pi)
-    escalation = ctx.extras.get("_escalation_usage") or {}
-    tokens = {
-        "in": tokens.get("in", 0) + int(escalation.get("in", 0) or 0),
-        "out": tokens.get("out", 0) + int(escalation.get("out", 0) or 0),
-        "total": tokens.get("total", 0) + int(escalation.get("total", 0) or 0),
-    }
     result.metrics = result.metrics.model_copy(update={
-        "piInputTokens": tokens.get("in", 0), "piOutputTokens": tokens.get("out", 0),
-        "piTotalTokens": tokens.get("total", 0), "invocationCount": _runner_count(ctx.pi, "invocation_count"),
-        "repairInvocationCount": _runner_count(ctx.pi, "repair_invocation_count"),
+        "piInputTokens": telemetry["in"], "piOutputTokens": telemetry["out"],
+        "piTotalTokens": telemetry["total"], "invocationCount": telemetry["invocation_count"],
+        "repairInvocationCount": telemetry["repair_invocation_count"],
         "wallClockDurationMs": int((finished_at - started_at) * 1000),
         "reasoningDurationMs": reasoning_duration_ms, "projectionDurationMs": 0,
         "validationDurationMs": 0, "changedFilesReviewed": len(getattr(ctx.state, "files", [])),
@@ -822,18 +887,22 @@ class SinglePiReasoningEngine(ReasoningEngine):
         if len(chunks) == 1:
             result = _single_pass(ctx, cfg)
             chunk_usage: list[TokenUsage] = []
+            scope_telemetry: dict[str, int] = {}
         else:
-            result, chunk_usage = _chunked_pass(self, ctx, cfg, chunks)
+            result, chunk_usage, scope_telemetry = _chunked_pass(self, ctx, cfg, chunks)
         focused = _run_escalation_pass(self, ctx, result)
         if focused is not None:
             result = _merge_escalation(result, focused)
         result = _normalize_review(result, ctx)
         reasoning_duration_ms = int((time.perf_counter() - reasoning_started) * 1000)
-        tokens = _runner_usage(ctx.pi)
+        telemetry = _aggregate_telemetry(ctx, scope_telemetry)
+        tokens = {name: telemetry[name] for name in ("in", "out", "total")}
         ctx.last_token_usage = tokens
         finished_at = time.time()
         result = self._enrich_metadata(result, cfg, started_at, finished_at, tokens)
-        return _update_metrics(result, ctx, started_at, finished_at, reasoning_duration_ms, chunks, chunk_usage)
+        return _update_metrics(
+            result, ctx, telemetry, started_at, finished_at, reasoning_duration_ms, chunks, chunk_usage
+        )
 
     def _synthesize(
         self,
@@ -847,12 +916,26 @@ class SinglePiReasoningEngine(ReasoningEngine):
     ) -> ChunkSynthesis | None:
         """Ask Pi for whole-PR summaries; ``None`` means use boilerplate."""
         output_path = ctx.artifacts.raw_dir / "chunk-synthesis.json"
+        metadata = ctx.metadata or (
+            read_json(ctx.artifacts.metadata) if ctx.artifacts.metadata.exists() else {}
+        )
+        metadata = metadata if isinstance(metadata, dict) else {}
+        changed_files = list(getattr(ctx.state, "files", []) if ctx.state is not None else [])
+        if not changed_files and getattr(ctx, "files_text", ""):
+            changed_files = [line for line in ctx.files_text.splitlines() if line]
         try:
             ctx.pi.run_json(
                 ctx.cfg.chunk_synthesis_prompt_path,
                 _build_synthesis_instruction(
-                    chunk_count, findings, uncertainties,
-                    test_gaps, escalation_hints, discarded_findings,
+                    chunk_count,
+                    findings,
+                    uncertainties,
+                    test_gaps,
+                    escalation_hints,
+                    discarded_findings,
+                    pr_title=str(metadata.get("title") or ""),
+                    pr_description=str(metadata.get("description") or ""),
+                    changed_files=changed_files,
                 ),
                 output_path,
                 "single-pi synthesis",

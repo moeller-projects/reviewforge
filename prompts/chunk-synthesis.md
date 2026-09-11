@@ -1,8 +1,8 @@
 # Chunk Synthesis
 
-You reviewed this pull request as several coherent unified-diff chunks. Your
-prior chunk analyses are in this session (and their merged findings are
-restated in the user message). Produce the whole-PR summaries now.
+You reviewed this pull request as several coherent unified-diff chunks. The
+user message explicitly supplies the PR title, description, changed-file list,
+and merged chunk results. Produce the whole-PR summaries now.
 
 Return exactly one JSON object — no markdown fences, no prose — with this
 shape:
@@ -32,9 +32,10 @@ shape:
 }
 ```
 
-- Base every statement on the chunk analyses; do not invent new findings.
-- `pr_summary.intent` and `pr_summary.work_type` MUST be non-empty; decide them
-  from the merged chunk results before writing the other summaries.
+- Base every statement on the explicitly supplied PR framing evidence and merged
+  chunk results; do not invent new findings.
+- `pr_summary.intent` and `pr_summary.work_type` MUST be non-empty; determine
+  them from the supplied PR title, description, and changed-file list.
 - `review_summary.summary` and `verification_summary.summary` MUST be
   non-empty strings. Never emit placeholder text such as "Reviewed N chunks."
 - `good_practices` is optional; omit it or return an empty list when nothing

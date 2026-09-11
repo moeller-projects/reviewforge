@@ -2,7 +2,7 @@
 
 ### Requirement: Detect unanswered human replies on bot threads
 
-The system MUST identify bot-authored comment threads awaiting a reply using only existing thread data. A thread awaits a reply iff it carries a `prb:` bot marker, its status is not `closed`, and its last comment is not bot-authored. A comment is bot-authored when it carries a bot marker or its author matches the author of the thread's marker-carrying comment, comparing by author `id` with fallback to `uniqueName`/`displayName`. Detection MUST NOT introduce new ADO endpoints or persisted state.
+The system MUST identify bot-authored comment threads awaiting a reply using only existing thread data. A thread awaits a reply iff it carries a `prb:` bot marker, its status is not one of `fixed`, `wontFix`, `wontfix`, `byDesign`, or `closed` (case-insensitively), and its last comment is not bot-authored. A comment is bot-authored when it carries a bot marker or any normalized author key intersects with the keys of a thread marker-carrying comment; the keys MUST include every available author `id`, `uniqueName`, and `displayName`. Detection MUST NOT introduce new ADO endpoints or persisted state.
 
 #### Scenario: Human disagrees with a finding
 
@@ -11,27 +11,32 @@ The system MUST identify bot-authored comment threads awaiting a reply using onl
 
 #### Scenario: Bot already replied last
 
-- **WHEN** the last comment on a bot-marked thread was posted by the bot identity (with or without a marker)
+- **WHEN** the last comment on a bot-marked thread has a normalized `id`, `uniqueName`, or `displayName` matching any key of a marker-carrying bot comment
 - **THEN** the thread is not reported as awaiting a reply
 
-#### Scenario: Closed or unmarked threads
+#### Scenario: Terminal or unmarked threads
 
-- **WHEN** a thread is closed or carries no bot marker
+- **WHEN** a thread has a terminal status of `fixed`, `wontFix`, `wontfix`, `byDesign`, or `closed`, or carries no bot marker
 - **THEN** the thread is never reported as awaiting a reply
 
 ### Requirement: Generate and post in-thread replies
 
-For each pending thread the system MUST generate a reply with the configured model runner, validate the model output immediately against the `CommentReplies` Pydantic schema, and drop replies targeting unknown thread ids, duplicate thread ids, or empty bodies. Validated replies MUST be posted as comments on their existing threads; no new threads are created and the `prb:` marker grammar is unchanged. Under `DRY_RUN` the system MUST record every accepted reply with `posted: false`; only the explicit `reply` command prints drafts, while automatic review dry-runs MUST keep findings stdout as one JSON document.
+For each pending thread the system MUST generate a reply with the configured model runner, validate the model output immediately against the `CommentReplies` Pydantic schema, and drop replies targeting unknown thread ids, duplicate thread ids, or empty bodies. Validated replies MUST be posted as comments on their existing threads; no new threads are created and the `prb:` marker grammar is unchanged. Under `DRY_RUN` the system MUST record every accepted reply with `posted: false`; `reviewforge reply --dry-run` MUST print the validated replies, while an automatic `reviewforge review --dry-run` reply stage MUST record the replies only and MUST NOT print reply drafts.
 
 #### Scenario: Replies posted to existing threads
 
 - **WHEN** pending threads exist and posting is enabled
 - **THEN** each validated reply is appended as a comment to its thread via the existing add-comment endpoint and recorded in the `comment-replies.json` artifact
 
-#### Scenario: Dry run drafts only
+#### Scenario: Explicit reply dry run prints drafts
 
-- **WHEN** `DRY_RUN` is active and pending threads exist
-- **THEN** validated replies are printed and recorded but no ADO write occurs
+- **WHEN** `reviewforge reply --dry-run` is invoked and pending threads exist
+- **THEN** validated replies are printed and recorded with `posted: false`, and no ADO write occurs
+
+#### Scenario: Automatic review dry run records artifacts only
+
+- **WHEN** `reviewforge review --dry-run` runs the automatic reply stage with pending threads
+- **THEN** validated replies are recorded with `posted: false` without an ADO write or printed reply drafts
 
 #### Scenario: Invalid model output
 

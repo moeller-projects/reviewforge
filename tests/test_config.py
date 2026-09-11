@@ -133,6 +133,27 @@ class TestFromSourcesBranches:
         assert cfg.pi_session_enabled is False
         assert cfg.pi_session_clear is True
 
+    @pytest.mark.parametrize("value", ["7", "0"])
+    def test_context_search_max_matches_from_sources(self, value):
+        cfg = Config.from_sources(
+            env={"ADO_AUTH_TOKEN": "tok", "CONTEXT_SEARCH_MAX_MATCHES": value}
+        )
+        assert cfg.context_search_max_matches == int(value)
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("PI_RETRY_BASE_DELAY", "not-a-number"),
+            ("PI_RETRY_BASE_DELAY", "-0.1"),
+            ("PI_RETRY_CAP_DELAY", "not-a-number"),
+            ("PI_RETRY_CAP_DELAY", "-0.1"),
+            ("PI_RETRY_ATTEMPTS", "0"),
+        ],
+    )
+    def test_from_sources_rejects_invalid_pi_retry_settings(self, name, value):
+        with pytest.raises(ConfigError, match=name):
+            Config.from_sources(env={"ADO_AUTH_TOKEN": "tok", name: value})
+
 
 class TestFromEnvFile:
     def test_default_path_reads_dotenv_in_cwd(self, tmp_path, monkeypatch):

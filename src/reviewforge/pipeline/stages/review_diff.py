@@ -33,15 +33,15 @@ def _merge_finding(
     findings: list[dict[str, Any]],
     seen: dict[tuple, dict[str, Any]],
 ) -> None:
+    finding = _normalize_finding(finding)
     key = tuple(
         finding.get(name) or (0 if name == "line" else "")
         for name in ("file", "line", "severity", "title", "message")
     )
     kept = seen.get(key)
     if kept is None:
-        kept = _normalize_finding(finding)
-        seen[key] = kept
-        findings.append(kept)
+        seen[key] = finding
+        findings.append(finding)
     else:
         # Duplicate from another chunk: adopt non-keyed extras the kept
         # finding is missing (e.g. evidence, regression).
@@ -227,6 +227,7 @@ class ReviewDiffStage(Stage):
                 max_bytes=cfg.max_diff_bytes,
             ),
         )
+        chunk_count = len(chunks)
         _run_chunks(ctx, cfg, chunks, run_one)
         doc = read_json(ctx.artifacts.candidate) or {"summary": "", "findings": []}
         doc["findings"] = [_normalize_finding(f) for f in doc.get("findings", [])]
@@ -235,7 +236,7 @@ class ReviewDiffStage(Stage):
         ctx.candidate = doc
         return {
             "findings": len(doc.get("findings", [])),
-            "chunks": len(doc.get("findings", [])),
+            "chunks": chunk_count,
         }
 
 

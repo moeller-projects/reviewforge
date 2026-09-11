@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1428,3 +1429,64 @@ class TestInvocationRecords:
         assert records[0]["stderr_tail"] == "still running"
 
 
+
+# =====================================================================
+# Full-duplex Pi process I/O
+# =====================================================================
+
+
+class _SignalingStdout:
+    """Emit the response as soon as the runner begins draining stdout."""
+
+    def __init__(self, output_ready: threading.Event, data: bytes) -> None:
+        self._output_ready = output_ready
+        self._data = data
+
+    def read(self) -> bytes:
+        self._output_ready.set()
+        return self._data
+
+
+class _StdinWaitingForStdout:
+    """Model a child that cannot consume input until stdout is drained."""
+
+    def __init__(self, output_ready: threading.Event) -> None:
+        self._output_ready = output_ready
+        self.data = b""
+        self.was_drained_before_input_completed = False
+
+    def write(self, data: bytes) -> int:
+        self.was_drained_before_input_completed = self._output_ready.wait(timeout=0.25)
+        self.data += data
+        return len(data)
+
+    def close(self) -> None:
+        pass
+
+
+class _FullDuplexFakePopen(FakePopen):
+    """Fake child that produces stdout before it finishes consuming stdin."""
+
+    def __init__(self, cmd: list[str]) -> None:
+        super().__init__(cmd, stdout=b"", stderr=b"")
+        output_ready = threading.Event()
+        self.stdin = _StdinWaitingForStdout(output_ready)
+        self.stdout = _SignalingStdout(output_ready, b'{"ok": true}')
+
+
+class TestFullDuplexProcessIo:
+    def test_drains_stdout_while_writing_stdin(self, cfg, tmp_path, monkeypatch):
+        calls: list[_FullDuplexFakePopen] = []
+
+        def fake_popen(cmd, **_kwargs):
+            proc = _FullDuplexFakePopen(cmd)
+            calls.append(proc)
+            return proc
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
+        output_path = tmp_path / "output.json"
+
+        PiRunner(cfg).run_json(cfg.review_prompt_path, "large input", output_path, "review")
+
+        assert calls[0].stdin.was_drained_before_input_completed
+        assert output_path.read_bytes() == b'{"ok": true}'

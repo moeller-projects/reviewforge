@@ -6,12 +6,12 @@ Files currently shipped under `prompts/`:
 
 - `fast-review-system.md`: production `single_pi` system prompt.
 - `review-system.md`: legacy `multi_stage` review prompt.
+- `comment-reply.md`: prompt for replies to existing bot threads.
 - `intent.md`, `context-plan.md`, `context-digest.md`, `verify-findings.md`, `severity.md`: legacy stage prompts.
 - `ac-coverage.md`: optional acceptance-criteria LLM re-check.
 - `chunk-synthesis.md`: whole-PR summary synthesis after chunked `single_pi` analysis.
-
 `Config` resolves paths from the corresponding `*_PROMPT_PATH` variables. `Config.validate_files()` checks the fast-review and chunk-synthesis prompts plus standards for `single_pi`; it checks the full legacy set for `multi_stage`; it checks `ac-coverage.md` when `AC_COVERAGE_LLM` is enabled. `ai.prompts.augment_prompt_file()` appends the review language to every prompt and the coding standards to the fast-review and legacy review prompts only.
-`single_pi` uses `ReviewResult` JSON for a small diff. For an oversized unified diff, it supplies ordered file-boundary chunks in one Pi session and requires each response to contain `findings`, `test_gaps`, `uncertainties`, `escalation_hints`, and `discarded_findings`; Python validates, deduplicates, caps, and merges those partial results. It then makes one final synthesis call using `prompts/chunk-synthesis.md` to produce model-written whole-PR framing and summaries; Python keeps the merged sections authoritative.
+`single_pi` uses `ReviewResult` JSON for a small diff. For an oversized unified diff, it supplies ordered file-boundary chunks in one Pi session. Each partial response is validated as a `ChunkResult`; its `findings`, `test_gaps`, `uncertainties`, `escalation_hints`, and `discarded_findings` fields are optional and default to empty lists when omitted. Python validates, deduplicates, caps, and merges the partial results. It then makes one final synthesis call using `prompts/chunk-synthesis.md` to produce model-written whole-PR framing and summaries; Python keeps the merged sections authoritative.
 
 If the synthesis call fails or its JSON does not validate as `ChunkSynthesis`, the review continues with a deterministic fallback that still supplies `pr_summary.intent`, `pr_summary.work_type`, and `pr_summary.biggest_unknown`, and records `synthesisFallback` in the reasoning-stage details. The single-chunk path does not make this extra call.
 

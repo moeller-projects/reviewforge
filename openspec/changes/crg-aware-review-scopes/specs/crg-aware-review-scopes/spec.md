@@ -1,19 +1,19 @@
 ## ADDED Requirements
 
 ### Requirement: Deterministic scope planning
-ReviewForge MUST assign every changed file to exactly one primary review scope. Scope planning MUST use existing CRG outputs when available and MUST enforce the configured byte/token budget as a hard boundary.
+ReviewForge MUST assign every changed file to exactly one primary review scope. Scope planning MUST enforce the configured byte budget as a hard boundary. When existing CRG output supplies impacted files, the planner MUST prioritize matching changed files ahead of non-impacted files deterministically; it MUST NOT require files with a shared flow or graph relationship to occupy the same scope.
 
-#### Scenario: CRG groups related files
-- **WHEN** changed files share an affected flow or graph relationship and fit within the configured budget
-- **THEN** the planner MUST place them in the same primary scope.
+#### Scenario: CRG prioritizes impacted files
+- **WHEN** parseable changed-file diff sections include files listed in CRG `impacted_files`
+- **THEN** the planner MUST pack impacted changed files before non-impacted changed files while preserving their source-diff order within each priority group.
 
-#### Scenario: Oversized connected scope
-- **WHEN** a related file group exceeds the configured budget
-- **THEN** the planner MUST split it deterministically while preserving complete changed-file coverage.
+#### Scenario: Byte budget boundary
+- **WHEN** a file section or sequentially packed scope would exceed the configured budget
+- **THEN** the planner MUST emit only scopes whose diff text is within that budget, truncate an oversized file section when necessary, and preserve complete changed-file coverage.
 
 #### Scenario: CRG unavailable
 - **WHEN** CRG is disabled, unavailable, malformed, or fails
-- **THEN** the planner MUST fall back to deterministic file-based budgeted scopes without failing the review solely because CRG is unavailable.
+- **THEN** the planner MUST fall back to deterministic sequential file-based budgeted scopes without failing the review solely because CRG is unavailable.
 
 ### Requirement: Isolated parallel review
 ReviewForge MUST review independent scopes with isolated Pi sessions, bounded concurrency, deterministic result ordering, and a whole-PR synthesis after all scopes complete.

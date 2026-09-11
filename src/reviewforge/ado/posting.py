@@ -235,6 +235,14 @@ def _thread_stale_marker(thread: dict[str, Any]) -> str | None:
     return None
 
 
+_TERMINAL_THREAD_STATUSES = frozenset({"fixed", "wontfix", "bydesign", "closed"})
+
+
+def _thread_has_terminal_status(thread: dict[str, Any]) -> bool:
+    """Return whether ADO reports a status that needs no further bot action."""
+    return str(thread.get("status") or "").casefold() in _TERMINAL_THREAD_STATUSES
+
+
 def _thread_is_actionable(thread: dict[str, Any]) -> bool:
     """Return whether a thread can still benefit from stale-anchor notice.
 
@@ -244,8 +252,7 @@ def _thread_is_actionable(thread: dict[str, Any]) -> bool:
     """
     if thread.get("isDeleted") or thread.get("thread_is_deleted"):
         return False
-    status = str(thread.get("status") or "").casefold()
-    return status not in {"fixed", "wontfix", "closed"}
+    return not _thread_has_terminal_status(thread)
 
 
 def _stale_thread_entry(
@@ -255,7 +262,12 @@ def _stale_thread_entry(
     just_posted: set[int | str],
 ) -> dict[str, Any] | None:
     thread_id = thread.get("id")
-    if thread_id is None or thread_id in just_posted or not _thread_is_actionable(thread):
+    if (
+        thread_id is None
+        or thread_id in just_posted
+        or not _thread_is_actionable(thread)
+        or not _thread_has_bot_marker(thread, existing_markers)
+    ):
         return None
     finding_key = _thread_marker(thread)
     # A stale follow-up for this finding already exists → annotated before.
@@ -399,9 +411,7 @@ def _marker_authors(comments: Iterable[dict[str, Any]]) -> set[str]:
 def _thread_awaits_reply(thread: dict[str, Any]) -> bool:
     """Return whether a single bot thread ends with a human comment."""
     comments = thread.get("comments") or []
-    if not comments or not _thread_marker(thread):
-        return False
-    if str(thread.get("status") or "").lower() == "closed":
+    if not comments or not _thread_marker(thread) or _thread_has_terminal_status(thread):
         return False
     return not _is_bot_comment(comments[-1], _marker_authors(comments))
 

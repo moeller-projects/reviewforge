@@ -387,6 +387,27 @@ class TestCmdRun:
         assert created and not Path(created[0]).exists()
         assert not env_file.exists()
 
+    def test_print_command_does_not_probe_existing_container(self, tmp_path, monkeypatch):
+        runtime_calls: list[list[str]] = []
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda command, **_kwargs: runtime_calls.append(command),
+        )
+        args = _run_args(
+            tmp_path,
+            "--runtime",
+            "docker",
+            "--container-name",
+            "existing-review",
+            "--print-command",
+        )
+
+        assert ops.cmd_run(args) == 0
+
+        assert runtime_calls == []
+
 
 class TestSelectPullRequests:
     def _items(self):
@@ -448,29 +469,39 @@ class TestSelectPullRequests:
         selected = ops._select_pull_requests(self._items(), interactive=True)
         assert [pr["pullRequestId"] for _p, pr in selected] == [2]
 
-    def test_pr_id_selection(self, monkeypatch):
+    def test_bare_number_prefers_index_over_matching_pr_id(self, monkeypatch):
+        items = [
+            ("P", {"pullRequestId": 2}),
+            ("P", {"pullRequestId": 101}),
+            ("P", {"pullRequestId": 202}),
+        ]
+        monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+
+        selected = ops._select_pull_requests(items, interactive=True)
+
+        assert [pr["pullRequestId"] for _p, pr in selected] == [101]
+
+    def test_pr_id_selection_requires_hash_prefix(self, monkeypatch):
         items = [
             ("P", {"pullRequestId": 101}),
             ("P", {"pullRequestId": 202}),
             ("P", {"pullRequestId": 303}),
         ]
-        monkeypatch.setattr("builtins.input", lambda _prompt: "303,101")
+        monkeypatch.setattr("builtins.input", lambda _prompt: "#303,#101")
+
         selected = ops._select_pull_requests(items, interactive=True)
+
         assert [pr["pullRequestId"] for _p, pr in selected] == [101, 303]
 
-    def test_mixed_id_and_index_range_selection(self, monkeypatch):
-        items = [
-            ("P", {"pullRequestId": 101}),
-            ("P", {"pullRequestId": 202}),
-            ("P", {"pullRequestId": 303}),
-        ]
-        monkeypatch.setattr("builtins.input", lambda _prompt: "303,1-2")
-        selected = ops._select_pull_requests(items, interactive=True)
-        assert [pr["pullRequestId"] for _p, pr in selected] == [101, 202, 303]
+    def test_ambiguous_pr_id_range_is_rejected(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda _prompt: "#101-202")
+
+        with pytest.raises(RuntimeError, match=r"invalid selection.*#<PR ID>"):
+            ops._select_pull_requests(self._items(), interactive=True)
 
     def test_unknown_pr_id_raises(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda _prompt: "99")
-        with pytest.raises(RuntimeError, match="pull-request ID not found"):
+        monkeypatch.setattr("builtins.input", lambda _prompt: "#99")
+        with pytest.raises(RuntimeError, match="pull-request ID not found: 99"):
             ops._select_pull_requests(self._items(), interactive=True)
 
 

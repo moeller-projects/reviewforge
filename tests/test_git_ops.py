@@ -44,6 +44,7 @@ class _GitSim:
         raise AssertionError(f"unexpected run_git args: {args}")
 
     def _run(self, cmd, **kwargs):
+        self.logged.append(cmd)
         if isinstance(cmd, list) and cmd[:2] == ["git", "merge-base"] and cmd[2] != "--is-ancestor":
             ok = self.fetched_unshallow and self.unshallow_helps
             return subprocess.CompletedProcess(cmd, 0 if ok else 1)
@@ -62,6 +63,7 @@ class TestUnshallowFallback:
 
         assert state.base_commit == "base123"
         assert any("--unshallow" in cmd for cmd in sim.logged)
+        assert all("--global" not in cmd for cmd in sim.logged)
         git_ops.cleanup(state)
 
     def test_merge_base_failure_after_unshallow_raises(self, tmp_path, monkeypatch):
@@ -86,12 +88,13 @@ class TestUnshallowFallback:
         assert excinfo.value.details["depths"] == [200, 1200, 6200, 10000]
 
     def test_failed_prepare_removes_temp_dirs(self, tmp_path, monkeypatch):
-        _GitSim(monkeypatch, shallow=False, unshallow_helps=False)
+        sim = _GitSim(monkeypatch, shallow=False, unshallow_helps=False)
 
         with pytest.raises(GitOperationError):
             git_ops.prepare_repo(_cfg(tmp_path), "feature", "main")
 
         assert list(tmp_path.iterdir()) == []
+        assert all("--global" not in cmd for cmd in sim.logged)
 
 
 class _FetchRetrySim:

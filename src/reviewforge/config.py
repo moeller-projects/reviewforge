@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
+import math
 import os
 import re
 import sys
@@ -73,6 +74,23 @@ def require_uint(name: str, value: str) -> int:
     if not re.fullmatch(r"\d+", value or ""):
         raise ConfigError(f"{name} must be a non-negative integer, got: {value!r}")
     return int(value)
+
+
+def require_positive_uint(name: str, value: str) -> int:
+    parsed = require_uint(name, value)
+    if parsed < 1:
+        raise ConfigError(f"{name} must be at least 1, got: {value!r}")
+    return parsed
+
+
+def require_nonnegative_float(name: str, value: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a non-negative number, got: {value!r}") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise ConfigError(f"{name} must be a non-negative number, got: {value!r}")
+    return parsed
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -429,9 +447,13 @@ class Config:
             chunk_trigger_diff_bytes=require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk_trigger_raw),
             disable_chunk_review=is_true(os.getenv("DISABLE_CHUNK_REVIEW")),
             pi_timeout_secs=require_uint("PI_TIMEOUT_SECS", os.getenv("PI_TIMEOUT_SECS", "600")),
-            pi_retry_attempts=require_uint("PI_RETRY_ATTEMPTS", os.getenv("PI_RETRY_ATTEMPTS", "2")),
-            pi_retry_base_delay=float(os.getenv("PI_RETRY_BASE_DELAY", "5")),
-            pi_retry_cap_delay=float(os.getenv("PI_RETRY_CAP_DELAY", "60")),
+            pi_retry_attempts=require_positive_uint("PI_RETRY_ATTEMPTS", os.getenv("PI_RETRY_ATTEMPTS", "2")),
+            pi_retry_base_delay=require_nonnegative_float(
+                "PI_RETRY_BASE_DELAY", os.getenv("PI_RETRY_BASE_DELAY", "5")
+            ),
+            pi_retry_cap_delay=require_nonnegative_float(
+                "PI_RETRY_CAP_DELAY", os.getenv("PI_RETRY_CAP_DELAY", "60")
+            ),
             dry_run=is_true(os.getenv("DRY_RUN")),
             include_work_items=is_true(os.getenv("INCLUDE_WORK_ITEMS", "1")),
             include_existing_comments=is_true(os.getenv("INCLUDE_EXISTING_COMMENTS", "1")),
@@ -693,9 +715,13 @@ def _source_numbers(
         "max_diff_bytes": max_diff,
         "chunk_trigger_diff_bytes": require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk),
         "pi_timeout_secs": require_uint("PI_TIMEOUT_SECS", _source_value(cli, env, "pi_timeout_secs", "PI_TIMEOUT_SECS", "600")),
-        "pi_retry_attempts": require_uint("PI_RETRY_ATTEMPTS", _source_value(cli, env, "pi_retry_attempts", "PI_RETRY_ATTEMPTS", "2")),
-        "pi_retry_base_delay": float(_source_value(cli, env, "pi_retry_base_delay", "PI_RETRY_BASE_DELAY", "5")),
-        "pi_retry_cap_delay": float(_source_value(cli, env, "pi_retry_cap_delay", "PI_RETRY_CAP_DELAY", "60")),
+        "pi_retry_attempts": require_positive_uint("PI_RETRY_ATTEMPTS", _source_value(cli, env, "pi_retry_attempts", "PI_RETRY_ATTEMPTS", "2")),
+        "pi_retry_base_delay": require_nonnegative_float(
+            "PI_RETRY_BASE_DELAY", _source_value(cli, env, "pi_retry_base_delay", "PI_RETRY_BASE_DELAY", "5")
+        ),
+        "pi_retry_cap_delay": require_nonnegative_float(
+            "PI_RETRY_CAP_DELAY", _source_value(cli, env, "pi_retry_cap_delay", "PI_RETRY_CAP_DELAY", "60")
+        ),
         "context_file_max_lines": require_uint("CONTEXT_FILE_MAX_LINES", _source_value(cli, env, "context_file_max_lines", "CONTEXT_FILE_MAX_LINES", "260")),
         "context_search_max_matches": require_uint("CONTEXT_SEARCH_MAX_MATCHES", _source_value(cli, env, "context_search_max_matches", "CONTEXT_SEARCH_MAX_MATCHES", "40")),
         "collect_context_workers": require_uint("COLLECT_CONTEXT_WORKERS", _source_value(cli, env, "collect_context_workers", "COLLECT_CONTEXT_WORKERS", "8")),
@@ -877,6 +903,7 @@ def _build_from_sources(
         pi_retry_cap_delay=pi_retry_cap_delay,
         model_backend=model_backend,
         context_file_max_lines=context_file_max_lines,
+        context_search_max_matches=context_search_max_matches,
         collect_context_workers=collect_context_workers,
         ac_coverage_llm=ac_coverage_llm,
         scope_workers=scope_workers,

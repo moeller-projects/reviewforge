@@ -117,6 +117,7 @@ CANONICAL_ARTIFACT_NAMES: tuple[str, ...] = (
     "graph-context.json",
     "comment-replies.json",
     "pi-invocations.json",
+    "review-scopes.json",
 )
 
 
@@ -125,11 +126,9 @@ class TestArtifactContract:
 
     def test_artifact_names_match_canonical_snapshot(self) -> None:
         from reviewforge.artifacts.manager import ARTIFACT_NAMES
-        # New entries may be appended at the end. No entry may be
-        # reordered, renamed, or removed.
-        assert ARTIFACT_NAMES[: len(CANONICAL_ARTIFACT_NAMES)] == CANONICAL_ARTIFACT_NAMES, (
+        assert ARTIFACT_NAMES == CANONICAL_ARTIFACT_NAMES, (
             "ARTIFACT_NAMES drifted from the canonical snapshot — this is a breaking change. "
-            "Add new entries only at the end and update CANONICAL_ARTIFACT_NAMES in this test."
+            "Update CANONICAL_ARTIFACT_NAMES in this test deliberately."
         )
 
     def test_artifact_names_no_duplicates(self) -> None:

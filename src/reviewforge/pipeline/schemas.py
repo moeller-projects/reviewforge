@@ -318,7 +318,10 @@ class RichFinding(_Base):
     def _repo_relative(cls, v: str | None) -> str | None:
         if v is None:
             return None
-        normalized = str(v).lstrip("/").replace("\\", "/")
+        raw = str(v)
+        if raw.startswith(("/", "\\")):
+            raise ValueError("file must be repo-relative with no leading slash")
+        normalized = raw.replace("\\", "/")
         if not normalized:
             raise ValueError("file must be a non-empty repo-relative path")
         if re.match(r"^[A-Za-z]:", normalized) or normalized.startswith("//"):
@@ -407,8 +410,6 @@ class Uncertainty(_Base):
 
     @model_validator(mode="after")
     def _resolvable(self) -> "Uncertainty":
-        if not self.reason.strip():
-            raise ValueError("reason must name the file or context that resolves it")
         if self.topic.startswith("cross-chunk:") and self.confidence != "low":
             raise ValueError("cross-chunk uncertainties must set confidence to low")
         return self
@@ -553,13 +554,6 @@ class ReviewResult(_Base):
     def _require_review_document(cls, data: Any) -> Any:
         if isinstance(data, dict) and data and "review_summary" not in data:
             raise ValueError("review_summary is required in a supplied review document")
-        if isinstance(data, dict) and data:
-            pr_summary = data.get("pr_summary")
-            if isinstance(pr_summary, dict):
-                if "work_type" not in pr_summary:
-                    raise ValueError("pr_summary.work_type is required")
-            elif pr_summary is None:
-                raise ValueError("pr_summary.work_type is required")
         return data
 
     @field_validator("test_gaps")

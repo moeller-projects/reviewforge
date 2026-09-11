@@ -167,9 +167,16 @@ def _truncated_scope(
     analysis: dict[str, object] | None,
     graph_context: dict[str, object] | None,
 ) -> DiffChunk:
-    clipped = encoded[:max_bytes].decode(errors="ignore")
+    marker = (
+        f"\n\n[FILE DIFF TRUNCATED: {path} original size {len(encoded)} bytes, "
+        f"cap {max_bytes} bytes]\n"
+    ).encode()
+    clipped = encoded[: max(0, max_bytes - len(marker))].decode(errors="ignore")
+    diff_text = clipped.encode() + marker
+    if len(diff_text) > max_bytes:
+        diff_text = marker[:max_bytes]
     return DiffChunk(
-        clipped + f"\n\n[FILE DIFF TRUNCATED: {path} original size {len(encoded)} bytes, cap {max_bytes} bytes]\n",
+        diff_text.decode(errors="ignore"),
         path + "\n",
         True,
         f"scope-{index:02d}",
@@ -194,15 +201,93 @@ def _parse_diff_section(raw: str) -> tuple[str, str]:
     lines = raw.splitlines()
     path = _header_path(lines[0] if lines else "")
     for line in lines:
-        if line.startswith("+++ b/"):
-            path = line[6:].strip()
+        if line.startswith("+++ "):
+            candidate = unquote_git_path(line[4:].strip())
+            path = candidate[2:] if candidate.startswith("b/") else ""
             break
     return section, path
 
 
+def unquote_git_path(path: str) -> str:
+    """Decode Git's C-style quoted pathname form."""
+    if len(path) < 2 or not (path.startswith('"') and path.endswith('"')):
+        return path
+    return _decode_c_quoted(path[1:-1], original=path)
+
+
+_C_ESCAPES = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+_OCTAL_DIGITS = frozenset("01234567")
+
+
+def _decode_octal(value: str, index: int, decoded: bytearray) -> int:
+    """Append one octal escape (1-3 digits) starting at ``index``; return the new index."""
+    end = index
+    while end < len(value) and end < index + 3 and value[end] in _OCTAL_DIGITS:
+        end += 1
+    decoded.append(int(value[index:end], 8))
+    return end
+
+
+def _decode_c_quoted(value: str, *, original: str) -> str:
+    decoded = bytearray()
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character != "\\":
+            decoded.extend(character.encode())
+            index += 1
+            continue
+        index += 1
+        if index == len(value):
+            return original
+        character = value[index]
+        if character in _OCTAL_DIGITS:
+            index = _decode_octal(value, index, decoded)
+            continue
+        decoded.extend(_C_ESCAPES.get(character, character).encode())
+        index += 1
+    return decoded.decode(errors="surrogateescape")
+
+
 def _header_path(line: str) -> str:
-    parts = line.split()
-    return parts[1][2:] if len(parts) >= 2 and parts[1].startswith("b/") else ""
+    paths = _git_path_tokens(line)
+    path = unquote_git_path(paths[1]) if len(paths) >= 2 else ""
+    return path[2:] if path.startswith("b/") else ""
+
+
+def _git_path_tokens(line: str) -> list[str]:
+    """Split the two C-quoted or unquoted paths in a diff header."""
+    paths: list[str] = []
+    index = 0
+    while index < len(line):
+        while index < len(line) and line[index].isspace():
+            index += 1
+        if index == len(line):
+            break
+        token, index = _scan_path_token(line, index)
+        paths.append(token)
+    return paths
+
+
+def _scan_path_token(line: str, start: int) -> tuple[str, int]:
+    if line[start] == '"':
+        return _scan_quoted_token(line, start)
+    index = start
+    while index < len(line) and not line[index].isspace():
+        index += 1
+    return line[start:index], index
+
+
+def _scan_quoted_token(line: str, start: int) -> tuple[str, int]:
+    index = start + 1
+    while index < len(line):
+        if line[index] == "\\":
+            index += 2
+            continue
+        index += 1
+        if line[index - 1] == '"':
+            break
+    return line[start:index], index
 
 
 def _analysis_file_path(item: object) -> str | None:
@@ -214,6 +299,8 @@ def _analysis_file_path(item: object) -> str | None:
 
 def _analysis_files(analysis: dict[str, object] | None, key: str) -> list[str]:
     values = analysis.get(key, []) if isinstance(analysis, dict) else []
+    if not isinstance(values, list):
+        return []
     paths = [_analysis_file_path(item) for item in values]
     return sorted(path for path in paths if path)
 
@@ -224,6 +311,8 @@ def _crg_context_files(files: list[str], analysis: dict[str, object] | None) -> 
 
 def _affected_flows(analysis: dict[str, object] | None) -> tuple[str, ...]:
     values = analysis.get("affected_flows", []) if isinstance(analysis, dict) else []
+    if not isinstance(values, list):
+        return ()
     return tuple(str(value) for value in values if value)[:15]
 
 
@@ -263,5 +352,4 @@ def scope_document(
         ],
     }
 
-
-__all__ = ["DiffChunk", "build_chunks", "build_scopes", "scope_document"]
+__all__ = ["DiffChunk", "build_chunks", "build_scopes", "scope_document", "unquote_git_path"]

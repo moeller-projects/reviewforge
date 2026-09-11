@@ -316,7 +316,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if cmd_build(build):
             return 1
     selected_runtime = runtime(args.runtime)
-    existing = _reuse_existing_container(args, selected_runtime, _container_name(args))
+    existing = None if args.print_command else _reuse_existing_container(args, selected_runtime, _container_name(args))
     if existing is not None:
         return existing
     command, env_file, temporary = run_command(args)
@@ -330,13 +330,21 @@ def cmd_run(args: argparse.Namespace) -> int:
 def _selection_token_indices(
     token: str, pull_request_ids: dict[int, int]
 ) -> set[int]:
+    if token.startswith("#"):
+        if not token[1:].isdigit():
+            raise ValueError(token)
+        pull_request_id = int(token[1:])
+        if pull_request_id not in pull_request_ids:
+            raise RuntimeError(
+                f"[review][ERROR] pull-request ID not found: {pull_request_id}"
+            )
+        return {pull_request_ids[pull_request_id]}
     start, separator, end = token.partition("-")
     if separator:
         first = int(start)
         last = int(end)
         return set(range(min(first, last), max(first, last) + 1))
-    value = int(token)
-    return {pull_request_ids.get(value, value)}
+    return {int(token)}
 
 
 def _selection_indices(
@@ -352,15 +360,12 @@ def _selection_indices(
         for part in raw.split(","):
             selected.update(_selection_token_indices(part.strip(), pull_request_ids))
     except ValueError as exc:
-        raise RuntimeError("[review][ERROR] invalid selection; use all, none, indexes, ranges, or PR IDs") from exc
+        raise RuntimeError(
+            "[review][ERROR] invalid selection; use all, none, indexes, "
+            "index ranges, or #<PR ID>"
+        ) from exc
     if not selected or min(selected) < 1 or max(selected) > size:
-        unknown = sorted(
-            value for value in selected
-            if value not in range(1, size + 1)
-        )
-        if unknown:
-            raise RuntimeError(f"[review][ERROR] pull-request ID not found: {unknown[0]} (selection is out of range)")
-        raise RuntimeError("[review][ERROR] selection is out of range")
+        raise RuntimeError("[review][ERROR] selection index is out of range")
     return selected
 
 
@@ -369,7 +374,7 @@ def _select_pull_requests(items: list[tuple[str, dict[str, object]]], interactiv
         return items
     for index, (project, pr) in enumerate(items, start=1):
         print(f"  [{index:2}] PR #{pr['pullRequestId']}  {project}/{pr.get('repositoryId', '')} -> {pr.get('targetRefName', '')}  {pr.get('title', '')}")
-    raw = input("==> Select PRs [all/none/indexes/ranges/PR IDs]: ").strip().lower()
+    raw = input("==> Select PRs [all/none/indexes/index ranges/#PR-ID]: ").strip().lower()
     if raw in {"all", "a"}:
         return items
     if raw in {"none", "n"}:

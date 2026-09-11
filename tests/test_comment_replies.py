@@ -56,8 +56,9 @@ class TestFindAwaitingReplies:
         ]
         assert [t["id"] for t in posting.find_awaiting_replies(threads)] == [1]
 
-    def test_closed_thread_is_skipped(self):
-        threads = [_thread(1, [_bot_comment(), _comment(HUMAN, "disagree")], status="closed")]
+    @pytest.mark.parametrize("status", ["fixed", "wontFix", "wontfix", "byDesign", "closed"])
+    def test_terminal_thread_status_is_skipped(self, status):
+        threads = [_thread(1, [_bot_comment(), _comment(HUMAN, "disagree")], status=status)]
         assert posting.find_awaiting_replies(threads) == []
 
     def test_unmarked_thread_is_skipped(self):
@@ -255,6 +256,31 @@ class TestReplyToCommentsStage:
             {"thread_id": 10, "reply": "second", "posted": True},
         ]
 
+
+    @pytest.mark.parametrize(
+        ("model_output", "error_type"),
+        [
+            ("not valid JSON", "JSONDecodeError"),
+            ('{"replies": [{"thread_id": 9}]}', "ValidationError"),
+        ],
+    )
+    def test_malformed_model_output_fails_stage_without_posting(
+        self, tmp_path, model_output, error_type
+    ):
+        ctx = _ctx(_cfg(tmp_path, dry_run=False), {"replies": []})
+        ctx.pi.run_json.side_effect = lambda _prompt, _stdin, output, _stage: output.write_text(
+            model_output, encoding="utf-8"
+        )
+        with patch(
+            "reviewforge.pipeline.stages.reply_to_comments.AdoClient"
+        ) as client_cls:
+            client = client_cls.return_value
+            client.get_threads.return_value = [_pending_thread()]
+            result = ReplyToCommentsStage()(ctx)
+
+        assert result.status == "failed"
+        assert result.error.startswith(f"{error_type}:")
+        client.add_comment.assert_not_called()
 
 # ---------------------------------------------------------------------------
 # CLI wiring

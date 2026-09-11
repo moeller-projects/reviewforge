@@ -59,10 +59,7 @@ class TestNonEmptyValidators:
     def test_uncertainty_topic_must_be_non_empty(self):
         with pytest.raises(ValidationError, match="non-empty"):
             Uncertainty.model_validate({"topic": ""})
-        assert (
-            Uncertainty.model_validate({"topic": "Rollout risk", "reason": "resolvable in repo"}).topic
-            == "Rollout risk"
-        )
+        assert Uncertainty.model_validate({"topic": "Rollout risk", "reason": ""}).reason == ""
 
 
 class TestRichEvidence:
@@ -101,6 +98,17 @@ class TestRichFinding:
     def test_evidence_cannot_be_null(self):
         with pytest.raises(ValidationError):
             RichFinding.model_validate(self._payload() | {"evidence": None})
+
+    @pytest.mark.parametrize("path", ["/outside.py", r"\\unc\path"])
+    def test_file_path_must_be_repo_relative(self, path: str):
+        with pytest.raises(ValidationError, match="repo-relative"):
+            RichFinding.model_validate(
+                self._payload()
+                | {
+                    "file": path,
+                    "evidence": {"changedLines": [1], "whyNewInThisPr": "new in PR"},
+                }
+            )
 
 
 class TestWorkItemAndRegression:
@@ -173,9 +181,15 @@ class TestContractCaps:
         with pytest.raises(ValidationError):
             PrSummary.model_validate({"work_type": "nonsense"})
 
-    def test_supplied_document_requires_work_type(self):
-        with pytest.raises(ValidationError, match="work_type"):
-            ReviewResult.model_validate({"review_summary": {"summary": "s"}})
+    def test_legacy_document_without_pr_summary_uses_defaults(self):
+        result = ReviewResult.model_validate({"review_summary": {"summary": "s"}})
+        assert result.pr_summary.work_type == "mixed"
+
+    def test_legacy_pr_summary_without_work_type_uses_default(self):
+        result = ReviewResult.model_validate(
+            {"review_summary": {"summary": "s"}, "pr_summary": {"intent": "Fix bug"}}
+        )
+        assert result.pr_summary.work_type == "mixed"
 
     def test_escalation_hint_enums(self):
         with pytest.raises(ValidationError):
