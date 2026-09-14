@@ -47,12 +47,34 @@ def test_downgrades_invalid_anchor_and_keeps_exempt_findings(tmp_path):
     findings = ctx.final["findings"]
 
     assert result.status == StageStatus.OK
-    assert result.details == {"downgraded": 1, "dropped": 0}
+    assert result.details == {"downgraded": 1, "dropped": 0, "out_of_scope": 0}
     assert findings[0]["line"] == 3
     assert findings[1]["file"] == "a.py"
     assert findings[1]["line"] == 99
     assert findings[1]["anchorDowngraded"] is True
     assert findings[2]["file"] == "gone.py"
+
+def test_drops_findings_on_files_outside_ado_pr_changes(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.final["findings"].append({"title": "foreign file", "file": "foreign.py", "line": 3})
+    ctx.extras["pr_changed_files"] = ["a.py", "gone.py"]
+
+    result = ValidateAnchorsStage()(ctx)
+
+    assert result.details["out_of_scope"] == 1
+    assert [f["title"] for f in ctx.final["findings"]] == [
+        "valid", "shifted", "Work item #1 scope", "general",
+    ]
+
+
+def test_out_of_scope_drop_precedes_anchor_policy(tmp_path):
+    ctx = _ctx(tmp_path, "drop")
+    ctx.final["findings"].append({"title": "foreign file", "file": "/foreign.py", "line": 99})
+    ctx.extras["pr_changed_files"] = ["a.py", "gone.py"]
+
+    result = ValidateAnchorsStage()(ctx)
+
+    assert result.details == {"downgraded": 0, "dropped": 1, "out_of_scope": 1}
 
 
 def test_drop_removes_invalid_anchor(tmp_path):

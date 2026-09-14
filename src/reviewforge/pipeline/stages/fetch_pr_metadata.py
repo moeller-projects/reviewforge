@@ -44,6 +44,7 @@ def _load_fetched_context(artifacts: Any) -> dict[str, Any]:
         ("wi_context", artifacts.work_items),
         ("wi_comments_context", artifacts.work_items.with_name("work-item-comments.json")),
         ("thread_context", artifacts.threads),
+        ("pr_changed_files", artifacts.work_items.with_name("pr-changed-files.json")),
     ):
         if (value := _load_list(path)) is not None:
             extras[key] = value

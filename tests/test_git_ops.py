@@ -254,6 +254,7 @@ class TestReviewedCommitRange:
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
 
         assert state.range_spec == "oldsha..sha"
+        assert state.range_fallback_reason == ""
         git_ops.cleanup(state)
 
     def test_ancestor_reviewed_commit_with_merges_uses_full_range(self, tmp_path, monkeypatch):
@@ -262,6 +263,7 @@ class TestReviewedCommitRange:
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
 
         assert state.range_spec == "base123..sha"
+        assert state.range_fallback_reason == "follow-up range contains 1 merge commit(s)"
         git_ops.cleanup(state)
 
     def test_failed_merge_check_uses_full_range(self, tmp_path, monkeypatch):
@@ -279,6 +281,7 @@ class TestReviewedCommitRange:
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
 
         assert state.range_spec == "base123..sha"
+        assert state.range_fallback_reason == "follow-up merge check failed"
         git_ops.cleanup(state)
 
 

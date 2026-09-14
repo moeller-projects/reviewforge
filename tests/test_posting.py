@@ -497,3 +497,90 @@ class TestDedupeKeyMigration:
         assert posting.dedupe_key(base) == posting.dedupe_key(
             {**base, "title": "missing   authorization-check"}
         )
+
+
+# ---------------------------------------------------------------------------
+# PR changed-files allowlist — never comment on files ADO does not list
+# ---------------------------------------------------------------------------
+
+
+def _client_with_pr_files(paths: list[str]) -> MagicMock:
+    client = _mock_client()
+    client.get_iterations.return_value = [{"id": 1}]
+    client.get_iteration_changes.return_value = [
+        {"changeType": "edit", "item": {"path": f"/{p}"}} for p in paths
+    ]
+    return client
+
+
+class TestPrChangedFilesAllowlist:
+    def _post(self, tmp_path, monkeypatch, client, finding) -> dict:
+        findings_file, out_file = _write_findings(tmp_path, [finding])
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
+        monkeypatch.delenv("FAIL_ON", raising=False)
+        from reviewforge.ado import cli as m
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = m.command_post_findings(_args(findings_file, out_file))
+        assert rc == 0
+        return json.loads(out_file.read_text())
+
+    def test_finding_outside_pr_changes_is_skipped(self, tmp_path, monkeypatch):
+        client = _client_with_pr_files(["src/app.py"])
+        result = self._post(
+            tmp_path,
+            monkeypatch,
+            client,
+            {"severity": "major", "title": "foreign", "message": "m",
+             "file": "src/foreign.py", "line": 10},
+        )
+        assert result["created"] == 0
+        assert result["skipped_reasons"]["not_in_pr_changes"] == 1
+        client.create_thread.assert_not_called()
+
+    def test_finding_inside_pr_changes_posts(self, tmp_path, monkeypatch):
+        client = _client_with_pr_files(["src/app.py"])
+        result = self._post(
+            tmp_path,
+            monkeypatch,
+            client,
+            {"severity": "major", "title": "in scope", "message": "m",
+             "file": "src/app.py", "line": 3},
+        )
+        assert result["created"] == 1
+        assert result["skipped_reasons"]["not_in_pr_changes"] == 0
+
+    def test_general_and_work_item_findings_unaffected(self, tmp_path, monkeypatch):
+        client = _client_with_pr_files(["src/app.py"])
+        findings_file, out_file = _write_findings(
+            tmp_path,
+            [
+                {"severity": "major", "title": "general note", "message": "m",
+                 "file": None, "line": None},
+                {"severity": "blocker", "title": "Work item #42 missing", "message": "m",
+                 "file": "src/foreign.py", "line": 7},
+            ],
+        )
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.delenv("VOTE_WAITING_ON", raising=False)
+        monkeypatch.delenv("FAIL_ON", raising=False)
+        from reviewforge.ado import cli as m
+
+        with patch("reviewforge.ado.cli.AdoClient", return_value=client):
+            rc = m.command_post_findings(_args(findings_file, out_file))
+        assert rc == 0
+        result = json.loads(out_file.read_text())
+        assert result["created"] == 2
+
+    def test_fails_open_when_iteration_fetch_fails(self, tmp_path, monkeypatch):
+        client = _mock_client()
+        client.get_iterations.side_effect = RuntimeError("boom")
+        result = self._post(
+            tmp_path,
+            monkeypatch,
+            client,
+            {"severity": "major", "title": "in scope", "message": "m",
+             "file": "src/app.py", "line": 3},
+        )
+        assert result["created"] == 1

@@ -283,6 +283,19 @@ class AdoClient:
             "GET", self.base + self.pr_path(pr_id, "/commits?api-version=7.1")
         ).get("value", [])
 
+    def get_iterations(self, pr_id: int | str) -> list[dict[str, Any]]:
+        """Return the pull request iterations, oldest first."""
+        return self._request("GET", self.base + self.pr_path(pr_id, "/iterations")).get("value", [])
+
+    def get_iteration_changes(
+        self, pr_id: int | str, iteration_id: int | str, *, top: int = 500, skip: int = 0
+    ) -> list[dict[str, Any]]:
+        """Return one page of change entries for a pull request iteration."""
+        path = self.pr_path(
+            pr_id, f"/iterations/{iteration_id}/changes?$top={top}&$skip={skip}"
+        )
+        return self._request("GET", self.base + path).get("changeEntries", [])
+
     def create_thread(self, pr_id: int | str, body: dict[str, Any]) -> Any:
         return self._request("POST", self.base + self.pr_path(pr_id, "/threads"), body)
 

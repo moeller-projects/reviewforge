@@ -458,6 +458,51 @@ def _commit_context(client: AdoClient, pr_id: int | str) -> list[dict[str, Any]]
     ] if isinstance(payload, list) else []
 
 
+def _latest_iteration_id(client: AdoClient, pr_id: int | str) -> int | None:
+    iterations = [
+        it for it in client.get_iterations(pr_id)
+        if isinstance(it, dict) and isinstance(it.get("id"), int)
+    ]
+    return max(it["id"] for it in iterations) if iterations else None
+
+
+def _entry_path(entry: Any) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    item = entry.get("item")
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("path") or "").lstrip("/")
+
+
+def _iteration_paths(client: AdoClient, pr_id: int | str, iteration_id: int) -> list[str]:
+    paths: set[str] = set()
+    skip = 0
+    while True:
+        entries = client.get_iteration_changes(pr_id, iteration_id, skip=skip)
+        if not entries:
+            return sorted(paths)
+        before = len(paths)
+        paths.update(filter(None, map(_entry_path, entries)))
+        if len(entries) < 500 or len(paths) == before:
+            return sorted(paths)
+        skip += len(entries)
+
+
+def fetch_pr_changed_files(client: AdoClient, pr_id: int | str) -> list[str]:
+    """Return the file paths ADO lists as changed in the PR's latest iteration.
+
+    This is the server-side ground truth for PR scope: ADO computes it with
+    full history, so it stays correct when the local shallow clone yields a
+    stale merge base. Best-effort like ``_commit_context``: any failure
+    returns ``[]`` so callers can fall back to the locally computed diff.
+    """
+    try:
+        latest = _latest_iteration_id(client, pr_id)
+        return [] if latest is None else _iteration_paths(client, pr_id, latest)
+    except Exception:
+        return []
+
 def _reviewer_context(authenticated: dict[str, Any]) -> dict[str, Any] | None:
     if not authenticated.get("id"):
         return None
@@ -520,17 +565,20 @@ def command_fetch_context(args: argparse.Namespace) -> int:
         _authenticated_user(client),
         _commit_context(client, args.pr),
     )
+    changed_files = fetch_pr_changed_files(client, args.pr)
     context = {
         "pr": metadata,
         "workItems": work_items,
         "workItemComments": work_item_comments,
         "existingThreads": [simplify_thread(thread) for thread in raw_threads],
+        "changedFiles": changed_files,
     }
     for name, value in {
         "metadata.json": metadata,
         "work-items.json": work_items,
         "work-item-comments.json": work_item_comments,
         "threads.json": context["existingThreads"],
+        "pr-changed-files.json": changed_files,
         "context.json": context,
     }.items():
         write_json(out / name, value)
@@ -692,12 +740,20 @@ def _post_one_finding(
     mapper: DiffLineMapper | None,
     summary: str,
     result: dict[str, Any],
+    pr_changed_files: set[str] | None = None,
 ) -> None:
     if is_work_item_finding(finding):
         finding = as_general_comment(finding)
     key = key_of(finding)
     if finding.get("anchorDowngraded"):
         _skip_finding(result, finding, key, "no_line_mapping")
+        return
+    if (
+        pr_changed_files is not None
+        and finding.get("file")
+        and str(finding["file"]).lstrip("/") not in pr_changed_files
+    ):
+        _skip_finding(result, finding, key, "not_in_pr_changes")
         return
     if not should_post(finding, existing):
         result["skipped"] += 1
@@ -835,13 +891,17 @@ def command_post_findings(args: argparse.Namespace) -> int:
         "accepted": len(findings),
         "created": 0,
         "skipped": 0,
-        "skipped_reasons": {"duplicate": 0, "no_line_mapping": 0, "file_fallback": 0},
+        "skipped_reasons": {"duplicate": 0, "no_line_mapping": 0, "file_fallback": 0, "not_in_pr_changes": 0},
         "comments": [],
         "votedWaitingForAuthor": False,
         "failOnTriggered": False,
     }
+    fetched = fetch_pr_changed_files(client, args.pr)
+    pr_changed_files = set(fetched) if fetched else None
     for finding in findings:
-        _post_one_finding(client, args.pr, finding, existing, mapper, summary, result)
+        _post_one_finding(
+            client, args.pr, finding, existing, mapper, summary, result, pr_changed_files
+        )
     _annotate_stale(client, args.pr, pr, threads, existing, mapper, result)
     _apply_vote(client, args.pr, pr, findings, args, result)
     if _apply_fail_on(findings, args, result):

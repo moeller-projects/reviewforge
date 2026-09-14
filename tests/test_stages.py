@@ -447,6 +447,7 @@ class TestPrepareRepositoryStage:
         assert result.details == {
             "files": 1, "diff_bytes": 14,
             "source_branch": "feature", "target_branch": "main",
+            "files_out_of_scope": 0, "range_fallback_reason": "",
         }
         assert ctx.state is fake_state
         assert ctx.files_text == "x.py\n"
@@ -455,6 +456,63 @@ class TestPrepareRepositoryStage:
             {"file": "x.py", "language": "Python", "isTest": False}
         ]
         assert "commit message" in artifacts.commits.read_text()
+
+    def test_scopes_diff_to_ado_pr_changed_files(self, cfg, artifacts, monkeypatch):
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        ctx.extras["pr_changed_files"] = ["/x.py"]
+        fake_state = self._fake_state(artifacts.dir, "diff --git a/x", ["foreign.py", "x.py"])
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.prepare_repository.resolve_branches",
+            lambda c: ("feature", "main"),
+        )
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.prepare_repository.git_ops.prepare_repo",
+            lambda c, s, t: fake_state,
+        )
+        diff_calls: list[tuple] = []
+
+        def fake_run_git(cwd, *args, **kwargs):
+            if args[:1] == ("diff",):
+                diff_calls.append(args)
+                return "diff --git a/x"
+            return "abc1234 commit message\n"
+
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.prepare_repository.git_ops.run_git", fake_run_git
+        )
+
+        result = PrepareRepositoryStage()(ctx)
+
+        assert result.details["files"] == 1
+        assert result.details["files_out_of_scope"] == 1
+        assert ctx.files_text == "x.py\n"
+        assert fake_state.files == ["x.py"]
+        assert diff_calls and diff_calls[0][-2:] == ("--", "x.py")
+        assert builder.read_json(artifacts.changed_files) == [
+            {"file": "x.py", "language": "Python", "isTest": False}
+        ]
+
+    def test_scope_filter_fails_open_on_empty_intersection(self, cfg, artifacts, monkeypatch):
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        ctx.extras["pr_changed_files"] = ["unrelated.py"]
+        fake_state = self._fake_state(artifacts.dir, "diff --git a/x", ["x.py"])
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.prepare_repository.resolve_branches",
+            lambda c: ("feature", "main"),
+        )
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.prepare_repository.git_ops.prepare_repo",
+            lambda c, s, t: fake_state,
+        )
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.prepare_repository.git_ops.run_git",
+            lambda *a, **k: "abc1234 commit message\n",
+        )
+
+        result = PrepareRepositoryStage()(ctx)
+
+        assert result.details["files_out_of_scope"] == 0
+        assert ctx.files_text == "x.py\n"
 
 
 # ---------------------------------------------------------------------------

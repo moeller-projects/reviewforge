@@ -662,3 +662,86 @@ class TestListActivePullRequests:
         assert len(out) == 1
         assert out[0]["repositoryId"] == "repo-uuid"
         assert out[0]["project"] == "Pay"
+
+
+# ---------------------------------------------------------------------------
+# Pull request iteration changes (ADO ground truth for PR file scope)
+# ---------------------------------------------------------------------------
+
+
+class TestIterationEndpoints:
+    def _client(self, monkeypatch, payload):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        client = AdoClient("contoso", "P", "r")
+        urls: list[str] = []
+        monkeypatch.setattr(
+            client, "_request", lambda method, url, body=None: urls.append(url) or payload
+        )
+        return client, urls
+
+    def test_get_iterations_url(self, monkeypatch):
+        client, urls = self._client(monkeypatch, {"value": [{"id": 1}]})
+        assert client.get_iterations(42) == [{"id": 1}]
+        assert urls[0].endswith("/pullRequests/42/iterations")
+
+    def test_get_iteration_changes_url_and_entries(self, monkeypatch):
+        entries = [{"changeType": "edit", "item": {"path": "/a.py"}}]
+        client, urls = self._client(monkeypatch, {"changeEntries": entries})
+        assert client.get_iteration_changes(42, 7, skip=500) == entries
+        assert "/pullRequests/42/iterations/7/changes" in urls[0]
+        assert "$skip=500" in urls[0]
+
+
+class TestFetchPrChangedFiles:
+    def test_latest_iteration_paths_normalized(self):
+        from reviewforge.ado.operations import fetch_pr_changed_files
+
+        client = MagicMock()
+        client.get_iterations.return_value = [{"id": 2}, {"id": 5}, {"id": 3}]
+        client.get_iteration_changes.return_value = [
+            {"changeType": "edit", "item": {"path": "/src/app.py"}},
+            {"changeType": "add", "item": {"path": "/src/app.py"}},
+            {"changeType": "edit", "item": {"path": "/src/other.py"}},
+            {"changeType": "delete", "item": {}},
+        ]
+        assert fetch_pr_changed_files(client, 42) == ["src/app.py", "src/other.py"]
+        assert client.get_iteration_changes.call_args.args[:2] == (42, 5)
+
+    def test_fail_open_on_error(self):
+        from reviewforge.ado.operations import fetch_pr_changed_files
+
+        client = MagicMock()
+        client.get_iterations.side_effect = RuntimeError("boom")
+        assert fetch_pr_changed_files(client, 42) == []
+
+    def test_empty_iterations(self):
+        from reviewforge.ado.operations import fetch_pr_changed_files
+
+        client = MagicMock()
+        client.get_iterations.return_value = []
+        assert fetch_pr_changed_files(client, 42) == []
+        client.get_iteration_changes.assert_not_called()
+
+    def test_paginates_until_short_page(self):
+        from reviewforge.ado.operations import fetch_pr_changed_files
+
+        client = MagicMock()
+        client.get_iterations.return_value = [{"id": 1}]
+        full_page = [{"changeType": "edit", "item": {"path": f"/f{i}.py"}} for i in range(500)]
+        client.get_iteration_changes.side_effect = [
+            full_page,
+            [{"changeType": "edit", "item": {"path": "/last.py"}}],
+        ]
+        result = fetch_pr_changed_files(client, 42)
+        assert len(result) == 501
+        assert client.get_iteration_changes.call_args_list[1].kwargs["skip"] == 500
+
+    def test_stops_when_server_repeats_page(self):
+        from reviewforge.ado.operations import fetch_pr_changed_files
+
+        client = MagicMock()
+        client.get_iterations.return_value = [{"id": 1}]
+        page = [{"changeType": "edit", "item": {"path": f"/f{i}.py"}} for i in range(500)]
+        client.get_iteration_changes.return_value = page
+        assert len(fetch_pr_changed_files(client, 42)) == 500
+        assert client.get_iteration_changes.call_count == 2

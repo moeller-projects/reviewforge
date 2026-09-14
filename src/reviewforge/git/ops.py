@@ -48,6 +48,7 @@ class RepoState:
     files: list[str]
     range_spec: str
     cleanup_paths: list[Path]
+    range_fallback_reason: str = ""
 
 
 
@@ -230,8 +231,8 @@ def _ensure_merge_base(
     return run_git(repo_dir, "merge-base", target_ref, source_ref).strip()
 
 
-def _has_merge_commits(repo_dir: Path, range_spec: str) -> bool:
-    """Return True unless the range is provably free of merge commits.
+def _count_merge_commits(repo_dir: Path, range_spec: str) -> int | None:
+    """Count merge commits in the range; ``None`` when the check fails.
 
     A follow-up diff is a tree-to-tree comparison, so a merge commit inside the
     range bakes the merged branch's content into the diff. When linearity cannot
@@ -244,31 +245,49 @@ def _has_merge_commits(repo_dir: Path, range_spec: str) -> bool:
         stderr=subprocess.PIPE,
     )
     if result.returncode:
-        return True
-    return result.stdout.decode().strip() != "0"
+        return None
+    try:
+        return int(result.stdout.decode().strip() or "0")
+    except ValueError:
+        return None
+
+
+def _is_ancestor(repo_dir: Path, commit: str, descendant: str) -> bool:
+    return subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, descendant],
+        cwd=str(repo_dir),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def _follow_up_range(
+    repo_dir: Path, base: str, source_commit: str, reviewed_commit: str
+) -> tuple[str, str]:
+    merges = _count_merge_commits(repo_dir, f"{reviewed_commit}..{source_commit}")
+    if merges is None or merges > 0:
+        reason = (
+            "follow-up merge check failed"
+            if merges is None
+            else f"follow-up range contains {merges} merge commit(s)"
+        )
+        log(f"{reason}; using full range")
+        return f"{base}..{source_commit}", reason
+    log(f"follow-up range -> {reviewed_commit}..{source_commit}")
+    return f"{reviewed_commit}..{source_commit}", ""
 
 
 def _review_range(
     repo_dir: Path, base: str, source_commit: str, reviewed_commit: str | None
-) -> str:
-    range_start = base
+) -> tuple[str, str]:
+    """Return the review range spec and why follow-up narrowing was refused."""
     if reviewed_commit == source_commit:
         log("previous review commit matches the current source commit; using full range")
-    elif reviewed_commit and subprocess.run(
-        ["git", "merge-base", "--is-ancestor", reviewed_commit, source_commit],
-        cwd=str(repo_dir),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode == 0:
-        follow_up = f"{reviewed_commit}..{source_commit}"
-        if _has_merge_commits(repo_dir, follow_up):
-            log(f"follow-up range {follow_up} contains merge commits; using full range")
-        else:
-            range_start = reviewed_commit
-            log(f"follow-up range -> {range_start}..{source_commit}")
+    elif reviewed_commit and _is_ancestor(repo_dir, reviewed_commit, source_commit):
+        return _follow_up_range(repo_dir, base, source_commit, reviewed_commit)
     elif reviewed_commit:
         log("previous review commit is not an ancestor; using full range")
-    return f"{range_start}..{source_commit}"
+    return f"{base}..{source_commit}", ""
 
 
 def prepare_repo(
@@ -291,7 +310,7 @@ def prepare_repo(
         log(f"target {target_branch} -> {target_commit}")
         log(f"source {source_branch} -> {source_commit}")
         log(f"merge-base -> {base}")
-        range_spec = _review_range(repo_dir, base, source_commit, reviewed_commit)
+        range_spec, fallback_reason = _review_range(repo_dir, base, source_commit, reviewed_commit)
         run_logged_retry("git checkout source", ["git", "checkout", source_commit], repo_dir)
         diff = run_git(repo_dir, "diff", "--unified=3", "--no-ext-diff", range_spec)
         files = [
@@ -304,7 +323,7 @@ def prepare_repo(
         raise
     return RepoState(
         repo_dir, source_branch, target_branch, base, source_commit, target_commit,
-        diff, files, range_spec, cleanup_paths,
+        diff, files, range_spec, cleanup_paths, range_fallback_reason=fallback_reason,
     )
 
 
