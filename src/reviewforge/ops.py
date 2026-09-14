@@ -328,7 +328,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _selection_token_indices(
-    token: str, pull_request_ids: dict[int, int]
+    token: str, pull_request_ids: dict[int, int], size: int
 ) -> set[int]:
     if token.startswith("#"):
         if not token[1:].isdigit():
@@ -344,7 +344,10 @@ def _selection_token_indices(
         first = int(start)
         last = int(end)
         return set(range(min(first, last), max(first, last) + 1))
-    return {int(token)}
+    index = int(token)
+    if not 1 <= index <= size and index in pull_request_ids:
+        return {pull_request_ids[index]}
+    return {index}
 
 
 def _selection_indices(
@@ -358,7 +361,7 @@ def _selection_indices(
     }
     try:
         for part in raw.split(","):
-            selected.update(_selection_token_indices(part.strip(), pull_request_ids))
+            selected.update(_selection_token_indices(part.strip(), pull_request_ids, size))
     except ValueError as exc:
         raise RuntimeError(
             "[review][ERROR] invalid selection; use all, none, indexes, "
@@ -374,7 +377,7 @@ def _select_pull_requests(items: list[tuple[str, dict[str, object]]], interactiv
         return items
     for index, (project, pr) in enumerate(items, start=1):
         print(f"  [{index:2}] PR #{pr['pullRequestId']}  {project}/{pr.get('repositoryId', '')} -> {pr.get('targetRefName', '')}  {pr.get('title', '')}")
-    raw = input("==> Select PRs [all/none/indexes/index ranges/#PR-ID]: ").strip().lower()
+    raw = input("==> Select PRs [all/none/indexes/index ranges/[#]PR-ID]: ").strip().lower()
     if raw in {"all", "a"}:
         return items
     if raw in {"none", "n"}:

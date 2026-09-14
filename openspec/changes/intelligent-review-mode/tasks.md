@@ -9,6 +9,7 @@
 - [x] 2.1 Add review-state detection before reasoning and expose compact context through `StageContext`.
 - [x] 2.2 Skip reasoning and prompt construction for NoOp with an informational final document.
 - [x] 2.3 Narrow follow-up repository diffs when the reviewed commit is available; retain full-review fallback.
+- [x] 2.5 Fall back to the merge-base range when the follow-up range contains merge commits.
 - [x] 2.4 Add `--force-full-review` and configuration wiring.
 
 ## 3. Verification

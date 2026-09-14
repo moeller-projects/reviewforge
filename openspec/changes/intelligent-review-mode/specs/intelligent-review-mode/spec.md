@@ -38,6 +38,11 @@ The orchestration layer MUST fall back to `ForceFull` whenever reviewer identity
 - **WHEN** the previous reviewed commit is not an ancestor of the current source commit
 - **THEN** the selected mode is `ForceFull` and the normal merge-base range is reviewed
 
+#### Scenario: Merge commits inside the follow-up range
+
+- **WHEN** the previous reviewed commit is an ancestor of the current source commit but the follow-up range contains one or more merge commits
+- **THEN** the normal merge-base range is reviewed, because a tree diff over the follow-up range would include content introduced by the merge rather than by the source branch
+
 ### Requirement: Structured follow-up context
 
 The orchestration layer MUST provide normalized review state to the reasoning engine, including mode, reviewer identity, previous reviewer findings/comments, active threads, resolved threads, review timestamp, changed commits, and changed files. Raw ADO response payloads MUST NOT be required by the engine.

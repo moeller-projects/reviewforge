@@ -13,7 +13,6 @@ import urllib.parse
 from ..config import Config
 from ..exceptions import GitOperationError
 from ..runlog import info as log
-from ..ado.client import _normalize_org
 
 #: A tiny ``GIT_ASKPASS`` script that supplies the ADO token when git asks
 #: for credentials. The token is read from the current process environment.
@@ -106,7 +105,13 @@ def run_logged_retry(desc: str, cmd: list[str], cwd: Path, *, attempts: int = 3)
             time.sleep(attempt)
 
 def _repo_url(cfg: Config) -> str:
-    """Return the git remote URL for the configured ADO repository."""
+    """Return the git remote URL for the configured ADO repository.
+
+    The ``ado.client`` import is deferred: a module-level import cycles back
+    through ``ado.diff_mapper`` into the partially initialized ``git.chunker``.
+    """
+    from ..ado.client import _normalize_org
+
     org_url, _ = _normalize_org(cfg.ado_org)
     return (
         f"{org_url}/{urllib.parse.quote(cfg.ado_project)}/_git/{urllib.parse.quote(cfg.ado_repo_id)}"
@@ -225,6 +230,24 @@ def _ensure_merge_base(
     return run_git(repo_dir, "merge-base", target_ref, source_ref).strip()
 
 
+def _has_merge_commits(repo_dir: Path, range_spec: str) -> bool:
+    """Return True unless the range is provably free of merge commits.
+
+    A follow-up diff is a tree-to-tree comparison, so a merge commit inside the
+    range bakes the merged branch's content into the diff. When linearity cannot
+    be proven, callers must keep the full merge-base range.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--merges", "--count", range_spec],
+        cwd=str(repo_dir),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode:
+        return True
+    return result.stdout.decode().strip() != "0"
+
+
 def _review_range(
     repo_dir: Path, base: str, source_commit: str, reviewed_commit: str | None
 ) -> str:
@@ -237,8 +260,12 @@ def _review_range(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     ).returncode == 0:
-        range_start = reviewed_commit
-        log(f"follow-up range -> {range_start}..{source_commit}")
+        follow_up = f"{reviewed_commit}..{source_commit}"
+        if _has_merge_commits(repo_dir, follow_up):
+            log(f"follow-up range {follow_up} contains merge commits; using full range")
+        else:
+            range_start = reviewed_commit
+            log(f"follow-up range -> {range_start}..{source_commit}")
     elif reviewed_commit:
         log("previous review commit is not an ancestor; using full range")
     return f"{range_start}..{source_commit}"

@@ -481,6 +481,19 @@ class TestSelectPullRequests:
 
         assert [pr["pullRequestId"] for _p, pr in selected] == [101]
 
+    def test_bare_number_falls_back_to_pr_id_when_not_an_index(self, monkeypatch):
+        items = [
+            ("P", {"pullRequestId": 8917}),
+            ("P", {"pullRequestId": 8914}),
+            ("P", {"pullRequestId": 8910}),
+        ]
+        monkeypatch.setattr("builtins.input", lambda _prompt: "8914")
+
+        selected = ops._select_pull_requests(items, interactive=True)
+
+        assert [pr["pullRequestId"] for _p, pr in selected] == [8914]
+
+
     def test_pr_id_selection_requires_hash_prefix(self, monkeypatch):
         items = [
             ("P", {"pullRequestId": 101}),

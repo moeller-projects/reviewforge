@@ -31,4 +31,5 @@ The pipeline currently fetches simplified PR metadata and threads, prepares the 
 
 - ADO history may omit commit linkage or timestamps; conservative full-review fallback costs tokens but prevents silent missed reviews.
 - A follow-up diff requires the reviewed commit to exist in the shallow clone; repository preparation falls back to the normal merge-base range if it is unavailable.
+- A follow-up diff is a tree-to-tree comparison; merge commits inside the follow-up range would pull the merged branch's content into the reviewed diff (observed on PR 8914: a merged `dev` produced 266 changed files). Repository preparation detects merges with `git rev-list --merges --count` and falls back to the normal merge-base range when linearity cannot be proven.
 - Existing callers constructing `Config` directly need the new force-full field to remain compatible; the CLI alias is additive.

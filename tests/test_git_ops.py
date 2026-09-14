@@ -218,7 +218,7 @@ class TestRunGit:
 
 
 class TestReviewedCommitRange:
-    def _install(self, monkeypatch, *, ancestor: bool):
+    def _install(self, monkeypatch, *, ancestor: bool, merges: bool = False):
         monkeypatch.setattr(git_ops, "_repo_url", lambda _cfg: "file:///remote")
         monkeypatch.setattr(git_ops, "run_logged", lambda desc, cmd, cwd: None)
 
@@ -234,6 +234,8 @@ class TestReviewedCommitRange:
         def fake_run(cmd, **kwargs):
             if cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
                 return subprocess.CompletedProcess(cmd, 0 if ancestor else 1)
+            if cmd[:2] == ["git", "rev-list"]:
+                return subprocess.CompletedProcess(cmd, 0, b"1\n" if merges else b"0\n")
             return subprocess.CompletedProcess(cmd, 0)
 
         monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
@@ -252,6 +254,31 @@ class TestReviewedCommitRange:
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
 
         assert state.range_spec == "oldsha..sha"
+        git_ops.cleanup(state)
+
+    def test_ancestor_reviewed_commit_with_merges_uses_full_range(self, tmp_path, monkeypatch):
+        self._install(monkeypatch, ancestor=True, merges=True)
+
+        state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
+
+        assert state.range_spec == "base123..sha"
+        git_ops.cleanup(state)
+
+    def test_failed_merge_check_uses_full_range(self, tmp_path, monkeypatch):
+        self._install(monkeypatch, ancestor=True)
+
+        real_run = git_ops.subprocess.run
+
+        def flaky_run(cmd, **kwargs):
+            if cmd[:2] == ["git", "rev-list"]:
+                return subprocess.CompletedProcess(cmd, 128, b"", b"fatal: bad revision")
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", flaky_run)
+
+        state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
+
+        assert state.range_spec == "base123..sha"
         git_ops.cleanup(state)
 
 
