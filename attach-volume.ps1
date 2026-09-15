@@ -1,1 +1,0 @@
-podman run -it --rm --volume reviewforge-artifacts:/workspace/artifacts:ro --workdir /workspace/artifacts busybox:latest
