@@ -218,7 +218,14 @@ class TestRunGit:
 
 
 class TestReviewedCommitRange:
-    def _install(self, monkeypatch, *, ancestor: bool, merges: bool = False):
+    def _install(
+        self,
+        monkeypatch,
+        *,
+        reviewed_ancestor: bool,
+        target_ancestor: bool = False,
+        merges: bool = False,
+    ):
         monkeypatch.setattr(git_ops, "_repo_url", lambda _cfg: "file:///remote")
         monkeypatch.setattr(git_ops, "run_logged", lambda desc, cmd, cwd: None)
 
@@ -226,13 +233,15 @@ class TestReviewedCommitRange:
             if args[0] == "merge-base":
                 return "base123\n"
             if args[0] == "rev-parse":
-                return "sha\n"
+                return "target123\n" if "target" in args[-1] else "sha\n"
             return ""
 
         monkeypatch.setattr(git_ops, "run_git", fake_run_git)
 
         def fake_run(cmd, **kwargs):
             if cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
+                commit = cmd[3]
+                ancestor = target_ancestor if commit == "target123" else reviewed_ancestor
                 return subprocess.CompletedProcess(cmd, 0 if ancestor else 1)
             if cmd[:2] == ["git", "rev-list"]:
                 return subprocess.CompletedProcess(cmd, 0, b"1\n" if merges else b"0\n")
@@ -241,7 +250,7 @@ class TestReviewedCommitRange:
         monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
 
     def test_non_ancestor_reviewed_commit_uses_full_range(self, tmp_path, monkeypatch):
-        self._install(monkeypatch, ancestor=False)
+        self._install(monkeypatch, reviewed_ancestor=False)
 
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
 
@@ -249,7 +258,7 @@ class TestReviewedCommitRange:
         git_ops.cleanup(state)
 
     def test_ancestor_reviewed_commit_narrows_range(self, tmp_path, monkeypatch):
-        self._install(monkeypatch, ancestor=True)
+        self._install(monkeypatch, reviewed_ancestor=True)
 
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
 
@@ -257,17 +266,29 @@ class TestReviewedCommitRange:
         assert state.range_fallback_reason == ""
         git_ops.cleanup(state)
 
-    def test_ancestor_reviewed_commit_with_merges_uses_full_range(self, tmp_path, monkeypatch):
-        self._install(monkeypatch, ancestor=True, merges=True)
+    def test_target_merge_uses_current_target_range(self, tmp_path, monkeypatch):
+        self._install(monkeypatch, reviewed_ancestor=True, target_ancestor=True, merges=True)
+
+        state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
+
+        assert state.range_spec == "target123..sha"
+        assert state.range_fallback_reason == ""
+        git_ops.cleanup(state)
+
+    def test_unrelated_merge_uses_full_range(self, tmp_path, monkeypatch):
+        self._install(monkeypatch, reviewed_ancestor=True, merges=True)
 
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main", reviewed_commit="oldsha")
 
         assert state.range_spec == "base123..sha"
-        assert state.range_fallback_reason == "follow-up range contains 1 merge commit(s)"
+        assert state.range_fallback_reason == (
+            "follow-up range contains 1 merge commit(s) and "
+            "does not contain the current target tip"
+        )
         git_ops.cleanup(state)
 
     def test_failed_merge_check_uses_full_range(self, tmp_path, monkeypatch):
-        self._install(monkeypatch, ancestor=True)
+        self._install(monkeypatch, reviewed_ancestor=True)
 
         real_run = git_ops.subprocess.run
 

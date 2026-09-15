@@ -45,9 +45,19 @@ The pipeline MUST NOT post file-level comments on files that ADO does not list a
 
 ### Requirement: Review range fallback observability
 
-The pipeline MUST record why follow-up range narrowing was refused in the prepare stage details so run summaries explain unexpected full-range reviews.
+The pipeline MUST record why follow-up range narrowing was refused in the prepare stage details so run summaries explain unexpected full-range reviews. When the current target tip is an ancestor of the source tip, the pipeline MUST use the current target tip as the follow-up base, even if older merge commits occur in the reviewed range.
 
-#### Scenario: Merge guard fires
+#### Scenario: Current target was merged into source
 
-- **WHEN** the follow-up range contains merge commits or the merge check fails
-- **THEN** the prepare stage details MUST contain a non-empty `range_fallback_reason`
+- **WHEN** the follow-up range contains merge commits and the current target tip is an ancestor of the source commit
+- **THEN** the pipeline MUST use `target_commit..source_commit` and MUST leave `range_fallback_reason` empty
+
+#### Scenario: Ambiguous merge history
+
+- **WHEN** the follow-up range contains merge commits and the current target tip is not an ancestor of the source commit
+- **THEN** the pipeline MUST use the full merge-base range and MUST record a non-empty `range_fallback_reason`
+
+#### Scenario: Merge guard check fails
+
+- **WHEN** the follow-up merge check fails
+- **THEN** the pipeline MUST use the full merge-base range and MUST record a non-empty `range_fallback_reason`

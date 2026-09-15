@@ -232,12 +232,11 @@ def _ensure_merge_base(
 
 
 def _count_merge_commits(repo_dir: Path, range_spec: str) -> int | None:
-    """Count merge commits in the range; ``None`` when the check fails.
+    """Count merge commits in a range; ``None`` means the check failed."""
 
-    A follow-up diff is a tree-to-tree comparison, so a merge commit inside the
-    range bakes the merged branch's content into the diff. When linearity cannot
-    be proven, callers must keep the full merge-base range.
-    """
+    # A merge commit is only ambiguous when it does not incorporate the
+    # current target tip. Callers use the count to decide whether ancestry
+    # must be checked before narrowing a follow-up review.
     result = subprocess.run(
         ["git", "rev-list", "--merges", "--count", range_spec],
         cwd=str(repo_dir),
@@ -262,14 +261,28 @@ def _is_ancestor(repo_dir: Path, commit: str, descendant: str) -> bool:
 
 
 def _follow_up_range(
-    repo_dir: Path, base: str, source_commit: str, reviewed_commit: str
+    repo_dir: Path,
+    base: str,
+    target_commit: str,
+    source_commit: str,
+    reviewed_commit: str,
 ) -> tuple[str, str]:
     merges = _count_merge_commits(repo_dir, f"{reviewed_commit}..{source_commit}")
-    if merges is None or merges > 0:
+    if merges is None:
+        reason = "follow-up merge check failed"
+        log(f"{reason}; using full range")
+        return f"{base}..{source_commit}", reason
+    if merges > 0:
+        if _is_ancestor(repo_dir, target_commit, source_commit):
+            log(
+                f"follow-up range contains {merges} merge commit(s); "
+                f"target tip {target_commit} is in source history; "
+                f"using target range"
+            )
+            return f"{target_commit}..{source_commit}", ""
         reason = (
-            "follow-up merge check failed"
-            if merges is None
-            else f"follow-up range contains {merges} merge commit(s)"
+            f"follow-up range contains {merges} merge commit(s) and "
+            "does not contain the current target tip"
         )
         log(f"{reason}; using full range")
         return f"{base}..{source_commit}", reason
@@ -278,16 +291,21 @@ def _follow_up_range(
 
 
 def _review_range(
-    repo_dir: Path, base: str, source_commit: str, reviewed_commit: str | None
+    repo_dir: Path,
+    base: str,
+    target_commit: str,
+    source_commit: str,
+    reviewed_commit: str | None,
 ) -> tuple[str, str]:
-    """Return the review range spec and why follow-up narrowing was refused."""
+    """Return the safest review range and any fallback explanation."""
     if reviewed_commit == source_commit:
         log("previous review commit matches the current source commit; using full range")
     elif reviewed_commit and _is_ancestor(repo_dir, reviewed_commit, source_commit):
-        return _follow_up_range(repo_dir, base, source_commit, reviewed_commit)
+        return _follow_up_range(repo_dir, base, target_commit, source_commit, reviewed_commit)
     elif reviewed_commit:
         log("previous review commit is not an ancestor; using full range")
     return f"{base}..{source_commit}", ""
+
 
 
 def prepare_repo(
@@ -310,7 +328,9 @@ def prepare_repo(
         log(f"target {target_branch} -> {target_commit}")
         log(f"source {source_branch} -> {source_commit}")
         log(f"merge-base -> {base}")
-        range_spec, fallback_reason = _review_range(repo_dir, base, source_commit, reviewed_commit)
+        range_spec, fallback_reason = _review_range(
+            repo_dir, base, target_commit, source_commit, reviewed_commit
+        )
         run_logged_retry("git checkout source", ["git", "checkout", source_commit], repo_dir)
         diff = run_git(repo_dir, "diff", "--unified=3", "--no-ext-diff", range_spec)
         files = [

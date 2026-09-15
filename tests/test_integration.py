@@ -695,10 +695,11 @@ class TestReviewModesEndToEnd:
 
 
 class TestFollowUpMergeGuard:
-    """Reproduces the PR-8914 incident shape with real git: the source branch
-    merges the target between reviews, so the follow-up tree diff would
-    include target-authored files. prepare_repo must fall back to the full
-    merge-base range, which excludes them."""
+    """A source branch can merge the current target after a prior review.
+
+    The follow-up range must use the current target tip, so target-authored
+    files are not reviewed again even when the history contains older merges.
+    """
 
     def test_merge_in_follow_up_range_falls_back_to_full_range(self, cfg, git_repo):
         reviewed_sha = _git(git_repo, "rev-parse", "HEAD").strip()
@@ -711,9 +712,10 @@ class TestFollowUpMergeGuard:
 
         state = git_ops.prepare_repo(cfg, "feature", "main", reviewed_commit=reviewed_sha)
         try:
-            # Merge-base advanced to the main tip; target-authored file is out.
+            # The current target tip is the effective base; target-authored
+            # files are out of the follow-up diff.
             assert state.range_spec == f"{main_tip}..{state.source_commit}"
-            assert state.range_fallback_reason == "follow-up range contains 1 merge commit(s)"
+            assert state.range_fallback_reason == ""
             assert sorted(state.files) == ["src/app.py", "src/feature_followup.py", "src/other.py"]
         finally:
             git_ops.cleanup(state)
