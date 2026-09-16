@@ -47,6 +47,7 @@ DEFAULT_AC_COVERAGE_PROMPT_PATH = _default_file(_PROMPTS_DIR / "ac-coverage.md",
 DEFAULT_FAST_REVIEW_PROMPT_PATH = _default_file(_PROMPTS_DIR / "fast-review-system.md", "/app/prompts/fast-review-system.md")
 DEFAULT_COMMENT_REPLY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "comment-reply.md", "/app/prompts/comment-reply.md")
 DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH = _default_file(_PROMPTS_DIR / "chunk-synthesis.md", "/app/prompts/chunk-synthesis.md")
+DEFAULT_NATIVE_REVIEW_PROMPT_PATH = _default_file(_PROMPTS_DIR / "native-review-system.md", "/app/prompts/native-review-system.md")
 DEFAULT_STANDARDS_PATH = _default_file(_STANDARDS_DIR / "clean-code.md", "/app/standards/clean-code.md")
 
 
@@ -292,6 +293,23 @@ class Config:
     fast_review_prompt_path: Path = field(default=DEFAULT_FAST_REVIEW_PROMPT_PATH, compare=False)
     #: System prompt for the whole-PR synthesis call after chunked reviews.
     chunk_synthesis_prompt_path: Path = field(default=DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH, compare=False)
+    # --- Native in-process engine (pydantic-ai) ---------------------------
+    #: Model string for the ``native`` engine. Any pydantic-ai model string
+    #: works (``openai-codex:…``, ``openai:…``, ``anthropic:…``, …). The
+    #: default authenticates via the OpenAI Codex/ChatGPT subscription OAuth
+    #: credentials, never an API key.
+    native_model: str = field(default="openai-codex:gpt-5.6-luna", compare=False)
+    #: Path to the Codex CLI OAuth credential file. In containers this is
+    #: mounted at ``/app/codex-auth.json``.
+    native_credential_path: str = field(default="~/.codex/auth.json", compare=False)
+    #: Maximum model requests per native review loop.
+    native_max_turns: int = field(default=30, compare=False)
+    #: Estimated conversation tokens that trigger sliding-window compaction.
+    native_max_context_tokens: int = field(default=150000, compare=False)
+    #: Maximum lines returned by a single native file-read tool call.
+    native_read_max_lines: int = field(default=2000, compare=False)
+    #: System prompt for the native in-process reasoning engine.
+    native_review_prompt_path: Path = field(default=DEFAULT_NATIVE_REVIEW_PROMPT_PATH, compare=False)
     # --- Escalation review -------------------------------------------------
     #: When ``True``, run a focused second review pass over the files named by
     #: ``escalation_hints``. Default off; hints are still recorded as artifacts.
@@ -404,6 +422,18 @@ class Config:
         reasoning_engine = _resolve_reasoning_engine(
             os.getenv("REASONING_ENGINE"), fast_review
         )
+        native_model = os.getenv("NATIVE_MODEL", "openai-codex:gpt-5.6-luna")
+        native_credential_path = os.getenv("NATIVE_CREDENTIAL_PATH", "~/.codex/auth.json")
+        native_max_turns = require_positive_uint("NATIVE_MAX_TURNS", os.getenv("NATIVE_MAX_TURNS", "30"))
+        native_max_context_tokens = require_positive_uint(
+            "NATIVE_MAX_CONTEXT_TOKENS", os.getenv("NATIVE_MAX_CONTEXT_TOKENS", "150000")
+        )
+        native_read_max_lines = require_positive_uint(
+            "NATIVE_READ_MAX_LINES", os.getenv("NATIVE_READ_MAX_LINES", "2000")
+        )
+        native_review_prompt_path = _resolve_prompt_path(
+            "NATIVE_REVIEW_PROMPT_PATH", str(DEFAULT_NATIVE_REVIEW_PROMPT_PATH)
+        )
         fast_review_prompt_path = _resolve_prompt_path(
             "FAST_REVIEW_PROMPT_PATH", str(DEFAULT_FAST_REVIEW_PROMPT_PATH)
         )
@@ -484,6 +514,12 @@ class Config:
             ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
             ac_coverage_prompt_path=ac_coverage_prompt_path,
             reasoning_engine=reasoning_engine,
+            native_model=native_model,
+            native_credential_path=native_credential_path,
+            native_max_turns=native_max_turns,
+            native_max_context_tokens=native_max_context_tokens,
+            native_read_max_lines=native_read_max_lines,
+            native_review_prompt_path=native_review_prompt_path,
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
@@ -586,6 +622,8 @@ class Config:
             paths.extend(legacy_paths)
         if self.ac_coverage_llm:
             paths.append(self.ac_coverage_prompt_path)
+        if self.reasoning_engine == "native":
+            paths.append(self.native_review_prompt_path)
         for path in paths:
             if not path.exists():
                 raise ConfigError(f"Required file not found: {path}")
@@ -912,6 +950,21 @@ def _build_from_sources(
             cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), str(DEFAULT_AC_COVERAGE_PROMPT_PATH)
         ),
         reasoning_engine=reasoning_engine,
+        native_model=cli_or_env("native_model", "NATIVE_MODEL", "openai-codex:gpt-5.6-luna"),
+        native_credential_path=cli_or_env("native_credential_path", "NATIVE_CREDENTIAL_PATH", "~/.codex/auth.json"),
+        native_max_turns=require_positive_uint(
+            "NATIVE_MAX_TURNS", cli_or_env("native_max_turns", "NATIVE_MAX_TURNS", "30")
+        ),
+        native_max_context_tokens=require_positive_uint(
+            "NATIVE_MAX_CONTEXT_TOKENS", cli_or_env("native_max_context_tokens", "NATIVE_MAX_CONTEXT_TOKENS", "150000")
+        ),
+        native_read_max_lines=require_positive_uint(
+            "NATIVE_READ_MAX_LINES", cli_or_env("native_read_max_lines", "NATIVE_READ_MAX_LINES", "2000")
+        ),
+        native_review_prompt_path=to_path(
+            cli_or_env("native_review_prompt_path", "NATIVE_REVIEW_PROMPT_PATH"),
+            str(DEFAULT_NATIVE_REVIEW_PROMPT_PATH),
+        ),
         fast_review=fast_review,
         fast_review_prompt_path=to_path(
             cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"),

@@ -35,7 +35,7 @@ def _crg_renderers(
     byte_cap_with_pointer: Callable[..., str] | None,
 ) -> tuple[Callable[..., str], Callable[..., str]]:
     if render_section is None or byte_cap_with_pointer is None:
-        from ...reasoning.single_pi import _byte_cap_with_pointer, render_section as _render_section
+        from ...reasoning.prefix import _byte_cap_with_pointer, render_section as _render_section
         render_section = _render_section
         byte_cap_with_pointer = _byte_cap_with_pointer
     return render_section, byte_cap_with_pointer

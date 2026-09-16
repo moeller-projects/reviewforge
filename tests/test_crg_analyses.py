@@ -211,7 +211,7 @@ def test_wave_two_off_preserves_phase_one_shape_and_instruction(tmp_path):
     from test_context_disclosure import _cfg
     from reviewforge.artifacts import manager
     from reviewforge.pipeline.stage import StageContext
-    from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+    from reviewforge.reasoning.prefix import _build_single_pi_prefix
 
     cfg = replace(_cfg(tmp_path), crg_enabled=True)
     artifacts = manager.create(cfg)

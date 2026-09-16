@@ -84,6 +84,12 @@ it unregisters and re-registers the task.
 
 Review output is written under `REVIEW_ARTIFACT_ROOT/pr-<PR_ID>/runs/<RUN_ID>/`. Read `run.log` there for the chronological, redacted container log for that run; `pr-<PR_ID>/latest.txt` identifies the latest run directory. Preserve `run-summary.json`, `review-result.json`, and `final-findings.json` when diagnosing or reposting. The container volume is already mounted by `run.ps1` and `run-open-prs.ps1`, so the same path is available to PowerShell operators. Do not edit the `prb:` deduplication marker in posted comment bodies; see [ADO integration](../reference/ado-integration.md).
 
+## Native engine credentials
+
+When `REASONING_ENGINE=native` and `NATIVE_MODEL` is `openai-codex:*`, `reviewforge.ops run` bind-mounts the Codex subscription credential file (`NATIVE_CREDENTIAL_PATH`, default `~/.codex/auth.json`) into the container at `/app/codex-auth.json` with read-write access and sets `NATIVE_CREDENTIAL_PATH` accordingly. Refresh tokens are single-use, so the credential source persists every rotation back to the host file (atomic temp-write + rename).
+
+Parallel runs race on the shared credential file: two containers refreshing the same token store can reuse a `refresh_token`. Run native+codex reviews serially (batch `--max-pull-requests 1`), or give each run its own copy (`cp auth.json auth-$PR_ID.json` and point `NATIVE_CREDENTIAL_PATH` at it). A backend-side token broker is the intended v2 answer. If auth fails, the error names `codex login` and `NATIVE_CREDENTIAL_PATH` rather than surfacing a raw 401.
+
 ## CRG graph cache
 
 With `CRG_ENABLED=1`, the Tree-sitter knowledge graph persists across runs at `CRG_CACHE_DIR/<repo_id>/crg-<tool_version>/crg.db`. Container runs mount the dedicated named volume `reviewforge-crg-cache` (override with `REVIEW_CRG_CACHE_VOLUME_NAME`) at `/workspace/crg-cache` and set `CRG_CACHE_DIR` accordingly; local runs default to `REVIEW_ARTIFACT_ROOT/crg-cache`. The first run for a repository performs a full build (seconds to tens of seconds depending on repo size); subsequent runs apply an incremental update, typically under two seconds — watch for `CRG graph incremental build` vs `CRG graph full build` in `run.log`. Upgrading `code-review-graph` changes the version-keyed directory and costs exactly one cold rebuild. To force a cold rebuild manually, delete the repo's `crg-<version>` directory from the volume (`attach-volume.ps1` mounts the artifact volume for inspection; use `--volume reviewforge-crg-cache:/workspace/crg-cache` for the cache volume).

@@ -91,7 +91,7 @@ def _build_common_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--reasoning-engine", dest="reasoning_engine",
-        help="Reasoning engine: multi_stage|single_pi (env: REASONING_ENGINE)",
+        help="Reasoning engine: multi_stage|single_pi|native (env: REASONING_ENGINE)",
     )
     return p
 

@@ -523,6 +523,28 @@ class ReviewConfidence(_Base):
     level: Confidence | None = None
     reasons: list[str] = Field(default_factory=list)
 
+class ReviewNarrative(_Base):
+    """Final structured output of the native engine's agent loop.
+
+    Findings are NOT part of this schema — they arrive via ``record_finding``
+    tool calls during the loop. Keeping the final output small removes the
+    giant-JSON failure mode the Pi engines needed repair calls for.
+    """
+
+    review_summary: ReviewSummary
+    verification_summary: VerificationSummary = Field(
+        default_factory=lambda: VerificationSummary(summary="Findings verified via read tools during the loop.")
+    )
+    pr_summary: PrSummary = Field(default_factory=PrSummary)
+    good_practices: list[GoodPractice] = Field(default_factory=list)
+
+    @field_validator("good_practices")
+    @classmethod
+    def _cap_good(cls, v: list[GoodPractice]) -> list[GoodPractice]:
+        if len(v) > 3:
+            raise ValueError("good_practices is capped at 3 entries")
+        return v
+
 
 class ReviewResult(_Base):
     """Top-level structured output from a ReasoningEngine.
@@ -620,6 +642,7 @@ __all__ = [
     "ReviewConfidence",
     "ReviewDoc",
     "ReviewMetadata",
+    "ReviewNarrative",
     "ReviewMetrics",
     "ReviewResult",
     "ReviewSummary",

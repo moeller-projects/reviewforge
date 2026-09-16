@@ -38,6 +38,7 @@ _ENV_ALLOWLIST_PREFIXES: tuple[str, ...] = (
     "ANCHOR_",
     "CRG_",
     "GRAPH_",
+    "NATIVE_",
 )
 _ENV_ALLOWLIST_KEYS: set[str] = {
     "SYSTEM_ACCESSTOKEN",
@@ -160,6 +161,31 @@ def _auth_json_mount_source() -> str | None:
         return None
     return _podman_artifact_mount_source(auth_json.resolve())
 
+_CODEX_AUTH_CONTAINER_PATH = "/app/codex-auth.json"
+
+
+def _codex_auth_mount_source(env_file: str) -> str | None:
+    """Resolve the Codex subscription credential mount for native-engine runs.
+
+    Only mounted when the native engine with an ``openai-codex:`` model is
+    selected; the mount is read-write because refresh tokens are single-use
+    and rotated tokens must persist back to the host file.
+    """
+    dotenv = parse_dotenv(env_file)
+    engine = os.environ.get("REASONING_ENGINE") or dotenv.get("REASONING_ENGINE") or ""
+    model = os.environ.get("NATIVE_MODEL") or dotenv.get("NATIVE_MODEL") or ""
+    if engine != "native" or (model and not model.startswith("openai-codex:")):
+        return None
+    raw = (
+        os.environ.get("NATIVE_CREDENTIAL_PATH")
+        or dotenv.get("NATIVE_CREDENTIAL_PATH")
+        or str(Path.home() / ".codex" / "auth.json")
+    )
+    auth_json = Path(raw).expanduser()
+    if not auth_json.is_file():
+        return None
+    return _podman_artifact_mount_source(auth_json.resolve())
+
 
 
 def _run_overrides(args: argparse.Namespace) -> dict[str, str | None]:
@@ -188,6 +214,10 @@ def _append_mounts(
     auth_json_mount = _auth_json_mount_source()
     if auth_json_mount:
         command.extend(["--volume", f"{auth_json_mount}:/home/review/.pi/agent/auth.json:ro"])
+    codex_auth_mount = _codex_auth_mount_source(env_file)
+    if codex_auth_mount:
+        command.extend(["--volume", f"{codex_auth_mount}:{_CODEX_AUTH_CONTAINER_PATH}:rw"])
+        command.extend(["-e", f"NATIVE_CREDENTIAL_PATH={_CODEX_AUTH_CONTAINER_PATH}"])
     artifact_path = _value(args.artifact_path, "ARTIFACT_PATH")
     if artifact_path:
         Path(artifact_path).mkdir(parents=True, exist_ok=True)

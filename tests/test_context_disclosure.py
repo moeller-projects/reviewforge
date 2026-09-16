@@ -12,7 +12,7 @@ from reviewforge.artifacts import manager
 from reviewforge.pipeline.stage import StageContext
 from reviewforge.pipeline.context_staging import stage_context_files
 from reviewforge.pipeline.crg.prompt import build_wave2_section
-from reviewforge.reasoning.single_pi import (
+from reviewforge.reasoning.prefix import (
     _byte_cap_with_pointer,
     render_section,
 )
@@ -113,7 +113,7 @@ def test_skip_path_has_no_context_preamble_or_pointers(tmp_path):
     state = SimpleNamespace(repo_dir=None, files=[], cleanup_paths=[])
     ctx = StageContext(cfg=cfg, artifacts=artifacts, state=state, pi=SimpleNamespace())
     assert stage_context_files(ctx) is None
-    from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+    from reviewforge.reasoning.prefix import _build_single_pi_prefix
     assert ".reviewforge-context" not in _build_single_pi_prefix(ctx)
 
 

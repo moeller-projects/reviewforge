@@ -180,6 +180,42 @@ class TestMountSources:
         monkeypatch.setenv("PI_AUTH_JSON_PATH", str(auth))
         assert ops._auth_json_mount_source() == str(auth.resolve())
 
+    def test_codex_auth_mount_for_native_codex(self, tmp_path, monkeypatch):
+        auth = tmp_path / "auth.json"
+        auth.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("REASONING_ENGINE", "native")
+        monkeypatch.delenv("NATIVE_MODEL", raising=False)
+        monkeypatch.setenv("NATIVE_CREDENTIAL_PATH", str(auth))
+        assert ops._codex_auth_mount_source(str(tmp_path / "absent.env")) == str(auth.resolve())
+
+    def test_codex_auth_no_mount_for_non_codex_model(self, tmp_path, monkeypatch):
+        auth = tmp_path / "auth.json"
+        auth.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("REASONING_ENGINE", "native")
+        monkeypatch.setenv("NATIVE_MODEL", "openai:gpt-5.5")
+        monkeypatch.setenv("NATIVE_CREDENTIAL_PATH", str(auth))
+        assert ops._codex_auth_mount_source(str(tmp_path / "absent.env")) is None
+
+    def test_codex_auth_no_mount_for_other_engine(self, tmp_path, monkeypatch):
+        auth = tmp_path / "auth.json"
+        auth.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("REASONING_ENGINE", "single_pi")
+        monkeypatch.delenv("NATIVE_MODEL", raising=False)
+        monkeypatch.setenv("NATIVE_CREDENTIAL_PATH", str(auth))
+        assert ops._codex_auth_mount_source(str(tmp_path / "absent.env")) is None
+
+    def test_codex_auth_mount_reads_env_file(self, tmp_path, monkeypatch):
+        auth = tmp_path / "auth.json"
+        auth.write_text("{}", encoding="utf-8")
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            f"REASONING_ENGINE=native\nNATIVE_CREDENTIAL_PATH={auth}\n", encoding="utf-8"
+        )
+        monkeypatch.delenv("REASONING_ENGINE", raising=False)
+        monkeypatch.delenv("NATIVE_CREDENTIAL_PATH", raising=False)
+        monkeypatch.delenv("NATIVE_MODEL", raising=False)
+        assert ops._codex_auth_mount_source(str(env_file)) == str(auth.resolve())
+
 
 class TestRunCommand:
     def test_artifact_path_is_mounted(self, tmp_path, monkeypatch):

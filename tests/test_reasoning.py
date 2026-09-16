@@ -1125,10 +1125,8 @@ class TestCrgPromptInjection:
 
     def test_absent_or_failed_analysis_is_byte_identical(self, tmp_path):
         """Absent/failed graph context must not alter the instruction at all."""
-        from reviewforge.reasoning.single_pi import (
-            _build_single_pi_instruction,
-            _build_single_pi_prefix,
-        )
+        from reviewforge.reasoning.single_pi import _build_single_pi_instruction
+        from reviewforge.reasoning.prefix import _build_single_pi_prefix
 
         ctx = _stage_context(_cfg(tmp_path), MagicMock())
         baseline_prefix = _build_single_pi_prefix(ctx)
@@ -1155,7 +1153,7 @@ class TestCrgPromptInjection:
         assert instruction.index("Deterministic graph context") < instruction.index("Unified diff:")
 
     def test_degraded_analysis_is_injected_with_truncation_note(self, tmp_path):
-        from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+        from reviewforge.reasoning.prefix import _build_single_pi_prefix
 
         ctx = _stage_context(_cfg(tmp_path), MagicMock())
         ctx.extras["crg_analysis"] = self._crg_document(status="degraded")
@@ -1247,7 +1245,7 @@ class TestCrgPromptInjection:
     def test_cfg_byte_cap_flows_into_prefix(self, tmp_path):
         from dataclasses import replace as _replace
 
-        from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+        from reviewforge.reasoning.prefix import _build_single_pi_prefix
 
         cfg = _replace(_cfg(tmp_path), crg_context_max_bytes=64)
         ctx = _stage_context(cfg, MagicMock())
@@ -1299,7 +1297,7 @@ class TestCrgPromptInjection:
 
     def test_non_positive_cap_disables_injection(self, tmp_path):
         from dataclasses import replace as _replace
-        from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+        from reviewforge.reasoning.prefix import _build_single_pi_prefix
         from reviewforge.pipeline.crg.prompt import build_crg_section
 
         doc = self._crg_document()

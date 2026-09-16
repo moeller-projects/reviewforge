@@ -9,6 +9,7 @@ from __future__ import annotations
 from .engine import ReasoningEngine, get_engine, register_engine
 from .multi_stage import MultiStageReasoningEngine  # registers itself
 from .single_pi import SinglePiReasoningEngine  # registers itself
+from .native import NativeReasoningEngine  # registers itself
 
 __all__ = [
     "ReasoningEngine",
@@ -16,4 +17,5 @@ __all__ = [
     "register_engine",
     "MultiStageReasoningEngine",
     "SinglePiReasoningEngine",
+    "NativeReasoningEngine",
 ]

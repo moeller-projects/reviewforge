@@ -12,6 +12,8 @@ Fields: `metadata`, `review_summary`, `verification_summary`, `pr_summary`, `fin
 
 `CoverageGap` is `{behavior, suggested_test, file}`. `EscalationHint` is `{files, reason, suggested_focus, danger}`.
 
+`ReviewNarrative` is the native engine's small final output: `review_summary`, optional `verification_summary`, `pr_summary`, and `good_practices` (capped at 3). Findings are deliberately absent — the native loop emits them via `record_finding` tool calls, so the final structured output stays small and a malformed finding never fails the whole run.
+
 `ReviewState.previousFeedback` contains deterministic entries with a normalized finding fingerprint, thread status, latest human reply (truncated), disposition (`dismissed`, `fixed`, or `unresolved`), and thread ID. `regression` may be true only when changed lines reintroduce a prior issue.
 
 ## Legacy and stage schemas

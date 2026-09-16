@@ -11,6 +11,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Native reasoning engine** (`REASONING_ENGINE=native`): an in-process pydantic-ai + pydantic-ai-harness agent loop with no Pi subprocess and no `OPENAI_API_KEY` — default auth via the OpenAI Codex/ChatGPT subscription OAuth (`openai-codex:` provider reading `~/.codex/auth.json`). Findings are emitted as validated `record_finding` tool calls (malformed findings retried in isolation, partial results survive a crash), and the final output is the small `ReviewNarrative` schema. New config: `NATIVE_MODEL`, `NATIVE_CREDENTIAL_PATH`, `NATIVE_MAX_TURNS`, `NATIVE_MAX_CONTEXT_TOKENS`, `NATIVE_READ_MAX_LINES`, `NATIVE_REVIEW_PROMPT_PATH`; new prompt `prompts/native-review-system.md`. See `docs/architecture/reasoning-engine.md`.
+- Reasoning engine prefix construction extracted to `reviewforge.reasoning.prefix` (shared by `single_pi` and `native`); `single_pi` output is byte-identical.
 - Reasoning engine abstraction with `single_pi` as the production default and `multi_stage` as an explicit legacy fallback.
 - Canonical `ReviewResult` response schema, projection layer, run metadata, and richer evidence/metrics artifacts.
 - `REASONING_ENGINE` configuration and `FAST_REVIEW` compatibility alias.

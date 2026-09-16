@@ -60,3 +60,4 @@ __all__ = ["ReasoningEngine", "get_engine", "register_engine"]
 # circular imports while the engine package is being initialized.
 from .multi_stage import MultiStageReasoningEngine  # noqa: E402,F401
 from .single_pi import SinglePiReasoningEngine  # noqa: E402,F401
+from .native import NativeReasoningEngine  # noqa: E402,F401

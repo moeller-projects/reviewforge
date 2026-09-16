@@ -1,25 +1,25 @@
 from types import SimpleNamespace
 
-from reviewforge.reasoning import single_pi
+from reviewforge.reasoning import prefix, single_pi
 
 
 def test_context_caps_preserve_pointers_and_utf8_boundaries():
-    assert single_pi._byte_cap_with_pointer("éé", 3, None) == "é"
-    pointed = single_pi._byte_cap_with_pointer("abcdef" * 20, 80, "context.json")
+    assert prefix._byte_cap_with_pointer("éé", 3, None) == "é"
+    pointed = prefix._byte_cap_with_pointer("abcdef" * 20, 80, "context.json")
     assert "full data: context.json" in pointed
-    assert single_pi._byte_cap_with_pointer("abcdef", 0, None) == ""
-    assert single_pi.render_section("Items", [1, 2, 3], 2, "items.json").endswith("items.json")
+    assert prefix._byte_cap_with_pointer("abcdef", 0, None) == ""
+    assert prefix.render_section("Items", [1, 2, 3], 2, "items.json").endswith("items.json")
 
 
 def test_review_state_and_context_sections_bound_large_inputs():
     context = {key: list(range(30)) for key in ("previousComments", "changedFiles")}
-    trimmed = single_pi._trim_review_state(context, object())
-    assert len(trimmed["previousComments"]) == single_pi._CONTEXT_MAX_REVIEW_ITEMS
-    pointers = single_pi._review_state_pointers(context, object())
+    trimmed = prefix._trim_review_state(context, object())
+    assert len(trimmed["previousComments"]) == prefix._CONTEXT_MAX_REVIEW_ITEMS
+    pointers = prefix._review_state_pointers(context, object())
     assert len(pointers) == 2
-    assert single_pi._feedback_section([], None) == []
-    assert single_pi._feedback_section(list(range(20)), object())
-    assert single_pi._staging_section({"a": {"description": "summary"}}, object())
+    assert prefix._feedback_section([], None) == []
+    assert prefix._feedback_section(list(range(20)), object())
+    assert prefix._staging_section({"a": {"description": "summary"}}, object())
 
 
 def test_runner_and_graph_helpers_handle_fallback_shapes():
@@ -46,8 +46,8 @@ def test_single_pi_context_and_escalation_edge_paths(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     ctx = _stage_context(cfg, SimpleNamespace())
     ctx.artifacts.commits.write_text("abc commit\n", encoding="utf-8")
-    assert single_pi._all_commit_lines(ctx) == ["abc commit"]
-    assert single_pi._trim_review_state([], None) == []
+    assert prefix._all_commit_lines(ctx) == ["abc commit"]
+    assert prefix._trim_review_state([], None) == []
     assert single_pi._uncertainty_key(SimpleNamespace(topic=" Topic ", reason=" Reason ")) == ("topic", "reason")
     assert single_pi._discarded_key(SimpleNamespace(category=" Cat ", reason=" Reason ")) == ("cat", "reason")
 
@@ -98,15 +98,15 @@ def test_single_pi_graph_state_and_worker_failure_paths(tmp_path, monkeypatch):
     ctx = _stage_context(cfg, MagicMock())
     ctx.extras["graph_context"] = {"architecture": {"status": "ok"}, "api_surface": {"status": "ok"}}
     ctx.cfg = cfg.with_overrides(graph_arch=True, graph_api_diff=True)
-    assert single_pi._prefix_graph_context(ctx, object())
+    assert prefix._prefix_graph_context(ctx, object())
     ctx.state.files = []
     ctx.files_text = "\n".join(f"file-{index}.py" for index in range(60))
-    assert "full data" in single_pi._changed_files_section(ctx, object())
-    monkeypatch.setattr(single_pi.git_ops, "run_git", lambda *args: "abc commit")
+    assert "full data" in prefix._changed_files_section(ctx, object())
+    monkeypatch.setattr(prefix.git_ops, "run_git", lambda *args: "abc commit")
     ctx.artifacts.commits.unlink(missing_ok=True)
     ctx.state.repo_dir = tmp_path
     ctx.state.range_spec = "HEAD"
-    assert single_pi._all_commit_lines(ctx) == ["abc commit"]
+    assert prefix._all_commit_lines(ctx) == ["abc commit"]
 
     ctx.pi.run_json.side_effect = lambda _p, _s, out, _stage: builder.write_json(out, {"findings": "bad"})
     with pytest.raises(SchemaValidationError):

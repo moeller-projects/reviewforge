@@ -88,6 +88,38 @@ class TestFromEnvBranches:
         assert cfg.reply_comments is False
         assert cfg.comment_reply_prompt_path == prompt
 
+    def test_native_overrides_are_respected(self, base_env, tmp_path):
+        prompt = tmp_path / "native.md"
+        prompt.write_text("native prompt", encoding="utf-8")
+        base_env.setenv("NATIVE_MODEL", "openai:gpt-5.5")
+        base_env.setenv("NATIVE_CREDENTIAL_PATH", str(tmp_path / "auth.json"))
+        base_env.setenv("NATIVE_MAX_TURNS", "12")
+        base_env.setenv("NATIVE_MAX_CONTEXT_TOKENS", "90000")
+        base_env.setenv("NATIVE_READ_MAX_LINES", "123")
+        base_env.setenv("NATIVE_REVIEW_PROMPT_PATH", str(prompt))
+
+        cfg = Config.from_env()
+
+        assert cfg.native_model == "openai:gpt-5.5"
+        assert cfg.native_credential_path == str(tmp_path / "auth.json")
+        assert cfg.native_max_turns == 12
+        assert cfg.native_max_context_tokens == 90000
+        assert cfg.native_read_max_lines == 123
+        assert cfg.native_review_prompt_path == prompt
+
+    def test_native_defaults(self, base_env):
+        cfg = Config.from_env()
+        assert cfg.native_model == "openai-codex:gpt-5.6-luna"
+        assert cfg.native_credential_path == "~/.codex/auth.json"
+        assert cfg.native_max_turns == 30
+        assert cfg.native_max_context_tokens == 150000
+        assert cfg.native_read_max_lines == 2000
+
+    def test_invalid_native_uint_rejected(self, base_env):
+        base_env.setenv("NATIVE_MAX_TURNS", "0")
+        with pytest.raises(ConfigError, match="NATIVE_MAX_TURNS"):
+            Config.from_env()
+
 
     def test_reply_prompt_validation_is_pipeline_specific(self, tmp_path):
         missing = tmp_path / "missing-reply.md"

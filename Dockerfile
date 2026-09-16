@@ -108,6 +108,7 @@ RUN python3 -c "import reviewforge, code_review_graph" \
  && pi --version \
  && git --version && rg --version \
  && test -f /app/prompts/fast-review-system.md \
+ && test -f /app/prompts/native-review-system.md \
  && test -d /home/review/.pi/agent
 
 ENTRYPOINT ["/app/.venv/bin/python", "-m", "reviewforge"]
