@@ -115,10 +115,14 @@ def _stderr_tail(stderr_bytes: bytes, *, max_lines: int = 3) -> str:
 
 
 def _default_session_id(cfg: Config) -> str:
-    """Build a session id that re-runs on the same PR can resume."""
+    """Build a session id scoped to one review run.
+
+    Session state is useful between stages of one run, but reusing a PR-only
+    id leaks an older diff and its model reasoning into later runs.
+    """
     if cfg.review_run_id:
         return f"pr-{cfg.pr_id}-review-{cfg.review_run_id}"
-    return f"pr-{cfg.pr_id}-review"
+    return f"pr-{cfg.pr_id}-review-unscoped"
 
 
 def _prompt_candidate_matches(candidate: Path | str | None, resolved: Path) -> bool:
@@ -170,6 +174,7 @@ class PiCliRunner:
         # temp dir keeps augmented files out of the read-only prompts dir
         # shipped inside the container.
         self._prompt_cache: dict[Path, Path] = {}
+        self._session_clear_pending = cfg.pi_session_clear
         self._prompt_dir = Path(tempfile.mkdtemp(prefix="pr-review-prompts-"))
 
     @property
@@ -267,12 +272,14 @@ class PiCliRunner:
         return _is_review_prompt(prompt_path, self.cfg)
 
     def _build_cmd(self, prompt_path: Path, instruction: str) -> list[str]:
-        """Compose the Pi CLI command, including session flags when enabled."""
+        """Compose the Pi CLI command, clearing a reusable session once."""
+        clear_session = self._session_clear_pending
+        self._session_clear_pending = False
         cmd = [
             "pi",
             *(["--no-session"] if not self.cfg.pi_session_enabled else []),
             *(["--session-id", self.session_id] if self.cfg.pi_session_enabled else []),
-            *(["--clear-session"] if self.cfg.pi_session_clear else []),
+            *(["--clear-session"] if clear_session else []),
             "--no-context-files",
             "--no-extensions",
             "--no-skills",

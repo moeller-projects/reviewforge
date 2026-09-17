@@ -46,9 +46,9 @@ class RepoState:
     target_commit: str
     diff_text: str
     files: list[str]
-    range_spec: str
     cleanup_paths: list[Path]
     range_fallback_reason: str = ""
+    range_mode: str = "full"
 
 
 
@@ -266,12 +266,12 @@ def _follow_up_range(
     target_commit: str,
     source_commit: str,
     reviewed_commit: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     merges = _count_merge_commits(repo_dir, f"{reviewed_commit}..{source_commit}")
     if merges is None:
         reason = "follow-up merge check failed"
         log(f"{reason}; using full range")
-        return f"{base}..{source_commit}", reason
+        return f"{base}..{source_commit}", reason, "full-fallback"
     if merges > 0:
         if _is_ancestor(repo_dir, target_commit, source_commit):
             log(
@@ -279,15 +279,15 @@ def _follow_up_range(
                 f"target tip {target_commit} is in source history; "
                 f"using target range"
             )
-            return f"{target_commit}..{source_commit}", ""
+            return f"{target_commit}..{source_commit}", "", "follow-up-target"
         reason = (
             f"follow-up range contains {merges} merge commit(s) and "
             "does not contain the current target tip"
         )
         log(f"{reason}; using full range")
-        return f"{base}..{source_commit}", reason
+        return f"{base}..{source_commit}", reason, "full-fallback"
     log(f"follow-up range -> {reviewed_commit}..{source_commit}")
-    return f"{reviewed_commit}..{source_commit}", ""
+    return f"{reviewed_commit}..{source_commit}", "", "follow-up"
 
 
 def _review_range(
@@ -296,15 +296,19 @@ def _review_range(
     target_commit: str,
     source_commit: str,
     reviewed_commit: str | None,
-) -> tuple[str, str]:
-    """Return the safest review range and any fallback explanation."""
+) -> tuple[str, str, str]:
+    """Return the safest review range, fallback explanation, and mode."""
     if reviewed_commit == source_commit:
         log("previous review commit matches the current source commit; using full range")
     elif reviewed_commit and _is_ancestor(repo_dir, reviewed_commit, source_commit):
         return _follow_up_range(repo_dir, base, target_commit, source_commit, reviewed_commit)
     elif reviewed_commit:
-        log("previous review commit is not an ancestor; using full range")
-    return f"{base}..{source_commit}", ""
+        reason = "previous review commit is not an ancestor of the current source"
+        log(f"{reason}; using full range")
+        return f"{base}..{source_commit}", reason, "full-rebase"
+    return f"{base}..{source_commit}", "", "full"
+
+
 
 
 
@@ -327,8 +331,7 @@ def prepare_repo(
         source_commit = run_git(repo_dir, "rev-parse", "--verify", f"{source_ref}^{{commit}}").strip()
         log(f"target {target_branch} -> {target_commit}")
         log(f"source {source_branch} -> {source_commit}")
-        log(f"merge-base -> {base}")
-        range_spec, fallback_reason = _review_range(
+        range_spec, fallback_reason, range_mode = _review_range(
             repo_dir, base, target_commit, source_commit, reviewed_commit
         )
         run_logged_retry("git checkout source", ["git", "checkout", source_commit], repo_dir)
@@ -342,8 +345,17 @@ def prepare_repo(
             shutil.rmtree(path, ignore_errors=True)
         raise
     return RepoState(
-        repo_dir, source_branch, target_branch, base, source_commit, target_commit,
-        diff, files, range_spec, cleanup_paths, range_fallback_reason=fallback_reason,
+        repo_dir=repo_dir,
+        source_branch=source_branch,
+        target_branch=target_branch,
+        base_commit=base,
+        source_commit=source_commit,
+        target_commit=target_commit,
+        diff_text=diff,
+        files=files,
+        cleanup_paths=cleanup_paths,
+        range_fallback_reason=fallback_reason,
+        range_mode=range_mode,
     )
 
 

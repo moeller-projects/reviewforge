@@ -28,7 +28,10 @@ def _filter_anchor_finding(
         return finding, None
     if int(finding["line"]) in mapper.line_set(str(finding["file"])):
         return finding, None
-    if ctx.cfg.anchor_policy == "drop":
+    # single_pi is instructed to cite changed lines only; retaining an
+    # off-diff anchor would make the posting layer unsafe even when the
+    # legacy configurable policy is set to downgrade.
+    if ctx.cfg.reasoning_engine == "single_pi" or ctx.cfg.anchor_policy == "drop":
         return None, "drop"
     return {**finding, "anchorDowngraded": True}, "downgrade"
 

@@ -161,6 +161,10 @@ def run_full(cfg: Config) -> RunOutcome:
     """Run the full review pipeline (review + post)."""
     cfg.validate_files(include_reply_prompt=cfg.reply_comments)
     artifacts = create_artifacts(cfg)
+    # The artifact run id is the isolation boundary for Pi conversation state.
+    # Bind it before constructing the runner so independent runs never share
+    # the default PR-only session.
+    cfg = dataclass_replace(cfg, review_run_id=artifacts.run_id)
     configure_runlog(artifacts.run_log)
     log_info("run started")
     pi = create_model_runner(cfg)
@@ -193,6 +197,7 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
     """
     cfg.validate_files()
     artifacts = create_artifacts(cfg)
+    cfg = dataclass_replace(cfg, review_run_id=artifacts.run_id)
     configure_runlog(artifacts.run_log)
     log_info("review-only run started")
     pi = create_model_runner(cfg)

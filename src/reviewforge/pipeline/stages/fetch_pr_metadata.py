@@ -81,6 +81,9 @@ class FetchPrMetadataStage(Stage):
             "is_draft": bool(metadata.get("isDraft")),
             "work_items_loaded": len(ctx.extras.get("wi_context", [])),
             "threads_loaded": len(ctx.extras.get("thread_context", [])),
+            "review_mode": getattr(ctx.extras.get("review_state"), "mode", None).value
+            if getattr(ctx.extras.get("review_state"), "mode", None) is not None
+            else None,
         }
 
 

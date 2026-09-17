@@ -55,10 +55,18 @@ class RunSummary:
     exit_code: int = 0
     artifact_dir: str = ""
     review_language: str = ""
-    # Runtime metrics are distinct from model-authored review metrics.
     pi_session_id: str | None = None
     pi_session_enabled: bool = True
     pi_session_cleared: bool = False
+    review_mode: str | None = None
+    range_spec: str | None = None
+    range_mode: str | None = None
+    range_fallback_reason: str = ""
+    scope_status: str | None = None
+    scope_source: str | None = None
+    local_file_count: int = 0
+    scoped_file_count: int = 0
+    files_out_of_scope: int = 0
     invocation_count: int = 0
     repair_invocation_count: int = 0
     reasoning_duration_ms: int = 0
@@ -90,6 +98,15 @@ class RunSummary:
             "pi_session_id": self.pi_session_id,
             "pi_session_enabled": self.pi_session_enabled,
             "pi_session_cleared": self.pi_session_cleared,
+            "review_mode": self.review_mode,
+            "range_spec": self.range_spec,
+            "range_mode": self.range_mode,
+            "range_fallback_reason": self.range_fallback_reason,
+            "scope_status": self.scope_status,
+            "scope_source": self.scope_source,
+            "local_file_count": self.local_file_count,
+            "scoped_file_count": self.scoped_file_count,
+            "files_out_of_scope": self.files_out_of_scope,
             "invocation_count": self.invocation_count,
             "repair_invocation_count": self.repair_invocation_count,
             "reasoning_duration_ms": self.reasoning_duration_ms,
@@ -218,6 +235,19 @@ def finalize_run_summary(
         summary.skipped_reason = skipped_reason
     _set_duration(summary)
     stage_counts = _stage_finding_counts(summary)
+    for record in summary.stages:
+        details = record.details if isinstance(record.details, dict) else {}
+        if record.name == "fetch_pr_metadata":
+            summary.review_mode = details.get("review_mode") or summary.review_mode
+        elif record.name == "prepare_repository":
+            summary.range_spec = details.get("range_spec") or summary.range_spec
+            summary.range_mode = details.get("range_mode") or summary.range_mode
+            summary.range_fallback_reason = str(details.get("range_fallback_reason") or "")
+            summary.scope_status = details.get("scope_status") or summary.scope_status
+            summary.scope_source = details.get("scope_source") or summary.scope_source
+            summary.local_file_count = int(details.get("local_files", 0) or 0)
+            summary.scoped_file_count = int(details.get("files", 0) or 0)
+            summary.files_out_of_scope = int(details.get("files_out_of_scope", 0) or 0)
     summary.finding_counts = {
         key: _safe_count_findings(path) or stage_counts.get(key, 0)
         for key, path in {

@@ -37,9 +37,9 @@ STALE_MARKER_PREFIX = f"{MARKER_PREFIX}-stale"
 #: * Bare form: ``prb:<key>`` (the canonical line, matches AGENTS.md §4.5).
 #: * HTML-comment form: ``<!-- prb:<key> -->`` (what the default comment
 #:   formatter actually emits). The leading ``<!-- `` and trailing `` -->``
-#:   are tolerated so the dedupe scanner recognizes its own comments.
-_MARKER_RE = re.compile(
-    rf"(?m)^(?:\s*<!--\s*)?{re.escape(MARKER_PREFIX)}:([a-zA-Z0-9]{{6,32}})(?:\s*-->)?\s*$"
+_MARKER_RE = re.compile(r"(?m)^\s*(?:<!--\s*)?prb:([a-zA-Z0-9]{6,32})(?:\s*-->)?\s*$")
+_FEEDBACK_MARKER_RE = re.compile(
+    r"(?m)^\s*<!--\s*prb-feedback:([a-zA-Z0-9]{6,32})\s*-->\s*$"
 )
 
 #: Regex matching a stale-reconciliation marker inside a comment body. This is
@@ -106,18 +106,14 @@ def dedupe_key_v1(finding: dict[str, Any]) -> str:
 
 
 def dedupe_key(finding: dict[str, Any]) -> str:
-    """Compute the v2 marker key from normalized location and title.
+    """Compute the stable semantic marker key.
 
-    Severity and message are deliberately excluded because they are
-    model-generated or recalibrated prose that can change on rerun. Stale
-    line anchors remain the responsibility of stale reconciliation.
+    Line anchors move when a patch is rebased. File plus normalized title is
+    the durable identity; anchor validation and stale reconciliation handle
+    the current line separately.
     """
     raw = "|".join(
-        [
-            _normalize_file(finding.get("file")),
-            str(finding.get("line") or ""),
-            _normalize_title(finding.get("title")),
-        ]
+        [_normalize_file(finding.get("file")), _normalize_title(finding.get("title"))]
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -153,18 +149,17 @@ def existing_bot_markers(threads: Iterable[dict[str, Any]]) -> set[str]:
             text = c.get("content") or ""
             for match in _MARKER_RE.finditer(text):
                 markers.add(match.group(1))
+            for match in _FEEDBACK_MARKER_RE.finditer(text):
+                markers.add(match.group(1))
     return markers
 
 
 def should_post(finding: dict[str, Any], existing_markers: set[str]) -> bool:
-    """Return ``True`` only when neither v1 nor v2 key has been posted.
-
-    New comments use :func:`dedupe_key` (v2); checking v1 preserves
-    idempotency for comments written before the migration.
-    """
+    """Return ``True`` only when no compatible historical marker exists."""
     return not {
         dedupe_key_v1(finding),
         dedupe_key(finding),
+        finding_fingerprint(finding),
     }.intersection(existing_markers)
 
 
