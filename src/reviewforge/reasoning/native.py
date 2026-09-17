@@ -130,6 +130,22 @@ def resolve_native_model(cfg: Any) -> Any:
     return model
 
 
+def resolve_thinking(raw: str | None) -> Any | None:
+    """Map a normalized ``native_thinking`` config value to a ``ThinkingLevel``.
+
+    Config normalizes to ``"true"``/``"false"`` or a literal level; this turns
+    that back into the bool/literal pydantic-ai accepts. ``None`` means "leave
+    the model at its provider default".
+    """
+    if raw is None:
+        return None
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return raw
+
+
 def _build_user_prompt(ctx: StageContext, diff_text: str) -> str:
     intro = (_NATIVE_INTRO[0].format(pr_id=ctx.cfg.pr_id), _NATIVE_INTRO[1])
     parts = [_build_single_pi_prefix(ctx, intro=intro)]
@@ -171,10 +187,12 @@ class NativeReasoningEngine(ReasoningEngine):
         from pydantic_ai_harness.filesystem import FileSystem
 
         repo_dir = getattr(ctx.state, "repo_dir", None) or cfg.clone_root
+        thinking = resolve_thinking(cfg.native_thinking)
         return Agent(
             model=self._model_override or resolve_native_model(cfg),
             output_type=ReviewNarrative,
             instructions=_compose(cfg.native_review_prompt_path, cfg, include_standards=True),
+            model_settings={"thinking": thinking} if thinking is not None else None,
             capabilities=[
                 FileSystem(
                     root_dir=repo_dir,
@@ -280,4 +298,4 @@ class NativeReasoningEngine(ReasoningEngine):
 
 register_engine(NativeReasoningEngine().name, NativeReasoningEngine)
 
-__all__ = ["CodexFileCredentialSource", "NativeReasoningEngine", "resolve_native_model"]
+__all__ = ["CodexFileCredentialSource", "NativeReasoningEngine", "resolve_native_model", "resolve_thinking"]

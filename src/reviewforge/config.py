@@ -55,6 +55,27 @@ def _resolve_reasoning_engine(raw: str | None, fast_review: bool) -> str:
     """Resolve the engine consistently for every configuration constructor."""
     return raw or ("single_pi" if fast_review else DEFAULT_REASONING_ENGINE)
 
+
+def _coerce_thinking(raw: str | None) -> str | None:
+    """Normalize ``NATIVE_THINKING`` to a stored form, rejecting bad values.
+
+    Returns ``None`` for unset, ``"true"``/``"false"`` for boolean forms, or
+    the literal level (``minimal``/``low``/``medium``/``high``/``xhigh``).
+    """
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    if value in {"true", "1", "yes", "on"}:
+        return "true"
+    if value in {"false", "0", "no", "off"}:
+        return "false"
+    if value in {"minimal", "low", "medium", "high", "xhigh"}:
+        return value
+    raise ConfigError(
+        "NATIVE_THINKING must be true, false, or one of "
+        f"minimal, low, medium, high, xhigh — got {raw!r}"
+    )
+
 def _coerce_bool(value: Any, default: bool, *, env_value: str | None = None) -> bool:
     """Coerce a CLI/env value to a bool with a sensible default.
 
@@ -310,6 +331,11 @@ class Config:
     native_read_max_lines: int = field(default=2000, compare=False)
     #: System prompt for the native in-process reasoning engine.
     native_review_prompt_path: Path = field(default=DEFAULT_NATIVE_REVIEW_PROMPT_PATH, compare=False)
+    #: Thinking/reasoning effort for the native model. ``None`` (default)
+    #: leaves the model at its provider default. Accepted: ``true``/``false``
+    #: or ``minimal``/``low``/``medium``/``high``/``xhigh``. Forwarded to the
+    #: model as pydantic-ai's ``ModelSettings.thinking``.
+    native_thinking: str | None = field(default=None, compare=False)
     # --- Escalation review -------------------------------------------------
     #: When ``True``, run a focused second review pass over the files named by
     #: ``escalation_hints``. Default off; hints are still recorded as artifacts.
@@ -434,6 +460,7 @@ class Config:
         native_review_prompt_path = _resolve_prompt_path(
             "NATIVE_REVIEW_PROMPT_PATH", str(DEFAULT_NATIVE_REVIEW_PROMPT_PATH)
         )
+        native_thinking = _coerce_thinking(os.getenv("NATIVE_THINKING"))
         fast_review_prompt_path = _resolve_prompt_path(
             "FAST_REVIEW_PROMPT_PATH", str(DEFAULT_FAST_REVIEW_PROMPT_PATH)
         )
@@ -520,6 +547,7 @@ class Config:
             native_max_context_tokens=native_max_context_tokens,
             native_read_max_lines=native_read_max_lines,
             native_review_prompt_path=native_review_prompt_path,
+            native_thinking=native_thinking,
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
@@ -965,6 +993,7 @@ def _build_from_sources(
             cli_or_env("native_review_prompt_path", "NATIVE_REVIEW_PROMPT_PATH"),
             str(DEFAULT_NATIVE_REVIEW_PROMPT_PATH),
         ),
+        native_thinking=_coerce_thinking(cli_or_env("native_thinking", "NATIVE_THINKING")),
         fast_review=fast_review,
         fast_review_prompt_path=to_path(
             cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"),

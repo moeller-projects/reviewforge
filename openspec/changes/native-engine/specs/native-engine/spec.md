@@ -82,3 +82,17 @@ The Codex credential source MUST persist refreshed tokens back to the configured
 
 - **WHEN** the credential file is absent or malformed
 - **THEN** the source raises a `UserError` directing the operator to run `codex login` or check `NATIVE_CREDENTIAL_PATH`
+
+### Requirement: Configurable thinking effort
+
+The native engine MUST accept a `NATIVE_THINKING` setting and forward it to the model as pydantic-ai `ModelSettings.thinking`. An unset value MUST leave the model at its provider default, and an invalid value MUST be rejected at configuration load.
+
+#### Scenario: Thinking effort forwarded
+
+- **WHEN** `NATIVE_THINKING` is set to a valid value (`true`/`false` or `minimal`/`low`/`medium`/`high`/`xhigh`)
+- **THEN** the constructed agent's model settings carry that thinking level, and the model's default is used when the variable is unset
+
+#### Scenario: Invalid thinking value rejected
+
+- **WHEN** `NATIVE_THINKING` is set to an unsupported string
+- **THEN** configuration loading fails with a `ConfigError` naming the accepted values

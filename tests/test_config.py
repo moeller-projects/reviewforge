@@ -41,6 +41,16 @@ class TestFromEnvBranches:
         base_env.setenv("PI_THINKING", "high")
         assert Config.from_env().pi_thinking == "high"
 
+    def test_native_thinking_from_env(self, base_env):
+        assert Config.from_env().native_thinking is None
+        base_env.setenv("NATIVE_THINKING", "high")
+        assert Config.from_env().native_thinking == "high"
+
+    def test_invalid_native_thinking_raises(self, base_env):
+        base_env.setenv("NATIVE_THINKING", "ultra")
+        with pytest.raises(ConfigError, match="NATIVE_THINKING"):
+            Config.from_env()
+
     def test_invalid_numeric_overrides_fall_back(self, base_env):
         base_env.setenv("MAX_FINDINGS", "not-a-number")
         base_env.setenv("CONTEXT_FILE_MAX_LINES", "bogus")

@@ -19,7 +19,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart  # noqa: 
 from pydantic_ai.models.function import AgentInfo, FunctionModel  # noqa: E402
 
 from reviewforge.artifacts import builder, manager  # noqa: E402
-from reviewforge.config import Config  # noqa: E402
+from reviewforge.config import Config, _coerce_thinking  # noqa: E402
 from reviewforge.exceptions import ReasoningEngineError  # noqa: E402
 from reviewforge.pipeline.stage import StageContext  # noqa: E402
 from reviewforge.reasoning.engine import get_engine  # noqa: E402
@@ -29,6 +29,7 @@ from reviewforge.reasoning.native import (
     CodexFileCredentialSource,
     NativeReasoningEngine,
     resolve_native_model,
+    resolve_thinking,
 )
 from reviewforge.reasoning.native_tools import ReviewCollectorToolset  # noqa: E402
 from reviewforge.reasoning.single_pi import SinglePiReasoningEngine  # noqa: E402
@@ -458,3 +459,35 @@ class TestPrefixParity:
         assert "\nChanged files:\na.py\n" in prompt
         assert "Unified diff:" in prompt
         assert prompt.endswith("defined in the system prompt.\n")
+
+
+class TestThinking:
+    def test_resolve_thinking_mapping(self):
+        assert resolve_thinking(None) is None
+        assert resolve_thinking("true") is True
+        assert resolve_thinking("false") is False
+        assert resolve_thinking("high") == "high"
+        assert resolve_thinking("xhigh") == "xhigh"
+
+    def test_coerce_thinking_normalization(self):
+        from reviewforge.config import ConfigError
+
+        assert _coerce_thinking(None) is None
+        assert _coerce_thinking("") is None
+        assert _coerce_thinking("  HIGH  ") == "high"
+        assert _coerce_thinking("1") == "true"
+        assert _coerce_thinking("off") == "false"
+        with pytest.raises(ConfigError):
+            _coerce_thinking("ultra")
+
+    def test_thinking_setting_forwarded(self, tmp_path):
+        cfg = _cfg(tmp_path).with_overrides(native_thinking="high")
+        engine = NativeReasoningEngine(cfg)
+        agent = engine._build_agent(cfg, _stage_context(cfg, tmp_path / "repo"), ReviewCollectorToolset(None, ""))
+        assert agent.model_settings == {"thinking": "high"}
+
+    def test_thinking_unset_leaves_model_default(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        engine = NativeReasoningEngine(cfg)
+        agent = engine._build_agent(cfg, _stage_context(cfg, tmp_path / "repo"), ReviewCollectorToolset(None, ""))
+        assert agent.model_settings is None
