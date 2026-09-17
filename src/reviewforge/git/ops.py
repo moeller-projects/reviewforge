@@ -46,6 +46,7 @@ class RepoState:
     target_commit: str
     diff_text: str
     files: list[str]
+    range_spec: str
     cleanup_paths: list[Path]
     range_fallback_reason: str = ""
     range_mode: str = "full"
@@ -353,6 +354,7 @@ def prepare_repo(
         target_commit=target_commit,
         diff_text=diff,
         files=files,
+        range_spec=range_spec,
         cleanup_paths=cleanup_paths,
         range_fallback_reason=fallback_reason,
         range_mode=range_mode,
