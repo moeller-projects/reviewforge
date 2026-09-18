@@ -1,9 +1,0 @@
- - [x] Implement complete context staging and redaction under the disposable checkout.
- - [x] Wire preparation and CRG refresh staging without changing artifact names.
- - [x] Set explicit Pi cwd while preserving the ModelRunner protocol and session reuse.
- - [x] Refactor all single-pi context sections to progressive summaries and pointers.
- - [x] Add context-file prompt contracts for single_pi and multi_stage.
- - [x] Add best-effort context read auditing and run-summary details.
- - [x] Add staging, rendering, cwd/session, audit, and chunking regression tests.
- - [x] Update architecture, prompt reference, operations, troubleshooting, and changelog docs.
- - [x] Run focused tests, full pytest, and OpenSpec validation.
