@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore ReviewForge.slnx
+
+      # -warnaserror: any compiler/analyzer warning fails the build.
+      - name: Build
+        run: dotnet build ReviewForge.slnx --no-restore --configuration Release -warnaserror
+
+      # CollectCoverage=true enforces the per-project 97% line-coverage gate
+      # (coverlet.msbuild Threshold in each test csproj). A failed test or a
+      # coverage miss exits non-zero and fails the job.
+      - name: Test
+        run: >-
+          dotnet test ReviewForge.slnx
+          --no-build --configuration Release
+          -p:CollectCoverage=true
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory TestResults
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Test Results (${{ matrix.os }})
+          path: TestResults/*.trx
+          reporter: dotnet-trx
+          fail-on-error: "true"
+
+  # One status check regardless of matrix leg: use "CI Result" for branch protection.
+  ci-result:
+    needs: build-and-test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate matrix result
+        run: |
+          result="${{ needs.build-and-test.result }}"
+          echo "Matrix result: $result"
+          if [ "$result" != "success" ]; then
+            exit 1
+          fi
