@@ -1,0 +1,31 @@
+using ReviewForge.Core.Reasoning;
+
+namespace ReviewForge.Core.Pipeline.Stages;
+
+/// <summary>Stage 6: compose the active rulebook, build the prompt, and run the agent loop.</summary>
+public sealed class ExecuteReasoningStage(NativeReviewAgent agent, string? findingsJsonlPath = null) : IReviewStage
+{
+    public string Name => "execute-reasoning";
+
+    public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        using var findingsJsonl = findingsJsonlPath is null
+            ? null
+            : new StreamWriter(findingsJsonlPath, append: true) {AutoFlush = true};
+        ctx.Collector = new ReviewCollector(ctx.PriorRun?.FindingKeys, findingsJsonl);
+        var rootFiles = Directory.Exists(ctx.RepoDir) ? Directory.GetFiles(ctx.RepoDir, "*", SearchOption.TopDirectoryOnly) : [];
+        var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
+        var prompt = PromptBuilder.Build(new PromptInput(
+            Pr: ctx.PullRequest!, Kind: ctx.Kind, WorkItems: ctx.WorkItems, ChangedFiles: ctx.ChangedFiles,
+            PendingReplies: ctx.PendingReplies, DiffText: ctx.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names));
+        ctx.Result = await agent.RunAsync(
+            prompt,
+            ctx.Collector,
+            ctx.ContextStore,
+            ctx.RepoDir!,
+            ruleBook,
+            ctx.ChangedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            ctx.Diff,
+            ct);
+    }
+}

@@ -1,0 +1,69 @@
+{
+  "id": "general",
+  "title": "General clean-code and complexity rules",
+  "version": 1,
+  "activation": {
+    "always": true,
+    "extensions": [],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "general.other",
+      "title": "Other verified issue",
+      "description": "Catch-all for a real, verified issue that matches no other active rule. Always available. Use sparingly — prefer a specific rule when one fits.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "general.complexity.god-class",
+      "title": "God class / oversized type",
+      "description": "A type exceeding ~500 lines or ~15 methods, or carrying multiple unrelated responsibilities. Recommend a concrete split by responsibility.",
+      "category": "style",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "general.complexity.long-method",
+      "title": "Hard-to-understand method",
+      "description": "A method exceeding ~60 lines, nesting deeper than 3 levels, or doing several distinct things. Recommend concrete extraction points.",
+      "category": "style",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "general.clean-code.naming",
+      "title": "Misleading or cryptic naming",
+      "description": "Names that lie about behavior, encode type in the name, or are meaningless abbreviations at API boundaries.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "general.clean-code.dead-code",
+      "title": "Dead or commented-out code",
+      "description": "Unreachable branches, unused private members, or commented-out code blocks. Delete, don't comment.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "general.clean-code.duplication",
+      "title": "Copy-paste duplication",
+      "description": "Substantially identical blocks (>= ~6 lines) repeated within the change. Recommend the shared abstraction.",
+      "category": "style",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "general.clean-code.magic-values",
+      "title": "Unexplained magic values",
+      "description": "Numeric or string literals with business meaning and no name or comment, especially in conditions.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    }
+  ]
+}

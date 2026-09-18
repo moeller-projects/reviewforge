@@ -1,0 +1,42 @@
+name: reviewforge
+
+services:
+  reviewforge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: reviewforge:latest
+    container_name: reviewforge
+    restart: unless-stopped
+    ports:
+      # host 5080 matches the CLI default (--service-url http://localhost:5080)
+      - "5080:8080"
+    environment:
+      # Secrets come from the host environment only — never commit values here.
+      REVIEWFORGE_ADO_PAT: ${REVIEWFORGE_ADO_PAT:?set REVIEWFORGE_ADO_PAT (Azure DevOps PAT)}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-} # only needed with Reasoning__Provider=openai
+
+      # Configuration overrides (double underscore maps to ':' in .NET configuration).
+      Ado__OrgUrl: ${ADO_ORG_URL:-https://dev.azure.com/aveato}
+      Ado__Project: ${ADO_PROJECT:-Laekker.Kitchen}
+      Reasoning__Provider: ${REASONING_PROVIDER:-openai-codex}
+      Reasoning__Model: ${REASONING_MODEL:-openai-codex:gpt-5.6-luna}
+    volumes:
+      # Codex OAuth credentials. Mount the directory, not the file, and keep it
+      # read-write: token rotation rewrites auth.json atomically (temp + move).
+      # The directory must be writable by the container's app user (uid 1654):
+      #   sudo chown -R 1654:1654 ~/.codex
+      - ${CODEX_AUTH_DIR:-~/.codex}:/home/app/.codex
+      # Repo working dir (one checkout per repository), findings.jsonl, reviewforge.db.
+      - reviewforge-data:/var/reviewforge
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # The Dockerfile HEALTHCHECK hits /health; no compose-level check needed.
+
+volumes:
+  reviewforge-data:

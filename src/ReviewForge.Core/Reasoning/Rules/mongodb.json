@@ -1,0 +1,50 @@
+{
+  "id": "mongodb",
+  "title": "MongoDB script rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [],
+    "pathPatterns": [
+      "*mongo*.js",
+      "*mongo*.json",
+      "mongodb/**",
+      "scripts/mongo/**"
+    ],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "mongo.unbounded-find",
+      "title": "Unbounded find",
+      "description": "find() over large collections without limit() or batch control in a script — memory and runtime blowup.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "mongo.where-operator",
+      "title": "$where with JavaScript",
+      "description": "$where executing server-side JavaScript — slow (no index use) and dangerous with interpolated input. Use native operators.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "mongo.regex-unanchored",
+      "title": "Unanchored regex query",
+      "description": "$regex without ^ anchor on an indexed field — full collection scan.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "mongo.no-projection",
+      "title": "Full-document fetch",
+      "description": "Queries returning whole documents when a few fields are needed — network and memory waste in scripts.",
+      "category": "performance",
+      "defaultSeverity": "low",
+      "enabled": true
+    }
+  ]
+}

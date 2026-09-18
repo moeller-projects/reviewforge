@@ -1,0 +1,56 @@
+{
+  "id": "python",
+  "title": "Python rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".py",
+      ".pyi"
+    ],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "py.mutable-default-arg",
+      "title": "Mutable default argument",
+      "description": "def f(x=[]) or x={} — the default is shared across calls. Use None + init in body.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "py.bare-except",
+      "title": "Bare or swallowed except",
+      "description": "except: / except Exception: pass — hides bugs including KeyboardInterrupt. Catch specific exceptions and handle or re-raise.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "py.sql-string-format",
+      "title": "SQL built by string formatting",
+      "description": "f-strings or % formatting building SQL with variables — injection risk. Use parameterized queries.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "py.resource-leak",
+      "title": "Resource not closed",
+      "description": "open(), socket, or connection without with/try-finally — leaks handles on exceptions.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "py.global-state",
+      "title": "Mutable module-level state",
+      "description": "Module-level mutable globals written by functions — hidden coupling, test pollution, thread hazards.",
+      "category": "style",
+      "defaultSeverity": "medium",
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="ReviewForge.Infrastructure.Tests"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../ReviewForge.Core/ReviewForge.Core.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.TeamFoundationServer.Client" Version="20.278.0-preview"/>
+        <PackageReference Include="LibGit2Sharp" Version="0.32.0"/>
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12"/>
+        <PackageReference Include="OpenAI" Version="2.13.0"/>
+        <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0"/>
+        <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.*"/>
+    </ItemGroup>
+
+</Project>

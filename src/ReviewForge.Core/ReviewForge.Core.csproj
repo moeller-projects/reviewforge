@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="Reasoning/Prompts/native-review-system.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.native-review-system.md"/>
+        <EmbeddedResource Include="Reasoning/Rules/*.json" LogicalName="ReviewForge.Core.Reasoning.Rules.%(Filename).json"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Agents.AI" Version="1.21.0"/>
+        <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0"/>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12"/>
+    </ItemGroup>
+
+</Project>
