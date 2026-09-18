@@ -64,6 +64,14 @@
       "category": "style",
       "defaultSeverity": "low",
       "enabled": true
+    },
+    {
+      "id": "general.requirements.ac-gap",
+      "title": "Acceptance criterion not met by the change",
+      "description": "A linked work item's acceptance criterion is unmet due to a concrete gap in the changed code. Record the finding at the code location that should have implemented it; cite the criterion in the description.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
     }
   ]
 }
