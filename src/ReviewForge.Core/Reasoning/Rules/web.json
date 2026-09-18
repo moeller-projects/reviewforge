@@ -1,0 +1,58 @@
+{
+  "id": "web",
+  "title": "CSS and HTML rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".css",
+      ".scss",
+      ".html",
+      ".htm"
+    ],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "web.a11y",
+      "title": "Accessibility violation",
+      "description": "img without alt, form control without label, click-handler-only divs, or contrast-breaking color-only state.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "web.inline-styles",
+      "title": "Inline styles",
+      "description": "style attributes with reusable or state-dependent styling that belongs in classes.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "web.important-overuse",
+      "title": "!important overuse",
+      "description": "!important used to win specificity fights instead of fixing selector structure — escalates into unmaintainable CSS.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "web.specificity-hack",
+      "title": "Fragile high-specificity selectors",
+      "description": "ID selectors or deep descendant chains (>3 levels) that break on any markup change.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "web.html-semantics",
+      "title": "Non-semantic markup",
+      "description": "div/span soup where semantic elements (nav, main, button, table) carry meaning, improve a11y, and reduce ARIA need.",
+      "category": "style",
+      "defaultSeverity": "info",
+      "enabled": true
+    }
+  ]
+}

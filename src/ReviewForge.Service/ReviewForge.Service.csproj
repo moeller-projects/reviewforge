@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="ReviewForge.Service.Tests"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../ReviewForge.Core/ReviewForge.Core.csproj"/>
+        <ProjectReference Include="../ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.*"/>
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*"/>
+        <PackageReference Include="Scalar.AspNetCore" Version="2.*"/>
+    </ItemGroup>
+
+</Project>

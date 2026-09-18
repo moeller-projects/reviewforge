@@ -1,0 +1,49 @@
+{
+  "id": "powershell",
+  "title": "PowerShell rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".ps1",
+      ".psm1",
+      ".psd1"
+    ],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "ps.silently-continue",
+      "title": "Errors silenced",
+      "description": "-ErrorAction SilentlyContinue or empty catch on operations whose failure matters — the script reports success on failure.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ps.plaintext-credential",
+      "title": "Plaintext credential",
+      "description": "Passwords, tokens, or connection strings as plaintext literals or ConvertFrom-SecureString without a key file story.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "ps.invoke-expression",
+      "title": "Invoke-Expression on input",
+      "description": "Invoke-Expression (or iex) on strings containing external input — code injection.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "ps.write-host",
+      "title": "Write-Host in reusable code",
+      "description": "Write-Host inside functions/scripts whose output may be piped or captured — breaks the pipeline. Use Write-Output/Write-Verbose.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    }
+  ]
+}

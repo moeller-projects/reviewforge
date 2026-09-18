@@ -1,0 +1,14 @@
+<Solution>
+    <Folder Name="/src/">
+        <Project Path="src/ReviewForge.Cli/ReviewForge.Cli.csproj"/>
+        <Project Path="src/ReviewForge.Core/ReviewForge.Core.csproj"/>
+        <Project Path="src/ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj"/>
+        <Project Path="src/ReviewForge.Service/ReviewForge.Service.csproj"/>
+    </Folder>
+    <Folder Name="/tests/">
+        <Project Path="tests/ReviewForge.Core.Tests/ReviewForge.Core.Tests.csproj"/>
+        <Project Path="tests/ReviewForge.Infrastructure.Tests/ReviewForge.Infrastructure.Tests.csproj"/>
+        <Project Path="tests/ReviewForge.Service.Tests/ReviewForge.Service.Tests.csproj"/>
+        <Project Path="tests/ReviewForge.Testing/ReviewForge.Testing.csproj"/>
+    </Folder>
+</Solution>

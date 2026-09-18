@@ -1,71 +1,111 @@
-# AGENTS.md
+# AGENTS.md — ReviewForge
 
-## Purpose
+Guidance for coding agents working in this repository. Read this before editing.
 
-This is the working guide for agents changing ReviewForge. The implementation under `src/reviewforge/` is authoritative; do not infer behavior from older documentation or OpenSpec history.
+## What this is
 
-## Architecture
+Automated PR review as a service (.NET 10, ASP.NET minimal API). For each submitted
+Azure DevOps pull request it runs a 10-stage pipeline: fetch context → gate → clone →
+classify → enrich → agent reasoning loop → validate findings → triage threads → publish (findings + summary + reviewer vote) → persist. See `README.md` for the stage table.
 
-ReviewForge has a physical pipeline in `src/reviewforge/pipeline/`: fetch PR metadata, prepare a Git checkout and diff, execute a registered reasoning engine, then post or retain findings. `ReviewResult` in `pipeline/schemas.py` is the canonical engine output. Legacy JSON files are projections. See [architecture](docs/architecture/overview.md).
+## Layout
 
-The production default is `single_pi`; `multi_stage` runs the legacy intent/plan/context/review/verify/calibrate flow. Engines do not automatically fall back to one another: the configured engine must succeed or the stage fails. Pi calls are made through `ai.runner.PiRunner`, which scrubs ADO credentials from the subprocess environment, restricts review interaction to read-only tools, and can reuse a per-PR session. Pi must never receive ADO/network side effects; authenticated ADO requests belong in `reviewforge.ado`.
-
-## Repository conventions
-
-- Python package code belongs under `src/reviewforge/`.
-- Tests belong under `tests/` and defend observable behavior.
-- Prompts belong under `prompts/`; coding standards belong under `standards/`.
-- Keep public exports and JSON shapes compatible unless the change explicitly changes the contract.
-- Use Pydantic schemas and immediate validation for model-produced JSON.
-- Keep secrets out of artifacts and Pi subprocess environments.
-- Preserve `ARTIFACT_NAMES` filenames and meanings. Treat the list as a stable compatibility contract; do not rename, remove, or repurpose entries without an explicit migration.
-- Preserve the `prb:<dedupe-key>` marker and marker layout in posted comments. Posting uses existing markers to avoid duplicate threads on reruns.
-
-## Coding standards
-
-Prefer small, direct functions and existing helpers. Preserve error handling at trust boundaries: CLI/env parsing, Git, Pi output, JSON validation, and Azure DevOps posting. Avoid speculative abstractions, new dependencies, and compatibility shims that have no current caller.
-
-## Prompt standards
-
-Prompts are data contracts, not prose-only configuration. Preserve JSON-only output requirements, scope limits, untrusted-content handling, evidence requirements, and current field names. Runtime composition is handled by `ai.prompts`; verify any changed prompt path with `Config.validate_files()` and the relevant engine.
-
-## Testing expectations
-
-Use the repository's uv environment. Before running the complete suite, sync
-all optional dependencies, including CRG:
-
-```bash
-uv sync --all-extras
-uv run --all-extras pytest tests/ --cov=reviewforge --cov-fail-under=97
-uv run complexipy src --max-complexity-allowed 10 --failed --plain
+```
+src/
+  ReviewForge.Core/            pure domain + pipeline + agent loop. NO IO adapters, NO vendor SDKs.
+    Domain/                    models, ReviewGate, RunClassifier, ThreadTriage
+    Analysis/                  DedupeKey (shift-proof), DiffIndex, AnchorResolver
+    Reasoning/                 NativeReviewAgent, RepoReadTools, prompt building, embedded system prompt
+    Pipeline/                  ReviewPipeline, Stages/ (one class per stage), CommentFormatter
+    Ports/                     IPullRequestSource, IFindingStore, IGitOps, IChatClientFactory, IContextEnricher
+  ReviewForge.Infrastructure/  adapters: Ado/ (ADO SDK), Git/ (LibGit2Sharp), Codex/ (OAuth file),
+                               Chat/ (OpenAI/Codex clients), Persistence/ (SQLite via EF Core)
+  ReviewForge.Service/         host: Endpoints, Queue/ (bounded channel + RunTracker), ReviewWorker,
+                               ReviewPipelineFactory (composition root), Program.cs
+  ReviewForge.Cli/             thin HTTP client (submit / status) — all logic is server-side
+tests/
+  ReviewForge.Testing/         shared fakes (FakePullRequestSource, FakeFindingStore, FakeGitOps,
+                               FakeEnricher, FakeChatClientFactory) + ScriptedChatClient
+  ReviewForge.{Core,Infrastructure,Service}.Tests/
+prompts/native-review-system.md   human-editable copy; the runtime default is the embedded
+                                  resource in src/ReviewForge.Core/Reasoning/Prompts/
 ```
 
-Run the narrowest relevant test first, then the complete suite for permanent
-behavior changes. `uv run --all-extras` is required for the complete suite;
-without it, optional CRG tests may fail during collection.
+## Hard rules (do not violate)
 
-Tests cover CLI parsing, configuration, stages, reasoning, ADO behavior,
-posting, stale reconciliation, session reuse, and entry points. A change is
-not complete if the implementation works only through an untested happy path.
+1. **Ports and adapters.** `ReviewForge.Core` must stay free of IO adapters and vendor
+   SDKs. New PR host → implement `IPullRequestSource`. New reasoning provider → implement
+   `IChatClientFactory`. Enrichment → `IContextEnricher` (fail-safe contract). The
+   pipeline must not change for a new adapter.
+2. **No engine fallback.** A failed stage fails the run; the failure is visible in run
+   status. Never swallow an exception, never add a silent fallback engine or provider.
+3. **Secrets from the environment only.** ADO PAT: `REVIEWFORGE_ADO_PAT`. OpenAI key:
+7. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
+   draft skip must not mark a head as reviewed.
+5. **Coverage gate.** Every test project enforces ≥97% line coverage (coverlet
+   `Threshold=97`) on its own SUT assembly. Any code you add must be covered or explicitly
+   excluded with justification (`[ExcludeFromCodeCoverage]` is reserved for pure
+   vendor-SDK wrappers like `AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`).
+   All logic must live in covered code.
+6. **Agent sandbox.** `RepoReadTools` is read-only, rooted at the checkout, escape-proof,
+   deny-regex for `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. Do not add a shell tool.
+7. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
+   draft skip must not mark a head as reviewed.
+8. **Codex auth file** is rewritten atomically (temp + move) on token rotation. Any mount
+   or path you introduce must preserve that (directory mount, read-write).
 
-## Review workflow
+## Conventions
 
-1. Inspect the current implementation and callers before editing.
-2. Preserve the canonical `ReviewResult` path and project only at boundaries.
-3. Update tests for new observable behavior.
-4. Run the changed-path test and a smoke command.
-5. Update docs only from verified implementation behavior.
-6. Validate OpenSpec artifacts when a behavior change has an active change record.
+- `Directory.Build.props`: `net10.0`, nullable enable, implicit usings, `LangVersion=latest`.
+  Experimental APIs suppressed centrally (`MAAI001`, `OPENAI001`, `MEAI001`).
+- Options are typed records/classes with DataAnnotations, validated fail-fast at startup.
+  Config sections: `Ado`, `Reasoning`, `ReviewForge`. Env overrides use double underscore,
+  e.g. `ReviewForge__MaxIterations=50`.
+- Tests: xUnit, no mocking framework — hand-written fakes live in `ReviewForge.Testing`.
+  Service tests run the real host in-process via `WebApplicationFactory<Program>` with
+  fakes swapped in DI. `ScriptedChatClient` scripts the agent loop's tool calls.
+- Test projects get internals via `<InternalsVisibleTo>` in the SUT csproj.
+- Commits: Conventional Commits (`feat`, `fix`, `refactor`, `test`, …), imperative,
+  no trailing period.
 
-## Documentation standards
+## Commands
 
-Use Markdown for repository docs. Keep tutorial, how-to, reference, and explanation content separate. State purpose and audience, verify commands and paths, cross-link instead of duplicating, and list gaps explicitly. Do not rewrite existing top-level docs wholesale without explicit user approval; this task provides that approval.
+```bash
+dotnet build                                        # build everything
+dotnet test                                         # full suite incl. coverage gates
+dotnet test tests/ReviewForge.Core.Tests /p:CollectCoverage=true
+dotnet run --project src/ReviewForge.Service        # serves http://localhost:5080
+```
 
-## Useful entry points
+Service endpoints: `POST /reviews` → 202 `{runId, statusUrl}` · `GET /reviews/{runId}` ·
+`GET /health`. The queue is bounded (100) with a single worker; `RunTracker` is in-memory (status is lost on restart).
 
-- `python -m reviewforge` or `reviewforge`: primary CLI.
-- `reviewforge review`: generate and normally post a review.
-- `reviewforge post --input <file>`: post an existing final-findings document.
-- `reviewforge discover --project <name>`: emit active PRs as JSON.
-- `python -m reviewforge.ado.cli fetch-context ...`: legacy helper CLI.
-- `python -m reviewforge.ado.cli post-findings ...`: legacy posting helper.
+## Docker
+
+`Dockerfile` is multi-stage: restore layer (project files only) → publish → alpine
+runtime (non-root `app` user, healthcheck on `/health`, read-only rootfs ready).
+LibGit2Sharp and SQLite use their bundled native binaries; no `git` binary is needed.
+
+```bash
+docker compose up --build        # needs REVIEWFORGE_ADO_PAT in the environment
+docker logs -f reviewforge
+```
+
+Mounts (see `docker-compose.yml`):
+
+- `~/.codex` → `/home/app/.codex` — **read-write, directory mount**: token rotation
+  rewrites `auth.json` atomically. A read-only single-file mount would break rotation.
+- named volume `reviewforge-data` → `/var/reviewforge` — repo checkouts (`work/<repo>`), `findings.jsonl`, and `reviewforge.db`. Inspect with
+  `docker compose exec reviewforge ls /var/reviewforge/work` (rootfs is read-only; only
+  `/var/reviewforge`, `/home/app/.codex` and `/tmp` are writable).
+
+Container listens on 8080; compose maps host 5080 → 8080 to match the CLI default.
+
+## Extension points (recap)
+
+- New PR host (GitHub/GitLab): `IPullRequestSource` — pipeline untouched.
+- New reasoning provider: `IChatClientFactory` (see `ChatClientFactory`).
+- Prompt tuning: `ReviewForge:PromptOverridePath` → markdown file; default is the embedded
+  resource `ReviewForge.Core.Reasoning.Prompts.native-review-system.md`.
+- Finding identity: `DedupeKey` = ruleId + file + normalized snippet (no line numbers —
+  shift-proof across force-pushes). Bot threads carry the key in ADO thread properties.

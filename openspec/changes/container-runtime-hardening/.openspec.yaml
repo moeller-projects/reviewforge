@@ -1,3 +1,0 @@
-schema: spec-driven
-created: 2026-07-30
-goal: Keep non-root Pi auth writable while making BuildKit requirements explicit

@@ -1,0 +1,73 @@
+{
+  "id": "csharp",
+  "title": "C# rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".cs",
+      ".csx",
+      ".razor"
+    ],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "csharp.null-deref",
+      "title": "Possible null dereference",
+      "description": "Dereference of a value that can be null on a reachable path (nullable context, missing guard, First() on possibly-empty).",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "csharp.async-fire-forget",
+      "title": "Fire-and-forget task",
+      "description": "async void outside event handlers, or a Task returned by a call that is never awaited — exceptions vanish, ordering breaks.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "csharp.disposable-leak",
+      "title": "IDisposable not disposed",
+      "description": "IDisposable/IAsyncDisposable created without using/await using or a guaranteed Dispose path (streams, HttpClient, scopes).",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "csharp.exception-swallow",
+      "title": "Swallowed exception",
+      "description": "Empty catch, catch-all without rethrow or logging, or catch that returns a default hiding the failure.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "csharp.linq-multiple-enumeration",
+      "title": "Multiple enumeration of IEnumerable",
+      "description": "IEnumerable enumerated more than once (Count() + foreach, Any() + First()) causing repeated queries or side effects. Materialize once.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "csharp.string-concat-loop",
+      "title": "String concatenation in loop",
+      "description": "string += inside a loop creates O(n²) allocations. Use StringBuilder or string.Join.",
+      "category": "performance",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "csharp.datetime-utc",
+      "title": "Local time for persisted/shared values",
+      "description": "DateTime.Now (local time) used for timestamps that are persisted, compared across machines, or sent over the wire. Use DateTimeOffset.UtcNow.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    }
+  ]
+}

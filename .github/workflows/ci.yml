@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore ReviewForge.slnx
+
+      # -warnaserror: any compiler/analyzer warning fails the build.
+      - name: Build
+        run: dotnet build ReviewForge.slnx --no-restore --configuration Release -warnaserror
+
+      # CollectCoverage=true enforces the per-project 97% line-coverage gate
+      # (coverlet.msbuild Threshold in each test csproj). A failed test or a
+      # coverage miss exits non-zero and fails the job.
+      - name: Test
+        shell: bash
+        run: |
+          # Per-project invocation: a single slnx run with a fixed LogFileName makes
+          # every project overwrite the same trx (last writer wins). Keep going after
+          # a failure so all results are collected; fail at the end.
+          failed=0
+          for proj in tests/*/; do
+            name="$(basename "$proj")"
+            dotnet test "$proj" --no-build --configuration Release \
+              -p:CollectCoverage=true -p:CoverletOutputFormat=cobertura \
+              --logger "trx;LogFileName=$name.trx" \
+              --results-directory TestResults || failed=1
+          done
+          exit "$failed"
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Test Results (${{ matrix.os }})
+          path: TestResults/*.trx
+          reporter: dotnet-trx
+          fail-on-error: "true"
+
+      # Visibility layer on top of the coverlet gate: per-project numbers in the
+      # job summary, cobertura XML as an artifact, and an explicit fail below 97%.
+      # Linux-only: irongut/CodeCoverageSummary is a Docker container action and
+      # does not run on Windows; the csproj Threshold=97 gate still applies there.
+      - name: Coverage summary
+        if: always() && matrix.os == 'ubuntu-latest'
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: "**/coverage.cobertura.xml"
+          badge: "true"
+          format: "markdown"
+          output: "both"
+          thresholds: "97 100"
+          fail_below_min: "true"
+
+      - name: Write coverage to job summary
+        if: always() && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          # May not exist if the Test step failed before coverlet wrote any report;
+          # the Coverage summary step above already surfaces that failure.
+          if [ -f code-coverage-results.md ]; then
+            cat code-coverage-results.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: "**/coverage.cobertura.xml"
+
+  # One status check regardless of matrix leg: use "CI Result" for branch protection.
+  ci-result:
+    needs: build-and-test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate matrix result
+        run: |
+          result="${{ needs.build-and-test.result }}"
+          echo "Matrix result: $result"
+          if [ "$result" != "success" ]; then
+            exit 1
+          fi

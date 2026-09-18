@@ -1,0 +1,58 @@
+{
+  "id": "dockerfile",
+  "title": "Dockerfile rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".dockerfile"
+    ],
+    "pathPatterns": [
+      "Dockerfile",
+      "Dockerfile.*"
+    ],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "docker.latest-tag",
+      "title": "Floating base image tag",
+      "description": "FROM image:latest (or untagged) — builds are not reproducible. Pin a version or digest.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "docker.root-user",
+      "title": "Container runs as root",
+      "description": "No USER directive — the process runs as root inside the container. Add a non-root user.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "docker.secret-in-layer",
+      "title": "Secret baked into image layer",
+      "description": "COPY of .env/credential files, or secrets passed via ARG/ENV — they persist in image history. Use build secrets or runtime mounts.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "docker.layer-bloat",
+      "title": "Layer and cache bloat",
+      "description": "Many separate RUN commands, missing --no-cache-dir / apt cleanup, or COPY . . before dependency manifests — larger images, worse cache hits.",
+      "category": "performance",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "docker.add-vs-copy",
+      "title": "ADD where COPY suffices",
+      "description": "ADD used for local files — it silently unpacks archives and fetches URLs. Prefer COPY unless the extra behavior is intended.",
+      "category": "style",
+      "defaultSeverity": "info",
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "id": "bash",
+  "title": "Bash rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".sh",
+      ".bash"
+    ],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "bash.unquoted-vars",
+      "title": "Unquoted variable expansion",
+      "description": "$var unquoted — word splitting and glob expansion corrupt paths with spaces. Use \"$var\".",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "bash.set-e-missing",
+      "title": "Missing strict mode",
+      "description": "Script without set -euo pipefail continues silently after failures and masks unset variables.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "bash.eval",
+      "title": "eval on external input",
+      "description": "eval with strings containing user or environment input — code injection.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "bash.cd-unchecked",
+      "title": "Unchecked cd",
+      "description": "cd without || exit / && — on failure the script operates in the wrong directory (including destructive commands).",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "bash.tempfile-insecure",
+      "title": "Predictable temp file",
+      "description": "Fixed paths in /tmp (e.g. /tmp/$$.tmp) — symlink attacks on shared hosts. Use mktemp.",
+      "category": "security",
+      "defaultSeverity": "medium",
+      "enabled": true
+    }
+  ]
+}

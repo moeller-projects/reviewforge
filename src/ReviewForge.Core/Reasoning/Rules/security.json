@@ -1,0 +1,77 @@
+{
+  "id": "security",
+  "title": "Cross-language security rules",
+  "version": 1,
+  "activation": {
+    "always": true,
+    "extensions": [],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "sec.hardcoded-secret",
+      "title": "Hardcoded secret",
+      "description": "Passwords, API keys, tokens, private keys, or connection strings with credentials committed in source. Move to a secret store; rotate if already committed.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "sec.injection",
+      "title": "Unsanitized input into an interpreter",
+      "description": "User-controlled data reaching a command shell, SQL, LDAP, XPath, or template engine without parameterization or escaping. Use the language pack's specific rule when one exists.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "sec.unsafe-deserialization",
+      "title": "Unsafe deserialization of untrusted data",
+      "description": "BinaryFormatter, pickle, Java ObjectInputStream, or eval-style revival of data from requests, files, or queues — remote code execution risk.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "sec.weak-crypto",
+      "title": "Weak or misused cryptography",
+      "description": "MD5/SHA1 for security purposes, DES/RC4, ECB mode, hardcoded IVs/keys, or homegrown crypto. Use modern primitives (AES-GCM, SHA-256+, bcrypt/Argon2 for passwords).",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sec.path-traversal",
+      "title": "User-controlled file path",
+      "description": "File system paths built from external input without normalization and containment checks — ../../ escapes the intended root.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sec.ssrf",
+      "title": "Server-side request to user-controlled URL",
+      "description": "Server fetches a URL derived from user input without allowlisting — reaches internal services and cloud metadata endpoints.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sec.sensitive-logging",
+      "title": "Secrets or PII in logs",
+      "description": "Credentials, tokens, session ids, or personal data written to logs/telemetry, including in exception messages and debug dumps.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sec.missing-authz",
+      "title": "Missing authorization check",
+      "description": "New endpoint, handler, or mutation path with no visible authorization enforcement where sibling operations require it.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    }
+  ]
+}

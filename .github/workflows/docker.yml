@@ -1,0 +1,47 @@
+name: Docker
+
+# Builds and publishes the service image on every push to main.
+# Registry: GHCR — authenticated with GITHUB_TOKEN, no extra secrets needed.
+# Package shows up under the repo's Packages; make it public in package settings
+# or keep it private and `docker login ghcr.io` with a PAT (read:packages) to pull.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  # github.repository is already lowercase (GHCR requires lowercase image names).
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # latest tracks main; the sha tag is the immutable, deployable reference.
+      # GHA layer cache keeps the restore layer warm across runs.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

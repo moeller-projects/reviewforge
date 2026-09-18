@@ -1,0 +1,53 @@
+using Microsoft.EntityFrameworkCore;
+
+namespace ReviewForge.Infrastructure.Persistence;
+
+public sealed class RunEntity
+{
+    public Guid Id { get; set; }
+    public required string Org { get; set; }
+    public required string Project { get; set; }
+    public required string RepositoryId { get; set; }
+    public int PrId { get; set; }
+    public required string HeadSha { get; set; }
+    public required string Kind { get; set; }
+    public DateTimeOffset StartedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public bool Success { get; set; }
+    public List<FindingEntity> Findings { get; set; } = [];
+}
+
+public sealed class FindingEntity
+{
+    public int Id { get; set; }
+    public Guid RunId { get; set; }
+    public required string DedupeKey { get; set; }
+    public required string RuleId { get; set; }
+    public required string Severity { get; set; }
+    public required string Title { get; set; }
+    public string? FilePath { get; set; }
+    public int? Line { get; set; }
+    public int? ThreadId { get; set; }
+}
+
+public sealed class FindingStoreDbContext(DbContextOptions<FindingStoreDbContext> options) : DbContext(options)
+{
+    public DbSet<RunEntity> Runs => Set<RunEntity>();
+    public DbSet<FindingEntity> Findings => Set<FindingEntity>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<RunEntity>(e =>
+        {
+            e.HasKey(r => r.Id);
+            e.HasIndex(r => new {r.Org, r.Project, r.RepositoryId, r.PrId});
+            e.HasMany(r => r.Findings).WithOne().HasForeignKey(f => f.RunId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FindingEntity>(e =>
+        {
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => f.DedupeKey);
+        });
+    }
+}

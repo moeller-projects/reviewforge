@@ -1,117 +1,51 @@
 # syntax=docker/dockerfile:1
-# target path: reviewforge/Dockerfile
-# Reviewer container: runs Pi read-only to produce findings, then posts them to
-# the PR through direct Azure DevOps REST calls. Build once, run per PR.
-#
-# Two stages: `build` holds the toolchains (uv, npm) and their caches; the
-# runtime stage ships only what a review run needs -- no uv, no npm, non-root.
-# Requires BuildKit (default since Docker Engine 23.0) for cache/bind mounts.
 
-# ---------------------------------------------------------------------------
-# build: resolve and install everything; nothing here reaches production
-# ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS build
+ARG DOTNET_VERSION=10.0
 
-# Versions are required build arguments supplied by versions.env via
-# `python -m reviewforge.ops build`; Docker cannot evaluate that file in ARG defaults.
-ARG PI_VERSION
-ARG UV_VERSION
-RUN test -n "$PI_VERSION" && test -n "$UV_VERSION"
+# ---------- restore: project files only → dependency layer stays cached across code changes ----------
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-alpine AS restore
+WORKDIR /src
+COPY Directory.Build.props ./
+COPY src/ReviewForge.Core/ReviewForge.Core.csproj src/ReviewForge.Core/
+COPY src/ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj src/ReviewForge.Infrastructure/
+COPY src/ReviewForge.Service/ReviewForge.Service.csproj src/ReviewForge.Service/
+RUN dotnet restore src/ReviewForge.Service/ReviewForge.Service.csproj
 
-# python3 is needed by uv pip install below; ca-certificates for PyPI TLS.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates python3 \
- && rm -rf /var/lib/apt/lists/*
+# ---------- publish: only the service closure; tests never enter the image ----------
+FROM restore AS publish
+COPY src/ src/
+RUN dotnet publish src/ReviewForge.Service/ReviewForge.Service.csproj \
+      --no-restore \
+      -c Release \
+      -o /app/publish \
+      /p:UseAppHost=false
 
-# Pin uv by copying the official binary (no installer script, no curl).
-COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /usr/local/bin/uv
-
-# Global CLI: the Pi coding agent, installed into a dedicated prefix so the
-# whole tree (package + hoisted deps + bin symlink) is one copyable unit.
-# npm's cache lives in a BuildKit mount -- never written to any layer.
-RUN --mount=type=cache,target=/root/.npm \
-    npm install -g --prefix /opt/pi --ignore-scripts --no-audit --no-fund \
-      "@earendil-works/pi-coding-agent@${PI_VERSION}"
-
-WORKDIR /app
-
-# Locked Python dependencies, installed into a venv we can copy wholesale.
-# Manifests are bind-mounted (never a layer), the uv cache is a mount, so a
-# one-line uv.lock change re-downloads one wheel instead of all of them.
-# UV_PYTHON_DOWNLOADS=0 keeps the venv on the system interpreter, which the
-# runtime stage has as well. UV_COMPILE_BYTECODE=1 precompiles for faster
-# container startup (one container is started per PR).
-ENV UV_LINK_MODE=copy \
-    UV_PYTHON_DOWNLOADS=0
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv venv /app/.venv \
- && uv export --format requirements-txt --no-dev --no-emit-project --extra crg -o /tmp/req.txt \
- && UV_COMPILE_BYTECODE=1 uv pip install --python /app/.venv/bin/python -r /tmp/req.txt \
- && rm /tmp/req.txt
-
-# ---------------------------------------------------------------------------
-# runtime: only what a review run needs
-# ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim
+# ---------- runtime: alpine (musl), non-root, healthcheck, read-only-rootfs ready ----------
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}-alpine AS runtime
 
 LABEL org.opencontainers.image.title="reviewforge" \
-      org.opencontainers.image.description="Azure DevOps PR review runner (Pi read-only + direct REST posting)"
+      org.opencontainers.image.description="Automated PR review as a service: ADO context, agent reasoning, findings, triage, vote" \
+      org.opencontainers.image.licenses="Proprietary"
 
-# Runtime tools only -- same interpreter version as the build stage (same base).
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git python3 ripgrep \
- && rm -rf /var/lib/apt/lists/* \
- # npm/corepack are build-time tools; Pi is copied in below, so strip them
- # from the runtime image (smaller surface, ~15 MB).
- && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
- && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+# Persistent state lives in /var/reviewforge (volume): repo checkouts, findings.jsonl, SQLite store.
+# Codex OAuth lives in /home/app/.codex (volume) — mounted read-write because token rotation
+# rewrites auth.json atomically (temp + move).
+RUN mkdir -p /var/reviewforge/work /home/app/.codex \
+ && chown -R app:app /var/reviewforge /home/app/.codex
 
-# Non-root runtime: the container clones with credentials and executes an
-# LLM-driven agent -- it should not run as root. Named volumes
-# (reviewforge-artifacts, reviewforge-crg-cache) inherit these ownerships.
-# HOME is pinned so Pi resolves config under /home/review, matching the
-# auth.json bind mount below.
-# /home/review/.pi/agent is pre-created so the auth.json bind mount lands in
-# a directory Pi can actually read and write sessions to.
-RUN useradd --uid 10001 --create-home review \
- && mkdir -p /workspace/artifacts /workspace/crg-cache /home/review/.pi/agent \
- && chown -R review:review /workspace /home/review/.pi
+ENV ASPNETCORE_URLS=http://+:8080 \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_NOLOGO=1 \
+    ReviewForge__WorkDir=/var/reviewforge/work \
+    ReviewForge__StoreConnectionString="Data Source=/var/reviewforge/reviewforge.db"
 
-# Pi CLI (self-contained prefix from the build stage) and the Python venv.
-COPY --from=build /opt/pi /opt/pi
-COPY --from=build /app/.venv /app/.venv
-RUN ln -sf /opt/pi/bin/pi /usr/local/bin/pi
+USER app
+WORKDIR /app
+COPY --from=publish --chown=app:app /app/publish .
 
-# Application sources (CRLF normalization is handled by .gitattributes on the
-# host, not in the image).
-COPY --chown=review:review src/ /app/src/
-COPY --chown=review:review prompts/ /app/prompts/
-COPY --chown=review:review standards/ /app/standards/
+EXPOSE 8080
 
-ENV PYTHONPATH=/app/src \
-    PATH="/app/.venv/bin:/opt/pi/bin:$PATH" \
-    HOME=/home/review \
-    WORKSPACE=/workspace \
-    PI_SKIP_VERSION_CHECK=1 \
-    PI_TELEMETRY=0 \
-    PYTHONUNBUFFERED=1
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
 
-USER review
-WORKDIR /workspace
-
-# Build-time smoke assertion: a missing package, broken venv, or broken Pi
-# symlink fails the BUILD here instead of degrading silently in production
-# (this check would have caught the CRG package absence in minutes).
-RUN python3 -c "import reviewforge, code_review_graph" \
- && pi --version \
- && git --version && rg --version \
- && test -f /app/prompts/fast-review-system.md \
- && test -d /home/review/.pi/agent
-
-ENTRYPOINT ["/app/.venv/bin/python", "-m", "reviewforge"]
-# Default subcommand when the image is run with no extra args. Overridden by
-# `podman run image <subcommand> ...` (e.g. post, discover). Mirrors the
-# no-argv default in cli.main().
-CMD ["review"]
+ENTRYPOINT ["dotnet", "ReviewForge.Service.dll"]

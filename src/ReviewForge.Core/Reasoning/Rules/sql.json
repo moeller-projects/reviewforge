@@ -1,0 +1,55 @@
+{
+  "id": "sql",
+  "title": "SQL rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".sql"
+    ],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "sql.select-star",
+      "title": "SELECT *",
+      "description": "SELECT * in views, procedures, or application-facing queries — fragile to schema change, fetches unneeded columns.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "sql.missing-where",
+      "title": "UPDATE/DELETE without WHERE",
+      "description": "UPDATE or DELETE affecting the whole table — almost always a mistake in a migration or procedure.",
+      "category": "bug",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "sql.no-transaction",
+      "title": "Multi-statement write without transaction",
+      "description": "Multiple dependent INSERT/UPDATE/DELETE statements without an explicit transaction — partial application on failure.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sql.dynamic-sql-injection",
+      "title": "Dynamic SQL via concatenation",
+      "description": "EXEC/sp_executesql on strings concatenated with parameters — injection. Use sp_executesql with parameters.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "sql.index-ignoring-function",
+      "title": "Function on filtered column",
+      "description": "Function applied to an indexed column in WHERE/JOIN (e.g. CONVERT(date, col) = ...) — defeats the index, forces scans.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    }
+  ]
+}

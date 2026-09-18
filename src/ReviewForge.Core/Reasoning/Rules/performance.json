@@ -1,0 +1,53 @@
+{
+  "id": "performance",
+  "title": "Cross-language performance rules",
+  "version": 1,
+  "activation": {
+    "always": true,
+    "extensions": [],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "perf.n-plus-one",
+      "title": "N+1 IO or query pattern",
+      "description": "A database, HTTP, or file call inside a loop over a collection that could be batched, prefetched, or joined.",
+      "category": "performance",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "perf.blocking-async",
+      "title": "Blocking call in async path",
+      "description": "Sync-over-async (.Result, .Wait, getResult) or a blocking IO call on an async/hot path. Risks thread starvation and deadlocks.",
+      "category": "performance",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "perf.allocation.hot-loop",
+      "title": "Avoidable allocation in hot loop",
+      "description": "Object/string/collection allocation inside a tight loop that can be hoisted, reused, or pooled.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "perf.unbounded-growth",
+      "title": "Unbounded growth",
+      "description": "Cache, list, or buffer that grows without eviction or limit — a slow memory leak under sustained load.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "perf.expensive-repeated",
+      "title": "Repeated expensive computation",
+      "description": "Identical expensive work (regex compile, reflection, parsing, serialization) recomputed per call instead of cached or hoisted.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    }
+  ]
+}

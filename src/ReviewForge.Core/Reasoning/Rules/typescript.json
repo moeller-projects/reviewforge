@@ -1,0 +1,66 @@
+{
+  "id": "typescript",
+  "title": "TypeScript rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts"
+    ],
+    "pathPatterns": [],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "ts.any-type",
+      "title": "any escapes type safety",
+      "description": "Explicit any, as-any cast, or implicit any at a boundary — pushes type errors to runtime. Suggest the precise type or unknown + narrowing.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ts.non-null-assertion",
+      "title": "Non-null assertion masks a check",
+      "description": "The ! operator asserting away nullability where the value can actually be null/undefined on a reachable path.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ts.promise-floating",
+      "title": "Floating promise",
+      "description": "A promise created without await, return, or .catch — rejections become unhandled and ordering is lost.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "ts.equality-loose",
+      "title": "Loose equality",
+      "description": "== / != with coercion where === was intended (null/undefined checks excepted if deliberate).",
+      "category": "bug",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "ts.unhandled-rejection",
+      "title": "Unhandled rejection path",
+      "description": "async function or promise chain with no error handling at the boundary — failures surface as unhandled rejections.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ts.state-mutation",
+      "title": "Direct state/props mutation",
+      "description": "Mutating props, store state, or shared objects in place where immutability is expected (React/Redux/NgRx patterns).",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    }
+  ]
+}

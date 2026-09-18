@@ -1,0 +1,60 @@
+{
+  "id": "angular",
+  "title": "Angular rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [],
+    "pathPatterns": [
+      "*.component.ts",
+      "*.component.html",
+      "*.directive.ts",
+      "*.pipe.ts"
+    ],
+    "rootFiles": [
+      "angular.json"
+    ]
+  },
+  "rules": [
+    {
+      "id": "ng.subscription-leak",
+      "title": "Subscription leak",
+      "description": "subscribe() without takeUntilDestroyed(), async pipe, or explicit unsubscribe — leaks on component destroy.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "ng.template-heavy-binding",
+      "title": "Heavy work in template binding",
+      "description": "Method calls or expensive getters in template bindings re-run on every change detection cycle. Use signals, pure pipes, or precomputed fields.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ng.dom-direct",
+      "title": "Direct DOM access",
+      "description": "document.* or nativeElement manipulation instead of Renderer2 — breaks SSR and sanitization.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ng.trackby-missing",
+      "title": "ngFor without trackBy",
+      "description": "*ngFor over changing lists without trackBy forces full DOM re-render of the list.",
+      "category": "performance",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "ng.logic-in-template",
+      "title": "Business logic in template",
+      "description": "Complex expressions, null-chains with side effects, or data transformation embedded in the template instead of the component/pipe.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    }
+  ]
+}
