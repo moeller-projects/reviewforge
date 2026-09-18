@@ -37,6 +37,7 @@ jobs:
           dotnet test ReviewForge.slnx
           --no-build --configuration Release
           -p:CollectCoverage=true
+          -p:CoverletOutputFormat=cobertura
           --logger "trx;LogFileName=test-results.trx"
           --results-directory TestResults
 
@@ -48,6 +49,31 @@ jobs:
           path: TestResults/*.trx
           reporter: dotnet-trx
           fail-on-error: "true"
+
+      # Visibility layer on top of the coverlet gate: per-project numbers in the
+      # job summary, cobertura XML as an artifact, and an explicit fail below 97%.
+      - name: Coverage summary
+        if: always()
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: "**/coverage.cobertura.xml"
+          badge: "true"
+          format: "markdown"
+          output: "both"
+          thresholds: "97 100"
+          fail_below_min: "true"
+
+      - name: Write coverage to job summary
+        if: always()
+        shell: bash
+        run: cat coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: "**/coverage.cobertura.xml"
 
   # One status check regardless of matrix leg: use "CI Result" for branch protection.
   ci-result:
