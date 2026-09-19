@@ -60,7 +60,16 @@ public static class ServiceCollectionExtensions
             adoPat: ado.Pat,
             clock: sp.GetRequiredService<TimeProvider>()));
 
-        services.AddHostedService<ReviewWorker>();
+        var workerCount = configuration.GetValue<int?>($"{ReviewForgeServiceOptions.SectionName}:WorkerCount") ?? 1;
+        if (workerCount < 1)
+        {
+            throw new InvalidOperationException("ReviewForge:WorkerCount must be at least 1");
+        }
+
+        for (var i = 0; i < workerCount; i++)
+        {
+            services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<ReviewWorker>(sp));
+        }
         services.AddHostedService<DiscoverySweepWorker>();
 
         services.AddOpenTelemetry()

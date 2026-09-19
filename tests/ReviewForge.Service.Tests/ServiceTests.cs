@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -323,6 +324,20 @@ public class DiWiringTests
             Assert.NotNull(provider.GetRequiredService<IFindingStore>());
             Assert.NotNull(provider.GetRequiredService<IPullRequestSource>());
             Assert.NotNull(provider.GetRequiredService<ReviewPipelineFactory>().Create());
+        });
+    }
+
+    [Fact]
+    public void WorkerCount_registers_multiple_workers()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig(new Dictionary<string, string?> {["ReviewForge:WorkerCount"] = "3"}));
+            using var provider = services.BuildServiceProvider();
+
+            Assert.Equal(3, provider.GetServices<IHostedService>().OfType<ReviewWorker>().Count());
         });
     }
 
