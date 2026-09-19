@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
-
+using ReviewForge.Core.Workspaces;
 namespace ReviewForge.Service;
 
 /// <summary>Service options for the pipeline host.</summary>
@@ -33,6 +33,7 @@ public sealed class ReviewPipelineFactory(
     IPullRequestSource source,
     IFindingStore store,
     IGitOps git,
+    RepoCheckoutPool checkoutPool,
     IChatClientFactory chatClientFactory,
     IOptions<ReviewForgeServiceOptions> options,
     ILoggerFactory loggerFactory,
@@ -59,7 +60,7 @@ public sealed class ReviewPipelineFactory(
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
-            new PrepareRepositoryStage(git, opts.WorkDir, adoPat),
+            new PrepareRepositoryStage(checkoutPool),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(agent, findingsDir),

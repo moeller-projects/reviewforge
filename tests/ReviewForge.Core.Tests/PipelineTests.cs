@@ -3,6 +3,7 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -133,7 +134,7 @@ public class StageTests : IDisposable
         };
         var ctx = Ctx();
 
-        await new PrepareRepositoryStage(git, Path.GetTempPath(), "pat").ExecuteAsync(ctx, CancellationToken.None);
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["head-sha"], git.Checkouts);
         Assert.True(ctx.Diff!.Contains("src/A.cs", 2));
@@ -303,7 +304,7 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PrepareRepositoryStage(git, _RepoDir).ExecuteAsync(ctx, CancellationToken.None));
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, _RepoDir)).ExecuteAsync(ctx, CancellationToken.None));
     }
 
     [Fact]

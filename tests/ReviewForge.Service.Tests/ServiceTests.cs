@@ -2,15 +2,16 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -63,6 +64,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
             services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory(Chat));
             services.AddSingleton(sp => new ReviewPipelineFactory(
                 Source, Store, Git,
+                sp.GetRequiredService<RepoCheckoutPool>(),
                 new FakeChatClientFactory(Chat),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>()));
@@ -206,8 +208,10 @@ public class ServiceTests : IAsyncLifetime
         var standaloneWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-failing-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(standaloneWorkDir);
         var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = standaloneWorkDir});
+        var failingGit = new ExplosiveGitOps(standaloneWorkDir);
         var failingFactory = new ReviewPipelineFactory(
-            _Factory.Source, _Factory.Store, new ExplosiveGitOps(standaloneWorkDir),
+            _Factory.Source, _Factory.Store, failingGit,
+            new RepoCheckoutPool(failingGit, standaloneWorkDir),
             new FakeChatClientFactory(_Factory.Chat),
             options,
             LoggerFactory.Create(b => { }));

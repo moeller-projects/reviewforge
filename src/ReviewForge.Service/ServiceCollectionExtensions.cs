@@ -6,7 +6,7 @@ using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Service.Queue;
-
+using ReviewForge.Core.Workspaces;
 namespace ReviewForge.Service;
 
 /// <summary>DI wiring for the whole host — options validation at startup, fail fast on bad config.</summary>
@@ -29,10 +29,15 @@ public static class ServiceCollectionExtensions
                         ?? throw new InvalidOperationException($"configuration section '{ReasoningOptions.SectionName}' missing");
         services.AddSingleton(reasoning);
         services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(sp.GetRequiredService<ReasoningOptions>()));
-
         services.Configure<ReviewForgeServiceOptions>(configuration.GetSection(ReviewForgeServiceOptions.SectionName));
         services.Configure<ApiDocsOptions>(configuration.GetSection(ApiDocsOptions.SectionName));
         services.AddSingleton<IGitOps, LibGit2SharpGitOps>();
+        services.AddSingleton(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+            var git = sp.GetRequiredService<IGitOps>();
+            return new RepoCheckoutPool(git, opts.WorkDir, ado.Pat);
+        });
         services.Configure<DiscoveryOptions>(configuration.GetSection(DiscoveryOptions.SectionName));
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         services.AddSingleton<DiscoveryService>();
@@ -47,6 +52,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IPullRequestSource>(),
             sp.GetRequiredService<IFindingStore>(),
             sp.GetRequiredService<IGitOps>(),
+            sp.GetRequiredService<RepoCheckoutPool>(),
             sp.GetRequiredService<IChatClientFactory>(),
             sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
             sp.GetRequiredService<ILoggerFactory>(),

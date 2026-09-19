@@ -117,7 +117,11 @@ public class FakeGitOps : IGitOps
     public string RepoDir { get; set; } = Path.Combine(Path.GetTempPath(), "reviewforge-fake-repo");
     public List<string> Checkouts { get; } = [];
 
-    public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat) => RepoDir;
+    public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat)
+    {
+        Directory.CreateDirectory(workDir);
+        return workDir;
+    }
     public virtual void Checkout(string repoPath, string commitSha) => Checkouts.Add(commitSha);
     public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
 }
