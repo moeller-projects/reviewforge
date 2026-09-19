@@ -57,10 +57,8 @@ public sealed class ValidateFindingsStage(
     private bool TryReanchor(RichFinding finding, string repoDir)
     {
         var path = Path.GetFullPath(Path.Combine(repoDir, finding.Anchor!.FilePath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!path.StartsWith(Path.GetFullPath(repoDir), StringComparison.Ordinal) || !File.Exists(path))
-        {
+        if (!PathSafety.IsContainedReal(repoDir, path) || !File.Exists(path))
             return false;
-        }
 
         string[] lines;
         try

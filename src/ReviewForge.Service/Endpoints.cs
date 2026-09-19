@@ -46,6 +46,7 @@ public static class Endpoints
         SubmitReviewRequest request,
         ReviewQueue queue,
         RunTracker tracker,
+        InFlightClaims claims,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -57,7 +58,21 @@ public static class Endpoints
 
         var pr = new PrKey(request.Org, request.Project, request.RepositoryId, request.PrId);
         var runId = Guid.NewGuid();
-        await queue.EnqueueAsync(new ReviewRequest(runId, pr, clock.GetUtcNow()), ct);
+        if (!claims.TryClaim(pr, runId, out var holder))
+        {
+            return TypedResults.Conflict(new {error = "a review for this pull request is already in flight", runId = holder});
+        }
+
+        try
+        {
+            await queue.EnqueueAsync(new ReviewRequest(runId, pr, clock.GetUtcNow()), ct);
+        }
+        catch
+        {
+            claims.Release(pr, runId);
+            throw;
+        }
+
         tracker.Set(runId, pr, RunState.Queued);
 
         return TypedResults.Accepted($"/reviews/{runId}", new SubmitReviewResponse(runId, $"/reviews/{runId}"));

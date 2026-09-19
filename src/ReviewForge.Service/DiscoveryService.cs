@@ -23,6 +23,7 @@ public sealed class DiscoveryService(
     IFindingStore store,
     ReviewQueue queue,
     RunTracker tracker,
+    InFlightClaims claims,
     DiscoveryOptions options,
     TimeProvider? clock = null)
 {
@@ -70,7 +71,22 @@ public sealed class DiscoveryService(
             }
 
             var runId = Guid.NewGuid();
-            await queue.EnqueueAsync(new ReviewRequest(runId, candidate.Key, _Clock.GetUtcNow()), ct);
+            if (!claims.TryClaim(candidate.Key, runId, out _))
+            {
+                skipped.Add(new SkippedPr(candidate.Key, "review already in flight"));
+                continue;
+            }
+
+            try
+            {
+                await queue.EnqueueAsync(new ReviewRequest(runId, candidate.Key, _Clock.GetUtcNow()), ct);
+            }
+            catch
+            {
+                claims.Release(candidate.Key, runId);
+                throw;
+            }
+
             tracker.Set(runId, candidate.Key, RunState.Queued);
             enqueued.Add(candidate.Key);
         }

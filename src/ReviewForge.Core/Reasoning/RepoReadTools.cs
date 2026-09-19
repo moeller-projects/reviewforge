@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
+using ReviewForge.Core.Analysis;
 
 namespace ReviewForge.Core.Reasoning;
 
@@ -156,7 +157,7 @@ public class RepoReadTools
         foreach (var file in Directory.EnumerateFiles(dir, glob ?? "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(_Root, file).Replace('\\', '/');
-            if (IsDenied(rel))
+            if (IsDenied(rel) || !PathSafety.IsContainedReal(_Root, file))
             {
                 continue;
             }
@@ -170,7 +171,6 @@ public class RepoReadTools
             {
                 continue;
             }
-
             for (var i = 0; i < lines.Length; i++)
             {
                 if (lines[i].Contains('\0'))
@@ -190,6 +190,7 @@ public class RepoReadTools
             }
         }
 
+
         return matches == 0 ? "no matches" : sb.ToString();
     }
 
@@ -206,7 +207,7 @@ public class RepoReadTools
         }
 
         var full = Path.GetFullPath(Path.Combine(_Root, rel));
-        if (!full.StartsWith(_Root, StringComparison.Ordinal))
+        if (!PathSafety.IsContainedReal(_Root, full))
         {
             error = $"access denied: path escapes repository root";
             return null;

@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using ReviewForge.Core.Domain;
 using ReviewForge.Infrastructure.Persistence;
@@ -21,9 +22,12 @@ public class SqliteFindingStoreTests : IDisposable
 
     public void Dispose()
     {
-        if (File.Exists(_DbPath))
+        foreach (var suffix in new[] {"", "-wal", "-shm"})
         {
-            File.Delete(_DbPath);
+            if (File.Exists(_DbPath + suffix))
+            {
+                File.Delete(_DbPath + suffix);
+            }
         }
     }
 
@@ -36,6 +40,42 @@ public class SqliteFindingStoreTests : IDisposable
     {
         Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
         Assert.Empty(await _Store.GetKnownDedupeKeysAsync(Key, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Store_enables_wal_journal_mode()
+    {
+        await _Store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await using var connection = new SqliteConnection(_ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqliteCommand("PRAGMA journal_mode", connection);
+        Assert.Equal("wal", Assert.IsType<string>(await command.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task Interceptor_sets_busy_timeout_on_connection()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        SqliteBusyTimeoutInterceptor.ApplyBusyTimeout(connection, 5000);
+
+        await using var command = new SqliteCommand("PRAGMA busy_timeout", connection);
+        Assert.Equal(5000L, Assert.IsType<long>(await command.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task Parallel_saves_from_two_stores_do_not_fail()
+    {
+        var second = new SqliteFindingStore(_ConnectionString);
+        var t0 = DateTimeOffset.UtcNow;
+
+        var saves = Enumerable.Range(0, 20).Select(i =>
+            (i % 2 == 0 ? _Store : second).SaveRunAsync(Run($"head-{i}", t0.AddSeconds(i)), CancellationToken.None));
+        await Task.WhenAll(saves);
+
+        Assert.NotNull(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
     }
 
     [Fact]

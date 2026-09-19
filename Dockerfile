@@ -27,7 +27,7 @@ LABEL org.opencontainers.image.title="reviewforge" \
       org.opencontainers.image.description="Automated PR review as a service: ADO context, agent reasoning, findings, triage, vote" \
       org.opencontainers.image.licenses="Proprietary"
 
-# Persistent state lives in /var/reviewforge (volume): repo checkouts, findings.jsonl, SQLite store.
+# Persistent state lives in /var/reviewforge (volume): repo checkouts, per-run findings/{runId}.jsonl, SQLite store.
 # Codex OAuth lives in /home/app/.codex (volume) — mounted read-write because token rotation
 # rewrites auth.json atomically (temp + move).
 RUN mkdir -p /var/reviewforge/work /home/app/.codex \

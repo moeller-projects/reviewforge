@@ -40,7 +40,7 @@ prompts/native-review-system.md   human-editable copy; the runtime default is th
 2. **No engine fallback.** A failed stage fails the run; the failure is visible in run
    status. Never swallow an exception, never add a silent fallback engine or provider.
 3. **Secrets from the environment only.** ADO PAT: `REVIEWFORGE_ADO_PAT`. OpenAI key:
-7. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
+4. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
    draft skip must not mark a head as reviewed.
 5. **Coverage gate.** Every test project enforces ≥97% line coverage (coverlet
    `Threshold=97`) on its own SUT assembly. Any code you add must be covered or explicitly
@@ -49,9 +49,7 @@ prompts/native-review-system.md   human-editable copy; the runtime default is th
    All logic must live in covered code.
 6. **Agent sandbox.** `RepoReadTools` is read-only, rooted at the checkout, escape-proof,
    deny-regex for `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. Do not add a shell tool.
-7. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
-   draft skip must not mark a head as reviewed.
-8. **Codex auth file** is rewritten atomically (temp + move) on token rotation. Any mount
+7. **Codex auth file** is rewritten atomically (temp + move) on token rotation. Any mount
    or path you introduce must preserve that (directory mount, read-write).
 
 ## Conventions
@@ -78,7 +76,10 @@ dotnet run --project src/ReviewForge.Service        # serves http://localhost:50
 ```
 
 Service endpoints: `POST /reviews` → 202 `{runId, statusUrl}` · `GET /reviews/{runId}` ·
-`GET /health`. The queue is bounded (100) with a single worker; `RunTracker` is in-memory (status is lost on restart).
+`GET /health`. The queue is bounded (100) with a configurable `ReviewForge:WorkerCount`;
+`RunTracker` is in-memory (status is lost on restart).
+
+All test projects enforce at least 97% line coverage; do not document generated test counts.
 
 ## Docker
 
@@ -92,12 +93,12 @@ docker logs -f reviewforge
 ```
 
 Mounts (see `docker-compose.yml`):
-
-- `~/.codex` → `/home/app/.codex` — **read-write, directory mount**: token rotation
-  rewrites `auth.json` atomically. A read-only single-file mount would break rotation.
-- named volume `reviewforge-data` → `/var/reviewforge` — repo checkouts (`work/<repo>`), `findings.jsonl`, and `reviewforge.db`. Inspect with
-  `docker compose exec reviewforge ls /var/reviewforge/work` (rootfs is read-only; only
-  `/var/reviewforge`, `/home/app/.codex` and `/tmp` are writable).
+- named volume `reviewforge-data` → `/var/reviewforge` — head checkouts
+  (`checkouts/<repository>/<head>`), local mirrors (`mirror/<repository>`),
+  per-run `findings/{runId}.jsonl`, and `reviewforge.db`. Inspect with
+  `docker compose exec reviewforge ls /var/reviewforge/checkouts`; eviction
+  removes idle head checkouts, not mirrors. The rootfs is read-only; only
+  `/var/reviewforge`, `/home/app/.codex` and `/tmp` are writable.
 
 Container listens on 8080; compose maps host 5080 → 8080 to match the CLI default.
 

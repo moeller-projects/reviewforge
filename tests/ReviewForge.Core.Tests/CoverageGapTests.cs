@@ -3,6 +3,7 @@ using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Reasoning;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -22,7 +23,7 @@ public class CoverageGapTests
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(),
-            new PrepareRepositoryStage(new FakeGitOps(), Path.GetTempPath()),
+            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), Path.GetTempPath())),
             new ClassifyRunStage(source),
             new EnrichContextStage(null, NullLogger<EnrichContextStage>.Instance),
             new ExecuteReasoningStage(agent),

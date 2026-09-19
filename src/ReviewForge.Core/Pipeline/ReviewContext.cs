@@ -1,7 +1,7 @@
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
-
+using ReviewForge.Core.Workspaces;
 namespace ReviewForge.Core.Pipeline;
 
 /// <summary>
@@ -9,7 +9,7 @@ namespace ReviewForge.Core.Pipeline;
 /// attach their own output. <see cref="Terminate"/> ends the run gracefully (success,
 /// no further stages) — used by the gate when no review is required.
 /// </summary>
-public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runId = null)
+public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runId = null) : IDisposable
 {
     public PrKey Pr { get; } = pr;
     public Guid RunId { get; } = runId ?? Guid.NewGuid();
@@ -28,6 +28,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public GateDecision? Gate { get; set; }
 
     // Stage 3 — repository
+
+    // Stage 3 — repository lease held until the worker disposes this context.
+    public IDisposable? RepoLease { get; set; }
     public string? RepoDir { get; set; }
     public string DiffText { get; set; } = string.Empty;
     public DiffIndex? Diff { get; set; }
@@ -56,9 +59,18 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public string? TerminationReason { get; private set; }
 
+    /// <summary>Optional host-owned guard checked immediately before external publication.</summary>
+    public Func<bool>? PublishGuard { get; set; }
+
     public void Terminate(string reason)
     {
         Terminated = true;
         TerminationReason = reason;
+    }
+
+    public void Dispose()
+    {
+        RepoLease?.Dispose();
+        RepoLease = null;
     }
 }

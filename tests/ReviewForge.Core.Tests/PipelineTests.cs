@@ -3,6 +3,7 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -133,7 +134,7 @@ public class StageTests : IDisposable
         };
         var ctx = Ctx();
 
-        await new PrepareRepositoryStage(git, Path.GetTempPath(), "pat").ExecuteAsync(ctx, CancellationToken.None);
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["head-sha"], git.Checkouts);
         Assert.True(ctx.Diff!.Contains("src/A.cs", 2));
@@ -193,6 +194,38 @@ public class StageTests : IDisposable
         Assert.True(ctx.Collector.IsKnown("known-key"));
         var prompt = script.Received[0].Last().Text;
         Assert.Contains("full code review", prompt);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_streams_findings_to_per_run_jsonl()
+    {
+        var findingsDir = Path.Combine(Path.GetTempPath(), "reviewforge-findings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(findingsDir);
+        try
+        {
+            var script = new ScriptedChatClient(
+                ScriptedChatClient.FunctionCalls(
+                    ("RecordFinding", new Dictionary<string, object?>
+                    {
+                        ["ruleId"] = "csharp.null-deref", ["title"] = "x may be null", ["severity"] = "high",
+                        ["category"] = "bug", ["description"] = "deref", ["snippet"] = "bad code here",
+                        ["filePath"] = "src/A.cs", ["startLine"] = 2,
+                    }),
+                    ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+            var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+            var ctx = Ctx();
+
+            await new ExecuteReasoningStage(agent, findingsDir).ExecuteAsync(ctx, CancellationToken.None);
+
+            var file = Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl");
+            Assert.True(File.Exists(file));
+            var line = Assert.Single(File.ReadLines(file));
+            Assert.Contains(ctx.RunId.ToString(), line);
+        }
+        finally
+        {
+            Directory.Delete(findingsDir, recursive: true);
+        }
     }
 
     private static RichFinding FindingOnLine(int line, string snippet = "bad code here") => new()
@@ -271,7 +304,7 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PrepareRepositoryStage(git, _RepoDir).ExecuteAsync(ctx, CancellationToken.None));
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, _RepoDir)).ExecuteAsync(ctx, CancellationToken.None));
     }
 
     [Fact]
@@ -334,6 +367,23 @@ public class StageTests : IDisposable
         Assert.Single(source.Votes);
         Assert.Equal(-5, source.Votes[0].Vote);
         Assert.Equal("user-1", source.Votes[0].ReviewerId);
+    }
+
+    [Fact]
+    public async Task Publish_aborts_when_host_claim_is_lost()
+    {
+        var ctx = Ctx(new FakePullRequestSource());
+        ctx.PublishGuard = () => false;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = [],
+            Uncertainties = [],
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(new FakePullRequestSource(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
     }
 
     [Fact]

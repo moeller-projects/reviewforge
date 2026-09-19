@@ -17,6 +17,11 @@ public sealed class PublishFindingsStage(IPullRequestSource source, ILogger<Publ
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        if (ctx.PublishGuard is not null && !ctx.PublishGuard())
+        {
+            throw new InvalidOperationException("review claim expired before publication");
+        }
+
         var posted = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var finding in ctx.AcceptedFindings)

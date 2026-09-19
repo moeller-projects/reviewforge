@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
-
+using ReviewForge.Core.Workspaces;
 namespace ReviewForge.Service;
 
 /// <summary>Service options for the pipeline host.</summary>
@@ -25,19 +25,19 @@ public sealed class ReviewForgeServiceOptions
 
     public int MaxContextTokens { get; init; } = 150_000;
     public int MaxIterations { get; init; } = 30;
+    public int WorkerCount { get; init; } = 1;
+    public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }
 }
 
-/// <summary>Composition root for the 10-stage pipeline.</summary>
 public sealed class ReviewPipelineFactory(
     IPullRequestSource source,
     IFindingStore store,
-    IGitOps git,
+    RepoCheckoutPool checkoutPool,
     IChatClientFactory chatClientFactory,
     IOptions<ReviewForgeServiceOptions> options,
     ILoggerFactory loggerFactory,
     IContextEnricher? enricher = null,
-    string? adoPat = null,
     TimeProvider? clock = null)
 {
     public ReviewPipeline Create()
@@ -52,16 +52,17 @@ public sealed class ReviewPipelineFactory(
             Effort = opts.ReasoningEffort,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
         Directory.CreateDirectory(opts.WorkDir);
-        var findingsJsonlPath = Path.Combine(opts.WorkDir, "findings.jsonl");
+        var findingsDir = Path.Combine(opts.WorkDir, "findings");
+        Directory.CreateDirectory(findingsDir);
 
         IReviewStage[] stages =
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
-            new PrepareRepositoryStage(git, opts.WorkDir, adoPat),
+            new PrepareRepositoryStage(checkoutPool),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
-            new ExecuteReasoningStage(agent, findingsJsonlPath),
+            new ExecuteReasoningStage(agent, findingsDir),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
             new PublishFindingsStage(source, loggerFactory.CreateLogger<PublishFindingsStage>()),

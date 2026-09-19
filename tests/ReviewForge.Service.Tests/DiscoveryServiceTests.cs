@@ -24,8 +24,8 @@ public class DiscoveryServiceTests
 
     private static DiscoveryService Service(
         FakePullRequestSource source, FakeFindingStore store, ReviewQueue queue, RunTracker tracker,
-        DiscoveryOptions? options = null)
-        => new(source, store, queue, tracker, options ?? new DiscoveryOptions {TargetBranches = ["main"]});
+        DiscoveryOptions? options = null, InFlightClaims? claims = null)
+        => new(source, store, queue, tracker, claims ?? new InFlightClaims(), options ?? new DiscoveryOptions {TargetBranches = ["main"]});
 
     [Fact]
     public async Task Sweep_skips_draft_branch_and_creator_but_enqueues_survivor()
@@ -56,6 +56,24 @@ public class DiscoveryServiceTests
         Assert.Contains(report.Skipped, s => s.Reason == "draft");
         Assert.Contains(report.Skipped, s => s.Reason == "target branch 'feature/x' not in filter");
         Assert.Contains(report.Skipped, s => s.Reason == "creator 'mallory' not in filter");
+    }
+
+    [Fact]
+    public async Task Sweep_skips_pr_already_in_flight()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var claims = new InFlightClaims();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), claims: claims);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(new PrKey("o", "p", "r", 2), Assert.Single(report.Enqueued));
+        Assert.Contains(report.Skipped, s => s.Reason == "review already in flight");
     }
 
     [Fact]
@@ -140,6 +158,23 @@ public class DiscoveryServiceTests
             break;
         }
     }
+
+    [Fact]
+    public async Task Queue_cancellation_releases_discovery_claim()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var claims = new InFlightClaims();
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), claims: claims);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunSweepAsync(cts.Token));
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
+    }
 }
 
 public class DiscoverySweepWorkerTests
@@ -155,7 +190,7 @@ public class DiscoverySweepWorkerTests
     {
         var source = new FakePullRequestSource();
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = null};
-        var service = new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+        var service = new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options);
         var worker = new DiscoverySweepWorker(service, options, NullLogger<DiscoverySweepWorker>.Instance);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -177,7 +212,7 @@ public class DiscoverySweepWorkerTests
         var queue = new ReviewQueue();
         var tracker = new RunTracker();
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = TimeSpan.FromMilliseconds(50)};
-        var service = new DiscoveryService(source, store, queue, tracker, options);
+        var service = new DiscoveryService(source, store, queue, tracker, new InFlightClaims(), options);
         var worker = new DiscoverySweepWorker(service, options, NullLogger<DiscoverySweepWorker>.Instance);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -208,7 +243,7 @@ public class DiscoverySweepWorkerTests
         var source = new ThrowingPullRequestSource();
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = TimeSpan.FromMilliseconds(25)};
         var worker = new DiscoverySweepWorker(
-            new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options),
+            new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options),
             options,
             NullLogger<DiscoverySweepWorker>.Instance);
 
