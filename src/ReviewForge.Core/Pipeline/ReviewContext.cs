@@ -59,6 +59,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public string? TerminationReason { get; private set; }
 
+    /// <summary>Optional host-owned guard checked immediately before external publication.</summary>
+    public Func<bool>? PublishGuard { get; set; }
+
     public void Terminate(string reason)
     {
         Terminated = true;

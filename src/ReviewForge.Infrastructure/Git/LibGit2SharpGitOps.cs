@@ -1,7 +1,8 @@
-using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using LibGit2Sharp;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Workspaces;
+
 namespace ReviewForge.Infrastructure.Git;
 
 /// <summary>
@@ -11,7 +12,7 @@ namespace ReviewForge.Infrastructure.Git;
 [ExcludeFromCodeCoverage]
 public sealed class LibGit2SharpGitOps : IGitOps
 {
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _MirrorLocks = new(StringComparer.Ordinal);
+    private readonly KeyedLockPool _MirrorLocks = new();
 
     public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
     {
@@ -31,27 +32,21 @@ public sealed class LibGit2SharpGitOps : IGitOps
     private string EnsureMirror(string cloneUrl, string workDir, string? pat)
     {
         var mirror = MirrorPath(workDir);
-        var gate = _MirrorLocks.GetOrAdd(mirror, _ => new SemaphoreSlim(1, 1));
-        gate.Wait();
-        try
+        using var gate = _MirrorLocks.AcquireAsync(mirror, CancellationToken.None)
+            .GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("mirror lock acquisition returned no lease");
+        if (Repository.IsValid(mirror))
         {
-            if (Repository.IsValid(mirror))
-            {
-                using var existing = new Repository(mirror);
-                Commands.Fetch(existing, "origin", ["+refs/heads/*:refs/remotes/origin/*"], FetchOptions(pat), null);
-            }
-            else
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(mirror)!);
-                Repository.Clone(cloneUrl, mirror, new CloneOptions(FetchOptions(pat)) {IsBare = true});
-            }
+            using var existing = new Repository(mirror);
+            Commands.Fetch(existing, "origin", ["+refs/heads/*:refs/remotes/origin/*"], FetchOptions(pat), null);
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(mirror)!);
+            Repository.Clone(cloneUrl, mirror, new CloneOptions(FetchOptions(pat)) {IsBare = true});
+        }
 
-            return mirror;
-        }
-        finally
-        {
-            gate.Release();
-        }
+        return mirror;
     }
 
     internal static string MirrorPath(string workDir)

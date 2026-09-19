@@ -24,6 +24,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Assert.Equal("repo_id", RepoCheckoutPool.Sanitize("repo/id"));
         Assert.Equal("repo-id", RepoCheckoutPool.Sanitize("repo-id"));
         Assert.Equal("repo_id", RepoCheckoutPool.Sanitize("repo\\id"));
+        Assert.NotEqual(RepoCheckoutPool.CheckoutKey("a/b", "head"), RepoCheckoutPool.CheckoutKey("a_b", "head"));
     }
 
     [Fact]
@@ -33,7 +34,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         var pool = new RepoCheckoutPool(git, _Root);
 
         var checkout = await pool.AcquireAsync("repo", "url", "head", CancellationToken.None);
-        Assert.Equal(Path.Combine(_Root, "checkouts", "repo", "head"), checkout.Path);
+        Assert.Equal(pool.CheckoutPath("repo", "head"), checkout.Path);
         Assert.True(Directory.Exists(checkout.Path));
         checkout.Dispose();
         checkout.Dispose();
@@ -58,7 +59,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     public async Task Evict_removes_oldest_over_repo_cap()
     {
         var pool = new RepoCheckoutPool(new TestGitOps(), _Root);
-        var repoDir = Path.Combine(_Root, "checkouts", "repo");
+        var repoDir = Path.GetDirectoryName(pool.CheckoutPath("repo", "old"))!;
         var old = Path.Combine(repoDir, "old");
         var middle = Path.Combine(repoDir, "middle");
         var newest = Path.Combine(repoDir, "newest");
@@ -111,15 +112,39 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Assert.Equal(1, git.CheckoutCount);
     }
 
+    [Fact]
+    public async Task Acquire_failure_releases_lock()
+    {
+        var pool = new RepoCheckoutPool(new TestGitOps {ThrowOnClone = true}, _Root);
+        await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "head", CancellationToken.None));
+    }
+
+    [Fact]
+    public void Evict_cleans_an_empty_repository_directory()
+    {
+        var pool = new RepoCheckoutPool(new TestGitOps(), _Root);
+        var repoDir = Path.GetDirectoryName(pool.CheckoutPath("repo", "head"))!;
+        var checkout = pool.CheckoutPath("repo", "head");
+        Directory.CreateDirectory(checkout);
+        File.WriteAllText(Path.Combine(checkout, "file"), "data");
+        pool.Evict(new CheckoutEvictionOptions {MaxCheckoutsPerRepo = 0}, TimeProvider.System);
+        Assert.False(Directory.Exists(repoDir));
+    }
+
     private sealed class TestGitOps : IGitOps
     {
         public TimeSpan Delay { get; init; }
+        public bool ThrowOnClone { get; init; }
         public int CheckoutCount { get; private set; }
         public int CloneCount { get; private set; }
         public string? HeadSha { get; init; }
 
         public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
         {
+            if (ThrowOnClone)
+            {
+                throw new IOException("clone failed");
+            }
             CloneCount++;
             Directory.CreateDirectory(Path.Combine(workDir, ".git"));
             return workDir;
@@ -137,5 +162,29 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         public string? GetHeadSha(string repoPath) => HeadSha;
         public void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs) { }
         public string GetDiff(string repoPath, string baseSha, string headSha) => string.Empty;
+    }
+    [Fact]
+    public async Task Keyed_lock_pool_prunes_after_release_and_honors_cancellation()
+    {
+        var locks = new KeyedLockPool();
+        using (await locks.AcquireAsync("one", CancellationToken.None)) { }
+        Assert.Equal(0, locks.Count);
+
+        using var held = await locks.AcquireAsync("one", CancellationToken.None);
+        Assert.Null(locks.TryAcquire("one"));
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => locks.AcquireAsync("one", canceled.Token));
+    }
+
+
+    [Fact]
+    public void Evict_returns_empty_when_disabled_or_checkout_root_missing()
+    {
+        var pool = new RepoCheckoutPool(new TestGitOps(), _Root);
+        Assert.Equal(0, pool.Evict(new CheckoutEvictionOptions {Enabled = false}, TimeProvider.System).Scanned);
+
+        Directory.Delete(Path.Combine(_Root, "checkouts"), recursive: true);
+        Assert.Equal(0, pool.Evict(new CheckoutEvictionOptions(), TimeProvider.System).Scanned);
     }
 }

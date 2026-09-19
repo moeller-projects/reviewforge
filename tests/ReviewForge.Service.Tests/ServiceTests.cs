@@ -483,4 +483,38 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
     }
+    [Fact]
+    public void Rejects_zero_worker_count_during_registration()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Ado:OrgUrl"] = "https://dev.azure.com/test",
+                ["Ado:Project"] = "test",
+                ["Reasoning:Provider"] = "openai",
+                ["Reasoning:Model"] = "test-model",
+                ["ReviewForge:WorkerCount"] = "0",
+            })
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(configuration));
+    }
+}
+
+public sealed class EndpointFailureTests
+{
+    [Fact]
+    public async Task Queue_failure_releases_claim()
+    {
+        using var factory = new ReviewForgeFactory();
+        factory.Services.GetRequiredService<ReviewQueue>().Complete();
+        var client = factory.CreateClient();
+        var response = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "closed", prId = 99});
+
+        Assert.NotEqual(HttpStatusCode.Accepted, response.StatusCode);
+        var claims = factory.Services.GetRequiredService<InFlightClaims>();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "closed", 99), Guid.NewGuid(), out _));
+    }
 }

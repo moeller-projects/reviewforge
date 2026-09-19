@@ -77,7 +77,16 @@ public sealed class DiscoveryService(
                 continue;
             }
 
-            await queue.EnqueueAsync(new ReviewRequest(runId, candidate.Key, _Clock.GetUtcNow()), ct);
+            try
+            {
+                await queue.EnqueueAsync(new ReviewRequest(runId, candidate.Key, _Clock.GetUtcNow()), ct);
+            }
+            catch
+            {
+                claims.Release(candidate.Key, runId);
+                throw;
+            }
+
             tracker.Set(runId, candidate.Key, RunState.Queued);
             enqueued.Add(candidate.Key);
         }

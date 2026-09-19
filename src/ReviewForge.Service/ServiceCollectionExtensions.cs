@@ -72,8 +72,8 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<CheckoutEvictionWorker>();
 
         services.AddOpenTelemetry()
-            .WithTracing(tracing => tracing.AddSource(ReviewForgeTelemetry.SourceName));
-
+            .WithTracing(tracing => tracing.AddSource(ReviewForgeTelemetry.SourceName))
+            .WithMetrics(metrics => metrics.AddMeter(ReviewForgeTelemetry.SourceName));
         return services;
     }
 }

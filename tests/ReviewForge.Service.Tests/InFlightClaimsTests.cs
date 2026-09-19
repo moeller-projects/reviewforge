@@ -54,4 +54,18 @@ public class InFlightClaimsTests
 
         Assert.True(claims.TryClaim(Key, Guid.NewGuid(), out _));
     }
+
+    [Fact]
+    public void Held_claim_is_only_valid_for_owner_and_ttl()
+    {
+        var clock = new FakeTimeProvider();
+        var runId = Guid.NewGuid();
+        var claims = new InFlightClaims(clock, TimeSpan.FromHours(1));
+        claims.TryClaim(Key, runId, out _);
+
+        Assert.True(claims.IsHeldBy(Key, runId));
+        Assert.False(claims.IsHeldBy(Key, Guid.NewGuid()));
+        clock.Advance(TimeSpan.FromHours(1).Add(TimeSpan.FromTicks(1)));
+        Assert.False(claims.IsHeldBy(Key, runId));
+    }
 }

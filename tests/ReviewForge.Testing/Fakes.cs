@@ -127,9 +127,13 @@ public class FakeGitOps : IGitOps
     {
         Directory.CreateDirectory(workDir);
         var active = Interlocked.Increment(ref _ActiveClones);
-        while (active > Volatile.Read(ref _MaxConcurrentClones) &&
-               Interlocked.CompareExchange(ref _MaxConcurrentClones, active, Volatile.Read(ref _MaxConcurrentClones)) != Volatile.Read(ref _MaxConcurrentClones))
+        while (true)
         {
+            var observed = Volatile.Read(ref _MaxConcurrentClones);
+            if (active <= observed || Interlocked.CompareExchange(ref _MaxConcurrentClones, active, observed) == observed)
+            {
+                break;
+            }
         }
 
         if (CloneDelay > TimeSpan.Zero)

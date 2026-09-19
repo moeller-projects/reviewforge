@@ -47,4 +47,15 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
             }
         }
     }
+
+    public bool IsHeldBy(PrKey pr, Guid runId)
+    {
+        lock (_Gate)
+        {
+            return _Claims.TryGetValue(pr, out var existing)
+                   && existing.RunId == runId
+                   && _Clock.GetUtcNow() - existing.ClaimedAt <= _Ttl;
+        }
+    }
+
 }

@@ -70,20 +70,26 @@ public sealed class RunTracker(
     private void Evict(DateTimeOffset now)
     {
         foreach (var runId in _Runs
-                     .Where(pair => now - pair.Value.UpdatedAt > _Retention)
+                     .Where(pair => IsTerminal(pair.Value.State) && now - pair.Value.UpdatedAt > _Retention)
                      .Select(pair => pair.Key)
                      .ToArray())
         {
             _Runs.Remove(runId);
         }
 
+        var terminalCount = _Runs.Values.Count(status => IsTerminal(status.State));
         foreach (var runId in _Runs.Values
+                     .Where(status => IsTerminal(status.State))
                      .OrderBy(status => status.UpdatedAt)
-                     .Take(Math.Max(0, _Runs.Count - _MaxEntries))
+                     .Take(Math.Max(0, terminalCount - _MaxEntries))
                      .Select(status => status.RunId)
                      .ToArray())
         {
             _Runs.Remove(runId);
         }
     }
+
+    private static bool IsTerminal(RunState state)
+
+        => state is RunState.Completed or RunState.Skipped or RunState.Failed;
 }

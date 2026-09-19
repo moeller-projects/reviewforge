@@ -24,7 +24,10 @@ public sealed class ReviewWorker(
             tracker.Set(request.RunId, request.Pr, RunState.Running);
             try
             {
-                using var ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId);
+                using var ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId)
+                {
+                    PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
+                };
                 await pipelineFactory.Create().RunAsync(ctx, stoppingToken);
 
                 tracker.Set(request.RunId, request.Pr,

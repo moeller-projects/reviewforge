@@ -84,6 +84,19 @@ public sealed class CompactConsoleFormatterTests
             output.ToString());
     }
 
+    [Fact]
+    public void Omits_empty_message()
+    {
+        var formatter = new CompactConsoleFormatter(new TestOptionsMonitor<ConsoleFormatterOptions>());
+        var entry = new LogEntry<string>(
+            LogLevel.Information, "Worker", default, string.Empty, null, static (_, _) => string.Empty);
+        using var output = new StringWriter();
+
+        formatter.Write(entry, null, output);
+
+        Assert.Contains("Worker:", output.ToString());
+    }
+
 
     private sealed class TestOptionsMonitor<T>(T? value = null) : IOptionsMonitor<T>
         where T : class, new()

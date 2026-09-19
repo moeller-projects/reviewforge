@@ -1,7 +1,9 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+
 namespace ReviewForge.Core.Workspaces;
 
 /// <summary>
@@ -13,7 +15,7 @@ public sealed class RepoCheckoutPool
     private readonly IGitOps _Git;
     private readonly string _Root;
     private readonly string? _Pat;
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _Locks = new(StringComparer.Ordinal);
+    private readonly KeyedLockPool _Locks = new();
 
     public RepoCheckoutPool(IGitOps git, string root, string? pat = null)
     {
@@ -29,8 +31,8 @@ public sealed class RepoCheckoutPool
     {
         var started = Stopwatch.GetTimestamp();
         var key = CheckoutKey(repositoryId, headSha);
-        var semaphore = _Locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-        await semaphore.WaitAsync(ct).ConfigureAwait(false);
+        var lockLease = await _Locks.AcquireAsync(key, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("checkout lock acquisition returned no lease");
         ReviewForgeTelemetry.CheckoutActive.Add(1);
         try
         {
@@ -41,7 +43,7 @@ public sealed class RepoCheckoutPool
             {
                 Directory.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-                return new RepoCheckout(path, new Lease(semaphore));
+                return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
 
             var repoPath = _Git.CloneOrOpen(cloneUrl, path, _Pat);
@@ -51,13 +53,13 @@ public sealed class RepoCheckoutPool
                 Directory.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
             }
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-            return new RepoCheckout(repoPath, new Lease(semaphore));
+            return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
         }
         catch
         {
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             ReviewForgeTelemetry.CheckoutActive.Add(-1);
-            semaphore.Release();
+            lockLease.Dispose();
             throw;
         }
     }
@@ -100,7 +102,8 @@ public sealed class RepoCheckoutPool
                     continue;
                 }
 
-                if (!TryLockForEviction(repoId, head))
+                using var evictionLease = _Locks.TryAcquire(EncodedCheckoutKey(repoId, head));
+                if (evictionLease is null)
                 {
                     inUse++;
                     continue;
@@ -109,31 +112,31 @@ public sealed class RepoCheckoutPool
                 try
                 {
                     var size = DirectorySize(path);
-                    try
-                    {
-                        Directory.Delete(path, recursive: true);
-                        bytes += size;
-                        deleted++;
-                        ReviewForgeTelemetry.CheckoutEvicted.Add(1);
-                    }
-                    catch (IOException)
-                    {
-                        // A transient native Git handle will be retried on the next sweep.
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        // A transient native Git handle will be retried on the next sweep.
-                    }
+                    Directory.Delete(path, recursive: true);
+                    bytes += size;
+                    deleted++;
+                    ReviewForgeTelemetry.CheckoutEvicted.Add(1);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // A transient native Git handle will be retried on the next sweep.
                 }
                 finally
                 {
-                    UnlockForEviction(repoId, head);
+                    evictionLease.Dispose();
                 }
             }
 
-            if (!Directory.EnumerateFileSystemEntries(repoDir).Any())
+            try
             {
-                Directory.Delete(repoDir);
+                if (!Directory.EnumerateFileSystemEntries(repoDir).Any())
+                {
+                    Directory.Delete(repoDir);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A concurrent acquire or native Git handle will be retried next sweep.
             }
         }
 
@@ -141,24 +144,27 @@ public sealed class RepoCheckoutPool
     }
 
     internal string CheckoutPath(string repositoryId, string headSha)
-        => Path.Combine(_Root, "checkouts", Sanitize(repositoryId), Sanitize(headSha));
+        => Path.Combine(_Root, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));
 
     internal static string CheckoutKey(string repositoryId, string headSha)
-        => $"{Sanitize(repositoryId)}:{Sanitize(headSha)}";
+        => EncodedCheckoutKey(KeyComponent(repositoryId), KeyComponent(headSha));
 
+    private static string EncodedCheckoutKey(string repositoryComponent, string headComponent)
+        => $"{repositoryComponent}:{headComponent}";
     internal static string Sanitize(string id)
         => string.Concat(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
 
-    internal bool TryLockForEviction(string repositoryId, string headSha)
-        => _Locks.GetOrAdd(CheckoutKey(repositoryId, headSha), _ => new SemaphoreSlim(1, 1)).Wait(0);
-
-    internal void UnlockForEviction(string repositoryId, string headSha)
-        => _Locks[CheckoutKey(repositoryId, headSha)].Release();
+    private static string KeyComponent(string id)
+    {
+        var readable = Sanitize(id);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id)))[..12].ToLowerInvariant();
+        return $"{readable}-{hash}";
+    }
 
     private static long DirectorySize(string path)
         => Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length);
 
-    private sealed class Lease(SemaphoreSlim semaphore) : IDisposable
+    private sealed class CheckoutLease(KeyedLockPool.Lease lease) : IDisposable
     {
         private int _Disposed;
 
@@ -167,7 +173,7 @@ public sealed class RepoCheckoutPool
             if (Interlocked.Exchange(ref _Disposed, 1) == 0)
             {
                 ReviewForgeTelemetry.CheckoutActive.Add(-1);
-                semaphore.Release();
+                lease.Dispose();
             }
         }
     }

@@ -158,6 +158,23 @@ public class DiscoveryServiceTests
             break;
         }
     }
+
+    [Fact]
+    public async Task Queue_cancellation_releases_discovery_claim()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var claims = new InFlightClaims();
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), claims: claims);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunSweepAsync(cts.Token));
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
+    }
 }
 
 public class DiscoverySweepWorkerTests

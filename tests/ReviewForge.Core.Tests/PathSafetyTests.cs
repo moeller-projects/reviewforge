@@ -40,4 +40,20 @@ public class PathSafetyTests : IDisposable
     [Fact]
     public void Unrelated_absolute_path_is_not_contained()
         => Assert.False(PathSafety.IsContained(_Root, Path.GetTempPath()));
+
+    [Fact]
+    public void Symlink_to_outside_is_not_contained()
+    {
+        var link = Path.Combine(_Root, "sub", "outside");
+        try
+        {
+            Directory.CreateSymbolicLink(link, _Sibling);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        Assert.False(PathSafety.IsContainedReal(_Root, Path.Combine(link, "file.cs")));
+    }
 }

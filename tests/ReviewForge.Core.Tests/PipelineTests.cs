@@ -370,6 +370,23 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Publish_aborts_when_host_claim_is_lost()
+    {
+        var ctx = Ctx(new FakePullRequestSource());
+        ctx.PublishGuard = () => false;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = [],
+            Uncertainties = [],
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(new FakePullRequestSource(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Publish_clean_run_sets_no_vote()
     {
         var source = new FakePullRequestSource();

@@ -80,4 +80,17 @@ public class QueueTests
         Assert.NotNull(tracker.Get(second));
         Assert.NotNull(tracker.Get(third));
     }
+
+    [Fact]
+    public void Tracker_keeps_queued_and_running_entries_over_terminal_cap()
+    {
+        var tracker = new RunTracker(maxEntries: 1);
+        var queued = Guid.NewGuid();
+        var running = Guid.NewGuid();
+        tracker.Set(queued, Key, RunState.Queued);
+        tracker.Set(running, Key, RunState.Running);
+
+        Assert.NotNull(tracker.Get(queued));
+        Assert.NotNull(tracker.Get(running));
+    }
 }
