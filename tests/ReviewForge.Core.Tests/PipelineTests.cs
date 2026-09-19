@@ -195,6 +195,38 @@ public class StageTests : IDisposable
         Assert.Contains("full code review", prompt);
     }
 
+    [Fact]
+    public async Task ExecuteReasoning_streams_findings_to_per_run_jsonl()
+    {
+        var findingsDir = Path.Combine(Path.GetTempPath(), "reviewforge-findings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(findingsDir);
+        try
+        {
+            var script = new ScriptedChatClient(
+                ScriptedChatClient.FunctionCalls(
+                    ("RecordFinding", new Dictionary<string, object?>
+                    {
+                        ["ruleId"] = "csharp.null-deref", ["title"] = "x may be null", ["severity"] = "high",
+                        ["category"] = "bug", ["description"] = "deref", ["snippet"] = "bad code here",
+                        ["filePath"] = "src/A.cs", ["startLine"] = 2,
+                    }),
+                    ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+            var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+            var ctx = Ctx();
+
+            await new ExecuteReasoningStage(agent, findingsDir).ExecuteAsync(ctx, CancellationToken.None);
+
+            var file = Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl");
+            Assert.True(File.Exists(file));
+            var line = Assert.Single(File.ReadLines(file));
+            Assert.Contains(ctx.RunId.ToString(), line);
+        }
+        finally
+        {
+            Directory.Delete(findingsDir, recursive: true);
+        }
+    }
+
     private static RichFinding FindingOnLine(int line, string snippet = "bad code here") => new()
     {
         RuleId = "r", Title = "t", Severity = "high", Category = "bug", Description = "d",

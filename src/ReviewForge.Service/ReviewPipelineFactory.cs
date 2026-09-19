@@ -52,7 +52,8 @@ public sealed class ReviewPipelineFactory(
             Effort = opts.ReasoningEffort,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
         Directory.CreateDirectory(opts.WorkDir);
-        var findingsJsonlPath = Path.Combine(opts.WorkDir, "findings.jsonl");
+        var findingsDir = Path.Combine(opts.WorkDir, "findings");
+        Directory.CreateDirectory(findingsDir);
 
         IReviewStage[] stages =
         [
@@ -61,7 +62,7 @@ public sealed class ReviewPipelineFactory(
             new PrepareRepositoryStage(git, opts.WorkDir, adoPat),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
-            new ExecuteReasoningStage(agent, findingsJsonlPath),
+            new ExecuteReasoningStage(agent, findingsDir),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
             new PublishFindingsStage(source, loggerFactory.CreateLogger<PublishFindingsStage>()),

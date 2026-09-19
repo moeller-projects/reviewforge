@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 using Xunit;
@@ -51,6 +52,21 @@ public class ReviewCollectorTests
         Assert.True(collector.IsKnown("k1"));
         Assert.Single(collector.Findings);
         Assert.Contains("\"k1\"", jsonl.ToString());
+    }
+
+    [Fact]
+    public void AddFinding_writes_envelope_with_run_metadata()
+    {
+        var jsonl = new StringWriter();
+        var runId = Guid.NewGuid();
+        var collector = new ReviewCollector(jsonlSink: jsonl, runId: runId, headSha: "abc123");
+        collector.AddFinding(Finding("k1"));
+
+        using var doc = JsonDocument.Parse(jsonl.ToString().Trim());
+        Assert.Equal(runId, doc.RootElement.GetProperty("RunId").GetGuid());
+        Assert.Equal("abc123", doc.RootElement.GetProperty("HeadSha").GetString());
+        Assert.True(doc.RootElement.GetProperty("RecordedAt").GetDateTimeOffset() > DateTimeOffset.MinValue);
+        Assert.Equal("k1", doc.RootElement.GetProperty("Finding").GetProperty("DedupeKey").GetString());
     }
 
     [Fact]

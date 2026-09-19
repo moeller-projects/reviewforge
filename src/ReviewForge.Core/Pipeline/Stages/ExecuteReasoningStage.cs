@@ -2,17 +2,22 @@ using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
-/// <summary>Stage 6: compose the active rulebook, build the prompt, and run the agent loop.</summary>
-public sealed class ExecuteReasoningStage(NativeReviewAgent agent, string? findingsJsonlPath = null) : IReviewStage
+/// <summary>
+/// Stage 6: compose the active rulebook, build the prompt, and run the agent loop.
+/// Findings stream to a per-run <c>findings/{runId}.jsonl</c> file so parallel workers
+/// never interleave partial lines into a shared sink.
+/// </summary>
+public sealed class ExecuteReasoningStage(NativeReviewAgent agent, string? findingsDir = null) : IReviewStage
 {
     public string Name => "execute-reasoning";
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        using var findingsJsonl = findingsJsonlPath is null
+        using var findingsJsonl = findingsDir is null
             ? null
-            : new StreamWriter(findingsJsonlPath, append: true) {AutoFlush = true};
-        ctx.Collector = new ReviewCollector(ctx.PriorRun?.FindingKeys, findingsJsonl);
+            : new StreamWriter(Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl"), append: true) {AutoFlush = true};
+        ctx.Collector = new ReviewCollector(
+            ctx.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.PullRequest?.SourceCommitSha);
         var rootFiles = Directory.Exists(ctx.RepoDir) ? Directory.GetFiles(ctx.RepoDir, "*", SearchOption.TopDirectoryOnly) : [];
         var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
