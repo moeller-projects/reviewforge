@@ -53,6 +53,13 @@ public class PathSafetyTests : IDisposable
         {
             return;
         }
+        catch (IOException ex) when (
+            OperatingSystem.IsWindows() && (uint) ex.HResult == 0x8007_0522)
+        {
+            // Windows reports ERROR_PRIVILEGE_NOT_HELD when symlink creation
+            // is unavailable without Developer Mode or the symlink privilege.
+            return;
+        }
 
         Assert.False(PathSafety.IsContainedReal(_Root, Path.Combine(link, "file.cs")));
     }
