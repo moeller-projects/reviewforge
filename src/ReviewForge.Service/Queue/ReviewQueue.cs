@@ -31,10 +31,20 @@ public sealed class ReviewQueue(int capacity = 100)
     public void Complete() => _Channel.Writer.Complete();
 }
 
-/// <summary>In-memory run status for the status endpoint. State survives until host restart.</summary>
-public sealed class RunTracker(TimeProvider? clock = null)
+/// <summary>
+/// In-memory run status for the status endpoint. Entries are retained for a bounded
+/// period and count; status is still lost on host restart.
+/// </summary>
+public sealed class RunTracker(
+    TimeProvider? clock = null,
+    TimeSpan? retention = null,
+    int maxEntries = 10_000)
 {
+    private static readonly TimeSpan DefaultRetention = TimeSpan.FromHours(24);
+
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
+    private readonly TimeSpan _Retention = retention ?? DefaultRetention;
+    private readonly int _MaxEntries = maxEntries > 0 ? maxEntries : throw new ArgumentOutOfRangeException(nameof(maxEntries));
     private readonly object _Gate = new();
     private readonly Dictionary<Guid, RunStatus> _Runs = [];
 
@@ -42,7 +52,9 @@ public sealed class RunTracker(TimeProvider? clock = null)
     {
         lock (_Gate)
         {
-            _Runs[runId] = new RunStatus(runId, pr, state, detail, _Clock.GetUtcNow());
+            var now = _Clock.GetUtcNow();
+            _Runs[runId] = new RunStatus(runId, pr, state, detail, now);
+            Evict(now);
         }
     }
 
@@ -50,7 +62,28 @@ public sealed class RunTracker(TimeProvider? clock = null)
     {
         lock (_Gate)
         {
+            Evict(_Clock.GetUtcNow());
             return _Runs.TryGetValue(runId, out var status) ? status : null;
+        }
+    }
+
+    private void Evict(DateTimeOffset now)
+    {
+        foreach (var runId in _Runs
+                     .Where(pair => now - pair.Value.UpdatedAt > _Retention)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _Runs.Remove(runId);
+        }
+
+        foreach (var runId in _Runs.Values
+                     .OrderBy(status => status.UpdatedAt)
+                     .Take(Math.Max(0, _Runs.Count - _MaxEntries))
+                     .Select(status => status.RunId)
+                     .ToArray())
+        {
+            _Runs.Remove(runId);
         }
     }
 }

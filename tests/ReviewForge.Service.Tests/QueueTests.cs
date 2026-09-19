@@ -1,7 +1,7 @@
+using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Queue;
 using Xunit;
-
 namespace ReviewForge.Service.Tests;
 
 public class QueueTests
@@ -47,5 +47,37 @@ public class QueueTests
 
         tracker.Set(id, Key, RunState.Failed, "boom");
         Assert.Equal("boom", tracker.Get(id)!.Detail);
+    }
+
+    [Fact]
+    public void Tracker_evicts_expired_statuses()
+    {
+        var clock = new FakeTimeProvider();
+        var tracker = new RunTracker(clock, TimeSpan.FromHours(1));
+        var id = Guid.NewGuid();
+        tracker.Set(id, Key, RunState.Completed);
+
+        clock.Advance(TimeSpan.FromHours(1).Add(TimeSpan.FromTicks(1)));
+
+        Assert.Null(tracker.Get(id));
+    }
+
+    [Fact]
+    public void Tracker_keeps_only_newest_max_entries()
+    {
+        var clock = new FakeTimeProvider();
+        var tracker = new RunTracker(clock, maxEntries: 2);
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var third = Guid.NewGuid();
+        tracker.Set(first, Key, RunState.Completed);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        tracker.Set(second, Key, RunState.Completed);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        tracker.Set(third, Key, RunState.Completed);
+
+        Assert.Null(tracker.Get(first));
+        Assert.NotNull(tracker.Get(second));
+        Assert.NotNull(tracker.Get(third));
     }
 }
