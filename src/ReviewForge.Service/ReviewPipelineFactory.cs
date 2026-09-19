@@ -26,6 +26,7 @@ public sealed class ReviewForgeServiceOptions
     public int MaxContextTokens { get; init; } = 150_000;
     public int MaxIterations { get; init; } = 30;
     public int WorkerCount { get; init; } = 1;
+    public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }
 }
 

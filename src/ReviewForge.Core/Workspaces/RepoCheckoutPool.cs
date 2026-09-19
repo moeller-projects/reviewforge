@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
-
 namespace ReviewForge.Core.Workspaces;
 
 /// <summary>
@@ -26,23 +27,36 @@ public sealed class RepoCheckoutPool
     public async Task<RepoCheckout> AcquireAsync(
         string repositoryId, string cloneUrl, string headSha, CancellationToken ct)
     {
+        var started = Stopwatch.GetTimestamp();
         var key = CheckoutKey(repositoryId, headSha);
         var semaphore = _Locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await semaphore.WaitAsync(ct).ConfigureAwait(false);
+        ReviewForgeTelemetry.CheckoutActive.Add(1);
         try
         {
             var path = CheckoutPath(repositoryId, headSha);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            if (Directory.Exists(Path.Combine(path, ".git")) &&
+                string.Equals(_Git.GetHeadSha(path), headSha, StringComparison.OrdinalIgnoreCase))
+            {
+                Directory.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+                ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                return new RepoCheckout(path, new Lease(semaphore));
+            }
+
             var repoPath = _Git.CloneOrOpen(cloneUrl, path, _Pat);
             _Git.Checkout(repoPath, headSha);
             if (Directory.Exists(repoPath))
             {
                 Directory.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
             }
+            ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             return new RepoCheckout(repoPath, new Lease(semaphore));
         }
         catch
         {
+            ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            ReviewForgeTelemetry.CheckoutActive.Add(-1);
             semaphore.Release();
             throw;
         }
@@ -100,6 +114,7 @@ public sealed class RepoCheckoutPool
                         Directory.Delete(path, recursive: true);
                         bytes += size;
                         deleted++;
+                        ReviewForgeTelemetry.CheckoutEvicted.Add(1);
                     }
                     catch (IOException)
                     {
@@ -151,6 +166,7 @@ public sealed class RepoCheckoutPool
         {
             if (Interlocked.Exchange(ref _Disposed, 1) == 0)
             {
+                ReviewForgeTelemetry.CheckoutActive.Add(-1);
                 semaphore.Release();
             }
         }

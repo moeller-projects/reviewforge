@@ -77,6 +77,18 @@ public sealed class LibGit2SharpGitOps : IGitOps
         Commands.Checkout(repo, commit, new CheckoutOptions {CheckoutModifiers = CheckoutModifiers.Force});
     }
 
+    public string? GetHeadSha(string repoPath)
+    {
+        using var repo = new Repository(repoPath);
+        return repo.Head.Tip?.Sha;
+    }
+
+    public void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs)
+    {
+        using var repo = new Repository(repoPath);
+        Commands.Fetch(repo, "origin", refSpecs, FetchOptions(pat), null);
+    }
+
     public string GetDiff(string repoPath, string baseSha, string headSha)
     {
         using var repo = new Repository(repoPath);

@@ -10,4 +10,10 @@ public interface IGitOps
 
     /// <summary>Unified diff between base and head commits.</summary>
     string GetDiff(string repoPath, string baseSha, string headSha);
+
+    /// <summary>Returns the checked-out HEAD SHA, or null when no commit is available.</summary>
+    string? GetHeadSha(string repoPath);
+
+    /// <summary>Fetches the requested refspecs into a local repository.</summary>
+    void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs);
 }

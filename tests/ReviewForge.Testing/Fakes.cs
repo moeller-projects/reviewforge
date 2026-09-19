@@ -142,6 +142,8 @@ public class FakeGitOps : IGitOps
     }
 
     public virtual void Checkout(string repoPath, string commitSha) => Checkouts.Add(commitSha);
+    public virtual string? GetHeadSha(string repoPath) => null;
+    public virtual void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs) { }
     public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
 }
 

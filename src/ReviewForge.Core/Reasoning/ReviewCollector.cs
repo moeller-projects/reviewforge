@@ -6,7 +6,7 @@ namespace ReviewForge.Core.Reasoning;
 /// <summary>
 /// Per-run sink for everything the agent records: findings, uncertainties, the final
 /// narrative. In-memory first (a crashed loop keeps what was recorded), optionally
-/// mirrored to a findings.jsonl stream for process-crash durability.
+/// mirrored to a per-run <c>findings/{runId}.jsonl</c> stream for process-crash durability.
 /// </summary>
 public sealed class ReviewCollector
 {

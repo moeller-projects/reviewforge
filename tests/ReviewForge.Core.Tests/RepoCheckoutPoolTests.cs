@@ -96,14 +96,32 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Assert.True(Directory.Exists(checkout.Path));
     }
 
+    [Fact]
+    public async Task Reuses_checkout_when_HEAD_already_matches()
+    {
+        var git = new TestGitOps {HeadSha = "head"};
+        var pool = new RepoCheckoutPool(git, _Root);
+        using (await pool.AcquireAsync("repo", "url", "head", CancellationToken.None))
+        {
+        }
+
+        using var second = await pool.AcquireAsync("repo", "url", "head", CancellationToken.None);
+
+        Assert.Equal(1, git.CloneCount);
+        Assert.Equal(1, git.CheckoutCount);
+    }
+
     private sealed class TestGitOps : IGitOps
     {
         public TimeSpan Delay { get; init; }
         public int CheckoutCount { get; private set; }
+        public int CloneCount { get; private set; }
+        public string? HeadSha { get; init; }
 
         public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
         {
-            Directory.CreateDirectory(workDir);
+            CloneCount++;
+            Directory.CreateDirectory(Path.Combine(workDir, ".git"));
             return workDir;
         }
 
@@ -116,6 +134,8 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             }
         }
 
+        public string? GetHeadSha(string repoPath) => HeadSha;
+        public void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs) { }
         public string GetDiff(string repoPath, string baseSha, string headSha) => string.Empty;
     }
 }

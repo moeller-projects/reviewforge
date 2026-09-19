@@ -71,6 +71,7 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<ReviewWorker>(sp));
         }
         services.AddHostedService<DiscoverySweepWorker>();
+        services.AddHostedService<CheckoutEvictionWorker>();
 
         services.AddOpenTelemetry()
             .WithTracing(tracing => tracing.AddSource(ReviewForgeTelemetry.SourceName));

@@ -95,7 +95,7 @@ Mounts (see `docker-compose.yml`):
 
 - `~/.codex` → `/home/app/.codex` — **read-write, directory mount**: token rotation
   rewrites `auth.json` atomically. A read-only single-file mount would break rotation.
-- named volume `reviewforge-data` → `/var/reviewforge` — repo checkouts (`work/<repo>`), `findings.jsonl`, and `reviewforge.db`. Inspect with
+- named volume `reviewforge-data` → `/var/reviewforge` — repo checkouts (`work/<repo>`), per-run `findings/{runId}.jsonl`, and `reviewforge.db`. Inspect with
   `docker compose exec reviewforge ls /var/reviewforge/work` (rootfs is read-only; only
   `/var/reviewforge`, `/home/app/.codex` and `/tmp` are writable).
 
