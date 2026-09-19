@@ -5,6 +5,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="ReviewForge.Core.Tests"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <EmbeddedResource Include="Reasoning/Prompts/native-review-system.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.native-review-system.md"/>
         <EmbeddedResource Include="Reasoning/Rules/*.json" LogicalName="ReviewForge.Core.Reasoning.Rules.%(Filename).json"/>
     </ItemGroup>

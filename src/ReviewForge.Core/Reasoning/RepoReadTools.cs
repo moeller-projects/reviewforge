@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
+using ReviewForge.Core.Analysis;
 
 namespace ReviewForge.Core.Reasoning;
 
@@ -206,7 +207,7 @@ public class RepoReadTools
         }
 
         var full = Path.GetFullPath(Path.Combine(_Root, rel));
-        if (!full.StartsWith(_Root, StringComparison.Ordinal))
+        if (!PathSafety.IsContained(_Root, full))
         {
             error = $"access denied: path escapes repository root";
             return null;

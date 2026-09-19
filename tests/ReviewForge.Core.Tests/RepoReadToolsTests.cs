@@ -85,6 +85,22 @@ public class RepoReadToolsTests : IDisposable
     }
 
     [Fact]
+    public void Escape_via_sibling_prefix_is_denied()
+    {
+        var sibling = _Root + "-evil";
+        Directory.CreateDirectory(sibling);
+        try
+        {
+            File.WriteAllText(Path.Combine(sibling, "leak.txt"), "x");
+            Assert.Contains("denied", Tools().ReadFile("../" + Path.GetFileName(sibling) + "/leak.txt"));
+        }
+        finally
+        {
+            Directory.Delete(sibling, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Grep_finds_matches_with_location()
     {
         var result = Tools().Grep("TARGET");
