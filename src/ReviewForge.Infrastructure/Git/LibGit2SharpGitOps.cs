@@ -1,7 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using LibGit2Sharp;
 using ReviewForge.Core.Ports;
-
 namespace ReviewForge.Infrastructure.Git;
 
 /// <summary>
@@ -11,8 +11,11 @@ namespace ReviewForge.Infrastructure.Git;
 [ExcludeFromCodeCoverage]
 public sealed class LibGit2SharpGitOps : IGitOps
 {
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _MirrorLocks = new(StringComparer.Ordinal);
+
     public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
     {
+        var mirror = EnsureMirror(cloneUrl, workDir, pat);
         if (Directory.Exists(Path.Combine(workDir, ".git")))
         {
             using var existing = new Repository(workDir);
@@ -20,9 +23,50 @@ public sealed class LibGit2SharpGitOps : IGitOps
             return workDir;
         }
 
-        Directory.CreateDirectory(workDir);
-        Repository.Clone(cloneUrl, workDir, new CloneOptions(FetchOptions(pat)));
+        Directory.CreateDirectory(Path.GetDirectoryName(workDir)!);
+        Repository.Clone(mirror, workDir, new CloneOptions());
         return workDir;
+    }
+
+    private string EnsureMirror(string cloneUrl, string workDir, string? pat)
+    {
+        var mirror = MirrorPath(workDir);
+        var gate = _MirrorLocks.GetOrAdd(mirror, _ => new SemaphoreSlim(1, 1));
+        gate.Wait();
+        try
+        {
+            if (Repository.IsValid(mirror))
+            {
+                using var existing = new Repository(mirror);
+                Commands.Fetch(existing, "origin", ["+refs/heads/*:refs/remotes/origin/*"], FetchOptions(pat), null);
+            }
+            else
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(mirror)!);
+                Repository.Clone(cloneUrl, mirror, new CloneOptions(FetchOptions(pat)) {IsBare = true});
+            }
+
+            return mirror;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    internal static string MirrorPath(string workDir)
+    {
+        var full = Path.GetFullPath(workDir);
+        var parent = Directory.GetParent(full)?.FullName
+                     ?? throw new ArgumentException("work directory must have a parent", nameof(workDir));
+        var checkoutRoot = Directory.GetParent(parent);
+        if (checkoutRoot is not null &&
+            string.Equals(Path.GetFileName(checkoutRoot.FullName), "checkouts", StringComparison.Ordinal))
+        {
+            return Path.Combine(checkoutRoot.Parent!.FullName, "mirror", Path.GetFileName(parent));
+        }
+
+        return Path.Combine(parent, "mirror", Path.GetFileName(full));
     }
 
     public void Checkout(string repoPath, string commitSha)
