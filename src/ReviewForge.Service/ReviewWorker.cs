@@ -11,6 +11,7 @@ public sealed class ReviewWorker(
     ReviewQueue queue,
     RunTracker tracker,
     ReviewPipelineFactory pipelineFactory,
+    InFlightClaims claims,
     ILogger<ReviewWorker> logger,
     TimeProvider? clock = null) : BackgroundService
 {
@@ -38,6 +39,10 @@ public sealed class ReviewWorker(
             {
                 logger.LogError(ex, "run {RunId} for {Pr} failed", request.RunId, request.Pr);
                 tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message);
+            }
+            finally
+            {
+                claims.Release(request.Pr, request.RunId);
             }
         }
     }

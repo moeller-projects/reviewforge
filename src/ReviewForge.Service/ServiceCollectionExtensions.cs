@@ -17,6 +17,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ReviewQueue>();
         services.AddSingleton<RunTracker>();
+        services.AddSingleton<InFlightClaims>();
 
         var ado = configuration.GetSection(AdoOptions.SectionName).Get<AdoOptions>()
                   ?? throw new InvalidOperationException($"configuration section '{AdoOptions.SectionName}' missing");

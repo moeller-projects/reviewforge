@@ -139,6 +139,18 @@ public class ServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Submit_conflicts_when_review_already_in_flight()
+    {
+        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), Guid.NewGuid(), out _));
+
+        var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = 77});
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Unknown_run_is_404()
     {
         var response = await _Factory.CreateClient().GetAsync($"/reviews/{Guid.NewGuid()}");
@@ -199,7 +211,7 @@ public class ServiceTests : IAsyncLifetime
             new FakeChatClientFactory(_Factory.Chat),
             options,
             LoggerFactory.Create(b => { }));
-        var worker = new ReviewWorker(queue, tracker, failingFactory,
+        var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
             LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -300,6 +312,7 @@ public class DiWiringTests
 
             Assert.NotNull(provider.GetRequiredService<ReviewQueue>());
             Assert.NotNull(provider.GetRequiredService<RunTracker>());
+            Assert.NotNull(provider.GetRequiredService<InFlightClaims>());
             Assert.NotNull(provider.GetRequiredService<TimeProvider>());
             Assert.NotNull(provider.GetRequiredService<IGitOps>());
             Assert.NotNull(provider.GetRequiredService<IChatClientFactory>());
