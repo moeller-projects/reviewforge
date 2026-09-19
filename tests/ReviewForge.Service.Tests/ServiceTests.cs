@@ -34,6 +34,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Reasoning__Provider", "openai");
         Environment.SetEnvironmentVariable("Reasoning__Model", "test-model");
         Environment.SetEnvironmentVariable("ReviewForge__WorkDir", WorkDir);
+        Environment.SetEnvironmentVariable("ReviewForge__WorkerCount", "2");
         Environment.SetEnvironmentVariable("ReviewForge__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
     }
 
@@ -77,7 +78,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            foreach (var key in new[] {"Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model", "ReviewForge__WorkDir", "ReviewForge__StoreConnectionString"})
+            foreach (var key in new[] {"Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model", "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString"})
             {
                 Environment.SetEnvironmentVariable(key, null);
             }
@@ -176,8 +177,41 @@ public class ServiceTests : IAsyncLifetime
         Assert.Single(_Factory.Store.Runs);
 
         var statusResponse = await client.GetAsync(body.StatusUrl);
+
         Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
     }
+    [Fact]
+    public async Task Different_heads_in_same_repo_complete_concurrently()
+    {
+        var firstPr = new PrKey("o", "p", "r", 51);
+        var secondPr = new PrKey("o", "p", "r", 52);
+        _Factory.Source.PullRequestsByKey[firstPr] = new PullRequest(51, "one", null, "head-one", "base", "url", false);
+        _Factory.Source.PullRequestsByKey[secondPr] = new PullRequest(52, "two", null, "head-two", "base", "url", false);
+        _Factory.Git.CloneDelay = TimeSpan.FromMilliseconds(150);
+        try
+        {
+            var client = _Factory.CreateClient();
+            var first = await client.PostAsJsonAsync("/reviews",
+                new {org = "o", project = "p", repositoryId = "r", prId = 51});
+            var second = await client.PostAsJsonAsync("/reviews",
+                new {org = "o", project = "p", repositoryId = "r", prId = 52});
+            var firstBody = await first.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var secondBody = await second.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+
+            var statuses = await Task.WhenAll(
+                WaitForState(firstBody!.RunId, RunState.Completed),
+                WaitForState(secondBody!.RunId, RunState.Completed));
+
+            Assert.All(statuses, status => Assert.Equal(RunState.Completed, status.State));
+            Assert.True(_Factory.Git.MaxConcurrentClones > 1);
+        }
+        finally
+        {
+            _Factory.Source.PullRequestsByKey.Clear();
+            _Factory.Git.CloneDelay = TimeSpan.Zero;
+        }
+    }
+
 
     [Fact]
     public async Task Draft_pr_is_skipped()

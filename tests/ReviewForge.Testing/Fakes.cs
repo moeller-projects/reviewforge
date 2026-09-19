@@ -12,6 +12,7 @@ public class FakePullRequestSource : IPullRequestSource
     public int OpenPullRequestsFetches { get; private set; }
     public int WorkItemFetches { get; private set; }
     public PullRequest Pr { get; set; } = new(1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false);
+    public Dictionary<PrKey, PullRequest> PullRequestsByKey { get; } = [];
     public List<WorkItem> WorkItems { get; set; } = [];
     public List<ChangedFile> ChangedFiles { get; set; } = [];
     public List<ReviewThread> Threads { get; set; } = [];
@@ -24,7 +25,8 @@ public class FakePullRequestSource : IPullRequestSource
     public List<(int ThreadId, ReviewThreadStatus Status)> StatusChanges { get; } = [];
     public List<(string ReviewerId, int Vote)> Votes { get; } = [];
 
-    public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct) => Task.FromResult(Pr);
+    public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+        => Task.FromResult(PullRequestsByKey.TryGetValue(pr, out var pullRequest) ? pullRequest : Pr);
 
     public virtual Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
@@ -116,12 +118,29 @@ public class FakeGitOps : IGitOps
     public string Diff { get; set; } = string.Empty;
     public string RepoDir { get; set; } = Path.Combine(Path.GetTempPath(), "reviewforge-fake-repo");
     public List<string> Checkouts { get; } = [];
+    public TimeSpan CloneDelay { get; set; }
+    public int MaxConcurrentClones => _MaxConcurrentClones;
+    private int _ActiveClones;
+    private int _MaxConcurrentClones;
 
     public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat)
     {
         Directory.CreateDirectory(workDir);
+        var active = Interlocked.Increment(ref _ActiveClones);
+        while (active > Volatile.Read(ref _MaxConcurrentClones) &&
+               Interlocked.CompareExchange(ref _MaxConcurrentClones, active, Volatile.Read(ref _MaxConcurrentClones)) != Volatile.Read(ref _MaxConcurrentClones))
+        {
+        }
+
+        if (CloneDelay > TimeSpan.Zero)
+        {
+            Thread.Sleep(CloneDelay);
+        }
+
+        Interlocked.Decrement(ref _ActiveClones);
         return workDir;
     }
+
     public virtual void Checkout(string repoPath, string commitSha) => Checkouts.Add(commitSha);
     public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
 }
