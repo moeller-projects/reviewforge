@@ -65,7 +65,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
             services.AddSingleton<IGitOps>(Git);
             services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory(Chat));
             services.AddSingleton(sp => new ReviewPipelineFactory(
-                Source, Store, Git,
+                Source, Store,
                 sp.GetRequiredService<RepoCheckoutPool>(),
                 new FakeChatClientFactory(Chat),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
@@ -245,7 +245,7 @@ public class ServiceTests : IAsyncLifetime
         var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = standaloneWorkDir});
         var failingGit = new ExplosiveGitOps(standaloneWorkDir);
         var failingFactory = new ReviewPipelineFactory(
-            _Factory.Source, _Factory.Store, failingGit,
+            _Factory.Source, _Factory.Store,
             new RepoCheckoutPool(failingGit, standaloneWorkDir),
             new FakeChatClientFactory(_Factory.Chat),
             options,

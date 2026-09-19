@@ -30,17 +30,14 @@ public sealed class ReviewForgeServiceOptions
     public ReasoningEffort? ReasoningEffort { get; init; }
 }
 
-/// <summary>Composition root for the 10-stage pipeline.</summary>
 public sealed class ReviewPipelineFactory(
     IPullRequestSource source,
     IFindingStore store,
-    IGitOps git,
     RepoCheckoutPool checkoutPool,
     IChatClientFactory chatClientFactory,
     IOptions<ReviewForgeServiceOptions> options,
     ILoggerFactory loggerFactory,
     IContextEnricher? enricher = null,
-    string? adoPat = null,
     TimeProvider? clock = null)
 {
     public ReviewPipeline Create()

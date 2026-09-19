@@ -51,13 +51,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => new ReviewPipelineFactory(
             sp.GetRequiredService<IPullRequestSource>(),
             sp.GetRequiredService<IFindingStore>(),
-            sp.GetRequiredService<IGitOps>(),
             sp.GetRequiredService<RepoCheckoutPool>(),
             sp.GetRequiredService<IChatClientFactory>(),
             sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
             sp.GetRequiredService<ILoggerFactory>(),
             enricher: null,
-            adoPat: ado.Pat,
             clock: sp.GetRequiredService<TimeProvider>()));
 
         var workerCount = configuration.GetValue<int?>($"{ReviewForgeServiceOptions.SectionName}:WorkerCount") ?? 1;
