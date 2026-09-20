@@ -401,6 +401,21 @@ public class DiWiringTests
     }
 
     [Fact]
+    public void ChatClientFactory_is_singleton_and_disposed_with_provider()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig());
+            using var provider = services.BuildServiceProvider();
+            var a = provider.GetRequiredService<IChatClientFactory>();
+            var b = provider.GetRequiredService<IChatClientFactory>();
+            Assert.Same(a, b);
+        });
+    }
+
+    [Fact]
     public void WorkerCount_registers_multiple_workers()
     {
         WithPat(() =>
