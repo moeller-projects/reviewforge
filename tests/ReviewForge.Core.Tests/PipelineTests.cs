@@ -266,6 +266,37 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Validate_reads_each_file_once()
+    {
+        var reads = new List<string>();
+        var stage = new ValidateFindingsStage(
+            NullLogger<ValidateFindingsStage>.Instance,
+            lineReader: path =>
+            {
+                reads.Add(path);
+                return File.ReadAllLines(path);
+            });
+
+        var f1 = FindingOnLine(2);
+        f1.DedupeKey = "k1";
+        var f2 = FindingOnLine(2);
+        f2.DedupeKey = "k2";
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative(),
+            Findings = [f1, f2],
+            Uncertainties = [],
+        };
+
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(reads);
+        Assert.Equal(2, ctx.AcceptedFindings.Count);
+    }
+
+    [Fact]
     public async Task Validate_rejects_when_file_missing()
     {
         var finding = FindingOnLine(1);

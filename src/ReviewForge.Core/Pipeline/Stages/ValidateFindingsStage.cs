@@ -13,6 +13,7 @@ public sealed class ValidateFindingsStage(
     ILogger<ValidateFindingsStage> logger,
     Func<string, string[]>? lineReader = null) : IReviewStage
 {
+    private readonly Dictionary<string, string[]> _LineCache = new(StringComparer.Ordinal);
     private readonly Func<string, string[]> _LineReader = lineReader ?? File.ReadAllLines;
 
     public string Name => "validate-findings";
@@ -61,15 +62,18 @@ public sealed class ValidateFindingsStage(
         if (!PathContainment.IsContained(repoDir, path) || !File.Exists(path))
             return false;
 
-        string[] lines;
-        try
+        if (!_LineCache.TryGetValue(path, out var lines))
         {
-            lines = _LineReader(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            logger.LogWarning(ex, "could not read {Path} for anchor validation", path);
-            return false;
+            try
+            {
+                lines = _LineReader(path);
+                _LineCache[path] = lines;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex, "could not read {Path} for anchor validation", path);
+                return false;
+            }
         }
 
         var (resolution, anchor) = AnchorResolver.Resolve(finding, lines);
