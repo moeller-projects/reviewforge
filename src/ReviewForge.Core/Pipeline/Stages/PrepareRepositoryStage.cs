@@ -12,7 +12,7 @@ public sealed class PrepareRepositoryStage(RepoCheckoutPool pool) : IReviewStage
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var pr = ctx.PullRequest!;
-        var checkout = await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.SourceCommitSha, ct);
+        var checkout = await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct);
         ctx.RepoLease = checkout;
         ctx.RepoDir = checkout.Path;
         ctx.DiffText = pool.GetDiff(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha);

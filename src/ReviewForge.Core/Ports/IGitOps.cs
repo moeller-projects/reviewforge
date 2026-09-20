@@ -14,6 +14,9 @@ public interface IGitOps
     /// <summary>Returns the checked-out HEAD SHA, or null when no commit is available.</summary>
     string? GetHeadSha(string repoPath);
 
-    /// <summary>Fetches the requested refspecs into a local repository.</summary>
-    void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs);
+    /// <summary>
+    /// Ensures both commits are present in the checkout, fetching them by SHA directly
+    /// from the authoritative clone URL when targeted fetch is enabled.
+    /// </summary>
+    void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat);
 }

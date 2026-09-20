@@ -137,6 +137,7 @@ public class StageTests : IDisposable
         await new PrepareRepositoryStage(new RepoCheckoutPool(git, Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["head-sha"], git.Checkouts);
+        Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
         Assert.True(ctx.Diff!.Contains("src/A.cs", 2));
         Assert.False(ctx.Diff.Contains("src/A.cs", 1));
     }

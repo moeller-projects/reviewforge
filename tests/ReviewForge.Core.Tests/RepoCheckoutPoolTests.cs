@@ -33,14 +33,26 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         var git = new TestGitOps();
         var pool = new RepoCheckoutPool(git, _Root);
 
-        var checkout = await pool.AcquireAsync("repo", "url", "head", CancellationToken.None);
+        var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
         Assert.Equal(pool.CheckoutPath("repo", "head"), checkout.Path);
         Assert.True(Directory.Exists(checkout.Path));
         checkout.Dispose();
         checkout.Dispose();
 
-        using var second = await pool.AcquireAsync("repo", "url", "head", CancellationToken.None);
+        using var second = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
         Assert.Equal(2, git.CheckoutCount);
+    }
+
+    [Fact]
+    public async Task Acquire_ensures_commits_before_checkout()
+    {
+        var git = new TestGitOps();
+        var pool = new RepoCheckoutPool(git, _Root);
+
+        using var checkout = await pool.AcquireAsync("repo", "url", "base-sha", "head-sha", CancellationToken.None);
+
+        Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
+        Assert.Equal(["clone", "ensure", "checkout"], git.Calls);
     }
 
     [Fact]
@@ -49,8 +61,8 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         var git = new TestGitOps {Delay = TimeSpan.FromMilliseconds(50)};
         var pool = new RepoCheckoutPool(git, _Root);
 
-        using var first = await pool.AcquireAsync("repo", "url", "head-a", CancellationToken.None);
-        using var second = await pool.AcquireAsync("repo", "url", "head-b", CancellationToken.None);
+        using var first = await pool.AcquireAsync("repo", "url", "base", "head-a", CancellationToken.None);
+        using var second = await pool.AcquireAsync("repo", "url", "base", "head-b", CancellationToken.None);
 
         Assert.Equal(2, git.CheckoutCount);
     }
@@ -88,7 +100,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     {
         var git = new TestGitOps();
         var pool = new RepoCheckoutPool(git, _Root);
-        using var checkout = await pool.AcquireAsync("repo", "url", "head", CancellationToken.None);
+        using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
         Directory.SetLastWriteTimeUtc(checkout.Path, DateTime.UtcNow.AddDays(-10));
 
         var report = pool.Evict(new CheckoutEvictionOptions {MaxAge = TimeSpan.FromDays(1)}, TimeProvider.System);
@@ -102,11 +114,11 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     {
         var git = new TestGitOps {HeadSha = "head"};
         var pool = new RepoCheckoutPool(git, _Root);
-        using (await pool.AcquireAsync("repo", "url", "head", CancellationToken.None))
+        using (await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None))
         {
         }
 
-        using var second = await pool.AcquireAsync("repo", "url", "head", CancellationToken.None);
+        using var second = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
 
         Assert.Equal(1, git.CloneCount);
         Assert.Equal(1, git.CheckoutCount);
@@ -116,7 +128,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     public async Task Acquire_failure_releases_lock()
     {
         var pool = new RepoCheckoutPool(new TestGitOps {ThrowOnClone = true}, _Root);
-        await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "head", CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
     }
 
     [Fact]
@@ -131,43 +143,14 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Assert.False(Directory.Exists(repoDir));
     }
 
-    private sealed class TestGitOps : IGitOps
-    {
-        public TimeSpan Delay { get; init; }
-        public bool ThrowOnClone { get; init; }
-        public int CheckoutCount { get; private set; }
-        public int CloneCount { get; private set; }
-        public string? HeadSha { get; init; }
-
-        public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
-        {
-            if (ThrowOnClone)
-            {
-                throw new IOException("clone failed");
-            }
-            CloneCount++;
-            Directory.CreateDirectory(Path.Combine(workDir, ".git"));
-            return workDir;
-        }
-
-        public void Checkout(string repoPath, string commitSha)
-        {
-            CheckoutCount++;
-            if (Delay > TimeSpan.Zero)
-            {
-                Thread.Sleep(Delay);
-            }
-        }
-
-        public string? GetHeadSha(string repoPath) => HeadSha;
-        public void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs) { }
-        public string GetDiff(string repoPath, string baseSha, string headSha) => string.Empty;
-    }
     [Fact]
     public async Task Keyed_lock_pool_prunes_after_release_and_honors_cancellation()
     {
         var locks = new KeyedLockPool();
-        using (await locks.AcquireAsync("one", CancellationToken.None)) { }
+        using (await locks.AcquireAsync("one", CancellationToken.None))
+        {
+        }
+
         Assert.Equal(0, locks.Count);
 
         using var held = await locks.AcquireAsync("one", CancellationToken.None);
@@ -186,5 +169,49 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
         Directory.Delete(Path.Combine(_Root, "checkouts"), recursive: true);
         Assert.Equal(0, pool.Evict(new CheckoutEvictionOptions(), TimeProvider.System).Scanned);
+    }
+
+    private sealed class TestGitOps : IGitOps
+    {
+        public TimeSpan Delay { get; init; }
+        public bool ThrowOnClone { get; init; }
+        public int CheckoutCount { get; private set; }
+        public int CloneCount { get; private set; }
+        public string? HeadSha { get; init; }
+        public List<(string Base, string Head)> EnsuredCommits { get; } = [];
+        public List<string> Calls { get; } = [];
+
+        public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
+        {
+            Calls.Add("clone");
+            if (ThrowOnClone)
+            {
+                throw new IOException("clone failed");
+            }
+
+            CloneCount++;
+            Directory.CreateDirectory(Path.Combine(workDir, ".git"));
+            return workDir;
+        }
+
+        public void Checkout(string repoPath, string commitSha)
+        {
+            Calls.Add("checkout");
+            CheckoutCount++;
+            if (Delay > TimeSpan.Zero)
+            {
+                Thread.Sleep(Delay);
+            }
+        }
+
+        public string? GetHeadSha(string repoPath) => HeadSha;
+
+        public void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
+        {
+            Calls.Add("ensure");
+            EnsuredCommits.Add((baseSha, headSha));
+        }
+
+        public string GetDiff(string repoPath, string baseSha, string headSha) => string.Empty;
     }
 }

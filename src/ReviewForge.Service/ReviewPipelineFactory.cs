@@ -4,6 +4,7 @@ using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
+
 namespace ReviewForge.Service;
 
 /// <summary>Service options for the pipeline host.</summary>
@@ -26,6 +27,7 @@ public sealed class ReviewForgeServiceOptions
     public int MaxContextTokens { get; init; } = 150_000;
     public int MaxIterations { get; init; } = 30;
     public int WorkerCount { get; init; } = 1;
+    public bool TargetedFetchEnabled { get; init; }
     public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }
 }

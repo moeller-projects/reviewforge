@@ -1,12 +1,13 @@
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Service.Queue;
-using ReviewForge.Core.Workspaces;
+
 namespace ReviewForge.Service;
 
 /// <summary>DI wiring for the whole host — options validation at startup, fail fast on bad config.</summary>
@@ -31,7 +32,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(sp.GetRequiredService<ReasoningOptions>()));
         services.Configure<ReviewForgeServiceOptions>(configuration.GetSection(ReviewForgeServiceOptions.SectionName));
         services.Configure<ApiDocsOptions>(configuration.GetSection(ApiDocsOptions.SectionName));
-        services.AddSingleton<IGitOps, LibGit2SharpGitOps>();
+        services.AddSingleton<IGitOps>(sp =>
+            new LibGit2SharpGitOps(
+                sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.TargetedFetchEnabled));
         services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
@@ -68,6 +71,7 @@ public static class ServiceCollectionExtensions
         {
             services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<ReviewWorker>(sp));
         }
+
         services.AddHostedService<DiscoverySweepWorker>();
         services.AddHostedService<CheckoutEvictionWorker>();
 

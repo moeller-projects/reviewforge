@@ -13,9 +13,9 @@ namespace ReviewForge.Core.Workspaces;
 public sealed class RepoCheckoutPool
 {
     private readonly IGitOps _Git;
-    private readonly string _Root;
-    private readonly string? _Pat;
     private readonly KeyedLockPool _Locks = new();
+    private readonly string? _Pat;
+    private readonly string _Root;
 
     public RepoCheckoutPool(IGitOps git, string root, string? pat = null)
     {
@@ -27,7 +27,7 @@ public sealed class RepoCheckoutPool
     }
 
     public async Task<RepoCheckout> AcquireAsync(
-        string repositoryId, string cloneUrl, string headSha, CancellationToken ct)
+        string repositoryId, string cloneUrl, string baseSha, string headSha, CancellationToken ct)
     {
         var started = Stopwatch.GetTimestamp();
         var key = CheckoutKey(repositoryId, headSha);
@@ -41,17 +41,20 @@ public sealed class RepoCheckoutPool
             if (Directory.Exists(Path.Combine(path, ".git")) &&
                 string.Equals(_Git.GetHeadSha(path), headSha, StringComparison.OrdinalIgnoreCase))
             {
+                _Git.EnsureCommits(path, cloneUrl, baseSha, headSha, _Pat);
                 Directory.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
 
             var repoPath = _Git.CloneOrOpen(cloneUrl, path, _Pat);
+            _Git.EnsureCommits(repoPath, cloneUrl, baseSha, headSha, _Pat);
             _Git.Checkout(repoPath, headSha);
             if (Directory.Exists(repoPath))
             {
                 Directory.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
             }
+
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
         }
@@ -66,6 +69,7 @@ public sealed class RepoCheckoutPool
 
     internal string GetDiff(string repoPath, string baseSha, string headSha)
         => _Git.GetDiff(repoPath, baseSha, headSha);
+
     public CheckoutEvictionReport Evict(CheckoutEvictionOptions options, TimeProvider clock)
     {
         if (!options.Enabled)
@@ -151,6 +155,7 @@ public sealed class RepoCheckoutPool
 
     private static string EncodedCheckoutKey(string repositoryComponent, string headComponent)
         => $"{repositoryComponent}:{headComponent}";
+
     internal static string Sanitize(string id)
         => string.Concat(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
 

@@ -115,13 +115,14 @@ public class FakeFindingStore : IFindingStore
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>
 public class FakeGitOps : IGitOps
 {
+    private int _ActiveClones;
+    private int _MaxConcurrentClones;
     public string Diff { get; set; } = string.Empty;
     public string RepoDir { get; set; } = Path.Combine(Path.GetTempPath(), "reviewforge-fake-repo");
     public List<string> Checkouts { get; } = [];
+    public List<(string Base, string Head)> EnsuredCommits { get; } = [];
     public TimeSpan CloneDelay { get; set; }
     public int MaxConcurrentClones => _MaxConcurrentClones;
-    private int _ActiveClones;
-    private int _MaxConcurrentClones;
 
     public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat)
     {
@@ -147,7 +148,10 @@ public class FakeGitOps : IGitOps
 
     public virtual void Checkout(string repoPath, string commitSha) => Checkouts.Add(commitSha);
     public virtual string? GetHeadSha(string repoPath) => null;
-    public virtual void FetchCommits(string repoPath, string? pat, IReadOnlyList<string> refSpecs) { }
+
+    public virtual void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
+        => EnsuredCommits.Add((baseSha, headSha));
+
     public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
 }
 
