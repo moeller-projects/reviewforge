@@ -16,7 +16,7 @@ public class CheckoutEvictionWorkerTests
         File.WriteAllText(Path.Combine(root, "checkouts", "repo", "head", "file"), "data");
         try
         {
-            var pool = new RepoCheckoutPool(new FakeGitOps(), root);
+            var pool = new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root);
             var options = Options.Create(new ReviewForgeServiceOptions
             {
                 WorkDir = root,
@@ -59,21 +59,35 @@ public class CheckoutEvictionWorkerTests
         try
         {
             var worker = new CheckoutEvictionWorker(
-                new RepoCheckoutPool(new FakeGitOps(), root),
+                new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root),
                 Options.Create(new ReviewForgeServiceOptions
                 {
                     WorkDir = root,
-                    Checkout = new CheckoutEvictionOptions {Enabled = false},
+                    // A short interval makes a "loop started despite Enabled=false" regression
+                    // observable within the test, rather than only after an hour-long sweep.
+                    Checkout = new CheckoutEvictionOptions
+                    {
+                        Enabled = false,
+                        MaxAge = TimeSpan.Zero,
+                        SweepInterval = TimeSpan.FromMilliseconds(10),
+                    },
                 }),
                 TimeProvider.System,
                 NullLogger<CheckoutEvictionWorker>.Instance);
 
             await worker.StartAsync(CancellationToken.None);
+            await Task.Delay(80); // several would-be ticks
+            Assert.True(Directory.Exists(checkout));
+
+            await worker.StopAsync(CancellationToken.None);
             Assert.True(Directory.Exists(checkout));
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
     }
 }

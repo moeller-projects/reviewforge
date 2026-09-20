@@ -191,6 +191,7 @@ public class FakeFindingStore : IFindingStore
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>
 public class FakeGitOps : IGitOps
 {
+    private readonly object _Gate = new();
     private int _ActiveClones;
     private int _MaxConcurrentClones;
     public string Diff { get; set; } = string.Empty;
@@ -222,11 +223,23 @@ public class FakeGitOps : IGitOps
         return workDir;
     }
 
-    public virtual void Checkout(string repoPath, string commitSha) => Checkouts.Add(commitSha);
+    public virtual void Checkout(string repoPath, string commitSha)
+    {
+        lock (_Gate)
+        {
+            Checkouts.Add(commitSha);
+        }
+    }
+
     public virtual string? GetHeadSha(string repoPath) => null;
 
     public virtual void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
-        => EnsuredCommits.Add((baseSha, headSha));
+    {
+        lock (_Gate)
+        {
+            EnsuredCommits.Add((baseSha, headSha));
+        }
+    }
 
     public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
 }
@@ -253,4 +266,26 @@ public class FakeChatClientFactory(IChatClient client, string model = "test-mode
 {
     public string ModelName => model;
     public IChatClient Create() => client;
+}
+
+/// <summary>In-memory <see cref="IWorkspaceFs"/> backed by the real filesystem (temp dirs).</summary>
+public sealed class FakeWorkspaceFs : IWorkspaceFs
+{
+    public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+
+    public bool DirectoryExists(string path) => Directory.Exists(path);
+
+    public IReadOnlyList<string> EnumerateDirectories(string path) => Directory.EnumerateDirectories(path).ToArray();
+
+    public string[] EnumerateFileSystemEntries(string path) => Directory.EnumerateFileSystemEntries(path).ToArray();
+
+    public string[] EnumerateFilesRecursive(string path) => Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).ToArray();
+
+    public long GetFileLength(string path) => new FileInfo(path).Length;
+
+    public DateTime GetLastWriteTimeUtc(string path) => Directory.GetLastWriteTimeUtc(path);
+
+    public void SetLastWriteTimeUtc(string path, DateTime timestamp) => Directory.SetLastWriteTimeUtc(path, timestamp);
+
+    public void DeleteDirectory(string path, bool recursive) => Directory.Delete(path, recursive);
 }

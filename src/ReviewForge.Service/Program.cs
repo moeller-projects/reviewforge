@@ -14,7 +14,8 @@ builder.Logging.AddOpenTelemetry(options =>
     options.ParseStateValues = true;
     options.AddOtlpExporter();
 });
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddCheck<StoreHealthCheck>("finding-store");
 builder.Services.AddReviewForge(builder.Configuration);
 builder.Services.AddOpenApi(ApiDocsRegistration.Configure);
 

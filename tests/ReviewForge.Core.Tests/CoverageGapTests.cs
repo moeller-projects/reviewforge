@@ -23,7 +23,7 @@ public class CoverageGapTests
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(),
-            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), Path.GetTempPath())),
+            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath())),
             new ClassifyRunStage(source),
             new EnrichContextStage(null, NullLogger<EnrichContextStage>.Instance),
             new ExecuteReasoningStage(agent),

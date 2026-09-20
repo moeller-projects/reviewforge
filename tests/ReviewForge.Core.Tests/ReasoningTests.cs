@@ -296,6 +296,19 @@ public class PromptBuilderTests
     }
 
     [Fact]
+    public void Truncation_stays_within_the_total_budget()
+    {
+        var big = string.Join('\n', Enumerable.Range(0, 10_000).Select(i => $"+line {i}"));
+
+        var diff = PromptBuilder.ShrinkDiff(big, maxTotal: 1_000, maxPerFile: 1_000);
+
+        // The reserved marker and fixed '\n' accounting must never push the emitted diff
+        // past the advertised total budget.
+        Assert.True(diff.Length <= 1_000, $"diff length {diff.Length} exceeded the 1000-char budget");
+        Assert.Contains(PromptBuilder.DiffTruncationMarker, diff);
+    }
+
+    [Fact]
     public void Per_file_cap_produces_per_file_marker()
     {
         var file = "+++ b/a.cs\n" + string.Join('\n', Enumerable.Range(0, 500).Select(i => $"+x{i}"));

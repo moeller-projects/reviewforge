@@ -80,10 +80,17 @@ public sealed class LibGit2SharpGitOps : IGitOps
                 [$"+{baseSha}:refs/reviewforge/base", $"+{headSha}:refs/reviewforge/head"],
                 FetchOptions(pat), null);
         }
-        catch (LibGit2SharpException)
+        catch (LibGit2SharpException ex)
         {
-            // Some ADO configurations reject fetch-by-SHA. Fall back to all heads.
+            // Some ADO configurations reject fetch-by-SHA. Fall back to all heads, but only
+            // succeed if the fallback actually reached the commits — otherwise the run must
+            // fail visibly (no silent degradation) rather than mask the real fetch error.
             Commands.Fetch(repo, remoteName, ["+refs/heads/*:refs/remotes/origin/*"], FetchOptions(pat), null);
+            if (!HasCommit(repo, baseSha) || !HasCommit(repo, headSha))
+            {
+                throw new InvalidOperationException(
+                    $"failed to fetch {baseSha}..{headSha} into {repoPath}: fetch-by-SHA was rejected and the heads fallback did not reach the commits", ex);
+            }
         }
         finally
         {

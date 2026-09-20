@@ -102,6 +102,38 @@ public class RepoReadToolsTests : IDisposable
     }
 
     [Fact]
+    public void Symlink_escaping_the_root_is_denied()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "reviewforge-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "secret.txt"), "top secret");
+        try
+        {
+            var link = Path.Combine(_Root, "linked");
+            try
+            {
+                Directory.CreateSymbolicLink(link, outside);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return; // symlinks unavailable (non-elevated Windows)
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            // Lexically inside the root, but resolving outside — must be refused on every entry point.
+            Assert.Contains("denied", Tools().ReadFile("linked/secret.txt"));
+            Assert.Contains("denied", Tools().List("linked"));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Grep_finds_matches_with_location()
     {
         var result = Tools().Grep("TARGET");

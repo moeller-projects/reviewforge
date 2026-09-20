@@ -208,7 +208,9 @@ public class RepoReadTools
         }
 
         var full = Path.GetFullPath(Path.Combine(_Root, rel));
-        if (rel.Length != 0 && !PathContainment.IsContained(_Root, full))
+        // Symlink-aware: a checkout-controlled link that resolves outside the root must be
+        // refused even though its lexical path stays under _Root.
+        if (rel.Length != 0 && !PathSafety.IsContainedReal(_Root, full))
         {
             error = $"access denied: path escapes repository root";
             return null;

@@ -1,5 +1,6 @@
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Testing;
 using Xunit;
 
 namespace ReviewForge.Core.Tests;
@@ -18,6 +19,9 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         }
     }
 
+    private RepoCheckoutPool Pool(TestGitOps git, string? pat = null)
+        => new(git, new FakeWorkspaceFs(), _Root, pat);
+
     [Fact]
     public void Sanitizes_path_components_without_separator_collisions()
     {
@@ -31,7 +35,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     public async Task Acquire_returns_per_head_checkout_and_dispose_is_idempotent()
     {
         var git = new TestGitOps();
-        var pool = new RepoCheckoutPool(git, _Root);
+        var pool = Pool(git);
 
         var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
         Assert.Equal(pool.CheckoutPath("repo", "head"), checkout.Path);
@@ -47,7 +51,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     public async Task Acquire_ensures_commits_before_checkout()
     {
         var git = new TestGitOps();
-        var pool = new RepoCheckoutPool(git, _Root);
+        var pool = Pool(git);
 
         using var checkout = await pool.AcquireAsync("repo", "url", "base-sha", "head-sha", CancellationToken.None);
 
@@ -56,21 +60,26 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     }
 
     [Fact]
-    public async Task Different_heads_can_materialize_concurrently()
+    public async Task Different_heads_materialize_concurrently()
     {
-        var git = new TestGitOps {Delay = TimeSpan.FromMilliseconds(50)};
-        var pool = new RepoCheckoutPool(git, _Root);
+        var git = new TestGitOps {Delay = TimeSpan.FromMilliseconds(150)};
+        var pool = Pool(git);
 
-        using var first = await pool.AcquireAsync("repo", "url", "base", "head-a", CancellationToken.None);
-        using var second = await pool.AcquireAsync("repo", "url", "base", "head-b", CancellationToken.None);
+        // The blocking clone delay overlaps only when both acquires run on separate threads,
+        // mirroring production where multiple workers drain the queue concurrently.
+        var first = Task.Run(() => pool.AcquireAsync("repo", "url", "base", "head-a", CancellationToken.None));
+        var second = Task.Run(() => pool.AcquireAsync("repo", "url", "base", "head-b", CancellationToken.None));
+        using var a = await first;
+        using var b = await second;
 
         Assert.Equal(2, git.CheckoutCount);
+        Assert.True(git.MaxConcurrentClones > 1, "independent heads should clone concurrently, not serialize");
     }
 
     [Fact]
     public async Task Evict_removes_oldest_over_repo_cap()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps(), _Root);
+        var pool = Pool(new TestGitOps());
         var repoDir = Path.GetDirectoryName(pool.CheckoutPath("repo", "old"))!;
         var old = Path.Combine(repoDir, "old");
         var middle = Path.Combine(repoDir, "middle");
@@ -99,7 +108,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     public async Task Evict_skips_a_checkout_held_by_a_lease()
     {
         var git = new TestGitOps();
-        var pool = new RepoCheckoutPool(git, _Root);
+        var pool = Pool(git);
         using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
         Directory.SetLastWriteTimeUtc(checkout.Path, DateTime.UtcNow.AddDays(-10));
 
@@ -113,7 +122,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     public async Task Reuses_checkout_when_HEAD_already_matches()
     {
         var git = new TestGitOps {HeadSha = "head"};
-        var pool = new RepoCheckoutPool(git, _Root);
+        var pool = Pool(git);
         using (await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None))
         {
         }
@@ -127,14 +136,21 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     [Fact]
     public async Task Acquire_failure_releases_lock()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps {ThrowOnClone = true}, _Root);
+        var git = new TestGitOps {ThrowOnClone = true};
+        var pool = Pool(git);
         await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+
+        // The failed acquire must not leave the keyed semaphore behind: the same pool and key
+        // must be acquirable once the clone stops failing.
+        git.ThrowOnClone = false;
+        using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
+        Assert.True(Directory.Exists(checkout.Path));
     }
 
     [Fact]
     public void Evict_cleans_an_empty_repository_directory()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps(), _Root);
+        var pool = Pool(new TestGitOps());
         var repoDir = Path.GetDirectoryName(pool.CheckoutPath("repo", "head"))!;
         var checkout = pool.CheckoutPath("repo", "head");
         Directory.CreateDirectory(checkout);
@@ -160,11 +176,43 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => locks.AcquireAsync("one", canceled.Token));
     }
 
+    [Fact]
+    public async Task Keyed_lock_pool_prunes_after_cancelled_waiter_and_release()
+    {
+        var locks = new KeyedLockPool();
+
+        using var held = await locks.AcquireAsync("key", CancellationToken.None);
+
+        // A second waiter queues for the same key and is cancelled while blocked behind the holder.
+        using var cts = new CancellationTokenSource();
+        var pending = locks.AcquireAsync("key", cts.Token);
+        cts.Cancel();
+
+        // The semaphore does not guarantee whether a blocked waiter observes cancellation or wins
+        // the now-free slot on release; either path must still prune the key and leave the
+        // semaphore reusable (no idle-entry leak, no premature disposal).
+        held!.Dispose();
+
+        KeyedLockPool.Lease? waiter = null;
+        try
+        {
+            waiter = await pending;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        waiter?.Dispose();
+
+        Assert.Equal(0, locks.Count);
+        using var again = await locks.AcquireAsync("key", CancellationToken.None);
+        Assert.NotNull(again);
+    }
 
     [Fact]
     public void Evict_returns_empty_when_disabled_or_checkout_root_missing()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps(), _Root);
+        var pool = Pool(new TestGitOps());
         Assert.Equal(0, pool.Evict(new CheckoutEvictionOptions {Enabled = false}, TimeProvider.System).Scanned);
 
         Directory.Delete(Path.Combine(_Root, "checkouts"), recursive: true);
@@ -173,34 +221,67 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
     private sealed class TestGitOps : IGitOps
     {
+        private readonly object _Gate = new();
+        private int _ActiveClones;
+        private int _MaxConcurrentClones;
         public TimeSpan Delay { get; init; }
-        public bool ThrowOnClone { get; init; }
+        public bool ThrowOnClone { get; set; }
         public int CheckoutCount { get; private set; }
         public int CloneCount { get; private set; }
+        public int MaxConcurrentClones => Volatile.Read(ref _MaxConcurrentClones);
         public string? HeadSha { get; init; }
         public List<(string Base, string Head)> EnsuredCommits { get; } = [];
         public List<string> Calls { get; } = [];
 
         public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
         {
-            Calls.Add("clone");
+            lock (_Gate)
+            {
+                Calls.Add("clone");
+            }
+
             if (ThrowOnClone)
             {
                 throw new IOException("clone failed");
             }
 
-            CloneCount++;
+            var active = Interlocked.Increment(ref _ActiveClones);
+            while (true)
+            {
+                var observed = Volatile.Read(ref _MaxConcurrentClones);
+                if (active <= observed || Interlocked.CompareExchange(ref _MaxConcurrentClones, active, observed) == observed)
+                {
+                    break;
+                }
+            }
+
+            lock (_Gate)
+            {
+                CloneCount++;
+            }
+
+            try
+            {
+                if (Delay > TimeSpan.Zero)
+                {
+                    Thread.Sleep(Delay);
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _ActiveClones);
+            }
+
             Directory.CreateDirectory(Path.Combine(workDir, ".git"));
             return workDir;
         }
 
         public void Checkout(string repoPath, string commitSha)
         {
-            Calls.Add("checkout");
-            CheckoutCount++;
-            if (Delay > TimeSpan.Zero)
+            lock (_Gate)
             {
-                Thread.Sleep(Delay);
+                Calls.Add("checkout");
+                CheckoutCount++;
             }
         }
 
@@ -208,8 +289,11 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
         public void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
         {
-            Calls.Add("ensure");
-            EnsuredCommits.Add((baseSha, headSha));
+            lock (_Gate)
+            {
+                Calls.Add("ensure");
+                EnsuredCommits.Add((baseSha, headSha));
+            }
         }
 
         public string GetDiff(string repoPath, string baseSha, string headSha) => string.Empty;

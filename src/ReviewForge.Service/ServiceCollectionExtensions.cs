@@ -6,6 +6,7 @@ using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
+using ReviewForge.Infrastructure.Filesystem;
 using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Service.Queue;
@@ -37,11 +38,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGitOps>(sp =>
             new LibGit2SharpGitOps(
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.TargetedFetchEnabled));
+        services.AddSingleton<IWorkspaceFs, FileSystemWorkspaceFs>();
         services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
             var git = sp.GetRequiredService<IGitOps>();
-            return new RepoCheckoutPool(git, opts.WorkDir, ado.Pat);
+            return new RepoCheckoutPool(git, sp.GetRequiredService<IWorkspaceFs>(), opts.WorkDir, ado.Pat);
         });
         services.Configure<DiscoveryOptions>(configuration.GetSection(DiscoveryOptions.SectionName));
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);

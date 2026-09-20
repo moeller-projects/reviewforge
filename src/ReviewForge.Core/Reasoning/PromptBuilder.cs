@@ -138,6 +138,10 @@ public static class PromptBuilder
             return diff;
         }
 
+        // A fixed '\n' keeps the emitted length equal to the accrued count on every platform,
+        // and the closing marker is reserved so the total never exceeds maxTotal.
+        const string nl = "\n";
+        var markerLength = DiffTruncationMarker.Length + nl.Length;
         var result = new StringBuilder(maxTotal + 4096);
         var currentFileLength = 0;
         var markerWritten = false;
@@ -154,36 +158,36 @@ public static class PromptBuilder
 
             if (!fileHeader && currentFileLength >= maxPerFile)
             {
-                // This file's body is over budget: keep the header, mark the cut, skip to the next file.
-                if (!markerWritten)
+                // This file's body is over budget: keep the header, mark the cut, skip the rest.
+                if (!markerWritten && written + markerLength <= maxTotal)
                 {
-                    result.AppendLine(DiffTruncationMarker);
-                    markerWritten = true;
-                    written += DiffTruncationMarker.Length + 1;
+                    result.Append(DiffTruncationMarker).Append(nl);
+                    written += markerLength;
                 }
 
+                markerWritten = true;
                 continue;
             }
 
-            if (written + line.Length + 1 > maxTotal)
+            // Reserve room for the truncation marker so the accumulator never exceeds maxTotal.
+            if (written + line.Length + nl.Length + markerLength > maxTotal)
             {
-                // Total budget exhausted: mark the cut and drop the rest of the diff.
-                if (!markerWritten)
+                if (!markerWritten && written + markerLength <= maxTotal)
                 {
-                    result.AppendLine(DiffTruncationMarker);
-                    written += DiffTruncationMarker.Length + 1;
+                    result.Append(DiffTruncationMarker).Append(nl);
+                    written += markerLength;
                 }
 
                 break;
             }
 
-            result.AppendLine(line);
-            currentFileLength += line.Length + 1;
-            written += line.Length + 1;
+            result.Append(line).Append(nl);
+            currentFileLength += line.Length + nl.Length;
+            written += line.Length + nl.Length;
         }
 
         // Drop the trailing newline so the closing fence lands on its own line.
         var text = result.ToString();
-        return text.EndsWith('\n') ? text[..(text.Length - 1)] : text;
+        return text.EndsWith(nl) ? text[..(text.Length - 1)] : text;
     }
 }

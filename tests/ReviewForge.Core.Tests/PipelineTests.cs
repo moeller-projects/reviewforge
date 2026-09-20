@@ -135,7 +135,7 @@ public class StageTests : IDisposable
         };
         var ctx = Ctx();
 
-        await new PrepareRepositoryStage(new RepoCheckoutPool(git, Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["head-sha"], git.Checkouts);
         Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
@@ -366,7 +366,7 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PrepareRepositoryStage(new RepoCheckoutPool(git, _RepoDir)).ExecuteAsync(ctx, CancellationToken.None));
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir)).ExecuteAsync(ctx, CancellationToken.None));
     }
 
     [Fact]

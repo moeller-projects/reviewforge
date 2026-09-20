@@ -260,7 +260,7 @@ public class ServiceTests : IAsyncLifetime
         var failingGit = new ExplosiveGitOps(standaloneWorkDir);
         var failingFactory = new ReviewPipelineFactory(
             _Factory.Source, _Factory.Store,
-            new RepoCheckoutPool(failingGit, standaloneWorkDir),
+            new RepoCheckoutPool(failingGit, new FakeWorkspaceFs(), standaloneWorkDir),
             new FakeChatClientFactory(_Factory.Chat),
             options,
             LoggerFactory.Create(b => { }));
@@ -557,6 +557,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
     }
 }
 
+[Collection("ReviewForge service host")]
 public sealed class EndpointFailureTests
 {
     [Fact]

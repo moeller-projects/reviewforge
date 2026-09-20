@@ -10,13 +10,14 @@ namespace ReviewForge.Service.Queue;
 public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = null)
 {
     private static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(2);
-
-    private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
-    private readonly TimeSpan _Ttl = ttl ?? DefaultTtl;
-    private readonly object _Gate = new();
     private readonly Dictionary<PrKey, ClaimEntry> _Claims = [];
 
-    private sealed record ClaimEntry(Guid RunId, DateTimeOffset ClaimedAt);
+    private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
+    private readonly object _Gate = new();
+    private readonly TimeSpan _Ttl = ttl ?? DefaultTtl;
+
+    /// <summary>The claim lifetime used to expire queued/crashed reservations.</summary>
+    public TimeSpan Ttl => _Ttl;
 
     /// <summary>Reserves the PR for this run; false (with the holder's run id) when already claimed.</summary>
     public bool TryClaim(PrKey pr, Guid runId, out Guid? holder)
@@ -58,4 +59,23 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
         }
     }
 
+    /// <summary>
+    /// Pushes the owner's expiry forward; false when the claim was lost (expired or taken by
+    /// another run). Called periodically while a run is actively executing.
+    /// </summary>
+    public bool Renew(PrKey pr, Guid runId)
+    {
+        lock (_Gate)
+        {
+            if (_Claims.TryGetValue(pr, out var existing) && existing.RunId == runId)
+            {
+                _Claims[pr] = existing with {ClaimedAt = _Clock.GetUtcNow()};
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    private sealed record ClaimEntry(Guid RunId, DateTimeOffset ClaimedAt);
 }

@@ -71,6 +71,10 @@ public sealed class DiscoveryService(
                 continue;
             }
 
+            // The final store read above is cancellable; a request cancelled during it must
+            // not still reserve and enqueue a review. Re-check right before claiming.
+            ct.ThrowIfCancellationRequested();
+
             var runId = Guid.NewGuid();
             if (!claims.TryClaim(candidate.Key, runId, out _))
             {

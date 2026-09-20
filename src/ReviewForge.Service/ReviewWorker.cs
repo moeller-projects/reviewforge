@@ -28,7 +28,24 @@ public sealed class ReviewWorker(
                 {
                     PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
                 };
-                await pipelineFactory.Create().RunAsync(ctx, stoppingToken);
+
+                // Keep the reservation alive for the whole run so a review that outlives the
+                // claim TTL does not admit a duplicate; the publish guard still fails the run
+                // safely if the claim is ever lost.
+                using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var heartbeat = new ClaimHeartbeat(
+                        claims, request.Pr, request.RunId,
+                        TimeSpan.FromTicks(Math.Max(claims.Ttl.Ticks / 4, TimeSpan.FromSeconds(1).Ticks)))
+                    .RunUntilCancelled(heartbeatCts.Token);
+                try
+                {
+                    await pipelineFactory.Create().RunAsync(ctx, stoppingToken);
+                }
+                finally
+                {
+                    heartbeatCts.Cancel();
+                    await heartbeat.ConfigureAwait(false);
+                }
 
                 tracker.Set(request.RunId, request.Pr,
                     ctx.Terminated ? RunState.Skipped : RunState.Completed,

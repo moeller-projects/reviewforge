@@ -12,18 +12,20 @@ namespace ReviewForge.Core.Workspaces;
 /// </summary>
 public sealed class RepoCheckoutPool
 {
+    private readonly IWorkspaceFs _Fs;
     private readonly IGitOps _Git;
     private readonly KeyedLockPool _Locks = new();
     private readonly string? _Pat;
     private readonly string _Root;
 
-    public RepoCheckoutPool(IGitOps git, string root, string? pat = null)
+    public RepoCheckoutPool(IGitOps git, IWorkspaceFs fs, string root, string? pat = null)
     {
         _Git = git;
+        _Fs = fs;
         _Root = Path.GetFullPath(root);
         _Pat = pat;
-        Directory.CreateDirectory(Path.Combine(_Root, "checkouts"));
-        Directory.CreateDirectory(Path.Combine(_Root, "mirror"));
+        _Fs.CreateDirectory(Path.Combine(_Root, "checkouts"));
+        _Fs.CreateDirectory(Path.Combine(_Root, "mirror"));
     }
 
     public async Task<RepoCheckout> AcquireAsync(
@@ -37,12 +39,12 @@ public sealed class RepoCheckoutPool
         try
         {
             var path = CheckoutPath(repositoryId, headSha);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            if (Directory.Exists(Path.Combine(path, ".git")) &&
+            _Fs.CreateDirectory(Path.GetDirectoryName(path)!);
+            if (_Fs.DirectoryExists(Path.Combine(path, ".git")) &&
                 string.Equals(_Git.GetHeadSha(path), headSha, StringComparison.OrdinalIgnoreCase))
             {
                 _Git.EnsureCommits(path, cloneUrl, baseSha, headSha, _Pat);
-                Directory.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+                _Fs.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
@@ -50,9 +52,9 @@ public sealed class RepoCheckoutPool
             var repoPath = _Git.CloneOrOpen(cloneUrl, path, _Pat);
             _Git.EnsureCommits(repoPath, cloneUrl, baseSha, headSha, _Pat);
             _Git.Checkout(repoPath, headSha);
-            if (Directory.Exists(repoPath))
+            if (_Fs.DirectoryExists(repoPath))
             {
-                Directory.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
+                _Fs.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
             }
 
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
@@ -78,7 +80,7 @@ public sealed class RepoCheckoutPool
         }
 
         var checkoutsRoot = Path.Combine(_Root, "checkouts");
-        if (!Directory.Exists(checkoutsRoot))
+        if (!_Fs.DirectoryExists(checkoutsRoot))
         {
             return new CheckoutEvictionReport(0, 0, 0, 0);
         }
@@ -89,11 +91,11 @@ public sealed class RepoCheckoutPool
         var inUse = 0;
         long bytes = 0;
 
-        foreach (var repoDir in Directory.EnumerateDirectories(checkoutsRoot))
+        foreach (var repoDir in _Fs.EnumerateDirectories(checkoutsRoot))
         {
             var repoId = Path.GetFileName(repoDir);
-            var heads = Directory.EnumerateDirectories(repoDir)
-                .Select(path => (Path: path, Head: Path.GetFileName(path), LastWrite: Directory.GetLastWriteTimeUtc(path)))
+            var heads = _Fs.EnumerateDirectories(repoDir)
+                .Select(path => (Path: path, Head: Path.GetFileName(path), LastWrite: _Fs.GetLastWriteTimeUtc(path)))
                 .OrderByDescending(item => item.LastWrite)
                 .ToArray();
 
@@ -116,7 +118,7 @@ public sealed class RepoCheckoutPool
                 try
                 {
                     var size = DirectorySize(path);
-                    Directory.Delete(path, recursive: true);
+                    _Fs.DeleteDirectory(path, recursive: true);
                     bytes += size;
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(1);
@@ -133,9 +135,9 @@ public sealed class RepoCheckoutPool
 
             try
             {
-                if (!Directory.EnumerateFileSystemEntries(repoDir).Any())
+                if (_Fs.EnumerateFileSystemEntries(repoDir).Length == 0)
                 {
-                    Directory.Delete(repoDir);
+                    _Fs.DeleteDirectory(repoDir, recursive: false);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -166,8 +168,8 @@ public sealed class RepoCheckoutPool
         return $"{readable}-{hash}";
     }
 
-    private static long DirectorySize(string path)
-        => Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length);
+    private long DirectorySize(string path)
+        => _Fs.EnumerateFilesRecursive(path).Sum(_Fs.GetFileLength);
 
     private sealed class CheckoutLease(KeyedLockPool.Lease lease) : IDisposable
     {
