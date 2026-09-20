@@ -106,8 +106,27 @@ public class FakePullRequestSource : IPullRequestSource
 public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
 {
     private readonly object _LogGate = new();
+    private int _ActiveFindingPosts;
     private int _CommentCount;
     public List<string> WriteLog { get; } = [];
+    public int MaxConcurrentFindingPosts { get; private set; }
+
+    private void BeginFindingPost()
+    {
+        lock (_LogGate)
+        {
+            _ActiveFindingPosts++;
+            MaxConcurrentFindingPosts = Math.Max(MaxConcurrentFindingPosts, _ActiveFindingPosts);
+        }
+    }
+
+    private void EndFindingPost()
+    {
+        lock (_LogGate)
+        {
+            _ActiveFindingPosts--;
+        }
+    }
 
     private async Task DelayAsync(CancellationToken ct)
     {
@@ -119,14 +138,22 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
 
     public override async Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct)
     {
-        await DelayAsync(ct);
-        var threadId = await base.PostFindingThreadAsync(pr, finding, ct);
-        lock (_LogGate)
+        BeginFindingPost();
+        try
         {
-            WriteLog.Add($"finding {finding.DedupeKey}");
-        }
+            await DelayAsync(ct);
+            var threadId = await base.PostFindingThreadAsync(pr, finding, ct);
+            lock (_LogGate)
+            {
+                WriteLog.Add($"finding {finding.DedupeKey}");
+            }
 
-        return threadId;
+            return threadId;
+        }
+        finally
+        {
+            EndFindingPost();
+        }
     }
 
     public override async Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
@@ -477,12 +476,9 @@ public class StageTests : IDisposable
             Uncertainties = [],
         };
 
-        var sw = Stopwatch.StartNew();
         await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
-        sw.Stop();
 
-        // Sequential would take 8 × 50ms posts plus the summary and the vote: ~500ms.
-        Assert.True(sw.ElapsedMilliseconds < 8 * 50, $"took {sw.ElapsedMilliseconds}ms");
+        Assert.InRange(source.MaxConcurrentFindingPosts, 2, PublishFindingsStage.MaxConcurrentPosts);
         Assert.Equal(8, source.PostedFindings.Count);
     }
 
