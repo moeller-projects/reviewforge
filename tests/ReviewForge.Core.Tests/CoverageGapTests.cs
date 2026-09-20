@@ -93,6 +93,28 @@ public class CoverageGapTests
             Directory.Delete(repoDir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task Enrich_skips_gracefully_when_repo_not_prepared()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
+        {
+            RepoDir = null,
+        };
+
+        await new EnrichContextStage(new FakeEnricher("graph"), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.ContextStore.Names);
+    }
+
+    [Fact]
+    public void RequireRepoDir_throws_when_null()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+
+        Assert.Throws<InvalidOperationException>(() => ctx.RequireRepoDir());
+    }
 }
 
 public class RepoReadToolsGapTests : IDisposable

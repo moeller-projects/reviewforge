@@ -1,7 +1,7 @@
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
-using ReviewForge.Core.Workspaces;
+
 namespace ReviewForge.Core.Pipeline;
 
 /// <summary>
@@ -62,15 +62,26 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     /// <summary>Optional host-owned guard checked immediately before external publication.</summary>
     public Func<bool>? PublishGuard { get; set; }
 
-    public void Terminate(string reason)
-    {
-        Terminated = true;
-        TerminationReason = reason;
-    }
-
     public void Dispose()
     {
         RepoLease?.Dispose();
         RepoLease = null;
+    }
+
+    public string RequireRepoDir()
+    {
+        if (RepoDir is not { } dir)
+        {
+            throw new InvalidOperationException(
+                $"stage ordering violation: {nameof(RepoDir)} is null but required");
+        }
+
+        return dir;
+    }
+
+    public void Terminate(string reason)
+    {
+        Terminated = true;
+        TerminationReason = reason;
     }
 }

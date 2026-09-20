@@ -19,6 +19,7 @@ public sealed class ValidateFindingsStage(
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var repoDir = ctx.RequireRepoDir();
         var accepted = new List<RichFinding>();
         var changedFiles = ctx.ChangedFiles
             .Select(Normalize)
@@ -32,7 +33,7 @@ public sealed class ValidateFindingsStage(
                 continue;
             }
 
-            if (!TryReanchor(finding, ctx.RepoDir!))
+            if (!TryReanchor(finding, repoDir))
             {
                 logger.LogInformation("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
                 continue;

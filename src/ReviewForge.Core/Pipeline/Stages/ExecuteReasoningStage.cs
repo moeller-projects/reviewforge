@@ -13,12 +13,13 @@ public sealed class ExecuteReasoningStage(NativeReviewAgent agent, string? findi
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var repoDir = ctx.RequireRepoDir();
         using var findingsJsonl = findingsDir is null
             ? null
             : new StreamWriter(Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl"), append: true) {AutoFlush = true};
         ctx.Collector = new ReviewCollector(
             ctx.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.PullRequest?.SourceCommitSha);
-        var rootFiles = Directory.Exists(ctx.RepoDir) ? Directory.GetFiles(ctx.RepoDir, "*", SearchOption.TopDirectoryOnly) : [];
+        var rootFiles = Directory.Exists(repoDir) ? Directory.GetFiles(repoDir, "*", SearchOption.TopDirectoryOnly) : [];
         var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
             Pr: ctx.PullRequest!, Kind: ctx.Kind, WorkItems: ctx.WorkItems, ChangedFiles: ctx.ChangedFiles,
@@ -27,7 +28,7 @@ public sealed class ExecuteReasoningStage(NativeReviewAgent agent, string? findi
             prompt,
             ctx.Collector,
             ctx.ContextStore,
-            ctx.RepoDir!,
+            repoDir,
             ruleBook,
             ctx.ChangedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase),
             ctx.Diff,
