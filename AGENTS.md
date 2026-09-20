@@ -93,10 +93,12 @@ docker logs -f reviewforge
 ```
 
 Mounts (see `docker-compose.yml`):
-- named volume `reviewforge-data` → `/var/reviewforge` — head checkouts
-  (`checkouts/<repository>/<head>`), local mirrors (`mirror/<repository>`),
-  per-run `findings/{runId}.jsonl`, and `reviewforge.db`. Inspect with
-  `docker compose exec reviewforge ls /var/reviewforge/checkouts`; eviction
+
+- named volume `reviewforge-data` → `/var/reviewforge` — `ReviewForge__WorkDir` is
+  `/var/reviewforge/work`, so head checkouts live at `work/checkouts/<repository>/<head>`,
+  local mirrors at `work/mirror/<repository>`, and per-run `work/findings/{runId}.jsonl`;
+  the SQLite store is `reviewforge.db` at the volume root. Inspect with
+  `docker compose exec reviewforge ls /var/reviewforge/work/checkouts`; eviction
   removes idle head checkouts, not mirrors. The rootfs is read-only; only
   `/var/reviewforge`, `/home/app/.codex` and `/tmp` are writable.
 

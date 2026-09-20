@@ -100,7 +100,7 @@ filters them, and enqueues the interesting ones (up to `Discovery:MaxEnqueuesPer
 short name), `Creators` (empty = allow all; matches creator id or name), `MaxEnqueuesPerSweep`
 (default 20), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables the background sweep
 worker). Skip reasons are checked in order: draft, target branch, creator, no linked work items,
-already-reviewed head, enqueue cap, queue full, and review already in flight. The per-run review
+already-reviewed head, enqueue cap, review already in flight, and queue full. The per-run review
 gate remains the final dedupe net — a sweep enqueue is only a candidate; the gate decides whether
 a run actually proceeds.
 
