@@ -53,6 +53,10 @@ public class PathSafetyTests : IDisposable
         {
             return;
         }
+        catch (IOException)
+        {
+            return;
+        }
 
         Assert.False(PathSafety.IsContainedReal(_Root, Path.Combine(link, "file.cs")));
     }

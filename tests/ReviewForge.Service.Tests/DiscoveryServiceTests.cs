@@ -179,7 +179,7 @@ public class DiscoveryServiceTests
     }
 
     [Fact]
-    public async Task Queue_cancellation_releases_discovery_claim()
+    public async Task Canceled_sweep_does_not_claim_discovery()
     {
         var source = new FakePullRequestSource
         {

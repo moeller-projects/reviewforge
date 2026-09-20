@@ -32,6 +32,7 @@ public sealed class DiscoveryService(
 
     public async Task<DiscoveryReport> RunSweepAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var candidates = await source.GetOpenPullRequestsAsync(ct);
         var enqueued = new List<PrKey>();
         var skipped = new List<SkippedPr>();
