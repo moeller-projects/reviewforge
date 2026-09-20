@@ -160,6 +160,25 @@ public class DiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Sweep_skips_candidates_when_queue_is_full_and_releases_claim()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var queue = new ReviewQueue(capacity: 1);
+        var claims = new InFlightClaims();
+        var service = Service(source, new FakeFindingStore(), queue, new RunTracker(), claims: claims);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Contains(report.Skipped, skipped => skipped.Pr.PrId == 2 && skipped.Reason == "queue full");
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 2), Guid.NewGuid(), out _));
+    }
+
+    [Fact]
     public async Task Queue_cancellation_releases_discovery_claim()
     {
         var source = new FakePullRequestSource

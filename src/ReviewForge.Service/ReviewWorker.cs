@@ -4,7 +4,7 @@ using ReviewForge.Service.Queue;
 namespace ReviewForge.Service;
 
 /// <summary>
-/// Single worker draining the ingest queue. A failed run is logged and marked Failed —
+/// Worker draining the bounded ingest queue. A failed run is logged and marked Failed —
 /// the worker keeps draining (no poison-message shutdown).
 /// </summary>
 public sealed class ReviewWorker(

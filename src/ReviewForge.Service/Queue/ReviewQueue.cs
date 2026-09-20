@@ -1,9 +1,12 @@
 using System.Threading.Channels;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 
 namespace ReviewForge.Service.Queue;
 
 public sealed record ReviewRequest(Guid RunId, PrKey Pr, DateTimeOffset EnqueuedAt);
+
+public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 
 public enum RunState
 {
@@ -16,14 +19,41 @@ public enum RunState
 
 public sealed record RunStatus(Guid RunId, PrKey Pr, RunState State, string? Detail, DateTimeOffset UpdatedAt);
 
-/// <summary>Bounded ingest queue: one writer per request, single worker reader.</summary>
-public sealed class ReviewQueue(int capacity = 100)
+/// <summary>Bounded ingest queue shared by the review workers.</summary>
+public sealed class ReviewQueue
 {
-    private readonly Channel<ReviewRequest> _Channel = Channel.CreateBounded<ReviewRequest>(
-        new BoundedChannelOptions(capacity) {FullMode = BoundedChannelFullMode.Wait});
+    private readonly int _Capacity;
+    private readonly Channel<ReviewRequest> _Channel;
 
-    public ValueTask EnqueueAsync(ReviewRequest request, CancellationToken ct)
-        => _Channel.Writer.WriteAsync(request, ct);
+    public ReviewQueue(int capacity = 100)
+    {
+        _Capacity = capacity;
+        _Channel = Channel.CreateBounded<ReviewRequest>(
+            new BoundedChannelOptions(capacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = false,
+                SingleWriter = false,
+            });
+        ReviewForgeTelemetry.Meter.CreateObservableGauge(
+            "reviewforge.queue.depth", () => _Channel.Reader.Count);
+    }
+
+    public int Capacity => _Capacity;
+
+    public int ApproximateDepth => _Channel.Reader.Count;
+
+    public EnqueueResult TryEnqueue(ReviewRequest request)
+    {
+        var accepted = _Channel.Writer.TryWrite(request);
+        var depth = _Channel.Reader.Count;
+        if (!accepted)
+        {
+            ReviewForgeTelemetry.QueueRejected.Add(1);
+        }
+
+        return new EnqueueResult(accepted, depth);
+    }
 
     public IAsyncEnumerable<ReviewRequest> ReadAllAsync(CancellationToken ct)
         => _Channel.Reader.ReadAllAsync(ct);
@@ -43,9 +73,9 @@ public sealed class RunTracker(
     private static readonly TimeSpan DefaultRetention = TimeSpan.FromHours(24);
 
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
-    private readonly TimeSpan _Retention = retention ?? DefaultRetention;
-    private readonly int _MaxEntries = maxEntries > 0 ? maxEntries : throw new ArgumentOutOfRangeException(nameof(maxEntries));
     private readonly object _Gate = new();
+    private readonly int _MaxEntries = maxEntries > 0 ? maxEntries : throw new ArgumentOutOfRangeException(nameof(maxEntries));
+    private readonly TimeSpan _Retention = retention ?? DefaultRetention;
     private readonly Dictionary<Guid, RunStatus> _Runs = [];
 
     public void Set(Guid runId, PrKey pr, RunState state, string? detail = null)
@@ -90,6 +120,5 @@ public sealed class RunTracker(
     }
 
     private static bool IsTerminal(RunState state)
-
         => state is RunState.Completed or RunState.Skipped or RunState.Failed;
 }

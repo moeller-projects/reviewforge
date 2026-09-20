@@ -2,17 +2,17 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
-using ReviewForge.Service.Queue;
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -26,6 +26,8 @@ public sealed class ReviewForgeServiceCollectionDefinition
 /// <summary>In-process host with fake ports; the real worker drains the queue.</summary>
 public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 {
+    private bool _WithoutWorkers;
+
     public ReviewForgeFactory()
     {
         // Minimal-hosting config must be visible before Program.cs runs — env vars are.
@@ -47,6 +49,12 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 
     public string WorkDir { get; } = Path.Combine(Path.GetTempPath(), "reviewforge-svc-" + Guid.NewGuid().ToString("N"));
 
+    public ReviewForgeFactory WithoutWorkers()
+    {
+        _WithoutWorkers = true;
+        return this;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         Directory.CreateDirectory(WorkDir);
@@ -54,6 +62,11 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
+            if (_WithoutWorkers)
+            {
+                services.RemoveAll<IHostedService>();
+            }
+
             services.RemoveAll<IPullRequestSource>();
             services.RemoveAll<IFindingStore>();
             services.RemoveAll<IGitOps>();
@@ -180,6 +193,7 @@ public class ServiceTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
     }
+
     [Fact]
     public async Task Different_heads_in_same_repo_complete_concurrently()
     {
@@ -259,8 +273,8 @@ public class ServiceTests : IAsyncLifetime
         var pr = new PrKey("o", "p", "r", 44);
         var first = Guid.NewGuid();
         var second = Guid.NewGuid();
-        await queue.EnqueueAsync(new ReviewRequest(first, pr, DateTimeOffset.UtcNow), cts.Token);
-        await queue.EnqueueAsync(new ReviewRequest(second, pr, DateTimeOffset.UtcNow), cts.Token);
+        Assert.True(queue.TryEnqueue(new ReviewRequest(first, pr, DateTimeOffset.UtcNow)).Accepted);
+        Assert.True(queue.TryEnqueue(new ReviewRequest(second, pr, DateTimeOffset.UtcNow)).Accepted);
 
         for (var i = 0; i < 200 && tracker.Get(second)?.State != RunState.Failed; i++)
         {
@@ -295,6 +309,31 @@ public class ServiceTests : IAsyncLifetime
 
         public override string GetDiff(string repoPath, string baseSha, string headSha)
             => throw new InvalidOperationException("git exploded");
+    }
+}
+
+[Collection("ReviewForge service host")]
+public class QueueSaturationEndpointTests
+{
+    [Fact]
+    public async Task Submit_returns_503_when_queue_is_full()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = factory.CreateClient();
+        var queue = factory.Services.GetRequiredService<ReviewQueue>();
+
+        for (var i = 0; i < queue.Capacity; i++)
+        {
+            Assert.True(queue.TryEnqueue(new ReviewRequest(
+                Guid.NewGuid(),
+                new PrKey("o", "p", "r", i + 1),
+                DateTimeOffset.UtcNow)).Accepted);
+        }
+
+        var response = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = queue.Capacity + 1});
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 }
 
@@ -483,6 +522,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
     }
+
     [Fact]
     public void Rejects_zero_worker_count_during_registration()
     {

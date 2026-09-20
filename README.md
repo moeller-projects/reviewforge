@@ -51,8 +51,8 @@ dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll submit \
 dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid>
 ```
 
-Endpoints: `POST /reviews` → 202 `{runId, statusUrl}` · `GET /reviews/{runId}` · `GET /health` ·
-`POST /reviews/discover` → 200 sweep report.
+Endpoints: `POST /reviews` → 202 `{runId, statusUrl}` or 503 when the bounded queue is full ·
+`GET /reviews/{runId}` · `GET /health` · `POST /reviews/discover` → 200 sweep report.
 
 ## API docs (opt-in)
 
@@ -100,16 +100,19 @@ filters them, and enqueues the interesting ones (up to `Discovery:MaxEnqueuesPer
 short name), `Creators` (empty = allow all; matches creator id or name), `MaxEnqueuesPerSweep`
 (default 20), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables the background sweep
 worker). Skip reasons are checked in order: draft, target branch, creator, no linked work items,
-already-reviewed head. The per-run review gate remains the final dedupe net — a sweep enqueue is
-only a candidate; the gate decides whether a run actually proceeds.
+already-reviewed head, enqueue cap, queue full, and review already in flight. The per-run review
+gate remains the final dedupe net — a sweep enqueue is only a candidate; the gate decides whether
+a run actually proceeds.
 
 ## Runtime concurrency and checkout storage
 
-`ReviewForge:WorkerCount` controls the number of concurrent queue workers. Each review
-holds its per-head checkout lease until the run finishes. `ReviewForge:Checkout` controls
-idle checkout eviction: `Enabled`, `MaxAge`, `MaxCheckoutsPerRepo`, and `SweepInterval`.
-Eviction removes old or over-cap head checkouts but never mirrors, and skips checkouts
-currently held by a review.
+`ReviewForge:WorkerCount` controls the number of concurrent queue workers. A full queue rejects
+submissions immediately with HTTP 503; discovery records a `queue full` skip. Queue depth is
+exported as `reviewforge.queue.depth`, and rejected enqueues as
+`reviewforge.queue.rejected_total`. Each review holds its per-head checkout lease until the run
+finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
+`MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts but
+never mirrors, and skips checkouts currently held by a review.
 
 ## Tests and coverage gate
 

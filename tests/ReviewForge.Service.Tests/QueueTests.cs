@@ -2,6 +2,7 @@ using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Queue;
 using Xunit;
+
 namespace ReviewForge.Service.Tests;
 
 public class QueueTests
@@ -9,12 +10,26 @@ public class QueueTests
     private static readonly PrKey Key = new("o", "p", "r", 1);
 
     [Fact]
+    public void TryEnqueue_rejects_when_full()
+    {
+        var queue = new ReviewQueue(capacity: 2);
+        var first = queue.TryEnqueue(new ReviewRequest(Guid.NewGuid(), Key, DateTimeOffset.UtcNow));
+        var second = queue.TryEnqueue(new ReviewRequest(Guid.NewGuid(), Key with {PrId = 2}, DateTimeOffset.UtcNow));
+        var third = queue.TryEnqueue(new ReviewRequest(Guid.NewGuid(), Key with {PrId = 3}, DateTimeOffset.UtcNow));
+
+        Assert.True(first.Accepted);
+        Assert.True(second.Accepted);
+        Assert.False(third.Accepted);
+        Assert.Equal(2, third.QueueDepth);
+    }
+
+    [Fact]
     public async Task Enqueued_requests_are_read_in_order()
     {
         var queue = new ReviewQueue();
         var t0 = DateTimeOffset.UtcNow;
-        await queue.EnqueueAsync(new ReviewRequest(Guid.NewGuid(), Key, t0), CancellationToken.None);
-        await queue.EnqueueAsync(new ReviewRequest(Guid.NewGuid(), Key with {PrId = 2}, t0), CancellationToken.None);
+        queue.TryEnqueue(new ReviewRequest(Guid.NewGuid(), Key, t0));
+        queue.TryEnqueue(new ReviewRequest(Guid.NewGuid(), Key with {PrId = 2}, t0));
         queue.Complete();
 
         var read = new List<ReviewRequest>();

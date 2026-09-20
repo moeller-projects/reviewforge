@@ -20,9 +20,9 @@ public static class Endpoints
         app.MapPost("/reviews", SubmitReview)
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
-            .WithTags("Reviews")
             .Produces<SubmitReviewResponse>(202)
-            .ProducesProblem(400);
+            .ProducesProblem(400)
+            .ProducesProblem(503);
 
         app.MapPost("/reviews/discover", DiscoverPullRequests)
             .WithName("DiscoverPullRequests")
@@ -42,13 +42,12 @@ public static class Endpoints
         return app;
     }
 
-    private static async Task<IResult> SubmitReview(
+    private static IResult SubmitReview(
         SubmitReviewRequest request,
         ReviewQueue queue,
         RunTracker tracker,
         InFlightClaims claims,
-        TimeProvider clock,
-        CancellationToken ct)
+        TimeProvider clock)
     {
         var errors = Validate(request);
         if (errors.Count > 0)
@@ -63,14 +62,14 @@ public static class Endpoints
             return TypedResults.Conflict(new {error = "a review for this pull request is already in flight", runId = holder});
         }
 
-        try
-        {
-            await queue.EnqueueAsync(new ReviewRequest(runId, pr, clock.GetUtcNow()), ct);
-        }
-        catch
+        var result = queue.TryEnqueue(new ReviewRequest(runId, pr, clock.GetUtcNow()));
+        if (!result.Accepted)
         {
             claims.Release(pr, runId);
-            throw;
+            return TypedResults.Problem(
+                title: "Review queue full",
+                detail: $"Queue depth {result.QueueDepth} of {queue.Capacity}. Retry shortly.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
         tracker.Set(runId, pr, RunState.Queued);
