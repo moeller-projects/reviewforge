@@ -93,6 +93,7 @@ public class RepoReadToolsTests : IDisposable
         {
             File.WriteAllText(Path.Combine(sibling, "leak.txt"), "x");
             Assert.Contains("denied", Tools().ReadFile("../" + Path.GetFileName(sibling) + "/leak.txt"));
+            Assert.Contains("denied", Tools().List("../" + Path.GetFileName(sibling)));
         }
         finally
         {

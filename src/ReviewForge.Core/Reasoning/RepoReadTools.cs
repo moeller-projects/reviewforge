@@ -171,6 +171,7 @@ public class RepoReadTools
             {
                 continue;
             }
+
             for (var i = 0; i < lines.Length; i++)
             {
                 if (lines[i].Contains('\0'))
@@ -207,7 +208,7 @@ public class RepoReadTools
         }
 
         var full = Path.GetFullPath(Path.Combine(_Root, rel));
-        if (!PathSafety.IsContainedReal(_Root, full))
+        if (rel.Length != 0 && !PathContainment.IsContained(_Root, full))
         {
             error = $"access denied: path escapes repository root";
             return null;

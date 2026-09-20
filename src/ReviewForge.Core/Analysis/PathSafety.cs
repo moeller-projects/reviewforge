@@ -7,20 +7,13 @@ namespace ReviewForge.Core.Analysis;
 /// </summary>
 internal static class PathSafety
 {
-    public static bool IsContained(string root, string candidate)
-    {
-        var rel = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(candidate));
-        return rel != ".."
-               && !rel.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-               && !Path.IsPathRooted(rel);
-    }
-
     public static bool IsContainedReal(string root, string candidate)
     {
         var resolvedRoot = ResolveLinks(Path.GetFullPath(root));
         var resolvedCandidate = ResolveLinks(Path.GetFullPath(candidate));
-        return IsContained(resolvedRoot, resolvedCandidate);
+        return PathContainment.IsContained(resolvedRoot, resolvedCandidate);
     }
+
 
     private static string ResolveLinks(string path)
     {

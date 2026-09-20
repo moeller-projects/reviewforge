@@ -277,6 +277,35 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Validate_rejects_sibling_directory_prefix_escape()
+    {
+        var sibling = _RepoDir + "-sibling";
+        Directory.CreateDirectory(sibling);
+        File.WriteAllText(Path.Combine(sibling, "evil.cs"), "bad code here");
+        try
+        {
+            var finding = FindingOnLine(1, "bad code here");
+            finding.Anchor = new FindingAnchor($"../{Path.GetFileName(sibling)}/evil.cs", 1, 1);
+            var ctx = Ctx();
+            ctx.Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative(),
+                Findings = [finding],
+                Uncertainties = [],
+            };
+
+            await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.Empty(ctx.AcceptedFindings);
+        }
+        finally
+        {
+            Directory.Delete(sibling, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Validate_rejects_when_file_is_not_in_diff()
     {
         var finding = FindingOnLine(2);

@@ -23,23 +23,23 @@ public class PathSafetyTests : IDisposable
     }
 
     [Fact]
-    public void Child_and_root_are_contained()
+    public void Child_is_contained_but_root_is_not()
     {
-        Assert.True(PathSafety.IsContained(_Root, Path.Combine(_Root, "sub", "file.cs")));
-        Assert.True(PathSafety.IsContained(_Root, _Root));
+        Assert.True(PathContainment.IsContained(_Root, Path.Combine(_Root, "sub", "file.cs")));
+        Assert.False(PathContainment.IsContained(_Root, _Root));
     }
 
     [Fact]
     public void Sibling_with_shared_prefix_is_not_contained()
-        => Assert.False(PathSafety.IsContained(_Root, Path.Combine(_Sibling, "file.cs")));
+        => Assert.False(PathContainment.IsContained(_Root, Path.Combine(_Sibling, "file.cs")));
 
     [Fact]
     public void Parent_escape_is_not_contained()
-        => Assert.False(PathSafety.IsContained(_Root, Path.Combine(_Root, "..", "outside.txt")));
+        => Assert.False(PathContainment.IsContained(_Root, Path.Combine(_Root, "..", "outside.txt")));
 
     [Fact]
     public void Unrelated_absolute_path_is_not_contained()
-        => Assert.False(PathSafety.IsContained(_Root, Path.GetTempPath()));
+        => Assert.False(PathContainment.IsContained(_Root, Path.GetTempPath()));
 
     [Fact]
     public void Symlink_to_outside_is_not_contained()
