@@ -7,8 +7,14 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// Findings stream to a per-run <c>findings/{runId}.jsonl</c> file so parallel workers
 /// never interleave partial lines into a shared sink.
 /// </summary>
-public sealed class ExecuteReasoningStage(NativeReviewAgent agent, string? findingsDir = null) : IReviewStage
+public sealed class ExecuteReasoningStage(
+    NativeReviewAgent agent,
+    string? findingsDir = null,
+    int maxDiffChars = 200_000,
+    int maxDiffCharsPerFile = 40_000) : IReviewStage
 {
+    // Defaults mirror PromptInput so unconfigured hosts keep the same prompt budget.
+
     public string Name => "execute-reasoning";
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
@@ -23,7 +29,8 @@ public sealed class ExecuteReasoningStage(NativeReviewAgent agent, string? findi
         var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
             Pr: ctx.PullRequest!, Kind: ctx.Kind, WorkItems: ctx.WorkItems, ChangedFiles: ctx.ChangedFiles,
-            PendingReplies: ctx.PendingReplies, DiffText: ctx.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names));
+            PendingReplies: ctx.PendingReplies, DiffText: ctx.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names,
+            MaxDiffChars: maxDiffChars, MaxDiffCharsPerFile: maxDiffCharsPerFile));
         ctx.Result = await agent.RunAsync(
             prompt,
             ctx.Collector,

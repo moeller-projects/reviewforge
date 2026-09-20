@@ -276,6 +276,35 @@ public class PromptBuilderTests
         Assert.Contains("read_context", prompt);
         Assert.Contains("graph-data", prompt);
     }
+
+    [Fact]
+    public void Small_diff_passes_through_unchanged()
+    {
+        var input = BaseInput() with {DiffText = "+++ b/a.cs\n@@ -1,1 +1,1 @@\n+x\n"};
+        var prompt = PromptBuilder.Build(input);
+        Assert.DoesNotContain(PromptBuilder.DiffTruncationMarker, prompt);
+    }
+
+    [Fact]
+    public void Oversized_diff_is_truncated_with_marker()
+    {
+        var big = string.Join('\n', Enumerable.Range(0, 10_000).Select(i => $"+line {i}"));
+        var input = BaseInput() with {DiffText = big, MaxDiffChars = 5_000, MaxDiffCharsPerFile = 5_000};
+        var prompt = PromptBuilder.Build(input);
+        Assert.Contains(PromptBuilder.DiffTruncationMarker, prompt);
+        Assert.True(prompt.Length < big.Length);
+    }
+
+    [Fact]
+    public void Per_file_cap_produces_per_file_marker()
+    {
+        var file = "+++ b/a.cs\n" + string.Join('\n', Enumerable.Range(0, 500).Select(i => $"+x{i}"));
+        var input = BaseInput() with {DiffText = file, MaxDiffChars = 1_000_000, MaxDiffCharsPerFile = 200};
+        var prompt = PromptBuilder.Build(input);
+        Assert.Contains("+++ b/a.cs", prompt);
+        Assert.Contains(PromptBuilder.DiffTruncationMarker, prompt);
+        Assert.DoesNotContain("x400", prompt);
+    }
 }
 
 public class SystemPromptComposerTests

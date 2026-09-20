@@ -30,6 +30,12 @@ public sealed class ReviewForgeServiceOptions
     public bool TargetedFetchEnabled { get; init; }
     public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }
+
+    /// <summary>Total diff budget for the review prompt (~50k tokens); oversized diffs are truncated with a marker.</summary>
+    public int MaxDiffChars { get; init; } = 200_000;
+
+    /// <summary>Per-file diff budget; files over it keep their header plus a bounded prefix.</summary>
+    public int MaxDiffCharsPerFile { get; init; } = 40_000;
 }
 
 public sealed class ReviewPipelineFactory(
@@ -64,7 +70,7 @@ public sealed class ReviewPipelineFactory(
             new PrepareRepositoryStage(checkoutPool),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
-            new ExecuteReasoningStage(agent, findingsDir),
+            new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
             new PublishFindingsStage(source, loggerFactory.CreateLogger<PublishFindingsStage>()),
