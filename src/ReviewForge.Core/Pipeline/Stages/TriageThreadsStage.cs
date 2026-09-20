@@ -21,25 +21,33 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
         ctx.TriagePlan = ThreadTriage.Plan(botThreads, currentKeys, agentActions);
         ctx.UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions);
 
-        foreach (var op in ctx.TriagePlan)
-        {
-            if (op.Op == TriageOp.None)
+        // Threads are independent; only reply-then-status per thread must stay sequential.
+        using var gate = new SemaphoreSlim(4, 4);
+        var tasks = ctx.TriagePlan
+            .Where(op => op.Op != TriageOp.None)
+            .Select(async op =>
             {
-                continue;
-            }
+                await gate.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(op.Comment))
+                    {
+                        await source.ReplyToThreadAsync(ctx.Pr, op.ThreadId, op.Comment, ct).ConfigureAwait(false);
+                    }
 
-            if (!string.IsNullOrWhiteSpace(op.Comment))
-            {
-                await source.ReplyToThreadAsync(ctx.Pr, op.ThreadId, op.Comment, ct);
-            }
+                    if (op.NewStatus is { } status)
+                    {
+                        await source.SetThreadStatusAsync(ctx.Pr, op.ThreadId, status, ct).ConfigureAwait(false);
+                    }
 
-            if (op.NewStatus is { } status)
-            {
-                await source.SetThreadStatusAsync(ctx.Pr, op.ThreadId, status, ct);
-            }
-
-            logger.LogInformation("thread {ThreadId}: {Op}", op.ThreadId, op.Op);
-        }
+                    logger.LogInformation("thread {ThreadId}: {Op}", op.ThreadId, op.Op);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            });
+        await Task.WhenAll(tasks).ConfigureAwait(false);
 
         foreach (var threadId in ctx.UnansweredThreads)
         {

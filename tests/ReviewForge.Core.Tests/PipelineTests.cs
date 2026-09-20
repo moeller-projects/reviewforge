@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
@@ -459,6 +460,52 @@ public class StageTests : IDisposable
 
         Assert.Empty(source.Votes);
         Assert.Single(source.GeneralComments); // summary only
+    }
+
+    [Fact]
+    public async Task Publish_posts_findings_concurrently_within_semaphore()
+    {
+        var source = new SlowFakePullRequestSource(delayMs: 50);
+        var findings = Enumerable.Range(0, 8).Select(i => FindingOnLine(2 + i)).ToArray();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = findings;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = findings,
+            Uncertainties = [],
+        };
+
+        var sw = Stopwatch.StartNew();
+        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        sw.Stop();
+
+        // Sequential would take 8 × 50ms posts plus the summary and the vote: ~500ms.
+        Assert.True(sw.ElapsedMilliseconds < 8 * 50, $"took {sw.ElapsedMilliseconds}ms");
+        Assert.Equal(8, source.PostedFindings.Count);
+    }
+
+    [Fact]
+    public async Task Publish_summary_always_posts_after_findings()
+    {
+        var source = new SlowFakePullRequestSource();
+        var findings = Enumerable.Range(0, 8).Select(i => FindingOnLine(2 + i)).ToArray();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = findings;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = findings,
+            Uncertainties = [],
+        };
+
+        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(9, source.WriteLog.Count); // 8 findings, then the summary
+        Assert.All(source.WriteLog.Take(8), entry => Assert.StartsWith("finding ", entry));
+        Assert.Equal("comment 0", source.WriteLog[8]);
     }
 
     [Fact]

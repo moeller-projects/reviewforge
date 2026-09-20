@@ -7,6 +7,7 @@ namespace ReviewForge.Testing;
 /// <summary>In-memory IPullRequestSource recording every write.</summary>
 public class FakePullRequestSource : IPullRequestSource
 {
+    private readonly object _Gate = new();
     private int _NextThreadId = 1000;
     public List<PullRequestCandidate> OpenPullRequests { get; set; } = [];
     public int OpenPullRequestsFetches { get; private set; }
@@ -52,33 +53,108 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct)
     {
-        var id = _NextThreadId++;
-        PostedFindings.Add((finding, id));
-        return Task.FromResult(id);
+        lock (_Gate)
+        {
+            var id = _NextThreadId++;
+            PostedFindings.Add((finding, id));
+            return Task.FromResult(id);
+        }
     }
 
     public virtual Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
     {
-        GeneralComments.Add(text);
+        lock (_Gate)
+        {
+            GeneralComments.Add(text);
+        }
+
         return Task.CompletedTask;
     }
 
     public virtual Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct)
     {
-        Replies.Add((threadId, text));
+        lock (_Gate)
+        {
+            Replies.Add((threadId, text));
+        }
+
         return Task.CompletedTask;
     }
 
     public virtual Task SetThreadStatusAsync(PrKey pr, int threadId, ReviewThreadStatus status, CancellationToken ct)
     {
-        StatusChanges.Add((threadId, status));
+        lock (_Gate)
+        {
+            StatusChanges.Add((threadId, status));
+        }
+
         return Task.CompletedTask;
     }
 
     public virtual Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
     {
-        Votes.Add((reviewerId, vote));
+        lock (_Gate)
+        {
+            Votes.Add((reviewerId, vote));
+        }
+
         return Task.CompletedTask;
+    }
+}
+
+/// <summary>FakePullRequestSource with a per-write delay and a global write-order log.</summary>
+public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
+{
+    private readonly object _LogGate = new();
+    private int _CommentCount;
+    public List<string> WriteLog { get; } = [];
+
+    private async Task DelayAsync(CancellationToken ct)
+    {
+        if (delayMs > 0)
+        {
+            await Task.Delay(delayMs, ct).ConfigureAwait(false);
+        }
+    }
+
+    public override async Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        var threadId = await base.PostFindingThreadAsync(pr, finding, ct);
+        lock (_LogGate)
+        {
+            WriteLog.Add($"finding {finding.DedupeKey}");
+        }
+
+        return threadId;
+    }
+
+    public override async Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.PostGeneralCommentAsync(pr, text, ct);
+        lock (_LogGate)
+        {
+            WriteLog.Add($"comment {_CommentCount++}");
+        }
+    }
+
+    public override async Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.ReplyToThreadAsync(pr, threadId, text, ct);
+    }
+
+    public override async Task SetThreadStatusAsync(PrKey pr, int threadId, ReviewThreadStatus status, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.SetThreadStatusAsync(pr, threadId, status, ct);
+    }
+
+    public override async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.SetReviewerVoteAsync(pr, reviewerId, vote, ct);
     }
 }
 
