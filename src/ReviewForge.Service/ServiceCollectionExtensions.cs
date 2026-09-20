@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
@@ -75,9 +77,25 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<DiscoverySweepWorker>();
         services.AddHostedService<CheckoutEvictionWorker>();
 
+        services.AddServiceDiscovery();
+        services.ConfigureHttpClientDefaults(http =>
+        {
+            http.AddStandardResilienceHandler();
+            http.AddServiceDiscovery();
+        });
+
         services.AddOpenTelemetry()
-            .WithTracing(tracing => tracing.AddSource(ReviewForgeTelemetry.SourceName))
-            .WithMetrics(metrics => metrics.AddMeter(ReviewForgeTelemetry.SourceName));
+            .WithTracing(tracing => tracing
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddSource(ReviewForgeTelemetry.SourceName)
+                .AddOtlpExporter())
+            .WithMetrics(metrics => metrics
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
+                .AddMeter(ReviewForgeTelemetry.SourceName)
+                .AddOtlpExporter());
         return services;
     }
 }

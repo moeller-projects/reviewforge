@@ -1,5 +1,6 @@
 <Solution>
     <Folder Name="/src/">
+        <Project Path="src/ReviewForge.AppHost/ReviewForge.AppHost.csproj"/>
         <Project Path="src/ReviewForge.Cli/ReviewForge.Cli.csproj"/>
         <Project Path="src/ReviewForge.Core/ReviewForge.Core.csproj"/>
         <Project Path="src/ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj"/>

@@ -34,10 +34,6 @@ public static class Endpoints
             .Produces<RunStatus>()
             .ProducesProblem(404);
 
-        app.MapGet("/health", () => TypedResults.Ok(new {status = "ok"}))
-            .WithName("Health")
-            .WithTags("Ops")
-            .ExcludeFromDescription();
 
         return app;
     }
