@@ -14,8 +14,8 @@ public sealed class CodexAuthHandler(CodexCredential credential) : DelegatingHan
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        await ApplyHeadersAsync(request, forceRefresh: false, cancellationToken);
-        var response = await base.SendAsync(request, cancellationToken);
+        await ApplyHeadersAsync(request, forceRefresh: false, cancellationToken).ConfigureAwait(false);
+        var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         if (response.StatusCode != HttpStatusCode.Unauthorized)
         {
@@ -23,17 +23,17 @@ public sealed class CodexAuthHandler(CodexCredential credential) : DelegatingHan
         }
 
         response.Dispose();
-        await ApplyHeadersAsync(request, forceRefresh: true, cancellationToken);
-        var respose = await base.SendAsync(request, cancellationToken);
-        return respose;
+        await ApplyHeadersAsync(request, forceRefresh: true, cancellationToken).ConfigureAwait(false);
+        var retryResponse = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return retryResponse;
     }
 
     private async Task ApplyHeadersAsync(HttpRequestMessage request, bool forceRefresh, CancellationToken ct)
     {
         var token = forceRefresh
-            ? await credential.ForceRefreshAsync(ct)
-            : await credential.GetTokenAsync(ct);
-        var accountId = await credential.GetAccountIdAsync(ct);
+            ? await credential.ForceRefreshAsync(ct).ConfigureAwait(false)
+            : await credential.GetTokenAsync(ct).ConfigureAwait(false);
+        var accountId = await credential.GetAccountIdAsync(ct).ConfigureAwait(false);
 
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Remove(BetaHeader);
