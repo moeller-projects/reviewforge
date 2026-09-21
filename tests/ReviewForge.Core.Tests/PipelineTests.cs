@@ -582,7 +582,7 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Publish_clean_run_sets_no_vote()
+    public async Task Publish_resets_vote_on_clean_run()
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
@@ -591,8 +591,54 @@ public class StageTests : IDisposable
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(source.Votes);
+        var vote = Assert.Single(source.Votes);
+        Assert.Equal(ReviewerVote.NoResponse, vote.Vote);
+        Assert.Equal("user-1", vote.ReviewerId);
         Assert.Single(source.GeneralComments); // summary only
+    }
+
+    [Fact]
+    public async Task Publish_clean_vote_configurable_to_approved()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, ReviewerVote.Approved)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(ReviewerVote.Approved, Assert.Single(source.Votes).Vote);
+    }
+
+    [Fact]
+    public async Task Publish_clean_vote_none_leaves_vote_untouched()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, cleanVote: null)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Votes);
+    }
+
+    [Fact]
+    public async Task Publish_still_sets_waiting_for_author_when_findings_exist()
+    {
+        var source = new FakePullRequestSource();
+        var finding = FindingOnLine(2);
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, ReviewerVote.Approved)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(ReviewerVote.WaitingForAuthor, Assert.Single(source.Votes).Vote);
     }
 
     [Fact]

@@ -34,7 +34,8 @@ public static class DiscoveryFilter
         PullRequestCandidate candidate,
         int linkedWorkItemCount,
         string? lastReviewedHeadSha,
-        DiscoveryRules rules)
+        DiscoveryRules rules,
+        bool hasNewHumanCommentsSinceLastRun = false)
     {
         if (candidate.Pr.IsDraft)
         {
@@ -60,7 +61,8 @@ public static class DiscoveryFilter
             return new DiscoveryDecision(false, "no linked work items");
         }
 
-        if (string.Equals(candidate.Pr.SourceCommitSha, lastReviewedHeadSha, StringComparison.Ordinal))
+        if (!hasNewHumanCommentsSinceLastRun
+            && string.Equals(candidate.Pr.SourceCommitSha, lastReviewedHeadSha, StringComparison.Ordinal))
         {
             return new DiscoveryDecision(false, "head already reviewed");
         }

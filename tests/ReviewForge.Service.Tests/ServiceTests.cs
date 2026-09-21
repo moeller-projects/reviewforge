@@ -658,6 +658,27 @@ public class DiWiringTests
         var services = new ServiceCollection();
         Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(config));
     }
+
+    [Fact]
+    public void Invalid_clean_run_vote_fails_fast()
+    {
+        WithPat(() =>
+        {
+            var options = Options.Create(new ReviewForgeServiceOptions
+            {
+                WorkDir = Path.Combine(Path.GetTempPath(), "rf-clean-" + Guid.NewGuid().ToString("N")),
+                CleanRunVote = "Bogus",
+            });
+            var factory = new ReviewPipelineFactory(
+                new FakePullRequestSource(), new FakeFindingStore(),
+                new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath()),
+                new FakeChatClientFactory(new ScriptedChatClient()),
+                options,
+                LoggerFactory.Create(_ => { }));
+
+            Assert.Throws<InvalidOperationException>(() => factory.Create());
+        });
+    }
 }
 
 [Collection("ReviewForge service host")]

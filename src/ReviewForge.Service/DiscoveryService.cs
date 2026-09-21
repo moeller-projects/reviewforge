@@ -57,7 +57,22 @@ public sealed class DiscoveryService(
             }
 
             var prior = await store.GetLastCompletedRunAsync(candidate.Key, ct);
-            var headDecision = DiscoveryFilter.Evaluate(candidate, workItems.Count, prior?.HeadSha, _Rules);
+
+            // Same head as the last completed run: the head check alone would skip the PR,
+            // but new human comments since that run (ReviewGate's condition) make it
+            // interesting again — fetch threads only in this case (one extra ADO call).
+            var hasNewHumanComments = false;
+            if (prior is not null
+                && string.Equals(candidate.Pr.SourceCommitSha, prior.HeadSha, StringComparison.Ordinal))
+            {
+                var threads = await source.GetThreadsAsync(candidate.Key, ct);
+                hasNewHumanComments = threads
+                    .SelectMany(t => t.Comments)
+                    .Any(c => !c.IsBot && c.PublishedAt > prior.CompletedAt);
+            }
+
+            var headDecision = DiscoveryFilter.Evaluate(
+                candidate, workItems.Count, prior?.HeadSha, _Rules, hasNewHumanComments);
             if (!headDecision.Interesting)
             {
                 skipped.Add(new SkippedPr(candidate.Key, headDecision.Reason));

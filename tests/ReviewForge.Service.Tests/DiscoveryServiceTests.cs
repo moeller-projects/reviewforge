@@ -138,6 +138,75 @@ public class DiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Sweep_enqueues_same_head_pr_with_new_human_comments()
+    {
+        var candidate = Candidate(1, headSha: "head-42");
+        var completedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "why?", completedAt.AddMinutes(1))]));
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, "head-42", completedAt, []),
+        };
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Equal(1, source.ThreadFetches);
+    }
+
+    [Fact]
+    public async Task Sweep_skips_same_head_pr_without_new_comments()
+    {
+        var candidate = Candidate(1, headSha: "head-42");
+        var completedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "why?", completedAt.AddMinutes(-1))]));
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, "head-42", completedAt, []),
+        };
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Contains(report.Skipped, s => s.Reason == "head already reviewed");
+    }
+
+    [Fact]
+    public async Task Sweep_does_not_fetch_threads_for_new_head()
+    {
+        var candidate = Candidate(1, headSha: "new-head");
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, "old-head", DateTimeOffset.UtcNow.AddMinutes(-5), []),
+        };
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Equal(0, source.ThreadFetches);
+    }
+
+    [Fact]
     public async Task Sweep_enqueues_failing_head_after_backoff_elapsed()
     {
         var candidate = Candidate(1, headSha: "head-42");

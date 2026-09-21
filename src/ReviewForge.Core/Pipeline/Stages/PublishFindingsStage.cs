@@ -8,12 +8,14 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// <summary>
 /// Stage 9: post findings (inline when the anchor holds, general otherwise), one summary
 /// comment with acceptance-criteria verdicts, and set the PAT user's reviewer vote to
-/// <see cref="ReviewerVote.WaitingForAuthor"/> when anything needs the author's attention.
+/// <see cref="ReviewerVote.WaitingForAuthor"/> when anything needs the author's attention,
+/// or to the configured clean value on a fully clean run.
 /// </summary>
 public sealed class PublishFindingsStage(
     IPullRequestSource source,
     IFindingStore store,
-    ILogger<PublishFindingsStage> logger) : IReviewStage
+    ILogger<PublishFindingsStage> logger,
+    ReviewerVote? cleanVote = ReviewerVote.NoResponse) : IReviewStage
 {
     /// <summary>Bounded concurrency for ADO writes; each finding is one HTTP round-trip.</summary>
     public const int MaxConcurrentPosts = 4;
@@ -95,11 +97,18 @@ public sealed class PublishFindingsStage(
             .ConfigureAwait(false);
 
         var acUnmet = (ctx.Result!.Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);
-        if (ctx.AcceptedFindings.Count > 0 || acUnmet || ctx.UnansweredThreads.Count > 0)
+        var needsAttention = ctx.AcceptedFindings.Count > 0 || acUnmet || ctx.UnansweredThreads.Count > 0;
+        if (needsAttention)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before vote");
             await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, ReviewerVote.WaitingForAuthor, ct);
             logger.LogInformation("reviewer vote set to waiting-for-author for {User}", ctx.CurrentUser!.DisplayName);
+        }
+        else if (cleanVote is { } vote)
+        {
+            PublishGuardChecks.ThrowIfClaimLost(ctx, "before vote");
+            await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, vote, ct);
+            logger.LogInformation("clean run: reviewer vote reset to {Vote} for {User}", vote, ctx.CurrentUser!.DisplayName);
         }
     }
 }

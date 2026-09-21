@@ -118,6 +118,22 @@ public class DiscoveryFilterTests
     }
 
     [Fact]
+    public void Evaluate_same_head_interesting_with_new_human_comments()
+    {
+        var decision = DiscoveryFilter.Evaluate(Candidate(headSha: "abc123"), 1, "abc123", Rules, hasNewHumanCommentsSinceLastRun: true);
+
+        Assert.True(decision.Interesting);
+    }
+
+    [Fact]
+    public void Evaluate_different_head_ignores_comment_flag()
+    {
+        var decision = DiscoveryFilter.Evaluate(Candidate(headSha: "new-head"), 1, "old-head", Rules, hasNewHumanCommentsSinceLastRun: false);
+
+        Assert.True(decision.Interesting);
+    }
+
+    [Fact]
     public void Rules_default_max_enqueues_is_20()
         => Assert.Equal(20, new DiscoveryRules([], []).MaxEnqueues);
 }
