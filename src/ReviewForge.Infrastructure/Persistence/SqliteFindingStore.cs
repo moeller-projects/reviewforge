@@ -66,36 +66,56 @@ public sealed class SqliteFindingStore : IFindingStore
     public async Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {
         await using var db = CreateContext();
-        db.Runs.Add(new RunEntity
+        var existing = await db.Runs
+            .Include(r => r.Findings)
+            .FirstOrDefaultAsync(r => r.Id == run.Id, ct);
+
+        if (existing is null)
         {
-            Id = run.Id,
-            Org = run.Pr.Org,
-            Project = run.Pr.Project,
-            RepositoryId = run.Pr.RepositoryId,
-            PrId = run.Pr.PrId,
-            HeadSha = run.HeadSha,
-            Kind = run.Kind.ToString(),
-            StartedAt = run.StartedAt,
-            CompletedAt = run.CompletedAt,
-            Success = run.Success,
-            Findings =
-            [
-                .. run.Findings.Select(f => new FindingEntity
-                {
-                    RunId = run.Id,
-                    DedupeKey = f.DedupeKey,
-                    RuleId = f.RuleId,
-                    Severity = f.Severity,
-                    Title = f.Title,
-                    FilePath = f.FilePath,
-                    Line = f.Line,
-                    ThreadId = f.ThreadId,
-                })
-            ],
-        });
+            db.Runs.Add(new RunEntity
+            {
+                Id = run.Id,
+                Org = run.Pr.Org,
+                Project = run.Pr.Project,
+                RepositoryId = run.Pr.RepositoryId,
+                PrId = run.Pr.PrId,
+                HeadSha = run.HeadSha,
+                Kind = run.Kind.ToString(),
+                StartedAt = run.StartedAt,
+                CompletedAt = run.CompletedAt,
+                Success = run.Success,
+                Findings = [.. run.Findings.Select(f => ToEntity(f, run.Id))],
+            });
+        }
+        else
+        {
+            // Finalize an in-flight run: update completion, merge newly relevant finding rows.
+            // Existing rows keep their ThreadId backfills (SetThreadIdAsync) — never overwritten.
+            existing.HeadSha = run.HeadSha;
+            existing.Kind = run.Kind.ToString();
+            existing.CompletedAt = run.CompletedAt;
+            existing.Success = run.Success;
+            var knownKeys = existing.Findings.Select(f => f.DedupeKey).ToHashSet(StringComparer.Ordinal);
+            foreach (var finding in run.Findings.Where(f => !knownKeys.Contains(f.DedupeKey)))
+            {
+                existing.Findings.Add(ToEntity(finding, run.Id));
+            }
+        }
 
         await db.SaveChangesAsync(ct);
     }
+
+    private static FindingEntity ToEntity(StoredFinding f, Guid runId) => new()
+    {
+        RunId = runId,
+        DedupeKey = f.DedupeKey,
+        RuleId = f.RuleId,
+        Severity = f.Severity,
+        Title = f.Title,
+        FilePath = f.FilePath,
+        Line = f.Line,
+        ThreadId = f.ThreadId,
+    };
 
     public async Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct)
     {

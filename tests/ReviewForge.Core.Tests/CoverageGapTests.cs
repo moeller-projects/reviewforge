@@ -28,15 +28,16 @@ public class CoverageGapTests
             new EnrichContextStage(null, NullLogger<EnrichContextStage>.Instance),
             new ExecuteReasoningStage(agent),
             new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance),
+            new BeginRunStage(store),
             new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance),
-            new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance),
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance),
             new PersistRunStage(store),
         ];
 
         Assert.Equal(
             [
                 "fetch-pr-context", "review-gate", "prepare-repository", "classify-run", "enrich-context",
-                "execute-reasoning", "validate-findings", "triage-threads", "publish-findings", "persist-run"
+                "execute-reasoning", "validate-findings", "begin-run", "triage-threads", "publish-findings", "persist-run"
             ],
             stages.Select(s => s.Name));
     }

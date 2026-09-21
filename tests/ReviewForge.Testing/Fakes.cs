@@ -26,6 +26,14 @@ public class FakePullRequestSource : IPullRequestSource
     public List<(int ThreadId, ReviewThreadStatus Status)> StatusChanges { get; } = [];
     public List<(string ReviewerId, ReviewerVote Vote)> Votes { get; } = [];
 
+    /// <summary>When set, PostFindingThreadAsync throws for a finding with this dedupe key
+    /// (deterministic partial-failure tests).</summary>
+    public string? ThrowOnPostKey { get; set; }
+
+    /// <summary>When set, the Nth PostFindingThreadAsync call throws (order-agnostic partial failure).</summary>
+    public int? ThrowOnNthPost { get; set; }
+    private int _PostCount;
+
     public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
         => Task.FromResult(PullRequestsByKey.TryGetValue(pr, out var pullRequest) ? pullRequest : Pr);
 
@@ -55,6 +63,16 @@ public class FakePullRequestSource : IPullRequestSource
     {
         lock (_Gate)
         {
+            if (ThrowOnNthPost is { } nth && ++_PostCount == nth)
+            {
+                throw new InvalidOperationException($"post #{nth} failed");
+            }
+
+            if (ThrowOnPostKey is not null && finding.DedupeKey == ThrowOnPostKey)
+            {
+                throw new InvalidOperationException($"post of {finding.DedupeKey} failed");
+            }
+
             var id = _NextThreadId++;
             PostedFindings.Add((finding, id));
             return Task.FromResult(id);
@@ -204,6 +222,7 @@ public class FakeFindingStore : IFindingStore
 
     public virtual Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {
+        Runs.RemoveAll(r => r.Id == run.Id);
         Runs.Add(run);
         return Task.CompletedTask;
     }

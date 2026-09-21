@@ -424,6 +424,73 @@ public class ServiceTests : IAsyncLifetime
         Assert.Contains(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key); // carried forward
     }
 
+    [Fact]
+    public async Task Rerun_after_partial_failure_posts_no_duplicates()
+    {
+        var pr = new PrKey("o", "p", "r", 42);
+        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,2 @@\n+bad code here\n+worse code here\n";
+
+        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "worse code here"]);
+
+        static Dictionary<string, object?> Finding(string snippet, int line) => new()
+        {
+            ["ruleId"] = "general.other",
+            ["title"] = "t",
+            ["severity"] = "high",
+            ["category"] = "bug",
+            ["description"] = "d",
+            ["snippet"] = snippet,
+            ["filePath"] = "src/A.cs",
+            ["startLine"] = line,
+        };
+
+        // Run 1: two findings; the second post throws mid-publish (partial failure).
+        _Factory.Source.ThrowOnNthPost = 2;
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(
+                ("RecordFinding", Finding("bad code here", 2)),
+                ("RecordFinding", Finding("worse code here", 3))),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var client = _Factory.CreateClient();
+        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body1!.RunId, RunState.Failed);
+
+        var posted = Assert.Single(_Factory.Source.PostedFindings); // exactly one landed before the fault
+        var postedKey = posted.Finding.DedupeKey!;
+        var postedThreadId = posted.ThreadId;
+
+        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        // The successfully-posted thread survives the failed run (ADO is the source of truth).
+        _Factory.Source.Threads.Add(new ReviewThread(postedThreadId, postedKey, ReviewThreadStatus.Active,
+            [new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+
+        // Run 2: same two findings; the already-posted one is suppressed, only the other posts.
+        _Factory.Source.ThrowOnNthPost = null;
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(
+                ("RecordFinding", Finding("bad code here", 2)),
+                ("RecordFinding", Finding("worse code here", 3))),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body2!.RunId, RunState.Completed);
+
+        // Exactly two distinct threads ever created — one per finding, zero duplicates.
+        Assert.Equal(2, _Factory.Source.PostedFindings.Count);
+        Assert.Equal(2, _Factory.Source.PostedFindings.Select(p => p.Finding.DedupeKey).Distinct().Count());
+    }
+
     private sealed class ExplosiveGitOps(string repoDir) : FakeGitOps
     {
         public override string CloneOrOpen(string cloneUrl, string workDir, string? pat) => repoDir;

@@ -4,9 +4,10 @@ using ReviewForge.Core.Ports;
 namespace ReviewForge.Core.Pipeline.Stages;
 
 /// <summary>
-/// Stage 10: persist the completed run (head sha + finding keys feed the gate and
-/// dedupe of the next run). Skipped runs (gate-terminated) are never persisted —
-/// a draft skip must not mark the head as reviewed.
+/// Stage 10 (finalize): mark the in-flight run completed. Upserts the shell persisted by
+/// <see cref="BeginRunStage"/> — sets Success/completion and merges finding rows with their
+/// posted thread ids. Carried-forward prior findings (P0-1) are included so the known-key
+/// set never decays to accepted-only. Skipped runs (gate-terminated) never reach here.
 /// </summary>
 public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = null) : IReviewStage
 {

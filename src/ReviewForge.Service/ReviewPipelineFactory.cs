@@ -72,8 +72,9 @@ public sealed class ReviewPipelineFactory(
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
+            new BeginRunStage(store, clock),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
-            new PublishFindingsStage(source, loggerFactory.CreateLogger<PublishFindingsStage>()),
+            new PublishFindingsStage(source, store, loggerFactory.CreateLogger<PublishFindingsStage>()),
             new PersistRunStage(store, clock),
         ];
 

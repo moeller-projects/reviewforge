@@ -117,6 +117,64 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task BeginRun_shell_is_invisible_to_GetLastCompletedRun()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var shellId = Guid.NewGuid();
+
+        await _Store.SaveRunAsync(new ReviewRun(shellId, Key, "head", ReviewKind.Full, t0, null, false,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)]), CancellationToken.None);
+
+        Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
+
+        // Backfill the thread id while the run is still in-flight.
+        await _Store.SetThreadIdAsync(shellId, "k1", 42, CancellationToken.None);
+
+        await _Store.SaveRunAsync(new ReviewRun(shellId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)]), CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.NotNull(last);
+        Assert.Equal("head", last.HeadSha);
+        Assert.Equal(["k1"], last.FindingKeys);
+        Assert.Equal(42, Assert.Single(last.Findings!).ThreadId); // backfill preserved through finalize
+    }
+
+    [Fact]
+    public async Task SaveRun_finalize_merges_without_losing_thread_ids()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var runId = Guid.NewGuid();
+
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, null, false,
+            [
+                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+            ]), CancellationToken.None);
+
+        await _Store.SetThreadIdAsync(runId, "k1", 1000, CancellationToken.None);
+
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
+            [
+                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+            ]), CancellationToken.None);
+
+        await using (var db = new FindingStoreDbContext(
+                         new DbContextOptionsBuilder<FindingStoreDbContext>()
+                             .UseSqlite(_ConnectionString).Options))
+        {
+            var runs = await db.Runs.Include(r => r.Findings).ToListAsync();
+            var run = Assert.Single(runs);
+            Assert.True(run.Success);
+            Assert.NotNull(run.CompletedAt);
+            Assert.Equal(2, run.Findings.Count);
+            Assert.Equal(1000, run.Findings.Single(f => f.DedupeKey == "k1").ThreadId);
+            Assert.Null(run.Findings.Single(f => f.DedupeKey == "k2").ThreadId);
+        }
+    }
+
+    [Fact]
     public async Task Known_keys_are_distinct_across_runs_and_scoped_to_pr()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);

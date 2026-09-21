@@ -9,6 +9,11 @@ public interface IFindingStore
 
     Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct);
 
+    /// <summary>
+    /// Saves a run. Upsert semantics: unknown run id → insert (in-flight shell when
+    /// CompletedAt/Success say so); known run id → finalize (update head/completion/success,
+    /// merge any missing finding rows, keep backfilled thread ids).
+    /// </summary>
     Task SaveRunAsync(ReviewRun run, CancellationToken ct);
 
     /// <summary>Backfill the posted thread id for a finding of the run.</summary>

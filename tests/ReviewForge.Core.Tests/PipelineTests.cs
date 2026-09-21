@@ -457,7 +457,7 @@ public class StageTests : IDisposable
             Uncertainties = [new ReviewUncertainty("t", "q", null)],
         };
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Single(source.PostedFindings);
         Assert.Equal(1000, ctx.PostedThreadIds["k2"]);
@@ -481,7 +481,7 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PublishFindingsStage(new FakePullRequestSource(), NullLogger<PublishFindingsStage>.Instance)
+            new PublishFindingsStage(new FakePullRequestSource(), new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
                 .ExecuteAsync(ctx, CancellationToken.None));
     }
 
@@ -499,7 +499,7 @@ public class StageTests : IDisposable
             Uncertainties = [],
         };
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Single(source.Votes);
         Assert.Equal(ReviewerVote.WaitingForAuthor, source.Votes[0].Vote);
@@ -513,7 +513,7 @@ public class StageTests : IDisposable
         ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
         ctx.AcceptedFindings = [];
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(source.Votes);
         Assert.Single(source.GeneralComments); // summary only
@@ -534,7 +534,7 @@ public class StageTests : IDisposable
             Uncertainties = [],
         };
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.InRange(source.MaxConcurrentFindingPosts, 2, PublishFindingsStage.MaxConcurrentPosts);
         Assert.Equal(8, source.PostedFindings.Count);
@@ -555,7 +555,7 @@ public class StageTests : IDisposable
             Uncertainties = [],
         };
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(9, source.WriteLog.Count); // 8 findings, then the summary
         Assert.All(source.WriteLog.Take(8), entry => Assert.StartsWith("finding ", entry));
@@ -621,6 +621,101 @@ public class StageTests : IDisposable
         var finding = Assert.Single(run.Findings); // prior "k2" not carried; accepted "k2" wins
         Assert.Equal("k2", finding.DedupeKey);
         Assert.Equal(1000, finding.ThreadId);
+    }
+
+    [Fact]
+    public async Task BeginRun_persists_inflight_shell_with_all_known_keys()
+    {
+        var store = new FakeFindingStore();
+        var accepted = FindingOnLine(3); // k3
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [accepted];
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+
+        await new BeginRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        var run = Assert.Single(store.Runs);
+        Assert.False(run.Success);
+        Assert.Null(run.CompletedAt);
+        Assert.Equal(2, run.Findings.Count);
+        Assert.Contains(run.Findings, f => f.DedupeKey == "k3" && f.ThreadId == null);
+        Assert.Contains(run.Findings, f => f.DedupeKey == "k2" && f.ThreadId == 42);
+    }
+
+    [Fact]
+    public async Task Publish_backfills_thread_id_per_finding_as_posted()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var f1 = FindingOnLine(2); // k2
+        var f2 = FindingOnLine(3); // k3
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [f1, f2];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []};
+
+        await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(2, store.ThreadIdBackfills.Count);
+        Assert.Contains(store.ThreadIdBackfills, b => b.Key == "k2");
+        Assert.Contains(store.ThreadIdBackfills, b => b.Key == "k3");
+    }
+
+    [Fact]
+    public async Task Publish_skips_finding_with_existing_live_thread()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var finding = FindingOnLine(2); // k2
+        source.Threads.Add(new ReviewThread(1000, "k2", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Publish_posts_when_matching_thread_is_fixed()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var finding = FindingOnLine(2); // k2
+        source.Threads.Add(new ReviewThread(1000, "k2", ReviewThreadStatus.Fixed,
+            [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Publish_partial_failure_keeps_successful_backfills()
+    {
+        var source = new FakePullRequestSource {ThrowOnPostKey = "k3"};
+        var store = new FakeFindingStore();
+        var f1 = FindingOnLine(2); // k2 posts
+        var f2 = FindingOnLine(3); // k3 throws
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [f1, f2];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []};
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Contains(store.ThreadIdBackfills, b => b.Key == "k2"); // successful post backfilled before the fault
+        Assert.DoesNotContain(store.ThreadIdBackfills, b => b.Key == "k3");
     }
 }
 
