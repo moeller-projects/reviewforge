@@ -994,6 +994,49 @@ public class StageTests : IDisposable
         Assert.Empty(source.Votes); // vote blocked
     }
 
+    [Fact]
+    public async Task Validate_rejects_symlink_escaping_checkout()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "rf-outside-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(outside, "MARKER-UNIQUE-SECRET");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_RepoDir, "linked"));
+            File.CreateSymbolicLink(Path.Combine(_RepoDir, "linked", "secret.txt"), outside);
+
+            var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("linked/secret.txt", 1, 1), Snippet = "MARKER-UNIQUE-SECRET"};
+            var ctx = Ctx();
+            ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+            await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.Empty(ctx.AcceptedFindings);
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
+    public async Task Validate_accepts_symlink_staying_inside_checkout()
+    {
+        Directory.CreateDirectory(Path.Combine(_RepoDir, "real"));
+        File.WriteAllText(Path.Combine(_RepoDir, "real", "b.txt"), "MARKER-INSIDE");
+        Directory.CreateDirectory(Path.Combine(_RepoDir, "a"));
+        File.CreateSymbolicLink(Path.Combine(_RepoDir, "a", "b.txt"), Path.Combine(_RepoDir, "real", "b.txt"));
+
+        var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("a/b.txt", 1, 1), Snippet = "MARKER-INSIDE"};
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/a/b.txt\n@@ -0,0 +1,1 @@\n+MARKER-INSIDE\n");
+        ctx.ChangedFileManifest = [new ChangedFile("a/b.txt", ChangedFileType.Edit)];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(ctx.AcceptedFindings);
+    }
+
     private sealed class CompetitorRepliedSource : FakePullRequestSource
     {
         public override Task<IReadOnlyList<ReviewThread>> GetThreadsAsync(PrKey pr, CancellationToken ct)

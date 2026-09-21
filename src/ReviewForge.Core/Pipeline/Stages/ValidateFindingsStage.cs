@@ -59,7 +59,9 @@ public sealed class ValidateFindingsStage(
     private bool TryReanchor(RichFinding finding, string repoDir)
     {
         var path = Path.GetFullPath(Path.Combine(repoDir, finding.Anchor!.FilePath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!PathContainment.IsContained(repoDir, path) || !File.Exists(path))
+        // Real-path check: checkout-planted symlinks must not let anchor validation read
+        // outside the checkout (lexical containment alone is insufficient — see P1-10).
+        if (!PathSafety.IsContainedReal(repoDir, path) || !File.Exists(path))
             return false;
 
         if (!_LineCache.TryGetValue(path, out var lines))
