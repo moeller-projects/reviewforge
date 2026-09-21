@@ -285,3 +285,63 @@ public class ThreadTriageTests
         Assert.Equal("because X", op.Comment);
     }
 }
+
+public class FailureBackoffTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 9, 17, 12, 0, 0, TimeSpan.Zero);
+    private static readonly FailureBackoffPolicy Policy = new(TimeSpan.FromMinutes(30), TimeSpan.FromHours(8));
+
+    private static ReviewRun Failed(string head, DateTimeOffset at)
+        => new(Guid.NewGuid(), new PrKey("o", "p", "r", 7), head, ReviewKind.Full, at.AddMinutes(-1), at, false, []);
+
+    private static ReviewRun Succeeded(string head, DateTimeOffset at)
+        => new(Guid.NewGuid(), new PrKey("o", "p", "r", 7), head, ReviewKind.Full, at.AddMinutes(-1), at, true, []);
+
+    [Fact]
+    public void BlockedUntil_returns_null_with_no_failures()
+        => Assert.Null(FailureBackoff.BlockedUntil([], "head", Now, Policy));
+
+    [Fact]
+    public void BlockedUntil_after_success_resets_streak()
+    {
+        // Newest first: success at -5 min, failure at -30 min.
+        var runs = new[] {Succeeded("head", Now.AddMinutes(-5)), Failed("head", Now.AddMinutes(-30))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_for_different_head()
+    {
+        var runs = new[] {Failed("other-head", Now.AddMinutes(-5))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_doubles_per_consecutive_failure()
+    {
+        var t = Now.AddMinutes(-5);
+        var one = FailureBackoff.BlockedUntil([Failed("head", t)], "head", Now, Policy);
+        Assert.Equal(t + TimeSpan.FromMinutes(30), one);
+
+        var two = FailureBackoff.BlockedUntil([Failed("head", t), Failed("head", t)], "head", Now, Policy);
+        Assert.Equal(t + TimeSpan.FromHours(1), two);
+
+        var three = FailureBackoff.BlockedUntil([Failed("head", t), Failed("head", t), Failed("head", t)], "head", Now, Policy);
+        Assert.Equal(t + TimeSpan.FromHours(2), three);
+    }
+
+    [Fact]
+    public void BlockedUntil_caps_at_max()
+    {
+        var t = Now.AddMinutes(-1);
+        var runs = Enumerable.Range(0, 20).Select(_ => Failed("head", t)).ToArray();
+        Assert.Equal(t + Policy.Max, FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_returns_null_once_window_elapsed()
+    {
+        var runs = new[] {Failed("head", Now.AddHours(-9))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+}

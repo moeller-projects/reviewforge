@@ -1,17 +1,21 @@
+using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
 
 /// <summary>
-/// Worker draining the bounded ingest queue. A failed run is logged and marked Failed —
-/// the worker keeps draining (no poison-message shutdown).
+/// Worker draining the bounded ingest queue. A failed run is logged, marked Failed, and
+/// persisted as a failure record (so discovery backoff has memory) — the worker keeps
+/// draining (no poison-message shutdown).
 /// </summary>
 public sealed class ReviewWorker(
     ReviewQueue queue,
     RunTracker tracker,
     ReviewPipelineFactory pipelineFactory,
     InFlightClaims claims,
+    IFindingStore store,
     ILogger<ReviewWorker> logger,
     TimeProvider? clock = null) : BackgroundService
 {
@@ -35,9 +39,10 @@ public sealed class ReviewWorker(
             }
 
             tracker.Set(request.RunId, request.Pr, RunState.Running);
+            ReviewContext? ctx = null;
             try
             {
-                using var ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId)
+                ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId)
                 {
                     PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
                 };
@@ -72,11 +77,34 @@ public sealed class ReviewWorker(
             {
                 logger.LogError(ex, "run {RunId} for {Pr} failed", request.RunId, request.Pr);
                 tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message);
+                await PersistFailureAsync(request, ctx, stoppingToken);
             }
             finally
             {
+                ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
             }
+        }
+    }
+
+    /// <summary>Best-effort failure record so discovery backoff has memory. Never throws.</summary>
+    private async Task PersistFailureAsync(ReviewRequest request, ReviewContext? ctx, CancellationToken ct)
+    {
+        try
+        {
+            await store.SaveRunAsync(new ReviewRun(
+                request.RunId,
+                request.Pr,
+                ctx?.PullRequest?.SourceCommitSha ?? string.Empty,
+                ctx?.Kind ?? ReviewKind.Full,
+                ctx?.StartedAt ?? request.EnqueuedAt,
+                _Clock.GetUtcNow(),
+                Success: false,
+                Findings: []), ct);
+        }
+        catch (Exception storeEx)
+        {
+            logger.LogWarning(storeEx, "failed to persist failure record for run {RunId}", request.RunId);
         }
     }
 }

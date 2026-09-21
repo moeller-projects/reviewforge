@@ -125,5 +125,27 @@ public sealed class SqliteFindingStore : IFindingStore
             .ExecuteUpdateAsync(s => s.SetProperty(f => f.ThreadId, threadId), ct);
     }
 
+    public async Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var runs = await db.Runs
+            .Include(r => r.Findings)
+            .Where(r => r.Org == pr.Org && r.Project == pr.Project
+                                        && r.RepositoryId == pr.RepositoryId && r.PrId == pr.PrId)
+            .ToListAsync(ct);
+
+        // SQLite cannot ORDER BY DateTimeOffset — order in memory (few runs per PR).
+        return
+        [
+            .. runs
+                .OrderByDescending(r => r.StartedAt)
+                .Take(count)
+                .Select(r => new ReviewRun(
+                    r.Id, pr, r.HeadSha, Enum.Parse<ReviewKind>(r.Kind),
+                    r.StartedAt, r.CompletedAt, r.Success,
+                    [.. r.Findings.Select(f => new StoredFinding(f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))]))
+        ];
+    }
+
     private FindingStoreDbContext CreateContext() => new(_Options);
 }

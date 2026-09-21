@@ -18,4 +18,7 @@ public interface IFindingStore
 
     /// <summary>Backfill the posted thread id for a finding of the run.</summary>
     Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct);
+
+    /// <summary>Newest runs for the PR regardless of outcome (failure backoff, diagnostics).</summary>
+    Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct);
 }

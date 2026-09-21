@@ -70,7 +70,7 @@ public sealed class ReviewPipelineFactory(
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
-            new PrepareRepositoryStage(checkoutPool),
+            new PrepareRepositoryStage(checkoutPool, loggerFactory.CreateLogger<PrepareRepositoryStage>()),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),

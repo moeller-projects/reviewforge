@@ -35,6 +35,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public string DiffText { get; set; } = string.Empty;
     public DiffIndex? Diff { get; set; }
 
+    /// <summary>Manifest ∩ diff files that carry reviewable text (set by stage 3).</summary>
+    public IReadOnlyCollection<string>? ReviewableFiles { get; set; }
+
     // Stage 4 — classify
     public ReviewKind Kind { get; set; } = ReviewKind.Full;
     public IReadOnlyList<PendingReply> PendingReplies { get; set; } = [];

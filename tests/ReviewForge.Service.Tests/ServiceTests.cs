@@ -304,7 +304,7 @@ public class ServiceTests : IAsyncLifetime
             options,
             LoggerFactory.Create(b => { }));
         var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
-            LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
+            _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = worker.StartAsync(cts.Token);

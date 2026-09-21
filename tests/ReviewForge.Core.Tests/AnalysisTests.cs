@@ -116,6 +116,67 @@ public class DiffIndexTests
         Assert.DoesNotContain("modules/untouched/Model.cs", index.Files);
         Assert.True(index.Contains("changed.md", 1));
     }
+
+    [Fact]
+    public void Parse_registers_binary_file_as_non_reviewable()
+    {
+        var index = DiffIndex.Parse("diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n");
+
+        Assert.Empty(index.Files);
+        Assert.Equal(DiffEntryKind.Binary, index.NonReviewableFiles["logo.png"]);
+    }
+
+    [Fact]
+    public void Parse_registers_mode_only_change()
+    {
+        var index = DiffIndex.Parse("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n");
+
+        Assert.Empty(index.Files);
+        Assert.Equal(DiffEntryKind.ModeOnly, index.NonReviewableFiles["run.sh"]);
+    }
+
+    [Fact]
+    public void Parse_registers_content_free_rename()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git a/a.cs b/b.cs\nsimilarity index 100%\nrename from a.cs\nrename to b.cs\n");
+
+        Assert.Empty(index.Files);
+        Assert.Equal(DiffEntryKind.RenameOnly, index.NonReviewableFiles["b.cs"]);
+    }
+
+    [Fact]
+    public void Parse_keeps_rename_with_content_as_text()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git a/a.cs b/b.cs\nsimilarity index 90%\nrename from a.cs\nrename to b.cs\n" +
+            "--- a/a.cs\n+++ b/b.cs\n@@ -1,1 +1,1 @@\n-old\n+new\n");
+
+        Assert.Contains("b.cs", index.Files);
+        Assert.DoesNotContain("b.cs", index.NonReviewableFiles.Keys);
+    }
+
+    [Fact]
+    public void Parse_text_file_followed_by_binary_keeps_both()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git a/a.cs b/a.cs\n--- a/a.cs\n+++ b/a.cs\n@@ -0,0 +1,1 @@\n+changed\n" +
+            "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n");
+
+        Assert.Contains("a.cs", index.Files);
+        Assert.True(index.Contains("a.cs", 1));
+        Assert.Equal(DiffEntryKind.Binary, index.NonReviewableFiles["logo.png"]);
+    }
+
+    [Fact]
+    public void Parse_handles_no_newline_marker_inside_hunk()
+    {
+        var index = DiffIndex.Parse("+++ b/f.cs\n@@ -0,0 +1,3 @@\n+x\n\\ No newline at end of file\n+y\n+z\n");
+
+        Assert.True(index.Contains("f.cs", 1));
+        Assert.True(index.Contains("f.cs", 2));
+        Assert.True(index.Contains("f.cs", 3));
+    }
 }
 
 public class AnchorResolverTests

@@ -15,4 +15,10 @@ public sealed class DiscoveryOptions
 
     /// <summary>Background sweep interval; null disables the sweep worker.</summary>
     public TimeSpan? SweepInterval { get; init; }
+
+    /// <summary>Backoff base after a failed run at the same head (doubles per consecutive failure).</summary>
+    public TimeSpan FailureBackoffBase { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>Cap for the failure backoff.</summary>
+    public TimeSpan FailureBackoffMax { get; init; } = TimeSpan.FromHours(8);
 }

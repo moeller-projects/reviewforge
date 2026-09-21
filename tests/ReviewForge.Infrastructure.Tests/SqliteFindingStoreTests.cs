@@ -202,6 +202,22 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetRecentRuns_returns_newest_first_across_outcomes()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h1", ReviewKind.Full, t0, t0.AddMinutes(5), false, []), CancellationToken.None);
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h2", ReviewKind.Full, t0.AddMinutes(10), t0.AddMinutes(15), true, []), CancellationToken.None);
+
+        var runs = await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None);
+
+        Assert.Equal(2, runs.Count);
+        Assert.True(runs[0].Success);
+        Assert.Equal("h2", runs[0].HeadSha);
+        Assert.False(runs[1].Success);
+        Assert.Equal("h1", runs[1].HeadSha);
+    }
+
+    [Fact]
     public async Task Known_keys_are_distinct_across_runs_and_scoped_to_pr()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);

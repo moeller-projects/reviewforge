@@ -211,6 +211,7 @@ public class FakeFindingStore : IFindingStore
     public int LastRunFetches { get; private set; }
     public List<string> KnownKeys { get; set; } = [];
     public List<(Guid RunId, string Key, int ThreadId)> ThreadIdBackfills { get; } = [];
+    public List<ReviewRun> RecentRuns { get; } = [];
 
     public virtual Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
     {
@@ -224,6 +225,7 @@ public class FakeFindingStore : IFindingStore
     {
         Runs.RemoveAll(r => r.Id == run.Id);
         Runs.Add(run);
+        RecentRuns.Add(run);
         return Task.CompletedTask;
     }
 
@@ -232,6 +234,10 @@ public class FakeFindingStore : IFindingStore
         ThreadIdBackfills.Add((runId, dedupeKey, threadId));
         return Task.CompletedTask;
     }
+
+    public virtual Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ReviewRun>>(
+            [.. RecentRuns.Where(r => r.Pr == pr).OrderByDescending(r => r.StartedAt).Take(count)]);
 }
 
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>

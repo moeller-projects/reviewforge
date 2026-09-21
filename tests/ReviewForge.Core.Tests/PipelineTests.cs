@@ -134,7 +134,7 @@ public class StageTests : IDisposable
         };
         var ctx = Ctx();
 
-        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"), NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["head-sha"], git.Checkouts);
         Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
@@ -365,7 +365,83 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir)).ExecuteAsync(ctx, CancellationToken.None));
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Prepare_accepts_manifest_with_binary_file()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git a/a.cs b/a.cs\n--- a/a.cs\n+++ b/a.cs\n@@ -0,0 +1,1 @@\n+changed\n" +
+                   "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
+    }
+
+    [Fact]
+    public async Task Prepare_accepts_content_free_rename()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git a/a.cs b/b.cs\nsimilarity index 100%\nrename from a.cs\nrename to b.cs\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Rename)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.ReviewableFiles!);
+    }
+
+    [Fact]
+    public async Task Prepare_still_throws_when_diff_has_unaccounted_text_file()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git a/a.cs b/a.cs\n--- a/a.cs\n+++ b/a.cs\n@@ -0,0 +1,1 @@\n+x\n" +
+                   "diff --git a/c.cs b/c.cs\n--- a/c.cs\n+++ b/c.cs\n@@ -0,0 +1,1 @@\n+y\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)],
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Prepare_warns_and_excludes_manifest_orphan()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "+++ b/a.cs\n@@ -0,0 +1,1 @@\n+x\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("ghost.cs", ChangedFileType.Edit)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
     }
 
     [Fact]

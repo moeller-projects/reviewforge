@@ -64,6 +64,18 @@ public sealed class DiscoveryService(
                 continue;
             }
 
+            // Failure memory: a head whose recent runs all failed backs off exponentially
+            // instead of burning an LLM run on every sweep.
+            var recentRuns = await store.GetRecentRunsAsync(candidate.Key, count: 10, ct);
+            var blockedUntil = FailureBackoff.BlockedUntil(
+                recentRuns, candidate.Pr.SourceCommitSha, _Clock.GetUtcNow(),
+                new FailureBackoffPolicy(options.FailureBackoffBase, options.FailureBackoffMax));
+            if (blockedUntil is not null)
+            {
+                skipped.Add(new SkippedPr(candidate.Key, $"head failing; backoff until {blockedUntil.Value:u}"));
+                continue;
+            }
+
             interesting++;
             if (enqueued.Count >= _Rules.MaxEnqueues)
             {
