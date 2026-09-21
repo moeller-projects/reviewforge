@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -17,6 +18,10 @@ public sealed class RepoCheckoutPool
     private readonly KeyedLockPool _Locks = new();
     private readonly string? _Pat;
     private readonly string _Root;
+
+    // path -> byte size. Checkouts are keyed by head SHA and immutable after
+    // materialization, so a cached size never goes stale; entries are removed on delete.
+    private readonly ConcurrentDictionary<string, long> _SizeCache = new(StringComparer.Ordinal);
 
     public RepoCheckoutPool(IGitOps git, IWorkspaceFs fs, string root, string? pat = null)
     {
@@ -57,6 +62,15 @@ public sealed class RepoCheckoutPool
                 _Fs.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
             }
 
+            try
+            {
+                _SizeCache[repoPath] = DirectorySize(repoPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _SizeCache.TryRemove(repoPath, out _); // measure later during eviction
+            }
+
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
         }
@@ -89,7 +103,10 @@ public sealed class RepoCheckoutPool
         var scanned = 0;
         var deleted = 0;
         var inUse = 0;
+        var failed = 0;
+        var failureDetails = new List<string>();
         long bytes = 0;
+        var survivors = new List<(string Path, string RepoId, string Head, DateTime LastWrite, long Size)>();
 
         foreach (var repoDir in _Fs.EnumerateDirectories(checkoutsRoot))
         {
@@ -105,6 +122,7 @@ public sealed class RepoCheckoutPool
                 var (path, head, lastWrite) = heads[i];
                 if (i < options.MaxCheckoutsPerRepo && lastWrite >= cutoff.UtcDateTime)
                 {
+                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path)));
                     continue;
                 }
 
@@ -119,6 +137,7 @@ public sealed class RepoCheckoutPool
                 {
                     var size = DirectorySize(path);
                     _Fs.DeleteDirectory(path, recursive: true);
+                    _SizeCache.TryRemove(path, out _);
                     bytes += size;
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(1);
@@ -126,7 +145,8 @@ public sealed class RepoCheckoutPool
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // A transient native Git handle will be retried on the next sweep.
+                    failed++;
+                    failureDetails.Add($"{path}: {ex.GetType().Name}");
                 }
                 finally
                 {
@@ -147,7 +167,71 @@ public sealed class RepoCheckoutPool
             }
         }
 
-        return new CheckoutEvictionReport(scanned, deleted, inUse, bytes);
+        // Phase 2 — global disk budget: evict least-recently-used cross-repo until under budget.
+        var totalBytes = survivors.Sum(s => s.Size);
+        if (options.MaxTotalBytes > 0 && totalBytes > options.MaxTotalBytes)
+        {
+            foreach (var candidate in survivors.OrderBy(s => s.LastWrite))
+            {
+                if (totalBytes <= options.MaxTotalBytes)
+                {
+                    break;
+                }
+
+                using var evictionLease = _Locks.TryAcquire(EncodedCheckoutKey(candidate.RepoId, candidate.Head));
+                if (evictionLease is null)
+                {
+                    inUse++;
+                    continue; // never evict an in-use checkout, even over budget
+                }
+
+                try
+                {
+                    _Fs.DeleteDirectory(candidate.Path, recursive: true);
+                    _SizeCache.TryRemove(candidate.Path, out _);
+                    bytes += candidate.Size;
+                    totalBytes -= candidate.Size;
+                    deleted++;
+                    ReviewForgeTelemetry.CheckoutEvicted.Add(1);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    failed++;
+                    failureDetails.Add($"{candidate.Path}: {ex.GetType().Name}");
+                }
+                finally
+                {
+                    evictionLease.Dispose();
+                }
+            }
+        }
+
+        return new CheckoutEvictionReport(scanned, deleted, inUse, bytes)
+        {
+            BytesRemaining = totalBytes,
+            Failed = failed,
+            FailureDetails = failureDetails,
+        };
+    }
+
+    /// <summary>Cached size of a checkout; measured once and reused across sweeps.</summary>
+    private long GetCachedSize(string path)
+    {
+        if (_SizeCache.TryGetValue(path, out var size))
+        {
+            return size;
+        }
+
+        try
+        {
+            size = DirectorySize(path);
+            _SizeCache[path] = size;
+            return size;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0; // transient — measured again next sweep
+        }
     }
 
     internal string CheckoutPath(string repositoryId, string headSha)

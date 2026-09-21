@@ -122,6 +122,211 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Assert.True(Directory.Exists(newest));
     }
 
+    private static void CreateCheckout(string path, int size, DateTime lastWrite)
+    {
+        Directory.CreateDirectory(path);
+        File.WriteAllBytes(Path.Combine(path, "blob"), new byte[size]);
+        Directory.SetLastWriteTimeUtc(path, lastWrite);
+    }
+
+    [Fact]
+    public void Evict_enforces_global_budget_cross_repo_lru()
+    {
+        var pool = Pool(new TestGitOps());
+        const int oneMb = 1_000_000;
+        var now = DateTime.UtcNow;
+
+        var a1 = pool.CheckoutPath("a", "old1");
+        var a2 = pool.CheckoutPath("a", "old2");
+        var b1 = pool.CheckoutPath("b", "new1");
+        var b2 = pool.CheckoutPath("b", "new2");
+        CreateCheckout(a1, oneMb, now.AddMinutes(-3));
+        CreateCheckout(a2, oneMb, now.AddMinutes(-2));
+        CreateCheckout(b1, oneMb, now.AddMinutes(-1));
+        CreateCheckout(b2, oneMb, now);
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxTotalBytes = 3L * oneMb, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            TimeProvider.System);
+
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal(oneMb, report.BytesFreed);
+        Assert.Equal(3L * oneMb, report.BytesRemaining);
+        Assert.False(Directory.Exists(a1)); // oldest cross-repo evicted
+        Assert.True(Directory.Exists(a2));
+        Assert.True(Directory.Exists(b1));
+        Assert.True(Directory.Exists(b2));
+    }
+
+    [Fact]
+    public void Evict_budget_zero_disables_global_pass()
+    {
+        var pool = Pool(new TestGitOps());
+        const int oneMb = 1_000_000;
+        var a1 = pool.CheckoutPath("a", "old1");
+        var a2 = pool.CheckoutPath("a", "old2");
+        CreateCheckout(a1, oneMb, DateTime.UtcNow.AddMinutes(-2));
+        CreateCheckout(a2, oneMb, DateTime.UtcNow);
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxTotalBytes = 0, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            TimeProvider.System);
+
+        Assert.Equal(0, report.Deleted);
+        Assert.True(Directory.Exists(a1));
+        Assert.True(Directory.Exists(a2));
+    }
+
+    [Fact]
+    public async Task Evict_budget_skips_in_use_checkouts()
+    {
+        var pool = Pool(new TestGitOps());
+        const int oneMb = 1_000_000;
+
+        var heldPath = pool.CheckoutPath("repo", "held");
+        CreateCheckout(heldPath, oneMb, DateTime.UtcNow);
+        using var held = await pool.AcquireAsync("repo", "url", "base", "held", CancellationToken.None);
+        Directory.SetLastWriteTimeUtc(heldPath, DateTime.UtcNow.AddMinutes(-5)); // held is oldest after acquire
+
+        var other = pool.CheckoutPath("repo", "other");
+        CreateCheckout(other, oneMb, DateTime.UtcNow.AddMinutes(-1));
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxTotalBytes = oneMb + oneMb / 2, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            TimeProvider.System);
+
+        Assert.Equal(1, report.SkippedInUse);
+        Assert.True(Directory.Exists(heldPath)); // in-use survives the budget pass
+        Assert.False(Directory.Exists(other));   // next-oldest evicted instead
+    }
+
+    [Fact]
+    public async Task Evict_budget_reports_over_budget_when_all_excess_in_use()
+    {
+        var pool = Pool(new TestGitOps());
+        const int oneMb = 1_000_000;
+
+        var p1 = pool.CheckoutPath("repo", "h1");
+        var p2 = pool.CheckoutPath("repo", "h2");
+        CreateCheckout(p1, oneMb, DateTime.UtcNow.AddMinutes(-5));
+        CreateCheckout(p2, oneMb, DateTime.UtcNow.AddMinutes(-1));
+        using var lease1 = await pool.AcquireAsync("repo", "url", "base", "h1", CancellationToken.None);
+        using var lease2 = await pool.AcquireAsync("repo", "url", "base", "h2", CancellationToken.None);
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxTotalBytes = oneMb, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            TimeProvider.System);
+
+        Assert.Equal(0, report.Deleted);
+        Assert.Equal(2, report.SkippedInUse);
+        Assert.True(report.BytesRemaining > oneMb);
+    }
+
+    [Fact]
+    public async Task Acquire_populates_size_cache_for_budget_eviction()
+    {
+        var pool = Pool(new TestGitOps());
+        const int oneMb = 1_000_000;
+
+        var path = pool.CheckoutPath("repo", "head");
+        CreateCheckout(path, oneMb, DateTime.UtcNow);
+        using (var held = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None))
+        {
+            Directory.SetLastWriteTimeUtc(held.Path, DateTime.UtcNow.AddMinutes(-5));
+        }
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxTotalBytes = oneMb / 2, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            TimeProvider.System);
+
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal(oneMb, report.BytesFreed);
+    }
+
+    [Fact]
+    public async Task Acquire_tolerates_size_measurement_failure()
+    {
+        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnSize = true }, _Root);
+
+        using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
+
+        Assert.True(Directory.Exists(checkout.Path));
+    }
+
+    [Fact]
+    public void Evict_tolerates_size_failure_for_survivors()
+    {
+        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnSize = true }, _Root);
+        var path = pool.CheckoutPath("repo", "head");
+        CreateCheckout(path, 1000, DateTime.UtcNow);
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxTotalBytes = 100, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            TimeProvider.System);
+
+        Assert.Equal(0, report.Deleted); // size unknown (0), budget not exceeded
+    }
+
+    [Fact]
+    public void Evict_reports_delete_failures_from_count_pass()
+    {
+        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnDelete = true }, _Root);
+        var path = pool.CheckoutPath("repo", "head");
+        CreateCheckout(path, 1000, DateTime.UtcNow.AddDays(-10));
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxAge = TimeSpan.FromDays(1), MaxTotalBytes = 0 },
+            TimeProvider.System);
+
+        Assert.Equal(1, report.Failed);
+        Assert.Single(report.FailureDetails);
+    }
+
+    [Fact]
+    public void Evict_reports_delete_failures_from_budget_pass()
+    {
+        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnDelete = true }, _Root);
+        var path = pool.CheckoutPath("repo", "head");
+        CreateCheckout(path, 1000, DateTime.UtcNow);
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { MaxTotalBytes = 100, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            TimeProvider.System);
+
+        Assert.Equal(1, report.Failed);
+        Assert.Single(report.FailureDetails);
+        Assert.True(report.BytesRemaining > 100); // delete failed, still over budget
+    }
+
+    private sealed class ThrowingFs : IWorkspaceFs
+    {
+        private readonly FakeWorkspaceFs _Inner = new();
+        public bool ThrowOnDelete { get; init; }
+        public bool ThrowOnSize { get; init; }
+
+        public void CreateDirectory(string path) => _Inner.CreateDirectory(path);
+        public bool DirectoryExists(string path) => _Inner.DirectoryExists(path);
+        public IReadOnlyList<string> EnumerateDirectories(string path) => _Inner.EnumerateDirectories(path);
+        public string[] EnumerateFileSystemEntries(string path) => _Inner.EnumerateFileSystemEntries(path);
+
+        public string[] EnumerateFilesRecursive(string path)
+            => ThrowOnSize ? throw new IOException("size failed") : _Inner.EnumerateFilesRecursive(path);
+
+        public long GetFileLength(string path) => _Inner.GetFileLength(path);
+        public DateTime GetLastWriteTimeUtc(string path) => _Inner.GetLastWriteTimeUtc(path);
+        public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
+
+        public void DeleteDirectory(string path, bool recursive)
+        {
+            if (ThrowOnDelete)
+            {
+                throw new IOException("delete failed");
+            }
+
+            _Inner.DeleteDirectory(path, recursive);
+        }
+    }
+
     [Fact]
     public async Task Evict_skips_a_checkout_held_by_a_lease()
     {
