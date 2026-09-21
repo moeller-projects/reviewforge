@@ -7,8 +7,9 @@ namespace ReviewForge.Core.Reasoning;
 
 /// <summary>
 /// Read-only, in-process filesystem tools for the agent. Rooted at the repository
-/// checkout, escape-proof (path containment enforced), deny-regex for secrets
-/// (.git, .env, *.pem, *.key, **/secrets*), line-capped reads. No shell tool exists.
+/// checkout, escape-proof (path containment enforced), deny-regex for secrets and
+/// credentials (.git, .env, private keys, cert/keystore material, kube/cloud/CI
+/// credentials, environment-specific settings), line-capped reads. No shell tool exists.
 /// </summary>
 public class RepoReadTools
 {
@@ -17,7 +18,15 @@ public class RepoReadTools
 
     private static readonly string[] DefaultDenyPatterns =
     [
-        @"\.git(/|$)", @"\.env($|\.)", @"\.envrc$", @"\.pem$", @"\.key$", @"secrets",
+        @"\.git(/|$)",
+        @"\.env($|\.)", @"\.envrc$",
+        @"\.pem$", @"\.key$", @"\.pfx$", @"\.p12$", @"\.snk$",
+        @"(^|/)id_(rsa|dsa|ecdsa|ed25519)$",
+        @"(^|/|\.)(kube)?config$",          // .kubeconfig, kubeconfig
+        @"(^|/)\.aws/",                     // AWS credentials & config
+        @"(^|/)\.npmrc$", @"(^|/)\.pypirc$", // registry tokens
+        @"(^|/)appsettings\.[^/]+\.json$",  // environment-specific settings (base appsettings.json stays readable)
+        @"secrets", @"credentials",
     ];
 
     private readonly Regex[] _Deny;

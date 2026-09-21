@@ -30,8 +30,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
         }
         currentKeys.UnionWith(ctx.Collector.RedetectedKeys);
 
-        // P1-5: pass CommentFormatter.WithBotPreamble as replyTextForMatch once the preamble lands.
-        ctx.TriagePlan = ThreadTriage.Plan(botThreads, currentKeys, agentActions);
+        ctx.TriagePlan = ThreadTriage.Plan(botThreads, currentKeys, agentActions, CommentFormatter.WithBotPreamble);
         ctx.UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions);
 
         // Threads are independent; only reply-then-status per thread must stay sequential.
@@ -56,14 +55,14 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 
             if (!string.IsNullOrWhiteSpace(op.Comment))
             {
-                // P1-5: wrap with CommentFormatter.WithBotPreamble once the preamble lands.
-                if (await AlreadyRepliedAsync(ctx, op.ThreadId, op.Comment, ct).ConfigureAwait(false))
+                var text = CommentFormatter.WithBotPreamble(op.Comment);
+                if (await AlreadyRepliedAsync(ctx, op.ThreadId, text, ct).ConfigureAwait(false))
                 {
                     logger.LogInformation("thread {ThreadId}: reply already posted by a previous attempt — skipping", op.ThreadId);
                 }
                 else
                 {
-                    await source.ReplyToThreadAsync(ctx.Pr, op.ThreadId, op.Comment, ct).ConfigureAwait(false);
+                    await source.ReplyToThreadAsync(ctx.Pr, op.ThreadId, text, ct).ConfigureAwait(false);
                 }
             }
 

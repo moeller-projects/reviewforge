@@ -30,6 +30,17 @@ public static class PromptBuilder
     internal const string DiffTruncationMarker =
         "…[diff truncated — use repo_read_file / repo_grep to inspect the full change]";
 
+    /// <summary>Delimiter pair marking every PR-author-controlled byte in the prompt.</summary>
+    internal const string UntrustedBegin = "<pr-supplied-data>";
+    internal const string UntrustedEnd = "</pr-supplied-data>";
+
+    /// <summary>Strip our own delimiters from embedded content so the boundary cannot be forged from inside.</summary>
+    internal static string Sanitize(string? text)
+        => string.IsNullOrEmpty(text)
+            ? string.Empty
+            : text.Replace(UntrustedBegin, string.Empty, StringComparison.Ordinal)
+                  .Replace(UntrustedEnd, string.Empty, StringComparison.Ordinal);
+
     public static string Build(PromptInput input)
     {
         var sb = new StringBuilder(16 * 1024);
@@ -40,12 +51,15 @@ public static class PromptBuilder
         sb.AppendLine();
 
         sb.AppendLine("## Pull request");
-        sb.AppendLine($"- Title: {input.Pr.Title}");
+        sb.AppendLine(UntrustedBegin);
+        sb.AppendLine($"- Title: {Sanitize(input.Pr.Title)}");
         if (!string.IsNullOrWhiteSpace(input.Pr.Description))
         {
-            sb.AppendLine($"- Description: {input.Pr.Description}");
+            sb.AppendLine($"- Description: {Sanitize(input.Pr.Description)}");
         }
+        sb.AppendLine(UntrustedEnd);
 
+        // commit SHAs are operator/tool-supplied — outside the delimiters:
         sb.AppendLine($"- Source commit: {input.Pr.SourceCommitSha}");
         sb.AppendLine($"- Target commit: {input.Pr.TargetCommitSha}");
         sb.AppendLine();
@@ -53,20 +67,22 @@ public static class PromptBuilder
         if (input.WorkItems.Count > 0)
         {
             sb.AppendLine("## Linked work items — verify every requirement and acceptance criterion");
+            sb.AppendLine(UntrustedBegin);
             foreach (var wi in input.WorkItems)
             {
-                sb.AppendLine($"### #{wi.Id} [{wi.Type}] {wi.Title} ({wi.State})");
+                sb.AppendLine($"### #{wi.Id} [{Sanitize(wi.Type)}] {Sanitize(wi.Title)} ({Sanitize(wi.State)})");
                 if (!string.IsNullOrWhiteSpace(wi.Description))
                 {
-                    sb.AppendLine(wi.Description.Trim());
+                    sb.AppendLine(Sanitize(wi.Description.Trim()));
                 }
 
                 if (!string.IsNullOrWhiteSpace(wi.AcceptanceCriteria))
                 {
                     sb.AppendLine("Acceptance criteria:");
-                    sb.AppendLine(wi.AcceptanceCriteria.Trim());
+                    sb.AppendLine(Sanitize(wi.AcceptanceCriteria.Trim()));
                 }
             }
+            sb.AppendLine(UntrustedEnd);
 
             sb.AppendLine();
             sb.AppendLine("For every acceptance criterion, return a verdict (met / unmet / unclear, with evidence) in task_done.");
@@ -76,10 +92,12 @@ public static class PromptBuilder
         if (input.PendingReplies.Count > 0)
         {
             sb.AppendLine("## Open threads awaiting your answer");
+            sb.AppendLine(UntrustedBegin);
             foreach (var reply in input.PendingReplies)
             {
-                sb.AppendLine($"- Thread {reply.ThreadId} (finding {reply.DedupeKey ?? "n/a"}), {reply.Author}: {reply.Text}");
+                sb.AppendLine($"- Thread {reply.ThreadId} (finding {Sanitize(reply.DedupeKey) ?? "n/a"}), {Sanitize(reply.Author)}: {Sanitize(reply.Text)}");
             }
+            sb.AppendLine(UntrustedEnd);
 
             sb.AppendLine();
             sb.AppendLine("Decide per thread in task_done: answer with a comment, resolve it, or reopen it with a follow-up comment.");
@@ -111,14 +129,16 @@ public static class PromptBuilder
         if (!string.IsNullOrWhiteSpace(input.Enrichment))
         {
             sb.AppendLine("## Structural enrichment (code-review graph)");
-            sb.AppendLine(input.Enrichment.Trim());
+            sb.AppendLine(Sanitize(input.Enrichment.Trim()));
             sb.AppendLine();
         }
 
         sb.AppendLine("## Unified diff (base → head)");
+        sb.AppendLine(UntrustedBegin);
         sb.AppendLine("```diff");
-        sb.AppendLine(ShrinkDiff(input.DiffText.Trim(), input.MaxDiffChars, input.MaxDiffCharsPerFile));
+        sb.AppendLine(Sanitize(ShrinkDiff(input.DiffText.Trim(), input.MaxDiffChars, input.MaxDiffCharsPerFile)));
         sb.AppendLine("```");
+        sb.AppendLine(UntrustedEnd);
 
         return sb.ToString();
     }

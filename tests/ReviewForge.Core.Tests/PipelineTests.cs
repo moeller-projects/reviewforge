@@ -465,7 +465,7 @@ public class StageTests : IDisposable
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Contains(source.Replies, r => r.ThreadId == 1 && r.Text == "fixed");
+        Assert.Contains(source.Replies, r => r.ThreadId == 1 && r.Text == CommentFormatter.WithBotPreamble("fixed"));
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 1 && s.Status == ReviewThreadStatus.Fixed);
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 2 && s.Status == ReviewThreadStatus.Fixed); // stale auto-resolved
         Assert.Empty(ctx.UnansweredThreads);
@@ -909,7 +909,7 @@ public class StageTests : IDisposable
         [
             new ThreadComment("b", "bot", true, "finding", t0),
             new ThreadComment("u", "human", false, "why?", t0.AddMinutes(1)),
-            new ThreadComment("b", "bot", true, "answer", t0.AddMinutes(2)),
+            new ThreadComment("b", "bot", true, CommentFormatter.WithBotPreamble("answer"), t0.AddMinutes(2)),
         ]));
 
         var ctx = Ctx(source);
@@ -999,7 +999,7 @@ public class StageTests : IDisposable
         public override Task<IReadOnlyList<ReviewThread>> GetThreadsAsync(PrKey pr, CancellationToken ct)
             => Task.FromResult<IReadOnlyList<ReviewThread>>(Threads
                 .Select(t => new ReviewThread(t.Id, t.DedupeKey, t.Status,
-                    [.. t.Comments, new ThreadComment("b", "bot", true, "answer", DateTimeOffset.UtcNow)]))
+                    [.. t.Comments, new ThreadComment("b", "bot", true, CommentFormatter.WithBotPreamble("answer"), DateTimeOffset.UtcNow)]))
                 .ToArray());
     }
 }
@@ -1087,5 +1087,28 @@ public class CommentFormatterTests
         Assert.Contains("full review", text);
         Assert.Contains("**Findings:** **0**", text);
         Assert.DoesNotContain("Acceptance criteria", text);
+    }
+
+    [Fact]
+    public void FormatFinding_starts_with_bot_preamble()
+    {
+        var finding = new RichFinding {RuleId = "r", Title = "t", Severity = "info", Category = "docs", Description = "d"};
+        Assert.StartsWith(CommentFormatter.BotPreamble, CommentFormatter.FormatFinding(finding));
+    }
+
+    [Fact]
+    public void FormatSummary_starts_with_bot_preamble()
+    {
+        var result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
+        Assert.StartsWith(CommentFormatter.BotPreamble, CommentFormatter.FormatSummary(result, [], [], ReviewKind.Full));
+    }
+
+    [Fact]
+    public void WithBotPreamble_prepends_once_and_trims()
+    {
+        var text = CommentFormatter.WithBotPreamble("  hello  ");
+        Assert.StartsWith(CommentFormatter.BotPreamble, text);
+        Assert.EndsWith("hello", text);
+        Assert.Equal(1, text.Split(CommentFormatter.BotPreamble).Length - 1);
     }
 }

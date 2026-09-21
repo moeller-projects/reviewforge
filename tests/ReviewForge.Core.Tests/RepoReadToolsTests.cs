@@ -77,6 +77,36 @@ public class RepoReadToolsTests : IDisposable
         Assert.Contains("denied", Tools().ReadFile("cert.pem"));
     }
 
+    [Theory]
+    [InlineData("id_rsa")]
+    [InlineData("id_ed25519")]
+    [InlineData("certs/app.pfx")]
+    [InlineData("signing/key.p12")]
+    [InlineData("strongname.snk")]
+    [InlineData(".kube/config")]
+    [InlineData("cluster.kubeconfig")]
+    [InlineData(".aws/credentials")]
+    [InlineData(".npmrc")]
+    [InlineData("appsettings.Production.json")]
+    public void ReadFile_denies_private_keys(string path)
+    {
+        Assert.StartsWith("access denied", Tools().ReadFile(path));
+    }
+
+    [Fact]
+    public void ReadFile_allows_base_appsettings()
+    {
+        File.WriteAllText(Path.Combine(_Root, "appsettings.json"), "{\"x\": 1}");
+        Assert.DoesNotContain("denied", Tools().ReadFile("appsettings.json"));
+    }
+
+    [Fact]
+    public void Grep_skips_denied_files()
+    {
+        File.WriteAllText(Path.Combine(_Root, "appsettings.Production.json"), "SECRETVALUE=xyz");
+        Assert.Equal("no matches", Tools().Grep("SECRETVALUE"));
+    }
+
     [Fact]
     public void Escape_outside_root_is_denied()
     {

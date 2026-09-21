@@ -56,6 +56,16 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         services.AddSingleton<DiscoveryService>();
 
+        var discovery = configuration.GetSection(DiscoveryOptions.SectionName).Get<DiscoveryOptions>() ?? new DiscoveryOptions();
+        if (discovery.SweepInterval is not null
+            && discovery.Creators.Length == 0
+            && !discovery.AllowAllCreators)
+        {
+            throw new InvalidOperationException(
+                "Discovery:Creators must be a non-empty allowlist when Discovery:SweepInterval is enabled " +
+                "(or set Discovery:AllowAllCreators=true to accept PRs from any author explicitly).");
+        }
+
         services.AddSingleton<IFindingStore>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;

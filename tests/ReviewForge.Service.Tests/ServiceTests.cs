@@ -679,6 +679,49 @@ public class DiWiringTests
             Assert.Throws<InvalidOperationException>(() => factory.Create());
         });
     }
+
+    [Fact]
+    public void Startup_throws_when_sweep_enabled_without_creators()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                services.AddReviewForge(BuildConfig(new Dictionary<string, string?> {["Discovery:SweepInterval"] = "00:30:00"})));
+            Assert.Contains("Discovery:Creators", ex.Message);
+        });
+    }
+
+    [Fact]
+    public void Startup_allows_explicit_allow_all_creators()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig(new Dictionary<string, string?>
+            {
+                ["Discovery:SweepInterval"] = "00:30:00",
+                ["Discovery:AllowAllCreators"] = "true",
+            }));
+            using var provider = services.BuildServiceProvider();
+            Assert.NotNull(provider.GetRequiredService<DiscoveryService>());
+        });
+    }
+
+    [Fact]
+    public void Startup_allows_empty_creators_when_sweep_disabled()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig());
+            using var provider = services.BuildServiceProvider();
+            Assert.NotNull(provider.GetRequiredService<DiscoveryService>());
+        });
+    }
 }
 
 [Collection("ReviewForge service host")]

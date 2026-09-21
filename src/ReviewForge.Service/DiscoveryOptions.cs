@@ -8,8 +8,13 @@ public sealed class DiscoveryOptions
     /// <summary>Branch short names to consider; matching is case-insensitive.</summary>
     public string[] TargetBranches { get; init; } = ["main", "develop"];
 
-    /// <summary>Creator filter (matches id or name); empty allows all creators.</summary>
+    /// <summary>Creator filter (matches id or name). REQUIRED when SweepInterval is set,
+    /// unless AllowAllCreators is explicitly true.</summary>
     public string[] Creators { get; init; } = [];
+
+    /// <summary>Explicit opt-out of the creator allowlist. Reviews PRs from any author,
+    /// including external contributors — only enable with prompt-injection hardening in place.</summary>
+    public bool AllowAllCreators { get; init; }
 
     public int MaxEnqueuesPerSweep { get; init; } = 20;
 
