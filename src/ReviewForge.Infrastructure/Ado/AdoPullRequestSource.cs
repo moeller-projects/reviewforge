@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using Microsoft.TeamFoundation.Core.WebApi;
@@ -72,44 +73,51 @@ public sealed class AdoPullRequestSource : IPullRequestSource
     public async Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
         var projectClient = await _Connection.GetClientAsync<ProjectHttpClient>(ct);
-        var result = new List<PullRequestCandidate>();
+        var projects = await projectClient.GetProjects();
+        var git = await _Connection.GetClientAsync<GitHttpClient>(ct);
+        var bag = new ConcurrentBag<(int Index, List<PullRequestCandidate> Candidates)>();
 
-        foreach (var project in await projectClient.GetProjects())
-        {
-            var git = await _Connection.GetClientAsync<GitHttpClient>(ct);
-            var prs = await git.GetPullRequestsByProjectAsync(
-                project.Name,
-                new GitPullRequestSearchCriteria {Status = PullRequestStatus.Active},
-                cancellationToken: ct);
-
-            foreach (var gpr in prs)
+        await Parallel.ForEachAsync(
+            projects.Select((project, index) => (project, index)),
+            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+            async (item, token) =>
             {
-                var repositoryId = gpr.Repository?.Id.ToString();
-                if (repositoryId is null)
+                var prs = await git.GetPullRequestsByProjectAsync(
+                    item.project.Name,
+                    new GitPullRequestSearchCriteria { Status = PullRequestStatus.Active },
+                    cancellationToken: token);
+
+                var list = new List<PullRequestCandidate>(prs.Count);
+                foreach (var gpr in prs)
                 {
-                    continue;
+                    var repositoryId = gpr.Repository?.Id.ToString();
+                    if (repositoryId is null)
+                    {
+                        continue;
+                    }
+
+                    var key = new PrKey(_Org, item.project.Name, repositoryId, gpr.PullRequestId);
+                    var pr = new PullRequest(
+                        gpr.PullRequestId,
+                        gpr.Title ?? string.Empty,
+                        gpr.Description,
+                        gpr.LastMergeSourceCommit?.CommitId ?? string.Empty,
+                        gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
+                        gpr.Repository?.RemoteUrl ?? string.Empty,
+                        gpr.IsDraft ?? false);
+
+                    list.Add(new PullRequestCandidate(
+                        key,
+                        pr,
+                        StripRefs(gpr.TargetRefName),
+                        gpr.CreatedBy?.Id.ToString() ?? string.Empty,
+                        gpr.CreatedBy?.DisplayName ?? string.Empty));
                 }
 
-                var key = new PrKey(_Org, project.Name, repositoryId, gpr.PullRequestId);
-                var pr = new PullRequest(
-                    gpr.PullRequestId,
-                    gpr.Title ?? string.Empty,
-                    gpr.Description,
-                    gpr.LastMergeSourceCommit?.CommitId ?? string.Empty,
-                    gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
-                    gpr.Repository?.RemoteUrl ?? string.Empty,
-                    gpr.IsDraft ?? false);
+                bag.Add((item.index, list));
+            });
 
-                result.Add(new PullRequestCandidate(
-                    key,
-                    pr,
-                    StripRefs(gpr.TargetRefName),
-                    gpr.CreatedBy?.Id.ToString() ?? string.Empty,
-                    gpr.CreatedBy?.DisplayName ?? string.Empty));
-            }
-        }
-
-        return result;
+        return [.. bag.OrderBy(b => b.Index).SelectMany(b => b.Candidates)];
     }
 
     public async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)

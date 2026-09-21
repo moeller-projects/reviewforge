@@ -18,6 +18,13 @@ public sealed class DiscoveryOptions
 
     public int MaxEnqueuesPerSweep { get; init; } = 20;
 
+    /// <summary>
+    /// Max concurrent ADO/store round-trips during a sweep. 1 restores fully sequential
+    /// behavior. Keep low (2–4) on PATs shared with other tooling; default 8 stays far
+    /// below ADO per-user throttling limits.
+    /// </summary>
+    public int MaxDegreeOfParallelism { get; init; } = 8;
+
     /// <summary>Background sweep interval; null disables the sweep worker.</summary>
     public TimeSpan? SweepInterval { get; init; }
 

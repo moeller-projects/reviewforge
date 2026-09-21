@@ -343,6 +343,60 @@ public class DiscoveryServiceTests
     {
         Assert.Equal("some-unknown-reason", DiscoveryService.NormalizeReason("some unknown reason!"));
     }
+
+    [Fact]
+    public async Task Sweep_fetches_work_items_concurrently()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = Enumerable.Range(1, 8).Select(i => Candidate(i)).ToList(),
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+            WorkItemBarrier = new Barrier(4),
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(8, report.Enqueued.Count); // barrier trips only with >=4 in flight
+    }
+
+    [Fact]
+    public async Task Enqueue_cap_is_exact_under_concurrency()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = Enumerable.Range(1, 10).Select(i => Candidate(i)).ToList(),
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxEnqueuesPerSweep = 3, MaxDegreeOfParallelism = 8 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(3, report.Enqueued.Count);
+        Assert.Equal(7, report.Skipped.Count(s => s.Reason == "enqueue cap reached"));
+    }
+
+    [Fact]
+    public async Task In_flight_claims_are_respected_concurrently()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = Enumerable.Range(1, 6).Select(i => Candidate(i)).ToList(),
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var claims = new InFlightClaims();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 2), Guid.NewGuid(), out _));
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 8 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options, claims);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(4, report.Enqueued.Count);
+        Assert.Equal(2, report.Skipped.Count(s => s.Reason == "review already in flight"));
+    }
 }
 
 public class DiscoverySweepWorkerTests

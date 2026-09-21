@@ -9,16 +9,23 @@ public class FakePullRequestSource : IPullRequestSource
 {
     private readonly object _Gate = new();
     private int _NextThreadId = 1000;
+    private int _openPullRequestsFetches;
+    private int _workItemFetches;
+    private int _threadFetches;
     public List<PullRequestCandidate> OpenPullRequests { get; set; } = [];
-    public int OpenPullRequestsFetches { get; private set; }
-    public int WorkItemFetches { get; private set; }
+    public int OpenPullRequestsFetches => _openPullRequestsFetches;
+    public int WorkItemFetches => _workItemFetches;
     public PullRequest Pr { get; set; } = new(1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false);
     public Dictionary<PrKey, PullRequest> PullRequestsByKey { get; } = [];
     public List<WorkItem> WorkItems { get; set; } = [];
     public List<ChangedFile> ChangedFiles { get; set; } = [];
     public List<ReviewThread> Threads { get; set; } = [];
     public CurrentUser User { get; set; } = new("user-1", "reviewforge bot");
-    public int ThreadFetches { get; private set; }
+    public int ThreadFetches => _threadFetches;
+
+    /// <summary>Optional barrier armed to prove concurrency in discovery tests; trips when
+    /// <paramref name="WorkItems"/> is awaited by that many concurrent callers.</summary>
+    public Barrier? WorkItemBarrier { get; set; }
 
     public List<(RichFinding Finding, int ThreadId)> PostedFindings { get; } = [];
     public List<string> GeneralComments { get; } = [];
@@ -39,21 +46,26 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
-        OpenPullRequestsFetches++;
+        Interlocked.Increment(ref _openPullRequestsFetches);
         return Task.FromResult<IReadOnlyList<PullRequestCandidate>>(OpenPullRequests);
     }
 
-    public virtual Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
+    public virtual async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
     {
-        WorkItemFetches++;
-        return Task.FromResult<IReadOnlyList<WorkItem>>(WorkItems);
+        Interlocked.Increment(ref _workItemFetches);
+        if (WorkItemBarrier is not null && !WorkItemBarrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+        {
+            throw new TimeoutException("work-item fetches did not overlap");
+        }
+
+        return WorkItems;
     }
 
     public virtual Task<IReadOnlyList<ChangedFile>> GetChangedFilesAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<ChangedFile>>(ChangedFiles);
 
     public virtual Task<IReadOnlyList<ReviewThread>> GetThreadsAsync(PrKey pr, CancellationToken ct)
     {
-        ThreadFetches++;
+        Interlocked.Increment(ref _threadFetches);
         return Task.FromResult<IReadOnlyList<ReviewThread>>(Threads);
     }
 
@@ -208,14 +220,15 @@ public class FakeFindingStore : IFindingStore
 {
     public List<ReviewRun> Runs { get; } = [];
     public PriorRun? LastRun { get; set; }
-    public int LastRunFetches { get; private set; }
+    private int _lastRunFetches;
+    public int LastRunFetches => _lastRunFetches;
     public List<string> KnownKeys { get; set; } = [];
     public List<(Guid RunId, string Key, int ThreadId)> ThreadIdBackfills { get; } = [];
     public List<ReviewRun> RecentRuns { get; } = [];
 
     public virtual Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
     {
-        LastRunFetches++;
+        Interlocked.Increment(ref _lastRunFetches);
         return Task.FromResult(LastRun);
     }
 
