@@ -7,6 +7,14 @@ namespace ReviewForge.Core.Tests;
 public sealed class RuleBookTests
 {
     [Fact]
+    public void Compose_reuses_embedded_pack_instances()
+    {
+        var a = new RuleBookComposer().Compose(["a.cs"], []);
+        var b = new RuleBookComposer().Compose(["a.cs"], []);
+        Assert.Same(a.Packs[0], b.Packs[0]);
+    }
+
+    [Fact]
     public void Composer_activates_language_and_always_packs()
     {
         var book = new RuleBookComposer().Compose(["src/app.component.ts"], []);

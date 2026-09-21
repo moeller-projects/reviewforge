@@ -1,0 +1,63 @@
+using ReviewForge.Core.Analysis;
+using Xunit;
+
+namespace ReviewForge.Core.Tests;
+
+public class PathSafetyTests : IDisposable
+{
+    private readonly string _Root;
+    private readonly string _Sibling;
+
+    public PathSafetyTests()
+    {
+        _Root = Path.Combine(Path.GetTempPath(), "reviewforge-pathsafety-" + Guid.NewGuid().ToString("N"));
+        _Sibling = _Root + "-evil";
+        Directory.CreateDirectory(Path.Combine(_Root, "sub"));
+        Directory.CreateDirectory(_Sibling);
+    }
+
+    public void Dispose()
+    {
+        Directory.Delete(_Root, recursive: true);
+        Directory.Delete(_Sibling, recursive: true);
+    }
+
+    [Fact]
+    public void Child_is_contained_but_root_is_not()
+    {
+        Assert.True(PathContainment.IsContained(_Root, Path.Combine(_Root, "sub", "file.cs")));
+        Assert.False(PathContainment.IsContained(_Root, _Root));
+    }
+
+    [Fact]
+    public void Sibling_with_shared_prefix_is_not_contained()
+        => Assert.False(PathContainment.IsContained(_Root, Path.Combine(_Sibling, "file.cs")));
+
+    [Fact]
+    public void Parent_escape_is_not_contained()
+        => Assert.False(PathContainment.IsContained(_Root, Path.Combine(_Root, "..", "outside.txt")));
+
+    [Fact]
+    public void Unrelated_absolute_path_is_not_contained()
+        => Assert.False(PathContainment.IsContained(_Root, Path.GetTempPath()));
+
+    [Fact]
+    public void Symlink_to_outside_is_not_contained()
+    {
+        var link = Path.Combine(_Root, "sub", "outside");
+        try
+        {
+            Directory.CreateSymbolicLink(link, _Sibling);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+
+        Assert.False(PathSafety.IsContainedReal(_Root, Path.Combine(link, "file.cs")));
+    }
+}

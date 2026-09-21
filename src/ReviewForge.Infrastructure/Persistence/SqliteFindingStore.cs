@@ -4,7 +4,11 @@ using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Infrastructure.Persistence;
 
-/// <summary>SQLite-backed finding store. Schema via EnsureCreated — single-writer service, no migrations needed.</summary>
+/// <summary>
+/// SQLite-backed finding store. Schema via EnsureCreated — no migrations needed.
+/// WAL journal mode (set once, persists in the file) plus a per-connection busy_timeout
+/// let multiple workers read and write the same database without SQLITE_BUSY failures.
+/// </summary>
 public sealed class SqliteFindingStore : IFindingStore
 {
     private readonly DbContextOptions<FindingStoreDbContext> _Options;
@@ -13,10 +17,12 @@ public sealed class SqliteFindingStore : IFindingStore
     {
         _Options = new DbContextOptionsBuilder<FindingStoreDbContext>()
             .UseSqlite(connectionString)
+            .AddInterceptors(new SqliteBusyTimeoutInterceptor())
             .Options;
 
         using var db = CreateContext();
         db.Database.EnsureCreated();
+        db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
     }
 
     public async Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)

@@ -3,6 +3,7 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -133,9 +134,10 @@ public class StageTests : IDisposable
         };
         var ctx = Ctx();
 
-        await new PrepareRepositoryStage(git, Path.GetTempPath(), "pat").ExecuteAsync(ctx, CancellationToken.None);
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["head-sha"], git.Checkouts);
+        Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
         Assert.True(ctx.Diff!.Contains("src/A.cs", 2));
         Assert.False(ctx.Diff.Contains("src/A.cs", 1));
     }
@@ -195,6 +197,38 @@ public class StageTests : IDisposable
         Assert.Contains("full code review", prompt);
     }
 
+    [Fact]
+    public async Task ExecuteReasoning_streams_findings_to_per_run_jsonl()
+    {
+        var findingsDir = Path.Combine(Path.GetTempPath(), "reviewforge-findings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(findingsDir);
+        try
+        {
+            var script = new ScriptedChatClient(
+                ScriptedChatClient.FunctionCalls(
+                    ("RecordFinding", new Dictionary<string, object?>
+                    {
+                        ["ruleId"] = "csharp.null-deref", ["title"] = "x may be null", ["severity"] = "high",
+                        ["category"] = "bug", ["description"] = "deref", ["snippet"] = "bad code here",
+                        ["filePath"] = "src/A.cs", ["startLine"] = 2,
+                    }),
+                    ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+            var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+            var ctx = Ctx();
+
+            await new ExecuteReasoningStage(agent, findingsDir).ExecuteAsync(ctx, CancellationToken.None);
+
+            var file = Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl");
+            Assert.True(File.Exists(file));
+            var line = Assert.Single(File.ReadLines(file));
+            Assert.Contains(ctx.RunId.ToString(), line);
+        }
+        finally
+        {
+            Directory.Delete(findingsDir, recursive: true);
+        }
+    }
+
     private static RichFinding FindingOnLine(int line, string snippet = "bad code here") => new()
     {
         RuleId = "r", Title = "t", Severity = "high", Category = "bug", Description = "d",
@@ -232,6 +266,37 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Validate_reads_each_file_once()
+    {
+        var reads = new List<string>();
+        var stage = new ValidateFindingsStage(
+            NullLogger<ValidateFindingsStage>.Instance,
+            lineReader: path =>
+            {
+                reads.Add(path);
+                return File.ReadAllLines(path);
+            });
+
+        var f1 = FindingOnLine(2);
+        f1.DedupeKey = "k1";
+        var f2 = FindingOnLine(2);
+        f2.DedupeKey = "k2";
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative(),
+            Findings = [f1, f2],
+            Uncertainties = [],
+        };
+
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(reads);
+        Assert.Equal(2, ctx.AcceptedFindings.Count);
+    }
+
+    [Fact]
     public async Task Validate_rejects_when_file_missing()
     {
         var finding = FindingOnLine(1);
@@ -241,6 +306,35 @@ public class StageTests : IDisposable
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
         Assert.Empty(ctx.AcceptedFindings);
+    }
+
+    [Fact]
+    public async Task Validate_rejects_sibling_directory_prefix_escape()
+    {
+        var sibling = _RepoDir + "-sibling";
+        Directory.CreateDirectory(sibling);
+        File.WriteAllText(Path.Combine(sibling, "evil.cs"), "bad code here");
+        try
+        {
+            var finding = FindingOnLine(1, "bad code here");
+            finding.Anchor = new FindingAnchor($"../{Path.GetFileName(sibling)}/evil.cs", 1, 1);
+            var ctx = Ctx();
+            ctx.Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative(),
+                Findings = [finding],
+                Uncertainties = [],
+            };
+
+            await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.Empty(ctx.AcceptedFindings);
+        }
+        finally
+        {
+            Directory.Delete(sibling, recursive: true);
+        }
     }
 
     [Fact]
@@ -271,7 +365,7 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PrepareRepositoryStage(git, _RepoDir).ExecuteAsync(ctx, CancellationToken.None));
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir)).ExecuteAsync(ctx, CancellationToken.None));
     }
 
     [Fact]
@@ -337,6 +431,23 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Publish_aborts_when_host_claim_is_lost()
+    {
+        var ctx = Ctx(new FakePullRequestSource());
+        ctx.PublishGuard = () => false;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = [],
+            Uncertainties = [],
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(new FakePullRequestSource(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Publish_clean_run_sets_no_vote()
     {
         var source = new FakePullRequestSource();
@@ -348,6 +459,49 @@ public class StageTests : IDisposable
 
         Assert.Empty(source.Votes);
         Assert.Single(source.GeneralComments); // summary only
+    }
+
+    [Fact]
+    public async Task Publish_posts_findings_concurrently_within_semaphore()
+    {
+        var source = new SlowFakePullRequestSource(delayMs: 50);
+        var findings = Enumerable.Range(0, 8).Select(i => FindingOnLine(2 + i)).ToArray();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = findings;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = findings,
+            Uncertainties = [],
+        };
+
+        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.InRange(source.MaxConcurrentFindingPosts, 2, PublishFindingsStage.MaxConcurrentPosts);
+        Assert.Equal(8, source.PostedFindings.Count);
+    }
+
+    [Fact]
+    public async Task Publish_summary_always_posts_after_findings()
+    {
+        var source = new SlowFakePullRequestSource();
+        var findings = Enumerable.Range(0, 8).Select(i => FindingOnLine(2 + i)).ToArray();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = findings;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = findings,
+            Uncertainties = [],
+        };
+
+        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(9, source.WriteLog.Count); // 8 findings, then the summary
+        Assert.All(source.WriteLog.Take(8), entry => Assert.StartsWith("finding ", entry));
+        Assert.Equal("comment 0", source.WriteLog[8]);
     }
 
     [Fact]

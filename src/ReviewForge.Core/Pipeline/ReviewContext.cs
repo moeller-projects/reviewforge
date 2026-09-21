@@ -9,7 +9,7 @@ namespace ReviewForge.Core.Pipeline;
 /// attach their own output. <see cref="Terminate"/> ends the run gracefully (success,
 /// no further stages) — used by the gate when no review is required.
 /// </summary>
-public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runId = null)
+public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runId = null) : IDisposable
 {
     public PrKey Pr { get; } = pr;
     public Guid RunId { get; } = runId ?? Guid.NewGuid();
@@ -28,6 +28,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public GateDecision? Gate { get; set; }
 
     // Stage 3 — repository
+
+    // Stage 3 — repository lease held until the worker disposes this context.
+    public IDisposable? RepoLease { get; set; }
     public string? RepoDir { get; set; }
     public string DiffText { get; set; } = string.Empty;
     public DiffIndex? Diff { get; set; }
@@ -55,6 +58,26 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public bool Terminated { get; private set; }
 
     public string? TerminationReason { get; private set; }
+
+    /// <summary>Optional host-owned guard checked immediately before external publication.</summary>
+    public Func<bool>? PublishGuard { get; set; }
+
+    public void Dispose()
+    {
+        RepoLease?.Dispose();
+        RepoLease = null;
+    }
+
+    public string RequireRepoDir()
+    {
+        if (RepoDir is not { } dir)
+        {
+            throw new InvalidOperationException(
+                $"stage ordering violation: {nameof(RepoDir)} is null but required");
+        }
+
+        return dir;
+    }
 
     public void Terminate(string reason)
     {

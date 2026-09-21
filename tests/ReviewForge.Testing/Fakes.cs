@@ -7,11 +7,13 @@ namespace ReviewForge.Testing;
 /// <summary>In-memory IPullRequestSource recording every write.</summary>
 public class FakePullRequestSource : IPullRequestSource
 {
+    private readonly object _Gate = new();
     private int _NextThreadId = 1000;
     public List<PullRequestCandidate> OpenPullRequests { get; set; } = [];
     public int OpenPullRequestsFetches { get; private set; }
     public int WorkItemFetches { get; private set; }
     public PullRequest Pr { get; set; } = new(1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false);
+    public Dictionary<PrKey, PullRequest> PullRequestsByKey { get; } = [];
     public List<WorkItem> WorkItems { get; set; } = [];
     public List<ChangedFile> ChangedFiles { get; set; } = [];
     public List<ReviewThread> Threads { get; set; } = [];
@@ -24,7 +26,8 @@ public class FakePullRequestSource : IPullRequestSource
     public List<(int ThreadId, ReviewThreadStatus Status)> StatusChanges { get; } = [];
     public List<(string ReviewerId, int Vote)> Votes { get; } = [];
 
-    public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct) => Task.FromResult(Pr);
+    public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+        => Task.FromResult(PullRequestsByKey.TryGetValue(pr, out var pullRequest) ? pullRequest : Pr);
 
     public virtual Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
@@ -50,33 +53,135 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct)
     {
-        var id = _NextThreadId++;
-        PostedFindings.Add((finding, id));
-        return Task.FromResult(id);
+        lock (_Gate)
+        {
+            var id = _NextThreadId++;
+            PostedFindings.Add((finding, id));
+            return Task.FromResult(id);
+        }
     }
 
     public virtual Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
     {
-        GeneralComments.Add(text);
+        lock (_Gate)
+        {
+            GeneralComments.Add(text);
+        }
+
         return Task.CompletedTask;
     }
 
     public virtual Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct)
     {
-        Replies.Add((threadId, text));
+        lock (_Gate)
+        {
+            Replies.Add((threadId, text));
+        }
+
         return Task.CompletedTask;
     }
 
     public virtual Task SetThreadStatusAsync(PrKey pr, int threadId, ReviewThreadStatus status, CancellationToken ct)
     {
-        StatusChanges.Add((threadId, status));
+        lock (_Gate)
+        {
+            StatusChanges.Add((threadId, status));
+        }
+
         return Task.CompletedTask;
     }
 
     public virtual Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
     {
-        Votes.Add((reviewerId, vote));
+        lock (_Gate)
+        {
+            Votes.Add((reviewerId, vote));
+        }
+
         return Task.CompletedTask;
+    }
+}
+
+/// <summary>FakePullRequestSource with a per-write delay and a global write-order log.</summary>
+public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
+{
+    private readonly object _LogGate = new();
+    private int _ActiveFindingPosts;
+    private int _CommentCount;
+    public List<string> WriteLog { get; } = [];
+    public int MaxConcurrentFindingPosts { get; private set; }
+
+    private void BeginFindingPost()
+    {
+        lock (_LogGate)
+        {
+            _ActiveFindingPosts++;
+            MaxConcurrentFindingPosts = Math.Max(MaxConcurrentFindingPosts, _ActiveFindingPosts);
+        }
+    }
+
+    private void EndFindingPost()
+    {
+        lock (_LogGate)
+        {
+            _ActiveFindingPosts--;
+        }
+    }
+
+    private async Task DelayAsync(CancellationToken ct)
+    {
+        if (delayMs > 0)
+        {
+            await Task.Delay(delayMs, ct).ConfigureAwait(false);
+        }
+    }
+
+    public override async Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct)
+    {
+        BeginFindingPost();
+        try
+        {
+            await DelayAsync(ct);
+            var threadId = await base.PostFindingThreadAsync(pr, finding, ct);
+            lock (_LogGate)
+            {
+                WriteLog.Add($"finding {finding.DedupeKey}");
+            }
+
+            return threadId;
+        }
+        finally
+        {
+            EndFindingPost();
+        }
+    }
+
+    public override async Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.PostGeneralCommentAsync(pr, text, ct);
+        lock (_LogGate)
+        {
+            WriteLog.Add($"comment {_CommentCount++}");
+        }
+    }
+
+    public override async Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.ReplyToThreadAsync(pr, threadId, text, ct);
+    }
+
+    public override async Task SetThreadStatusAsync(PrKey pr, int threadId, ReviewThreadStatus status, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.SetThreadStatusAsync(pr, threadId, status, ct);
+    }
+
+    public override async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
+    {
+        await DelayAsync(ct);
+        await base.SetReviewerVoteAsync(pr, reviewerId, vote, ct);
     }
 }
 
@@ -113,12 +218,56 @@ public class FakeFindingStore : IFindingStore
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>
 public class FakeGitOps : IGitOps
 {
+    private readonly object _Gate = new();
+    private int _ActiveClones;
+    private int _MaxConcurrentClones;
     public string Diff { get; set; } = string.Empty;
     public string RepoDir { get; set; } = Path.Combine(Path.GetTempPath(), "reviewforge-fake-repo");
     public List<string> Checkouts { get; } = [];
+    public List<(string Base, string Head)> EnsuredCommits { get; } = [];
+    public TimeSpan CloneDelay { get; set; }
+    public int MaxConcurrentClones => _MaxConcurrentClones;
 
-    public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat) => RepoDir;
-    public virtual void Checkout(string repoPath, string commitSha) => Checkouts.Add(commitSha);
+    public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat)
+    {
+        Directory.CreateDirectory(workDir);
+        var active = Interlocked.Increment(ref _ActiveClones);
+        while (true)
+        {
+            var observed = Volatile.Read(ref _MaxConcurrentClones);
+            if (active <= observed || Interlocked.CompareExchange(ref _MaxConcurrentClones, active, observed) == observed)
+            {
+                break;
+            }
+        }
+
+        if (CloneDelay > TimeSpan.Zero)
+        {
+            Thread.Sleep(CloneDelay);
+        }
+
+        Interlocked.Decrement(ref _ActiveClones);
+        return workDir;
+    }
+
+    public virtual void Checkout(string repoPath, string commitSha)
+    {
+        lock (_Gate)
+        {
+            Checkouts.Add(commitSha);
+        }
+    }
+
+    public virtual string? GetHeadSha(string repoPath) => null;
+
+    public virtual void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
+    {
+        lock (_Gate)
+        {
+            EnsuredCommits.Add((baseSha, headSha));
+        }
+    }
+
     public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
 }
 
@@ -144,4 +293,26 @@ public class FakeChatClientFactory(IChatClient client, string model = "test-mode
 {
     public string ModelName => model;
     public IChatClient Create() => client;
+}
+
+/// <summary>In-memory <see cref="IWorkspaceFs"/> backed by the real filesystem (temp dirs).</summary>
+public sealed class FakeWorkspaceFs : IWorkspaceFs
+{
+    public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+
+    public bool DirectoryExists(string path) => Directory.Exists(path);
+
+    public IReadOnlyList<string> EnumerateDirectories(string path) => Directory.EnumerateDirectories(path).ToArray();
+
+    public string[] EnumerateFileSystemEntries(string path) => Directory.EnumerateFileSystemEntries(path).ToArray();
+
+    public string[] EnumerateFilesRecursive(string path) => Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).ToArray();
+
+    public long GetFileLength(string path) => new FileInfo(path).Length;
+
+    public DateTime GetLastWriteTimeUtc(string path) => Directory.GetLastWriteTimeUtc(path);
+
+    public void SetLastWriteTimeUtc(string path, DateTime timestamp) => Directory.SetLastWriteTimeUtc(path, timestamp);
+
+    public void DeleteDirectory(string path, bool recursive) => Directory.Delete(path, recursive);
 }

@@ -23,6 +23,7 @@ public sealed class DiscoveryService(
     IFindingStore store,
     ReviewQueue queue,
     RunTracker tracker,
+    InFlightClaims claims,
     DiscoveryOptions options,
     TimeProvider? clock = null)
 {
@@ -31,6 +32,7 @@ public sealed class DiscoveryService(
 
     public async Task<DiscoveryReport> RunSweepAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var candidates = await source.GetOpenPullRequestsAsync(ct);
         var enqueued = new List<PrKey>();
         var skipped = new List<SkippedPr>();
@@ -69,8 +71,25 @@ public sealed class DiscoveryService(
                 continue;
             }
 
+            // The final store read above is cancellable; a request cancelled during it must
+            // not still reserve and enqueue a review. Re-check right before claiming.
+            ct.ThrowIfCancellationRequested();
+
             var runId = Guid.NewGuid();
-            await queue.EnqueueAsync(new ReviewRequest(runId, candidate.Key, _Clock.GetUtcNow()), ct);
+            if (!claims.TryClaim(candidate.Key, runId, out _))
+            {
+                skipped.Add(new SkippedPr(candidate.Key, "review already in flight"));
+                continue;
+            }
+
+            var result = queue.TryEnqueue(new ReviewRequest(runId, candidate.Key, _Clock.GetUtcNow()));
+            if (!result.Accepted)
+            {
+                claims.Release(candidate.Key, runId);
+                skipped.Add(new SkippedPr(candidate.Key, "queue full"));
+                continue;
+            }
+
             tracker.Set(runId, candidate.Key, RunState.Queued);
             enqueued.Add(candidate.Key);
         }

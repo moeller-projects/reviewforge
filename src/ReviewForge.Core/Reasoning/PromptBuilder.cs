@@ -12,7 +12,9 @@ public sealed record PromptInput(
     IReadOnlyList<PendingReply> PendingReplies,
     string DiffText,
     string? Enrichment,
-    IReadOnlyCollection<string> ContextNames);
+    IReadOnlyCollection<string> ContextNames,
+    int MaxDiffChars = 200_000,
+    int MaxDiffCharsPerFile = 40_000);
 
 /// <summary>
 /// Builds the single user prompt for the review run. Deterministic sections so tests
@@ -21,6 +23,13 @@ public sealed record PromptInput(
 /// </summary>
 public static class PromptBuilder
 {
+    /// <summary>
+    /// Stable marker appended wherever the diff is cut short; tells the agent to inspect
+    /// the skipped content on its own. Tests assert on this exact text.
+    /// </summary>
+    internal const string DiffTruncationMarker =
+        "…[diff truncated — use repo_read_file / repo_grep to inspect the full change]";
+
     public static string Build(PromptInput input)
     {
         var sb = new StringBuilder(16 * 1024);
@@ -108,9 +117,77 @@ public static class PromptBuilder
 
         sb.AppendLine("## Unified diff (base → head)");
         sb.AppendLine("```diff");
-        sb.AppendLine(input.DiffText.Trim());
+        sb.AppendLine(ShrinkDiff(input.DiffText.Trim(), input.MaxDiffChars, input.MaxDiffCharsPerFile));
         sb.AppendLine("```");
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Caps the diff at <c>maxTotal</c> characters overall and <c>maxPerFile</c> per file.
+    /// Files over their budget keep the <c>+++ b/</c> header plus a bounded prefix; every
+    /// cut is marked with <see cref="DiffTruncationMarker"/> so the agent falls back to
+    /// repo_read_file / repo_grep instead of missing the change silently.
+    /// </summary>
+    internal static string ShrinkDiff(string diff, int maxTotal, int maxPerFile)
+    {
+        // Per-file content is bounded by the whole diff, so nothing can trip either cap
+        // only when both thresholds cover the entire diff.
+        if (diff.Length <= maxTotal && maxPerFile >= diff.Length)
+        {
+            return diff;
+        }
+
+        // A fixed '\n' keeps the emitted length equal to the accrued count on every platform,
+        // and the closing marker is reserved so the total never exceeds maxTotal.
+        const string nl = "\n";
+        var markerLength = DiffTruncationMarker.Length + nl.Length;
+        var result = new StringBuilder(maxTotal + 4096);
+        var currentFileLength = 0;
+        var markerWritten = false;
+        var written = 0;
+
+        foreach (var line in diff.Split('\n'))
+        {
+            var fileHeader = line.StartsWith("+++ b/", StringComparison.Ordinal);
+            if (fileHeader)
+            {
+                currentFileLength = 0;
+                markerWritten = false;
+            }
+
+            if (!fileHeader && currentFileLength >= maxPerFile)
+            {
+                // This file's body is over budget: keep the header, mark the cut, skip the rest.
+                if (!markerWritten && written + markerLength <= maxTotal)
+                {
+                    result.Append(DiffTruncationMarker).Append(nl);
+                    written += markerLength;
+                }
+
+                markerWritten = true;
+                continue;
+            }
+
+            // Reserve room for the truncation marker so the accumulator never exceeds maxTotal.
+            if (written + line.Length + nl.Length + markerLength > maxTotal)
+            {
+                if (!markerWritten && written + markerLength <= maxTotal)
+                {
+                    result.Append(DiffTruncationMarker).Append(nl);
+                    written += markerLength;
+                }
+
+                break;
+            }
+
+            result.Append(line).Append(nl);
+            currentFileLength += line.Length + nl.Length;
+            written += line.Length + nl.Length;
+        }
+
+        // Drop the trailing newline so the closing fence lands on its own line.
+        var text = result.ToString();
+        return text.EndsWith(nl) ? text[..(text.Length - 1)] : text;
     }
 }

@@ -3,6 +3,7 @@ using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Reasoning;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -22,7 +23,7 @@ public class CoverageGapTests
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(),
-            new PrepareRepositoryStage(new FakeGitOps(), Path.GetTempPath()),
+            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath())),
             new ClassifyRunStage(source),
             new EnrichContextStage(null, NullLogger<EnrichContextStage>.Instance),
             new ExecuteReasoningStage(agent),
@@ -91,6 +92,28 @@ public class CoverageGapTests
         {
             Directory.Delete(repoDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Enrich_skips_gracefully_when_repo_not_prepared()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
+        {
+            RepoDir = null,
+        };
+
+        await new EnrichContextStage(new FakeEnricher("graph"), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.ContextStore.Names);
+    }
+
+    [Fact]
+    public void RequireRepoDir_throws_when_null()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+
+        Assert.Throws<InvalidOperationException>(() => ctx.RequireRepoDir());
     }
 }
 

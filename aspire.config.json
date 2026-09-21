@@ -1,0 +1,6 @@
+{
+  "appHost": {
+    "language": "csharp",
+    "path": "src/ReviewForge.AppHost/ReviewForge.AppHost.csproj"
+  }
+}

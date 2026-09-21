@@ -73,6 +73,58 @@ public class ChatClientFactoryTests
     }
 
     [Fact]
+    public void Create_returns_same_instance()
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var factory = new ChatClientFactory(new ReasoningOptions {Provider = "openai", Model = "gpt-5"});
+            var a = factory.Create();
+            var b = factory.Create();
+            Assert.Same(a, b);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
+    [Fact]
+    public void Codex_returns_same_instance()
+    {
+        var factory = new ChatClientFactory(new ReasoningOptions
+        {
+            Provider = "openai-codex",
+            Model = "openai-codex:gpt-5.6-luna",
+            CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
+        });
+        var a = factory.Create();
+        var b = factory.Create();
+        Assert.Same(a, b);
+    }
+
+    [Fact]
+    public void Dispose_before_create_does_not_throw()
+    {
+        var factory = new ChatClientFactory(new ReasoningOptions {Provider = "bogus", Model = "m"});
+        factory.Dispose();
+    }
+
+    [Fact]
+    public void Dispose_after_create_does_not_throw()
+    {
+        var factory = new ChatClientFactory(new ReasoningOptions
+        {
+            Provider = "openai-codex",
+            Model = "openai-codex:gpt-5.6-luna",
+            CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
+        });
+        factory.Create();
+        factory.Dispose();
+    }
+
+    [Fact]
     public void Default_credential_path_points_into_user_profile()
         => Assert.EndsWith(Path.Combine(".codex", "auth.json"), ReasoningOptions.DefaultCredentialPath());
 }

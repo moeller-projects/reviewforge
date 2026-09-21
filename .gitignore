@@ -217,3 +217,5 @@ MigrationBackup/
 .env
 .env*
 !.env.example
+# Playwright CLI output (may contain credentials)
+.playwright-cli/

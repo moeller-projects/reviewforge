@@ -13,12 +13,14 @@ public sealed class ValidateFindingsStage(
     ILogger<ValidateFindingsStage> logger,
     Func<string, string[]>? lineReader = null) : IReviewStage
 {
+    private readonly Dictionary<string, string[]> _LineCache = new(StringComparer.Ordinal);
     private readonly Func<string, string[]> _LineReader = lineReader ?? File.ReadAllLines;
 
     public string Name => "validate-findings";
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var repoDir = ctx.RequireRepoDir();
         var accepted = new List<RichFinding>();
         var changedFiles = ctx.ChangedFiles
             .Select(Normalize)
@@ -32,7 +34,7 @@ public sealed class ValidateFindingsStage(
                 continue;
             }
 
-            if (!TryReanchor(finding, ctx.RepoDir!))
+            if (!TryReanchor(finding, repoDir))
             {
                 logger.LogInformation("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
                 continue;
@@ -57,20 +59,21 @@ public sealed class ValidateFindingsStage(
     private bool TryReanchor(RichFinding finding, string repoDir)
     {
         var path = Path.GetFullPath(Path.Combine(repoDir, finding.Anchor!.FilePath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!path.StartsWith(Path.GetFullPath(repoDir), StringComparison.Ordinal) || !File.Exists(path))
-        {
+        if (!PathContainment.IsContained(repoDir, path) || !File.Exists(path))
             return false;
-        }
 
-        string[] lines;
-        try
+        if (!_LineCache.TryGetValue(path, out var lines))
         {
-            lines = _LineReader(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            logger.LogWarning(ex, "could not read {Path} for anchor validation", path);
-            return false;
+            try
+            {
+                lines = _LineReader(path);
+                _LineCache[path] = lines;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex, "could not read {Path} for anchor validation", path);
+                return false;
+            }
         }
 
         var (resolution, anchor) = AnchorResolver.Resolve(finding, lines);

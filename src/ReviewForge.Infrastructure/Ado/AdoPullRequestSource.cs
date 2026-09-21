@@ -186,7 +186,7 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                                 c.Author?.DisplayName ?? "unknown",
                                 string.Equals(c.Author?.Id.ToString(), botId, StringComparison.OrdinalIgnoreCase),
                                 c.Content ?? string.Empty,
-                                new DateTimeOffset(DateTime.SpecifyKind(c.PublishedDate, DateTimeKind.Utc))))
+                                AdoTime.ToUtc(c.PublishedDate)))
                     ]))
         ];
     }

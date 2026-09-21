@@ -31,7 +31,7 @@ tests/
 | 3  | prepare-repository | clone/reuse checkout, checkout head, unified diff → DiffIndex                                                                                              |
 | 4  | classify-run       | re-fetches threads (new comments?), full vs follow-up, pending human replies                                                                               |
 | 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                      |
-| 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to `findings.jsonl` |
+| 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files |
 | 7  | validate-findings  | re-anchors via snippet (AnchorResolver), downgrades unverifiable/out-of-diff anchors to general comments                                                   |
 | 8  | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
 | 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist            |
@@ -51,8 +51,8 @@ dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll submit \
 dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid>
 ```
 
-Endpoints: `POST /reviews` → 202 `{runId, statusUrl}` · `GET /reviews/{runId}` · `GET /health` ·
-`POST /reviews/discover` → 200 sweep report.
+Endpoints: `POST /reviews` → 202 `{runId, statusUrl}` or 503 when the bounded queue is full ·
+`GET /reviews/{runId}` · `GET /health` · `POST /reviews/discover` → 200 sweep report.
 
 ## API docs (opt-in)
 
@@ -100,20 +100,31 @@ filters them, and enqueues the interesting ones (up to `Discovery:MaxEnqueuesPer
 short name), `Creators` (empty = allow all; matches creator id or name), `MaxEnqueuesPerSweep`
 (default 20), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables the background sweep
 worker). Skip reasons are checked in order: draft, target branch, creator, no linked work items,
-already-reviewed head. The per-run review gate remains the final dedupe net — a sweep enqueue is
-only a candidate; the gate decides whether a run actually proceeds.
+already-reviewed head, enqueue cap, review already in flight, and queue full. The per-run review
+gate remains the final dedupe net — a sweep enqueue is only a candidate; the gate decides whether
+a run actually proceeds.
+
+## Runtime concurrency and checkout storage
+
+`ReviewForge:WorkerCount` controls the number of concurrent queue workers. A full queue rejects
+submissions immediately with HTTP 503; discovery records a `queue full` skip. Queue depth is
+exported as `reviewforge.queue.depth`, and rejected enqueues as
+`reviewforge.queue.rejected_total`. Each review holds its per-head checkout lease until the run
+finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
+`MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts but
+never mirrors, and skips checkouts currently held by a review.
 
 ## Tests and coverage gate
 
 ```bash
-dotnet test                    # 163 tests
+dotnet test
 dotnet test tests/ReviewForge.Core.Tests /p:CollectCoverage=true
 ```
 
-Every test project enforces **≥97% line coverage** via coverlet (`Threshold=97`) on its own
-SUT assembly. Current: Core 100%, Infrastructure 100%, Service 97.6%. Adapters that only
-wrap vendor SDKs (`AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`) are excluded
-by design — all logic lives in covered code.
+Every test project enforces **at least 97% line coverage** via coverlet (`Threshold=97`)
+on its own SUT assembly. Vendor-only adapters such as `AdoPullRequestSource`,
+`LibGit2SharpGitOps`, and `Program.cs` are excluded by design; all application logic
+remains covered.
 
 ## Extension points
 

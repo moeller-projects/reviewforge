@@ -46,9 +46,21 @@ public sealed class RuleBookComposer
     private const string ResourcePrefix = "ReviewForge.Core.Reasoning.Rules.";
     private static readonly JsonSerializerOptions JsonOptions = new() {PropertyNameCaseInsensitive = true};
 
+    private static readonly Lazy<IReadOnlyList<RulePack>> EmbeddedPacks =
+        new(LoadEmbeddedPacksCore, LazyThreadSafetyMode.ExecutionAndPublication);
+
     public RuleBook Compose(IReadOnlyList<string> changedFiles, IReadOnlyList<string> repoRootFiles, string? overridesPath = null)
     {
-        var packs = LoadEmbeddedPacks();
+        var packs = EmbeddedPacks.Value;
+        if (string.IsNullOrWhiteSpace(overridesPath) || !Directory.Exists(overridesPath))
+        {
+            // Fast path: filter the immutable embedded set, no dictionary building.
+            var activePacks = packs.Where(p => IsActive(p, changedFiles, repoRootFiles))
+                .OrderBy(p => p.Id, StringComparer.Ordinal).ToArray();
+            ValidateGeneralPack(packs, activePacks);
+            return new RuleBook(activePacks);
+        }
+
         var overrides = LoadOverrides(overridesPath);
         var merged = packs.ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
         var replaced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -78,12 +90,17 @@ public sealed class RuleBookComposer
 
         var active = merged.Values.Where(p => IsActive(p, changedFiles, repoRootFiles))
             .OrderBy(p => p.Id, StringComparer.Ordinal).ToArray();
-        var general = merged.Values.FirstOrDefault(p => p.Id.Equals("general", StringComparison.OrdinalIgnoreCase));
+        ValidateGeneralPack(merged.Values, active);
+        return new RuleBook(active);
+    }
+
+    private static void ValidateGeneralPack(IEnumerable<RulePack> packs, IEnumerable<RulePack> active)
+    {
+        var general = packs.FirstOrDefault(p => p.Id.Equals("general", StringComparison.OrdinalIgnoreCase));
         if (general is null || !general.Rules.Any(r => r.Id.Equals("general.other", StringComparison.OrdinalIgnoreCase) && r.Enabled))
             throw new InvalidOperationException("rulebook must contain enabled rule 'general.other'");
         if (!active.Any(p => p.Id.Equals("general", StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("general rule pack must be active");
-        return new RuleBook(active);
     }
 
     private static bool IsActive(RulePack pack, IReadOnlyList<string> changedFiles, IReadOnlyList<string> rootFiles)
@@ -107,7 +124,7 @@ public sealed class RuleBookComposer
 
     private static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
 
-    private static IReadOnlyList<RulePack> LoadEmbeddedPacks()
+    private static IReadOnlyList<RulePack> LoadEmbeddedPacksCore()
     {
         var assembly = Assembly.GetExecutingAssembly();
         return assembly.GetManifestResourceNames().Where(n => n.StartsWith(ResourcePrefix, StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal))

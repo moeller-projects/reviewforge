@@ -6,10 +6,12 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
@@ -24,6 +26,8 @@ public sealed class ReviewForgeServiceCollectionDefinition
 /// <summary>In-process host with fake ports; the real worker drains the queue.</summary>
 public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 {
+    private bool _WithoutWorkers;
+
     public ReviewForgeFactory()
     {
         // Minimal-hosting config must be visible before Program.cs runs — env vars are.
@@ -32,6 +36,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Reasoning__Provider", "openai");
         Environment.SetEnvironmentVariable("Reasoning__Model", "test-model");
         Environment.SetEnvironmentVariable("ReviewForge__WorkDir", WorkDir);
+        Environment.SetEnvironmentVariable("ReviewForge__WorkerCount", "2");
         Environment.SetEnvironmentVariable("ReviewForge__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
     }
 
@@ -44,6 +49,12 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 
     public string WorkDir { get; } = Path.Combine(Path.GetTempPath(), "reviewforge-svc-" + Guid.NewGuid().ToString("N"));
 
+    public ReviewForgeFactory WithoutWorkers()
+    {
+        _WithoutWorkers = true;
+        return this;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         Directory.CreateDirectory(WorkDir);
@@ -51,6 +62,11 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
+            if (_WithoutWorkers)
+            {
+                services.RemoveAll<IHostedService>();
+            }
+
             services.RemoveAll<IPullRequestSource>();
             services.RemoveAll<IFindingStore>();
             services.RemoveAll<IGitOps>();
@@ -62,7 +78,8 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
             services.AddSingleton<IGitOps>(Git);
             services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory(Chat));
             services.AddSingleton(sp => new ReviewPipelineFactory(
-                Source, Store, Git,
+                Source, Store,
+                sp.GetRequiredService<RepoCheckoutPool>(),
                 new FakeChatClientFactory(Chat),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>()));
@@ -74,7 +91,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            foreach (var key in new[] {"Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model", "ReviewForge__WorkDir", "ReviewForge__StoreConnectionString"})
+            foreach (var key in new[] {"Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model", "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString"})
             {
                 Environment.SetEnvironmentVariable(key, null);
             }
@@ -139,6 +156,18 @@ public class ServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Submit_conflicts_when_review_already_in_flight()
+    {
+        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), Guid.NewGuid(), out _));
+
+        var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = 77});
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Unknown_run_is_404()
     {
         var response = await _Factory.CreateClient().GetAsync($"/reviews/{Guid.NewGuid()}");
@@ -161,8 +190,42 @@ public class ServiceTests : IAsyncLifetime
         Assert.Single(_Factory.Store.Runs);
 
         var statusResponse = await client.GetAsync(body.StatusUrl);
+
         Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
     }
+
+    [Fact]
+    public async Task Different_heads_in_same_repo_complete_concurrently()
+    {
+        var firstPr = new PrKey("o", "p", "r", 51);
+        var secondPr = new PrKey("o", "p", "r", 52);
+        _Factory.Source.PullRequestsByKey[firstPr] = new PullRequest(51, "one", null, "head-one", "base", "url", false);
+        _Factory.Source.PullRequestsByKey[secondPr] = new PullRequest(52, "two", null, "head-two", "base", "url", false);
+        _Factory.Git.CloneDelay = TimeSpan.FromMilliseconds(150);
+        try
+        {
+            var client = _Factory.CreateClient();
+            var first = await client.PostAsJsonAsync("/reviews",
+                new {org = "o", project = "p", repositoryId = "r", prId = 51});
+            var second = await client.PostAsJsonAsync("/reviews",
+                new {org = "o", project = "p", repositoryId = "r", prId = 52});
+            var firstBody = await first.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var secondBody = await second.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+
+            var statuses = await Task.WhenAll(
+                WaitForState(firstBody!.RunId, RunState.Completed),
+                WaitForState(secondBody!.RunId, RunState.Completed));
+
+            Assert.All(statuses, status => Assert.Equal(RunState.Completed, status.State));
+            Assert.True(_Factory.Git.MaxConcurrentClones > 1);
+        }
+        finally
+        {
+            _Factory.Source.PullRequestsByKey.Clear();
+            _Factory.Git.CloneDelay = TimeSpan.Zero;
+        }
+    }
+
 
     [Fact]
     public async Task Draft_pr_is_skipped()
@@ -194,12 +257,14 @@ public class ServiceTests : IAsyncLifetime
         var standaloneWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-failing-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(standaloneWorkDir);
         var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = standaloneWorkDir});
+        var failingGit = new ExplosiveGitOps(standaloneWorkDir);
         var failingFactory = new ReviewPipelineFactory(
-            _Factory.Source, _Factory.Store, new ExplosiveGitOps(standaloneWorkDir),
+            _Factory.Source, _Factory.Store,
+            new RepoCheckoutPool(failingGit, new FakeWorkspaceFs(), standaloneWorkDir),
             new FakeChatClientFactory(_Factory.Chat),
             options,
             LoggerFactory.Create(b => { }));
-        var worker = new ReviewWorker(queue, tracker, failingFactory,
+        var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
             LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -208,8 +273,8 @@ public class ServiceTests : IAsyncLifetime
         var pr = new PrKey("o", "p", "r", 44);
         var first = Guid.NewGuid();
         var second = Guid.NewGuid();
-        await queue.EnqueueAsync(new ReviewRequest(first, pr, DateTimeOffset.UtcNow), cts.Token);
-        await queue.EnqueueAsync(new ReviewRequest(second, pr, DateTimeOffset.UtcNow), cts.Token);
+        Assert.True(queue.TryEnqueue(new ReviewRequest(first, pr, DateTimeOffset.UtcNow)).Accepted);
+        Assert.True(queue.TryEnqueue(new ReviewRequest(second, pr, DateTimeOffset.UtcNow)).Accepted);
 
         for (var i = 0; i < 200 && tracker.Get(second)?.State != RunState.Failed; i++)
         {
@@ -244,6 +309,31 @@ public class ServiceTests : IAsyncLifetime
 
         public override string GetDiff(string repoPath, string baseSha, string headSha)
             => throw new InvalidOperationException("git exploded");
+    }
+}
+
+[Collection("ReviewForge service host")]
+public class QueueSaturationEndpointTests
+{
+    [Fact]
+    public async Task Submit_returns_503_when_queue_is_full()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = factory.CreateClient();
+        var queue = factory.Services.GetRequiredService<ReviewQueue>();
+
+        for (var i = 0; i < queue.Capacity; i++)
+        {
+            Assert.True(queue.TryEnqueue(new ReviewRequest(
+                Guid.NewGuid(),
+                new PrKey("o", "p", "r", i + 1),
+                DateTimeOffset.UtcNow)).Accepted);
+        }
+
+        var response = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = queue.Capacity + 1});
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 }
 
@@ -300,12 +390,42 @@ public class DiWiringTests
 
             Assert.NotNull(provider.GetRequiredService<ReviewQueue>());
             Assert.NotNull(provider.GetRequiredService<RunTracker>());
+            Assert.NotNull(provider.GetRequiredService<InFlightClaims>());
             Assert.NotNull(provider.GetRequiredService<TimeProvider>());
             Assert.NotNull(provider.GetRequiredService<IGitOps>());
             Assert.NotNull(provider.GetRequiredService<IChatClientFactory>());
             Assert.NotNull(provider.GetRequiredService<IFindingStore>());
             Assert.NotNull(provider.GetRequiredService<IPullRequestSource>());
             Assert.NotNull(provider.GetRequiredService<ReviewPipelineFactory>().Create());
+        });
+    }
+
+    [Fact]
+    public void ChatClientFactory_is_singleton_and_disposed_with_provider()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig());
+            using var provider = services.BuildServiceProvider();
+            var a = provider.GetRequiredService<IChatClientFactory>();
+            var b = provider.GetRequiredService<IChatClientFactory>();
+            Assert.Same(a, b);
+        });
+    }
+
+    [Fact]
+    public void WorkerCount_registers_multiple_workers()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig(new Dictionary<string, string?> {["ReviewForge:WorkerCount"] = "3"}));
+            using var provider = services.BuildServiceProvider();
+
+            Assert.Equal(3, provider.GetServices<IHostedService>().OfType<ReviewWorker>().Count());
         });
     }
 
@@ -416,5 +536,41 @@ public class ApiDocsEnabledTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public void Rejects_zero_worker_count_during_registration()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Ado:OrgUrl"] = "https://dev.azure.com/test",
+                ["Ado:Project"] = "test",
+                ["Reasoning:Provider"] = "openai",
+                ["Reasoning:Model"] = "test-model",
+                ["ReviewForge:WorkerCount"] = "0",
+            })
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(configuration));
+    }
+}
+
+[Collection("ReviewForge service host")]
+public sealed class EndpointFailureTests
+{
+    [Fact]
+    public async Task Queue_failure_releases_claim()
+    {
+        using var factory = new ReviewForgeFactory();
+        factory.Services.GetRequiredService<ReviewQueue>().Complete();
+        var client = factory.CreateClient();
+        var response = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "closed", prId = 99});
+
+        Assert.NotEqual(HttpStatusCode.Accepted, response.StatusCode);
+        var claims = factory.Services.GetRequiredService<InFlightClaims>();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "closed", 99), Guid.NewGuid(), out _));
     }
 }

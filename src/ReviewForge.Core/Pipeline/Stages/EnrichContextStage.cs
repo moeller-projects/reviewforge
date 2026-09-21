@@ -20,9 +20,15 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
             return;
         }
 
+        if (ctx.RepoDir is not { } repoDir)
+        {
+            logger.LogWarning("enrichment skipped: repository not prepared");
+            return;
+        }
+
         try
         {
-            var payload = await enricher.EnrichAsync(ctx.RepoDir!, ctx.DiffText, ct);
+            var payload = await enricher.EnrichAsync(repoDir, ctx.DiffText, ct);
             if (!string.IsNullOrWhiteSpace(payload))
             {
                 ctx.ContextStore.Put(ContextName, payload);

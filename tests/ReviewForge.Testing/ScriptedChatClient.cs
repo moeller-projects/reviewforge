@@ -9,9 +9,13 @@ namespace ReviewForge.Testing;
 /// </summary>
 public sealed class ScriptedChatClient : IChatClient
 {
+    private readonly object _Gate = new();
     private readonly Queue<ChatResponse> _Script;
 
-    public ScriptedChatClient(params ChatResponse[] script) => _Script = new Queue<ChatResponse>(script);
+    public ScriptedChatClient(params ChatResponse[] script)
+    {
+        _Script = new Queue<ChatResponse>(script);
+    }
 
     public int Calls { get; private set; }
 
@@ -19,15 +23,20 @@ public sealed class ScriptedChatClient : IChatClient
 
     public List<ChatOptions?> ReceivedOptions { get; } = [];
 
+
+
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
     {
-        Calls++;
-        Received.Add([.. messages]);
-        ReceivedOptions.Add(options);
-        return Task.FromResult(_Script.Count > 0
-            ? _Script.Dequeue()
-            : new ChatResponse(new ChatMessage(ChatRole.Assistant, "script exhausted")));
+        lock (_Gate)
+        {
+            Calls++;
+            Received.Add([.. messages]);
+            ReceivedOptions.Add(options);
+            return Task.FromResult(_Script.Count > 0
+                ? _Script.Dequeue()
+                : new ChatResponse(new ChatMessage(ChatRole.Assistant, "script exhausted")));
+        }
     }
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

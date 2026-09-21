@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 using Xunit;
@@ -51,6 +52,21 @@ public class ReviewCollectorTests
         Assert.True(collector.IsKnown("k1"));
         Assert.Single(collector.Findings);
         Assert.Contains("\"k1\"", jsonl.ToString());
+    }
+
+    [Fact]
+    public void AddFinding_writes_envelope_with_run_metadata()
+    {
+        var jsonl = new StringWriter();
+        var runId = Guid.NewGuid();
+        var collector = new ReviewCollector(jsonlSink: jsonl, runId: runId, headSha: "abc123");
+        collector.AddFinding(Finding("k1"));
+
+        using var doc = JsonDocument.Parse(jsonl.ToString().Trim());
+        Assert.Equal(runId, doc.RootElement.GetProperty("RunId").GetGuid());
+        Assert.Equal("abc123", doc.RootElement.GetProperty("HeadSha").GetString());
+        Assert.True(doc.RootElement.GetProperty("RecordedAt").GetDateTimeOffset() > DateTimeOffset.MinValue);
+        Assert.Equal("k1", doc.RootElement.GetProperty("Finding").GetProperty("DedupeKey").GetString());
     }
 
     [Fact]
@@ -259,6 +275,48 @@ public class PromptBuilderTests
         var prompt = PromptBuilder.Build(input);
         Assert.Contains("read_context", prompt);
         Assert.Contains("graph-data", prompt);
+    }
+
+    [Fact]
+    public void Small_diff_passes_through_unchanged()
+    {
+        var input = BaseInput() with {DiffText = "+++ b/a.cs\n@@ -1,1 +1,1 @@\n+x\n"};
+        var prompt = PromptBuilder.Build(input);
+        Assert.DoesNotContain(PromptBuilder.DiffTruncationMarker, prompt);
+    }
+
+    [Fact]
+    public void Oversized_diff_is_truncated_with_marker()
+    {
+        var big = string.Join('\n', Enumerable.Range(0, 10_000).Select(i => $"+line {i}"));
+        var input = BaseInput() with {DiffText = big, MaxDiffChars = 5_000, MaxDiffCharsPerFile = 5_000};
+        var prompt = PromptBuilder.Build(input);
+        Assert.Contains(PromptBuilder.DiffTruncationMarker, prompt);
+        Assert.True(prompt.Length < big.Length);
+    }
+
+    [Fact]
+    public void Truncation_stays_within_the_total_budget()
+    {
+        var big = string.Join('\n', Enumerable.Range(0, 10_000).Select(i => $"+line {i}"));
+
+        var diff = PromptBuilder.ShrinkDiff(big, maxTotal: 1_000, maxPerFile: 1_000);
+
+        // The reserved marker and fixed '\n' accounting must never push the emitted diff
+        // past the advertised total budget.
+        Assert.True(diff.Length <= 1_000, $"diff length {diff.Length} exceeded the 1000-char budget");
+        Assert.Contains(PromptBuilder.DiffTruncationMarker, diff);
+    }
+
+    [Fact]
+    public void Per_file_cap_produces_per_file_marker()
+    {
+        var file = "+++ b/a.cs\n" + string.Join('\n', Enumerable.Range(0, 500).Select(i => $"+x{i}"));
+        var input = BaseInput() with {DiffText = file, MaxDiffChars = 1_000_000, MaxDiffCharsPerFile = 200};
+        var prompt = PromptBuilder.Build(input);
+        Assert.Contains("+++ b/a.cs", prompt);
+        Assert.Contains(PromptBuilder.DiffTruncationMarker, prompt);
+        Assert.DoesNotContain("x400", prompt);
     }
 }
 
