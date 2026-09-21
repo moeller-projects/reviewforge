@@ -1,12 +1,16 @@
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
 /// <summary>Stage 3: acquire a per-head checkout and compute the unified change diff.</summary>
-public sealed class PrepareRepositoryStage(RepoCheckoutPool pool, ILogger<PrepareRepositoryStage> logger) : IReviewStage
+public sealed class PrepareRepositoryStage(
+    RepoCheckoutPool pool,
+    ILogger<PrepareRepositoryStage> logger,
+    DiffBudget? diffBudget = null) : IReviewStage
 {
     public string Name => "prepare-repository";
 
@@ -16,7 +20,7 @@ public sealed class PrepareRepositoryStage(RepoCheckoutPool pool, ILogger<Prepar
         var checkout = await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
         ctx.RepoLease = checkout;
         ctx.RepoDir = checkout.Path;
-        ctx.DiffText = await pool.GetDiffAsync(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
+        ctx.DiffText = await pool.GetDiffAsync(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
         ctx.Diff = DiffIndex.Parse(ctx.DiffText);
 
         var nonReviewable = ctx.Diff.NonReviewableFiles.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -29,6 +33,11 @@ public sealed class PrepareRepositoryStage(RepoCheckoutPool pool, ILogger<Prepar
                 logger.LogInformation("excluding non-reviewable file {Path} ({Kind}) from review scope",
                     path, ctx.Diff.NonReviewableFiles[path]);
                 continue;
+            }
+
+            if (diffBudget is not null && DiffExclusions.IsExcluded(path, diffBudget.ExcludeGlobs))
+            {
+                continue; // machine-generated content — never reviewable, never in the diff
             }
 
             reviewable.Add(path);

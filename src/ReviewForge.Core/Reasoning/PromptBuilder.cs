@@ -167,9 +167,11 @@ public static class PromptBuilder
         var markerWritten = false;
         var written = 0;
 
-        foreach (var line in diff.Split('\n'))
+        foreach (var lineSpan in diff.AsSpan().EnumerateLines())
         {
-            var fileHeader = line.StartsWith("+++ b/", StringComparison.Ordinal);
+            var fileHeader = lineSpan.StartsWith("diff --git ", StringComparison.Ordinal)
+                || lineSpan.StartsWith("+++ b/", StringComparison.Ordinal)
+                || lineSpan.StartsWith("+++ /dev/null", StringComparison.Ordinal);
             if (fileHeader)
             {
                 currentFileLength = 0;
@@ -190,7 +192,7 @@ public static class PromptBuilder
             }
 
             // Reserve room for the truncation marker so the accumulator never exceeds maxTotal.
-            if (written + line.Length + nl.Length + markerLength > maxTotal)
+            if (written + lineSpan.Length + nl.Length + markerLength > maxTotal)
             {
                 if (!markerWritten && written + markerLength <= maxTotal)
                 {
@@ -201,9 +203,9 @@ public static class PromptBuilder
                 break;
             }
 
-            result.Append(line).Append(nl);
-            currentFileLength += line.Length + nl.Length;
-            written += line.Length + nl.Length;
+            result.Append(lineSpan).Append(nl);
+            currentFileLength += lineSpan.Length + nl.Length;
+            written += lineSpan.Length + nl.Length;
         }
 
         // Drop the trailing newline so the closing fence lands on its own line.

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
@@ -223,7 +224,7 @@ public class ReviewWorkerTests
 
     private sealed class ThrowingGitOps : FakeGitOps
     {
-        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct)
+        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
             => throw new InvalidOperationException("git exploded");
     }
 

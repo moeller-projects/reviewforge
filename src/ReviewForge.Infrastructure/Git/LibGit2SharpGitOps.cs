@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using LibGit2Sharp;
+using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 
@@ -59,8 +61,8 @@ public sealed class LibGit2SharpGitOps : IGitOps
             return true;
         }, ct);
 
-    public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct)
-        => _Scheduler.RunAsync(() => GetDiffCore(repoPath, baseSha, headSha), ct);
+    public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
+        => _Scheduler.RunAsync(() => GetDiffCore(repoPath, baseSha, headSha, budget), ct);
 
     /// <summary>Existing CloneOrOpen body; mirror path supplied by the async wrapper.</summary>
     private string CloneOrOpenCore(string cloneUrl, string workDir, string? pat, string mirror)
@@ -142,7 +144,7 @@ public sealed class LibGit2SharpGitOps : IGitOps
         }
     }
 
-    private string GetDiffCore(string repoPath, string baseSha, string headSha)
+    private string GetDiffCore(string repoPath, string baseSha, string headSha, DiffBudget? budget)
     {
         using var repo = new Repository(repoPath);
         var baseCommit = repo.Lookup<Commit>(baseSha)
@@ -150,7 +152,46 @@ public sealed class LibGit2SharpGitOps : IGitOps
         var headCommit = repo.Lookup<Commit>(headSha)
                          ?? throw new InvalidOperationException($"head commit {headSha} not found");
 
-        return repo.Diff.Compare<Patch>(baseCommit.Tree, headCommit.Tree).Content;
+        var patch = repo.Diff.Compare<Patch>(baseCommit.Tree, headCommit.Tree);
+        if (budget is null)
+        {
+            return patch.Content;
+        }
+
+        var sb = new StringBuilder();
+        long total = 0;
+        foreach (var entry in patch)
+        {
+            var path = entry.Path.Replace('\\', '/');
+            if (DiffExclusions.IsExcluded(path, budget.ExcludeGlobs))
+            {
+                continue; // machine-generated content — never reviewable
+            }
+
+            var text = entry.Patch ?? string.Empty;
+            if (text.Length > budget.MaxPerFileBytes)
+            {
+                sb.Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
+                  .Append("--- a/").Append(path).Append('\n')
+                  .Append("+++ b/").Append(path).Append('\n')
+                  .Append("…[file diff skipped — ").Append(text.Length).Append(" bytes exceeds the per-file budget; use repo_read_file]\n");
+                continue;
+            }
+
+            if (total + text.Length > budget.MaxTotalBytes)
+            {
+                sb.Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
+                  .Append("--- a/").Append(path).Append('\n')
+                  .Append("+++ b/").Append(path).Append('\n')
+                  .Append("…[file diff skipped — total diff budget reached; use repo_read_file]\n");
+                continue;
+            }
+
+            sb.Append(text);
+            total += text.Length;
+        }
+
+        return sb.ToString();
     }
 
     internal static string MirrorPath(string workDir)

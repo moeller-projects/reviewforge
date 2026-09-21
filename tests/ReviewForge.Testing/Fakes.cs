@@ -297,7 +297,7 @@ public class FakeGitOps : IGitOps
         return Task.CompletedTask;
     }
 
-    public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct) => Task.FromResult(Diff);
+    public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null) => Task.FromResult(Diff);
 }
 
 /// <summary>Fake enricher: fixed payload, null, or throwing.</summary>

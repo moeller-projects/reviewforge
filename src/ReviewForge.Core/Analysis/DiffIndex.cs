@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+using System.Text;
 
 namespace ReviewForge.Core.Analysis;
 
@@ -12,17 +12,13 @@ public enum DiffEntryKind
 
 /// <summary>
 /// Parsed unified diff: which lines of which files are part of the change. Built once in
-/// repository preparation, consumed by anchor validation. Non-text sections (binary,
-/// mode-only, content-free rename) are classified so the scope guard can exclude them.
+/// repository preparation, consumed by anchor validation. Added lines are coalesced into
+/// sorted, non-overlapping ranges at parse time so lookups are binary searches. Non-text
+/// sections (binary, mode-only, content-free rename) are classified so the scope guard can
+/// exclude them.
 /// </summary>
 public sealed class DiffIndex
 {
-    // @@ -oldStart,oldCount +newStart,newCount @@
-    private static readonly Regex HunkHeader = new(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", RegexOptions.Compiled);
-    private static readonly Regex DiffGitHeader = new(@"^diff --git a/.+ b/(?<new>.+)$", RegexOptions.Compiled);
-    private static readonly Regex BinaryMarker = new(@"^Binary files .+ and b/(?<new>.+) differ$", RegexOptions.Compiled);
-    private static readonly Regex RenameToMarker = new(@"^rename to (?<new>.+)$", RegexOptions.Compiled);
-
     private readonly Dictionary<string, List<(int Start, int End)>> _ChangedLines = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DiffEntryKind> _NonReviewable = new(StringComparer.OrdinalIgnoreCase);
 
@@ -42,6 +38,18 @@ public sealed class DiffIndex
         var sectionRename = false;
         var newLine = 0;
         var inHunk = false;
+        var runStart = 0;
+        var runEnd = 0; // runEnd < runStart means no open run
+
+        void FlushRun()
+        {
+            if (currentFile is not null && runEnd >= runStart)
+            {
+                index._ChangedLines[currentFile].Add((runStart, runEnd));
+            }
+
+            runEnd = runStart - 1;
+        }
 
         void FlushSection()
         {
@@ -54,51 +62,69 @@ public sealed class DiffIndex
             }
         }
 
-        foreach (var rawLine in unifiedDiff.Split('\n'))
+        foreach (var rawLine in unifiedDiff.AsSpan().EnumerateLines())
         {
-            var line = rawLine.TrimEnd('\r');
-            // A "diff --git" header is a hard section boundary: it must be recognized even
-            // when the previous file's hunk is still open (real git emits it right after hunk content).
-            if (DiffGitHeader.Match(line) is {Success: true} header)
+            var line = rawLine;
+
+            // A "diff --git" header is a hard section boundary: recognized even when the
+            // previous file's hunk is still open (real git emits it right after hunk content).
+            if (line.StartsWith("diff --git a/", StringComparison.Ordinal))
             {
+                FlushRun();
                 FlushSection();
-                sectionFile = header.Groups["new"].Value;
+                sectionFile = DiffGitNewPath(line);
                 sawContent = false;
                 sectionBinary = false;
                 sectionRename = false;
                 currentFile = null;
                 inHunk = false;
+                continue;
             }
+
             // Hunk headers take precedence; added content is parsed before file headers so an
             // added line can itself start with "+++ b/".
-            else if (currentFile is not null && HunkHeader.Match(line) is {Success: true} match)
+            if (currentFile is not null && line.Length >= 3 && line[0] == '@' && line[1] == '@' && line[2] == ' '
+                && TryParseHunkNewStart(line, out var hunkStart))
             {
-                newLine = int.Parse(match.Groups[1].Value);
+                FlushRun();
+                newLine = hunkStart;
                 inHunk = true;
+                continue;
             }
-            else if (currentFile is not null && inHunk && line.Length > 0)
+
+            if (currentFile is not null && inHunk && line.Length > 0)
             {
                 switch (line[0])
                 {
                     case '+':
-                        index._ChangedLines[currentFile].Add((newLine, newLine));
+                        if (runEnd < runStart)
+                        {
+                            runStart = newLine; // open a new run
+                        }
+
+                        runEnd = newLine;
                         newLine++;
-                        break;
+                        continue;
                     case ' ':
+                        FlushRun();
                         newLine++;
-                        break;
+                        continue;
                     case '-':
-                        break;
+                        FlushRun();
+                        continue;
                     case '\\': // "\ No newline at end of file"
-                        break;
+                        continue;
                     default:
+                        FlushRun();
                         inHunk = false;
-                        break;
+                        continue;
                 }
             }
-            else if (line.StartsWith("+++ b/", StringComparison.Ordinal))
+
+            FlushRun();
+            if (line.StartsWith("+++ b/", StringComparison.Ordinal))
             {
-                currentFile = line[6..];
+                currentFile = line[6..].ToString();
                 sawContent = true;
                 if (!index._ChangedLines.ContainsKey(currentFile))
                 {
@@ -112,28 +138,123 @@ public sealed class DiffIndex
                 currentFile = null; // deleted file
                 inHunk = false;
             }
-            else if (sectionFile is not null && BinaryMarker.Match(line) is {Success: true} binary)
+            else if (sectionFile is not null && line.StartsWith("Binary files ", StringComparison.Ordinal))
             {
                 sectionBinary = true;
-                sectionFile = binary.Groups["new"].Value; // authoritative destination name
+                sectionFile = BinaryNewPath(line);
             }
-            else if (sectionFile is not null && RenameToMarker.Match(line) is {Success: true} rename)
+            else if (sectionFile is not null && line.StartsWith("rename to ", StringComparison.Ordinal))
             {
                 sectionRename = true;
-                sectionFile = rename.Groups["new"].Value;
+                sectionFile = line["rename to ".Length..].ToString();
             }
         }
 
+        FlushRun();
         FlushSection();
         return index;
     }
+
+    /// <summary>Parses "@@ -old[,n] +newStart[,n] @@" and yields the added-side start.</summary>
+    internal static bool TryParseHunkNewStart(ReadOnlySpan<char> line, out int newStart)
+    {
+        newStart = 0;
+        var plus = line.IndexOf('+');
+        if (plus < 0)
+        {
+            return false;
+        }
+
+        var rest = line[(plus + 1)..];
+        var digits = 0;
+        var value = 0;
+        while (digits < rest.Length && rest[digits] is >= '0' and <= '9')
+        {
+            value = value * 10 + (rest[digits] - '0');
+            digits++;
+        }
+
+        if (digits == 0)
+        {
+            return false;
+        }
+
+        // Optional ",count" then the closing " @@".
+        var tail = rest[digits..];
+        if (tail.StartsWith(','))
+        {
+            if (tail.IndexOf(" @@", StringComparison.Ordinal) < 0)
+            {
+                return false;
+            }
+        }
+        else if (!tail.StartsWith(" @@", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        newStart = value;
+        return true;
+    }
+
+    /// <summary>Extracts the destination path from "diff --git a/OLD b/NEW", or null.</summary>
+    internal static string? DiffGitNewPath(ReadOnlySpan<char> line)
+    {
+        var rest = line["diff --git a/".Length..];
+        var bIdx = rest.IndexOf(" b/", StringComparison.Ordinal);
+        return bIdx < 0 ? null : rest[(bIdx + 3)..].ToString();
+    }
+
+    /// <summary>Extracts the destination path from "Binary files a/OLD and b/NEW differ", or null.</summary>
+    internal static string? BinaryNewPath(ReadOnlySpan<char> line)
+    {
+        var rest = line["Binary files ".Length..];
+        var andIdx = rest.IndexOf(" and b/", StringComparison.Ordinal);
+        if (andIdx < 0)
+        {
+            return null;
+        }
+
+        var tail = rest[(andIdx + " and b/".Length)..];
+        var differIdx = tail.LastIndexOf(" differ", StringComparison.Ordinal);
+        return (differIdx >= 0 ? tail[..differIdx] : tail).ToString();
+    }
+
+    /// <summary>Number of coalesced ranges for a file (test seam — asserts coalescing).</summary>
+    internal int RangeCount(string filePath)
+        => _ChangedLines.TryGetValue(NormalizePath(filePath), out var ranges) ? ranges.Count : 0;
 
     /// <summary>True when the line is part of the PR's changed (added-side) lines.</summary>
     public bool Contains(string filePath, int line)
     {
         var normalized = NormalizePath(filePath);
-        return _ChangedLines.TryGetValue(normalized, out var ranges)
-               && ranges.Exists(r => line >= r.Start && line <= r.End);
+        if (!_ChangedLines.TryGetValue(normalized, out var ranges))
+        {
+            return false;
+        }
+
+        // Binary search over sorted, non-overlapping ranges.
+        var lo = 0;
+        var hi = ranges.Count - 1;
+        while (lo <= hi)
+        {
+            var mid = lo + ((hi - lo) >> 1);
+            var r = ranges[mid];
+            if (line < r.Start)
+            {
+                hi = mid - 1;
+            }
+            else if (line > r.End)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string NormalizePath(string filePath)

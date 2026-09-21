@@ -359,6 +359,21 @@ public class PromptBuilderTests
     }
 
     [Fact]
+    public void ShrinkDiff_deleted_files_each_get_own_budget()
+    {
+        var deleted = (string name) =>
+            $"diff --git a/{name} b/{name}\n--- a/{name}\n+++ /dev/null\n@@ -1,100 +0,0 @@\n"
+            + string.Join('\n', Enumerable.Range(0, 100).Select(i => $"-line{i}"));
+        var diff = deleted("d1.cs") + "\n" + deleted("d2.cs") + "\n";
+
+        var shrunk = PromptBuilder.ShrinkDiff(diff, maxTotal: 100_000, maxPerFile: 200);
+
+        Assert.Contains("d1.cs", shrunk);
+        Assert.Contains("d2.cs", shrunk); // pre-fix, the second deleted file vanished entirely
+        Assert.Contains(PromptBuilder.DiffTruncationMarker, shrunk);
+    }
+
+    [Fact]
     public void Build_wraps_pr_fields_in_untrusted_delimiters()
     {
         var prompt = PromptBuilder.Build(BaseInput());

@@ -1,5 +1,6 @@
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using Xunit;
 
 namespace ReviewForge.Core.Tests;
@@ -176,6 +177,125 @@ public class DiffIndexTests
         Assert.True(index.Contains("f.cs", 1));
         Assert.True(index.Contains("f.cs", 2));
         Assert.True(index.Contains("f.cs", 3));
+    }
+
+    [Fact]
+    public void Contiguous_added_lines_coalesce_into_one_range()
+    {
+        var lines = Enumerable.Range(1, 100).Select(i => $"+line{i}");
+        var index = DiffIndex.Parse("+++ b/f.cs\n@@ -0,0 +1,100 @@\n" + string.Join('\n', lines) + "\n");
+
+        Assert.Equal(1, index.RangeCount("f.cs"));
+        Assert.True(index.Contains("f.cs", 1));
+        Assert.True(index.Contains("f.cs", 50));
+        Assert.True(index.Contains("f.cs", 100));
+        Assert.False(index.Contains("f.cs", 101));
+    }
+
+    [Fact]
+    public void Separate_hunks_stay_separate_ranges()
+    {
+        var index = DiffIndex.Parse("+++ b/f.cs\n@@ -0,0 +1,2 @@\n+a\n+b\n@@ -0,0 +5,2 @@\n+e\n+f\n");
+
+        Assert.Equal(2, index.RangeCount("f.cs"));
+        Assert.True(index.Contains("f.cs", 1));
+        Assert.True(index.Contains("f.cs", 2));
+        Assert.False(index.Contains("f.cs", 3)); // gap between hunks
+        Assert.False(index.Contains("f.cs", 4));
+        Assert.True(index.Contains("f.cs", 5));
+        Assert.True(index.Contains("f.cs", 6));
+    }
+
+    [Fact]
+    public void Hunk_like_content_line_is_not_a_header()
+    {
+        var index = DiffIndex.Parse("+++ b/f.cs\n@@ -0,0 +1,3 @@\n+x\n @@ -1 +2 @@\n+y\n");
+
+        Assert.True(index.Contains("f.cs", 1));   // +x
+        Assert.False(index.Contains("f.cs", 2));  // the "@@ -1 +2 @@" context line
+        Assert.True(index.Contains("f.cs", 3));   // +y
+    }
+
+    [Fact]
+    public void Contains_uses_sorted_ranges()
+    {
+        var hunks = Enumerable.Range(0, 50).Select(h => $"@@ -0,0 +{h * 10 + 1},1 @@\n+line{h}");
+        var index = DiffIndex.Parse("+++ b/f.cs\n" + string.Join('\n', hunks) + "\n");
+
+        Assert.True(index.Contains("f.cs", 1));    // first hunk
+        Assert.True(index.Contains("f.cs", 491));  // last hunk (49*10+1)
+        Assert.False(index.Contains("f.cs", 500));
+    }
+
+    [Fact]
+    public void Skip_note_header_registers_file_with_no_lines()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git a/big.cs b/big.cs\n--- a/big.cs\n+++ b/big.cs\n" +
+            "…[file diff skipped — 999999 bytes exceeds the per-file budget; use repo_read_file]\n");
+
+        Assert.Contains("big.cs", index.Files);
+        Assert.False(index.Contains("big.cs", 1));
+    }
+
+    [Fact]
+    public void Hunk_header_parser_rejects_malformed_headers()
+    {
+        Assert.False(DiffIndex.TryParseHunkNewStart("@@ -1 @@", out _));    // no '+'
+        Assert.False(DiffIndex.TryParseHunkNewStart("@@ -1 + @@", out _));  // '+' without digits
+        Assert.False(DiffIndex.TryParseHunkNewStart("@@ -1 +1,5", out _));  // ',' without closing '@@'
+        Assert.False(DiffIndex.TryParseHunkNewStart("@@ -1 +1", out _));    // no closing '@@'
+        Assert.True(DiffIndex.TryParseHunkNewStart("@@ -1 +7 @@", out var start));
+        Assert.Equal(7, start);
+        Assert.True(DiffIndex.TryParseHunkNewStart("@@ -1,3 +7,2 @@", out var startWithCount));
+        Assert.Equal(7, startWithCount);
+    }
+
+    [Fact]
+    public void Hunk_ends_on_unexpected_line()
+    {
+        var index = DiffIndex.Parse("+++ b/f.cs\n@@ -0,0 +1,2 @@\n+x\nUNEXPECTED\n+y\n");
+
+        Assert.True(index.Contains("f.cs", 1));   // +x
+        Assert.False(index.Contains("f.cs", 2));  // +y follows an unexpected line — hunk ended
+    }
+
+    [Fact]
+    public void Binary_new_path_rejects_malformed_marker()
+    {
+        Assert.Null(DiffIndex.BinaryNewPath("Binary files a/x b/y differ")); // no " and b/"
+        Assert.Equal("logo.png", DiffIndex.BinaryNewPath("Binary files a/logo.png and b/logo.png differ"));
+    }
+}
+
+public class DiffExclusionsTests
+{
+    [Fact]
+    public void Glob_matches_lockfiles_and_generated_code()
+    {
+        var globs = DiffBudget.Default.ExcludeGlobs;
+        Assert.True(DiffExclusions.IsExcluded("src/app/package-lock.json", globs));
+        Assert.True(DiffExclusions.IsExcluded("obj/Foo.Designer.cs", globs));
+        Assert.True(DiffExclusions.IsExcluded("wwwroot/site.min.js", globs));
+        Assert.False(DiffExclusions.IsExcluded("src/Foo.cs", globs));
+        Assert.False(DiffExclusions.IsExcluded("src/Design.cs", globs));
+    }
+
+    [Fact]
+    public void Glob_star_does_not_cross_segments()
+    {
+        Assert.True(DiffExclusions.IsExcluded("a/b/c.min.js", ["**/*.min.js"]));
+        Assert.True(DiffExclusions.IsExcluded("c.min.js", ["**/*.min.js"]));
+        Assert.True(DiffExclusions.IsExcluded("root.js", ["*.js"]));
+        Assert.False(DiffExclusions.IsExcluded("a/root.js", ["*.js"]));
+    }
+
+    [Fact]
+    public void Glob_trailing_star_matches_zero_or_more()
+    {
+        Assert.True(DiffExclusions.IsExcluded("foo", ["foo*"]));      // star matches zero chars
+        Assert.True(DiffExclusions.IsExcluded("foobar", ["foo*"]));   // star matches more
+        Assert.False(DiffExclusions.IsExcluded("barfoo", ["foo*"]));  // prefix mismatch
     }
 }
 

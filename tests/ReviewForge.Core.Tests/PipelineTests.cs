@@ -3,6 +3,7 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
@@ -174,6 +175,28 @@ public class StageTests : IDisposable
         Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
         Assert.True(ctx.Diff!.Contains("src/A.cs", 2));
         Assert.False(ctx.Diff.Contains("src/A.cs", 1));
+    }
+
+    [Fact]
+    public async Task Prepare_scope_check_ignores_excluded_files()
+    {
+        var source = new FakePullRequestSource();
+        source.ChangedFiles.Add(new ChangedFile("src/A.cs", ChangedFileType.Edit));
+        source.ChangedFiles.Add(new ChangedFile("package-lock.json", ChangedFileType.Edit));
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n", // no package-lock.json (excluded at the git layer)
+        };
+        var ctx = Ctx(source);
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance,
+            DiffBudget.Default).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains("src/A.cs", ctx.ReviewableFiles!);
+        Assert.DoesNotContain("package-lock.json", ctx.ReviewableFiles!);
     }
 
     [Fact]

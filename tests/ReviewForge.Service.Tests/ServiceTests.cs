@@ -509,7 +509,7 @@ public class ServiceTests : IAsyncLifetime
         public override Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
             => Task.FromResult(repoDir);
 
-        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct)
+        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
             => throw new InvalidOperationException("git exploded");
     }
 }

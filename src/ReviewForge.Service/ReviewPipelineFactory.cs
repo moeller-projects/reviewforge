@@ -52,6 +52,11 @@ public sealed class ReviewForgeServiceOptions
     /// <summary>Per-file diff budget; files over it keep their header plus a bounded prefix.</summary>
     public int MaxDiffCharsPerFile { get; init; } = 40_000;
 
+    /// <summary>Extra diff exclusion globs; replace the default set when set (array replace, not merge).</summary>
+    public string[]? DiffExcludeGlobs { get; init; }
+    public long MaxDiffBytes { get; init; } = 4 * 1024 * 1024;
+    public int MaxDiffBytesPerFile { get; init; } = 256 * 1024;
+
     /// <summary>Opt-in: exports OTel traces/metrics via OTLP. Default false (no exporter).</summary>
     public bool OtlpEnabled { get; init; }
 }
@@ -90,11 +95,16 @@ public sealed class ReviewPipelineFactory(
         var findingsDir = Path.Combine(opts.WorkDir, "findings");
         Directory.CreateDirectory(findingsDir);
 
+        var diffBudget = new DiffBudget(
+            opts.MaxDiffBytes,
+            opts.MaxDiffBytesPerFile,
+            opts.DiffExcludeGlobs ?? DiffBudget.Default.ExcludeGlobs);
+
         IReviewStage[] stages =
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
-            new PrepareRepositoryStage(checkoutPool, loggerFactory.CreateLogger<PrepareRepositoryStage>()),
+            new PrepareRepositoryStage(checkoutPool, loggerFactory.CreateLogger<PrepareRepositoryStage>(), diffBudget),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),

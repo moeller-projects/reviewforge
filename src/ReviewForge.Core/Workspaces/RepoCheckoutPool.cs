@@ -69,8 +69,8 @@ public sealed class RepoCheckoutPool
         }
     }
 
-    internal Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct)
-        => _Git.GetDiffAsync(repoPath, baseSha, headSha, ct);
+    internal Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
+        => _Git.GetDiffAsync(repoPath, baseSha, headSha, ct, budget);
 
     public CheckoutEvictionReport Evict(CheckoutEvictionOptions options, TimeProvider clock)
     {

@@ -340,6 +340,6 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct) => Task.FromResult(string.Empty);
+        public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null) => Task.FromResult(string.Empty);
     }
 }
