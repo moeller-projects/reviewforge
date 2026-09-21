@@ -24,7 +24,7 @@ public class FakePullRequestSource : IPullRequestSource
     public List<string> GeneralComments { get; } = [];
     public List<(int ThreadId, string Text)> Replies { get; } = [];
     public List<(int ThreadId, ReviewThreadStatus Status)> StatusChanges { get; } = [];
-    public List<(string ReviewerId, int Vote)> Votes { get; } = [];
+    public List<(string ReviewerId, ReviewerVote Vote)> Votes { get; } = [];
 
     public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
         => Task.FromResult(PullRequestsByKey.TryGetValue(pr, out var pullRequest) ? pullRequest : Pr);
@@ -91,7 +91,7 @@ public class FakePullRequestSource : IPullRequestSource
         return Task.CompletedTask;
     }
 
-    public virtual Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
+    public virtual Task SetReviewerVoteAsync(PrKey pr, string reviewerId, ReviewerVote vote, CancellationToken ct)
     {
         lock (_Gate)
         {
@@ -178,7 +178,7 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
         await base.SetThreadStatusAsync(pr, threadId, status, ct);
     }
 
-    public override async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
+    public override async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, ReviewerVote vote, CancellationToken ct)
     {
         await DelayAsync(ct);
         await base.SetReviewerVoteAsync(pr, reviewerId, vote, ct);

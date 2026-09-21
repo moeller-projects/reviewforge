@@ -426,7 +426,7 @@ public class StageTests : IDisposable
         Assert.Equal(2, source.GeneralComments.Count); // downgraded finding + summary
         Assert.Contains("❌", source.GeneralComments[1]);
         Assert.Single(source.Votes);
-        Assert.Equal(-5, source.Votes[0].Vote);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, source.Votes[0].Vote);
         Assert.Equal("user-1", source.Votes[0].ReviewerId);
     }
 
@@ -445,6 +445,26 @@ public class StageTests : IDisposable
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new PublishFindingsStage(new FakePullRequestSource(), NullLogger<PublishFindingsStage>.Instance)
                 .ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Publish_sets_waiting_for_author_vote_via_domain_enum()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [FindingOnLine(2)];
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = ctx.AcceptedFindings,
+            Uncertainties = [],
+        };
+
+        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.Votes);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, source.Votes[0].Vote);
     }
 
     [Fact]

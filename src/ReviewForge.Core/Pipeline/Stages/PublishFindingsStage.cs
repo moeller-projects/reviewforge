@@ -8,12 +8,10 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// <summary>
 /// Stage 9: post findings (inline when the anchor holds, general otherwise), one summary
 /// comment with acceptance-criteria verdicts, and set the PAT user's reviewer vote to
-/// "waiting for the author" (-5) when anything needs the author's attention.
+/// <see cref="ReviewerVote.WaitingForAuthor"/> when anything needs the author's attention.
 /// </summary>
 public sealed class PublishFindingsStage(IPullRequestSource source, ILogger<PublishFindingsStage> logger) : IReviewStage
 {
-    public const int VoteWaitingForAuthor = -5;
-
     /// <summary>Bounded concurrency for ADO writes; each finding is one HTTP round-trip.</summary>
     public const int MaxConcurrentPosts = 4;
 
@@ -74,7 +72,7 @@ public sealed class PublishFindingsStage(IPullRequestSource source, ILogger<Publ
         var acUnmet = (ctx.Result!.Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);
         if (ctx.AcceptedFindings.Count > 0 || acUnmet || ctx.UnansweredThreads.Count > 0)
         {
-            await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, VoteWaitingForAuthor, ct);
+            await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, ReviewerVote.WaitingForAuthor, ct);
             logger.LogInformation("reviewer vote set to waiting-for-author for {User}", ctx.CurrentUser!.DisplayName);
         }
     }

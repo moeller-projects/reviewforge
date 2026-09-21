@@ -256,11 +256,11 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             pr.Project, pr.RepositoryId, pr.PrId, threadId, cancellationToken: ct);
     }
 
-    public async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
+    public async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, ReviewerVote vote, CancellationToken ct)
     {
         var git = await GitClientAsync(ct);
         await git.CreatePullRequestReviewerAsync(
-            new IdentityRefWithVote {Id = reviewerId, Vote = (short) vote},
+            new IdentityRefWithVote {Id = reviewerId, Vote = AdoReviewerVote.ToAdoVote(vote)},
             pr.Project, pr.RepositoryId, pr.PrId, reviewerId, cancellationToken: ct);
     }
 
