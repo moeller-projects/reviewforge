@@ -5,8 +5,15 @@ on:
     branches: [ main ]
   pull_request:
 
+# Least privilege: checkout needs contents:read; nothing else by default.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
+    permissions:
+      contents: read
+      checks: write # dorny/test-reporter publishes check runs
     strategy:
       fail-fast: false
       matrix:
