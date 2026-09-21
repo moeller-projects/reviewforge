@@ -37,9 +37,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(sp.GetRequiredService<ReasoningOptions>()));
         services.Configure<ReviewForgeServiceOptions>(configuration.GetSection(ReviewForgeServiceOptions.SectionName));
         services.Configure<ApiDocsOptions>(configuration.GetSection(ApiDocsOptions.SectionName));
+        services.AddSingleton(sp => new GitOperationScheduler(
+            sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.GitMaxConcurrency));
         services.AddSingleton<IGitOps>(sp =>
             new LibGit2SharpGitOps(
-                sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.TargetedFetchEnabled));
+                sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.TargetedFetchEnabled,
+                sp.GetRequiredService<GitOperationScheduler>()));
+        // Register the scheduler for disposal with the host.
+        services.AddSingleton(sp => (IDisposable)sp.GetRequiredService<GitOperationScheduler>());
         services.AddSingleton<IWorkspaceFs, FileSystemWorkspaceFs>();
         services.AddSingleton(sp =>
         {
@@ -67,7 +72,8 @@ public static class ServiceCollectionExtensions
             enricher: null,
             clock: sp.GetRequiredService<TimeProvider>()));
 
-        var workerCount = configuration.GetValue<int?>($"{ReviewForgeServiceOptions.SectionName}:WorkerCount") ?? 1;
+        var workerCount = configuration.GetValue<int?>($"{ReviewForgeServiceOptions.SectionName}:WorkerCount")
+                          ?? Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
         if (workerCount < 1)
         {
             throw new InvalidOperationException("ReviewForge:WorkerCount must be at least 1");

@@ -41,17 +41,17 @@ public sealed class RepoCheckoutPool
             var path = CheckoutPath(repositoryId, headSha);
             _Fs.CreateDirectory(Path.GetDirectoryName(path)!);
             if (_Fs.DirectoryExists(Path.Combine(path, ".git")) &&
-                string.Equals(_Git.GetHeadSha(path), headSha, StringComparison.OrdinalIgnoreCase))
+                string.Equals(await _Git.GetHeadShaAsync(path, ct).ConfigureAwait(false), headSha, StringComparison.OrdinalIgnoreCase))
             {
-                _Git.EnsureCommits(path, cloneUrl, baseSha, headSha, _Pat);
+                await _Git.EnsureCommitsAsync(path, cloneUrl, baseSha, headSha, _Pat, ct).ConfigureAwait(false);
                 _Fs.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
 
-            var repoPath = _Git.CloneOrOpen(cloneUrl, path, _Pat);
-            _Git.EnsureCommits(repoPath, cloneUrl, baseSha, headSha, _Pat);
-            _Git.Checkout(repoPath, headSha);
+            var repoPath = await _Git.CloneOrOpenAsync(cloneUrl, path, _Pat, ct).ConfigureAwait(false);
+            await _Git.EnsureCommitsAsync(repoPath, cloneUrl, baseSha, headSha, _Pat, ct).ConfigureAwait(false);
+            await _Git.CheckoutAsync(repoPath, headSha, ct).ConfigureAwait(false);
             if (_Fs.DirectoryExists(repoPath))
             {
                 _Fs.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
@@ -69,8 +69,8 @@ public sealed class RepoCheckoutPool
         }
     }
 
-    internal string GetDiff(string repoPath, string baseSha, string headSha)
-        => _Git.GetDiff(repoPath, baseSha, headSha);
+    internal Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct)
+        => _Git.GetDiffAsync(repoPath, baseSha, headSha, ct);
 
     public CheckoutEvictionReport Evict(CheckoutEvictionOptions options, TimeProvider clock)
     {

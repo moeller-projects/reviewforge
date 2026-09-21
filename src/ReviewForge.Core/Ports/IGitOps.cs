@@ -1,22 +1,21 @@
 namespace ReviewForge.Core.Ports;
 
-/// <summary>Git operations for the repository-preparation stage.</summary>
+/// <summary>Git operations for the repository-preparation stage. Synchronous library
+/// work is offloaded by the implementation; cancellation stops waiting promptly.</summary>
 public interface IGitOps
 {
     /// <summary>Clones the repository (or reuses an existing checkout) and returns the work path.</summary>
-    string CloneOrOpen(string cloneUrl, string workDir, string? pat);
+    Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct);
 
-    void Checkout(string repoPath, string commitSha);
+    Task CheckoutAsync(string repoPath, string commitSha, CancellationToken ct);
 
     /// <summary>Unified diff between base and head commits.</summary>
-    string GetDiff(string repoPath, string baseSha, string headSha);
+    Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct);
 
     /// <summary>Returns the checked-out HEAD SHA, or null when no commit is available.</summary>
-    string? GetHeadSha(string repoPath);
+    Task<string?> GetHeadShaAsync(string repoPath, CancellationToken ct);
 
-    /// <summary>
-    /// Ensures both commits are present in the checkout, fetching them by SHA directly
-    /// from the authoritative clone URL when targeted fetch is enabled.
-    /// </summary>
-    void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat);
+    /// <summary>Ensures both commits are present in the checkout, fetching them by SHA
+    /// directly from the authoritative clone URL when targeted fetch is enabled.</summary>
+    Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct);
 }

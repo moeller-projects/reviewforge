@@ -155,6 +155,22 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     }
 
     [Fact]
+    public async Task Acquire_propagates_cancellation_during_clone()
+    {
+        var git = new TestGitOps {Delay = TimeSpan.FromSeconds(5)};
+        var pool = Pool(git);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            pool.AcquireAsync("repo", "url", "base", "head", cts.Token));
+
+        // The cancelled acquire must release the keyed lock: a fresh acquire succeeds.
+        git.Delay = TimeSpan.Zero;
+        using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
+        Assert.True(Directory.Exists(checkout.Path));
+    }
+
+    [Fact]
     public void Evict_cleans_an_empty_repository_directory()
     {
         var pool = Pool(new TestGitOps());
@@ -232,7 +248,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         private int _ActiveClones;
         private int _MaxConcurrentClones;
         public Barrier? CloneBarrier { get; init; }
-        public TimeSpan Delay { get; init; }
+        public TimeSpan Delay { get; set; }
         public bool ThrowOnClone { get; set; }
         public int CheckoutCount { get; private set; }
         public int CloneCount { get; private set; }
@@ -241,7 +257,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         public List<(string Base, string Head)> EnsuredCommits { get; } = [];
         public List<string> Calls { get; } = [];
 
-        public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
+        public async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
         {
             lock (_Gate)
             {
@@ -277,7 +293,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
                 if (Delay > TimeSpan.Zero)
                 {
-                    Thread.Sleep(Delay);
+                    await Task.Delay(Delay, ct).ConfigureAwait(false);
                 }
             }
             finally
@@ -289,26 +305,30 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             return workDir;
         }
 
-        public void Checkout(string repoPath, string commitSha)
+        public Task CheckoutAsync(string repoPath, string commitSha, CancellationToken ct)
         {
             lock (_Gate)
             {
                 Calls.Add("checkout");
                 CheckoutCount++;
             }
+
+            return Task.CompletedTask;
         }
 
-        public string? GetHeadSha(string repoPath) => HeadSha;
+        public Task<string?> GetHeadShaAsync(string repoPath, CancellationToken ct) => Task.FromResult(HeadSha);
 
-        public void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
+        public Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
         {
             lock (_Gate)
             {
                 Calls.Add("ensure");
                 EnsuredCommits.Add((baseSha, headSha));
             }
+
+            return Task.CompletedTask;
         }
 
-        public string GetDiff(string repoPath, string baseSha, string headSha) => string.Empty;
+        public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct) => Task.FromResult(string.Empty);
     }
 }

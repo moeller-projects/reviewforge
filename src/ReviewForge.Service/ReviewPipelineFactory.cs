@@ -26,7 +26,10 @@ public sealed class ReviewForgeServiceOptions
 
     public int MaxContextTokens { get; init; } = 150_000;
     public int MaxIterations { get; init; } = 30;
-    public int WorkerCount { get; init; } = 1;
+    public int WorkerCount { get; init; } = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+
+    /// <summary>Dedicated threads for LibGit2Sharp work (clones/fetches/diffs).</summary>
+    public int GitMaxConcurrency { get; init; } = Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
     public bool TargetedFetchEnabled { get; init; }
     public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }

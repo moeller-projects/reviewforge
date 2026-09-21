@@ -175,6 +175,33 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveRun_finalize_merges_new_findings()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var runId = Guid.NewGuid();
+
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, null, false,
+            [new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null)]), CancellationToken.None);
+
+        // Finalize introduces a finding the shell did not have; it must be merged.
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
+            [
+                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+            ]), CancellationToken.None);
+
+        await using (var db = new FindingStoreDbContext(
+                         new DbContextOptionsBuilder<FindingStoreDbContext>()
+                             .UseSqlite(_ConnectionString).Options))
+        {
+            var run = Assert.Single(await db.Runs.Include(r => r.Findings).ToListAsync());
+            Assert.Equal(2, run.Findings.Count);
+            Assert.Contains(run.Findings, f => f.DedupeKey == "k1");
+            Assert.Contains(run.Findings, f => f.DedupeKey == "k2");
+        }
+    }
+
+    [Fact]
     public async Task Known_keys_are_distinct_across_runs_and_scoped_to_pr()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);

@@ -493,9 +493,10 @@ public class ServiceTests : IAsyncLifetime
 
     private sealed class ExplosiveGitOps(string repoDir) : FakeGitOps
     {
-        public override string CloneOrOpen(string cloneUrl, string workDir, string? pat) => repoDir;
+        public override Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
+            => Task.FromResult(repoDir);
 
-        public override string GetDiff(string repoPath, string baseSha, string headSha)
+        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct)
             => throw new InvalidOperationException("git exploded");
     }
 }

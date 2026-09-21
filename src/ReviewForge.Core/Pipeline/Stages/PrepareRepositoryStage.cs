@@ -15,7 +15,7 @@ public sealed class PrepareRepositoryStage(RepoCheckoutPool pool) : IReviewStage
         var checkout = await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct);
         ctx.RepoLease = checkout;
         ctx.RepoDir = checkout.Path;
-        ctx.DiffText = pool.GetDiff(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha);
+        ctx.DiffText = await pool.GetDiffAsync(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
         ctx.Diff = DiffIndex.Parse(ctx.DiffText);
 
         var providerFiles = ctx.ChangedFileManifest

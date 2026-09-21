@@ -7,22 +7,79 @@ namespace ReviewForge.Infrastructure.Git;
 
 /// <summary>
 /// LibGit2Sharp adapter — process-free clone/checkout/diff. Thin wrapper over the
-/// library, excluded from coverage by design.
+/// library, excluded from coverage by design. Synchronous library work runs on a
+/// dedicated bounded scheduler; the mirror-lock wait honors the caller's cancellation token.
 /// </summary>
 [ExcludeFromCodeCoverage]
 public sealed class LibGit2SharpGitOps : IGitOps
 {
     private readonly KeyedLockPool _MirrorLocks = new();
+    private readonly GitOperationScheduler _Scheduler;
     private readonly bool _TargetedFetch;
 
-    public LibGit2SharpGitOps(bool targetedFetch = false)
+    public LibGit2SharpGitOps(bool targetedFetch = false, GitOperationScheduler? scheduler = null)
     {
         _TargetedFetch = targetedFetch;
+        _Scheduler = scheduler ?? new GitOperationScheduler(
+            Math.Clamp(Environment.ProcessorCount / 2, 2, 4));
     }
 
-    public string CloneOrOpen(string cloneUrl, string workDir, string? pat)
+    public async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
     {
-        var mirror = EnsureMirror(cloneUrl, workDir, pat);
+        // The mirror is shared across checkouts: hold the keyed lock for clone+fetch.
+        // The wait is cancellable (real ct); the native work runs off the pool.
+        var mirror = MirrorPath(workDir);
+        using var gate = await _MirrorLocks.AcquireAsync(mirror, ct).ConfigureAwait(false)
+                         ?? throw new InvalidOperationException("mirror lock acquisition returned no lease");
+        return await _Scheduler.RunAsync(() => CloneOrOpenCore(cloneUrl, workDir, pat, mirror), ct)
+            .ConfigureAwait(false);
+    }
+
+    public Task CheckoutAsync(string repoPath, string commitSha, CancellationToken ct)
+        => _Scheduler.RunAsync(() =>
+        {
+            using var repo = new Repository(repoPath);
+            var commit = repo.Lookup<Commit>(commitSha)
+                         ?? throw new InvalidOperationException($"commit {commitSha} not found in {repoPath}");
+            Commands.Checkout(repo, commit, new CheckoutOptions {CheckoutModifiers = CheckoutModifiers.Force});
+            return true;
+        }, ct);
+
+    public Task<string?> GetHeadShaAsync(string repoPath, CancellationToken ct)
+        => _Scheduler.RunAsync(() =>
+        {
+            using var repo = new Repository(repoPath);
+            return repo.Head.Tip?.Sha;
+        }, ct);
+
+    public Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+        => _Scheduler.RunAsync(() =>
+        {
+            EnsureCommitsCore(repoPath, cloneUrl, baseSha, headSha, pat);
+            return true;
+        }, ct);
+
+    public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct)
+        => _Scheduler.RunAsync(() => GetDiffCore(repoPath, baseSha, headSha), ct);
+
+    /// <summary>Existing CloneOrOpen body; mirror path supplied by the async wrapper.</summary>
+    private string CloneOrOpenCore(string cloneUrl, string workDir, string? pat, string mirror)
+    {
+        // EnsureMirror body, minus the lock acquisition (now held by the caller):
+        if (Repository.IsValid(mirror))
+        {
+            if (!_TargetedFetch)
+            {
+                using var existing = new Repository(mirror);
+                Commands.Fetch(existing, "origin", ["+refs/heads/*:refs/remotes/origin/*"], FetchOptions(pat), null);
+            }
+        }
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(mirror)!);
+            Repository.Clone(cloneUrl, mirror, new CloneOptions(FetchOptions(pat)) {IsBare = true});
+        }
+
         if (Directory.Exists(Path.Combine(workDir, ".git")))
         {
             if (!_TargetedFetch)
@@ -39,21 +96,7 @@ public sealed class LibGit2SharpGitOps : IGitOps
         return workDir;
     }
 
-    public void Checkout(string repoPath, string commitSha)
-    {
-        using var repo = new Repository(repoPath);
-        var commit = repo.Lookup<Commit>(commitSha)
-                     ?? throw new InvalidOperationException($"commit {commitSha} not found in {repoPath}");
-        Commands.Checkout(repo, commit, new CheckoutOptions {CheckoutModifiers = CheckoutModifiers.Force});
-    }
-
-    public string? GetHeadSha(string repoPath)
-    {
-        using var repo = new Repository(repoPath);
-        return repo.Head.Tip?.Sha;
-    }
-
-    public void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
+    private void EnsureCommitsCore(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
     {
         if (!_TargetedFetch)
         {
@@ -99,7 +142,7 @@ public sealed class LibGit2SharpGitOps : IGitOps
         }
     }
 
-    public string GetDiff(string repoPath, string baseSha, string headSha)
+    private string GetDiffCore(string repoPath, string baseSha, string headSha)
     {
         using var repo = new Repository(repoPath);
         var baseCommit = repo.Lookup<Commit>(baseSha)
@@ -108,29 +151,6 @@ public sealed class LibGit2SharpGitOps : IGitOps
                          ?? throw new InvalidOperationException($"head commit {headSha} not found");
 
         return repo.Diff.Compare<Patch>(baseCommit.Tree, headCommit.Tree).Content;
-    }
-
-    private string EnsureMirror(string cloneUrl, string workDir, string? pat)
-    {
-        var mirror = MirrorPath(workDir);
-        using var gate = _MirrorLocks.AcquireAsync(mirror, CancellationToken.None)
-                             .GetAwaiter().GetResult()
-                         ?? throw new InvalidOperationException("mirror lock acquisition returned no lease");
-        if (Repository.IsValid(mirror))
-        {
-            if (!_TargetedFetch)
-            {
-                using var existing = new Repository(mirror);
-                Commands.Fetch(existing, "origin", ["+refs/heads/*:refs/remotes/origin/*"], FetchOptions(pat), null);
-            }
-        }
-        else
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(mirror)!);
-            Repository.Clone(cloneUrl, mirror, new CloneOptions(FetchOptions(pat)) {IsBare = true});
-        }
-
-        return mirror;
     }
 
     internal static string MirrorPath(string workDir)

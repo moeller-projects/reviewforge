@@ -247,7 +247,7 @@ public class FakeGitOps : IGitOps
     public TimeSpan CloneDelay { get; set; }
     public int MaxConcurrentClones => _MaxConcurrentClones;
 
-    public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat)
+    public virtual async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
     {
         Directory.CreateDirectory(workDir);
         var active = Interlocked.Increment(ref _ActiveClones);
@@ -262,32 +262,36 @@ public class FakeGitOps : IGitOps
 
         if (CloneDelay > TimeSpan.Zero)
         {
-            Thread.Sleep(CloneDelay);
+            await Task.Delay(CloneDelay, ct).ConfigureAwait(false);
         }
 
         Interlocked.Decrement(ref _ActiveClones);
         return workDir;
     }
 
-    public virtual void Checkout(string repoPath, string commitSha)
+    public virtual Task CheckoutAsync(string repoPath, string commitSha, CancellationToken ct)
     {
         lock (_Gate)
         {
             Checkouts.Add(commitSha);
         }
+
+        return Task.CompletedTask;
     }
 
-    public virtual string? GetHeadSha(string repoPath) => null;
+    public virtual Task<string?> GetHeadShaAsync(string repoPath, CancellationToken ct) => Task.FromResult<string?>(null);
 
-    public virtual void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
+    public virtual Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
     {
         lock (_Gate)
         {
             EnsuredCommits.Add((baseSha, headSha));
         }
+
+        return Task.CompletedTask;
     }
 
-    public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
+    public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct) => Task.FromResult(Diff);
 }
 
 /// <summary>Fake enricher: fixed payload, null, or throwing.</summary>
