@@ -88,6 +88,11 @@ public sealed class ValidateFindingsStage(
         {
             case AnchorResolver.Resolution.Unverifiable:
                 return false;
+            case AnchorResolver.Resolution.WeakSnippet:
+                // Keep the stated anchor for diff-membership validation, but never post inline.
+                finding.AnchorDowngraded = true;
+                logger.LogInformation("finding {Key} downgraded: snippet too unspecific to reanchor", finding.DedupeKey);
+                break;
             case AnchorResolver.Resolution.Reanchored when anchor is not null:
                 finding.Anchor = anchor;
                 break;

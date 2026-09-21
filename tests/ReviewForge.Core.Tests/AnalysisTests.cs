@@ -214,14 +214,14 @@ public class AnchorResolverTests
     [Fact]
     public void Snippet_on_same_line_verifies()
     {
-        var (result, _) = AnchorResolver.Resolve(Finding("beta"), ["alpha", "beta", "gamma"]);
+        var (result, _) = AnchorResolver.Resolve(Finding("return beta"), ["alpha", "return beta", "gamma"]);
         Assert.Equal(AnchorResolver.Resolution.Verified, result);
     }
 
     [Fact]
     public void Snippet_on_other_line_reanchors()
     {
-        var (result, anchor) = AnchorResolver.Resolve(Finding("gamma", line: 1), ["alpha", "beta", "gamma"]);
+        var (result, anchor) = AnchorResolver.Resolve(Finding("return gamma", line: 1), ["alpha", "beta", "return gamma"]);
         Assert.Equal(AnchorResolver.Resolution.Reanchored, result);
         Assert.Equal(3, anchor!.StartLine);
         Assert.Equal(3, anchor.EndLine);
@@ -256,55 +256,75 @@ public class AnchorResolverTests
     }
 
     [Fact]
-    public void Trivial_snippet_trusts_anchor_instead_of_matching_anywhere()
+    public void Resolve_TrivialBraceSnippet_ReturnsWeakSnippet()
     {
-        // "}" (1 char) matches the first block close; it proves nothing — trust line 7.
-        var (result, anchor) = AnchorResolver.Resolve(Finding("}", line: 7), ["{", "}", "x"]);
+        var (result, anchor) = AnchorResolver.Resolve(Finding("}", line: 50), ["{", "}", "x"]);
+        Assert.Equal(AnchorResolver.Resolution.WeakSnippet, result);
+        Assert.Equal(50, anchor!.StartLine);
+    }
+
+    [Fact]
+    public void Resolve_BlankOnlySnippet_TreatedAsNoSnippet()
+    {
+        var (result, anchor) = AnchorResolver.Resolve(Finding("\n  \n", line: 7), ["alpha", "beta"]);
         Assert.Equal(AnchorResolver.Resolution.Verified, result);
         Assert.Equal(7, anchor!.StartLine);
     }
 
     [Fact]
-    public void Snippet_at_or_above_min_chars_is_searched()
+    public void Resolve_SnippetWithBlankLines_BlankLinesIgnored()
     {
-        // 2 chars < MinSnippetChars(3): trusted as given (would otherwise reanchor to line 3).
-        var shortSnippet = Finding("x)", line: 1);
-        var (shortResult, shortAnchor) = AnchorResolver.Resolve(shortSnippet, ["unrelated", "unrelated", "x)"]);
-        Assert.Equal(AnchorResolver.Resolution.Verified, shortResult);
-        Assert.Equal(1, shortAnchor!.StartLine);
-
-        // 3 chars >= threshold: searched and reanchored.
-        var realSnippet = Finding("ab)", line: 1);
-        var (realResult, realAnchor) = AnchorResolver.Resolve(realSnippet, ["unrelated", "unrelated", "ab)"]);
-        Assert.Equal(AnchorResolver.Resolution.Reanchored, realResult);
-        Assert.Equal(3, realAnchor!.StartLine);
+        var finding = Finding("alpha one\n\nbeta two", line: 1);
+        var (result, anchor) = AnchorResolver.Resolve(finding, ["unrelated", "alpha one", "beta two", "after"]);
+        Assert.Equal(AnchorResolver.Resolution.Reanchored, result);
+        Assert.Equal(2, anchor!.StartLine);
+        Assert.Equal(3, anchor.EndLine);
     }
 
     [Fact]
-    public void Duplicated_snippet_prefers_stated_line()
+    public void Resolve_MultipleMatches_PrefersNearestToStatedLine()
     {
-        var file = new[] { "one", "beta", "three", "four", "five", "six", "seven", "eight", "beta", "ten" };
+        var file = new[] { "one", "return beta", "three", "four", "five", "six", "seven", "eight", "return beta", "ten" };
 
-        var (r1, a1) = AnchorResolver.Resolve(Finding("beta", line: 8), file);
+        var (r1, a1) = AnchorResolver.Resolve(Finding("return beta", line: 8), file);
         Assert.Equal(AnchorResolver.Resolution.Reanchored, r1);
         Assert.Equal(9, a1!.StartLine);
 
-        var (r2, a2) = AnchorResolver.Resolve(Finding("beta", line: 1), file);
+        var (r2, a2) = AnchorResolver.Resolve(Finding("return beta", line: 1), file);
         Assert.Equal(AnchorResolver.Resolution.Reanchored, r2);
         Assert.Equal(2, a2!.StartLine);
     }
 
     [Fact]
+    public void Resolve_MultipleMatches_Tie_PrefersLowerLine()
+    {
+        var file = new[] { "one", "two", "return beta", "four", "five", "six", "return beta", "eight" };
+        var (result, anchor) = AnchorResolver.Resolve(Finding("return beta", line: 5), file);
+        Assert.Equal(AnchorResolver.Resolution.Reanchored, result);
+        Assert.Equal(3, anchor!.StartLine);
+    }
+
+    [Fact]
+    public void Resolve_TwoShortLines_AboveFloorViaMultiLineRule()
+    {
+        var finding = Finding("}\n})", line: 1);
+        var (result, anchor) = AnchorResolver.Resolve(finding, ["unrelated", "}", "})"]);
+        Assert.Equal(AnchorResolver.Resolution.Reanchored, result);
+        Assert.Equal(2, anchor!.StartLine);
+        Assert.Equal(3, anchor.EndLine);
+    }
+
+    [Fact]
     public void PreparedFile_resolves_multiple_findings()
     {
-        var file = new AnchorResolver.PreparedFile(["alpha", "beta", "gamma"]);
+        var file = new AnchorResolver.PreparedFile(["alpha", "return beta", "return gamma"]);
         Assert.Equal(3, file.Normalized.Length);
         Assert.Equal("alpha", file.Normalized[0]);
 
-        var (r1, _) = AnchorResolver.Resolve(Finding("beta"), file);
+        var (r1, _) = AnchorResolver.Resolve(Finding("return beta"), file);
         Assert.Equal(AnchorResolver.Resolution.Verified, r1);
 
-        var (r2, a2) = AnchorResolver.Resolve(Finding("gamma", line: 1), file);
+        var (r2, a2) = AnchorResolver.Resolve(Finding("return gamma", line: 1), file);
         Assert.Equal(AnchorResolver.Resolution.Reanchored, r2);
         Assert.Equal(3, a2!.StartLine);
     }

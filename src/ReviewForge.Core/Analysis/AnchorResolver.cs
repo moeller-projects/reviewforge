@@ -10,16 +10,18 @@ namespace ReviewForge.Core.Analysis;
 public static class AnchorResolver
 {
     /// <summary>
-    /// Normalized needle shorter than this is trivially matchable anywhere in the file
-    /// ("}", ");", "x)") and verifies nothing — the anchor is trusted as given instead.
+    /// Minimum total normalized snippet characters before a snippet may reanchor a finding.
+    /// A lone "}" (1 char) or ");" (3 chars) matches nearly any line and proves nothing.
     /// </summary>
-    public const int MinSnippetChars = 3;
+    public const int MinSnippetChars = 8;
 
     public enum Resolution
     {
         Verified,
         Reanchored,
-        Unverifiable
+        Unverifiable,
+        /// <summary>Snippet too unspecific to search (e.g. "}") — stated anchor kept, post downgraded.</summary>
+        WeakSnippet
     }
 
     /// <summary>
@@ -64,17 +66,25 @@ public static class AnchorResolver
             return (Resolution.Verified, finding.Anchor);
         }
 
+        // Blank snippet lines normalize to "" and would match anything — drop them.
         var needleLines = finding.Snippet!
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n')
             .Split('\n')
             .Select(DedupeKey.NormalizeSnippet)
+            .Where(line => line.Length > 0)
             .ToArray();
 
-        // Trivial snippet ("}", ");", …) — matches anywhere, proves nothing.
-        if (needleLines.Sum(l => l.Length) < MinSnippetChars)
+        if (needleLines.Length == 0)
         {
-            return (Resolution.Verified, finding.Anchor);
+            return (Resolution.Verified, finding.Anchor); // effectively no snippet
+        }
+
+        // Specificity floor: "}" or a lone brace cluster must never reanchor.
+        var specificity = needleLines.Sum(line => line.Length);
+        if (specificity < MinSnippetChars && needleLines.Length < 2)
+        {
+            return (Resolution.WeakSnippet, finding.Anchor);
         }
 
         var norm = file.Normalized;

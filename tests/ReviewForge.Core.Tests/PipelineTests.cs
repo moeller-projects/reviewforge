@@ -284,6 +284,34 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Validate_weak_snippet_downgrades_but_keeps_finding()
+    {
+        var finding = FindingOnLine(2, "}");
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        var accepted = Assert.Single(ctx.AcceptedFindings);
+        Assert.True(accepted.AnchorDowngraded);
+        Assert.Equal(2, accepted.Anchor!.StartLine);
+    }
+
+    [Fact]
+    public async Task Validate_weak_snippet_outside_diff_still_rejected()
+    {
+        var finding = FindingOnLine(3, "}");
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AcceptedFindings);
+    }
+
+    [Fact]
     public async Task Validate_reads_each_file_once()
     {
         var reads = new List<string>();
