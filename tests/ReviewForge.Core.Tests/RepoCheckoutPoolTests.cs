@@ -62,13 +62,20 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     [Fact]
     public async Task Different_heads_materialize_concurrently()
     {
-        var git = new TestGitOps {Delay = TimeSpan.FromMilliseconds(150)};
+        var git = new TestGitOps {CloneBarrier = new Barrier(2)};
         var pool = Pool(git);
 
-        // The blocking clone delay overlaps only when both acquires run on separate threads,
-        // mirroring production where multiple workers drain the queue concurrently.
-        var first = Task.Run(() => pool.AcquireAsync("repo", "url", "base", "head-a", CancellationToken.None));
-        var second = Task.Run(() => pool.AcquireAsync("repo", "url", "base", "head-b", CancellationToken.None));
+        // Use dedicated workers and coordinate at the clone boundary instead of relying on timing.
+        var first = Task.Factory.StartNew(
+            () => pool.AcquireAsync("repo", "url", "base", "head-a", CancellationToken.None),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default).Unwrap();
+        var second = Task.Factory.StartNew(
+            () => pool.AcquireAsync("repo", "url", "base", "head-b", CancellationToken.None),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default).Unwrap();
         using var a = await first;
         using var b = await second;
 
@@ -224,6 +231,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         private readonly object _Gate = new();
         private int _ActiveClones;
         private int _MaxConcurrentClones;
+        public Barrier? CloneBarrier { get; init; }
         public TimeSpan Delay { get; init; }
         public bool ThrowOnClone { get; set; }
         public int CheckoutCount { get; private set; }
@@ -262,6 +270,11 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
             try
             {
+                if (CloneBarrier is not null && !CloneBarrier.SignalAndWait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("clone operations did not overlap");
+                }
+
                 if (Delay > TimeSpan.Zero)
                 {
                     Thread.Sleep(Delay);
