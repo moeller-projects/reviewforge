@@ -21,6 +21,19 @@ public sealed class ReviewWorker(
     {
         await foreach (var request in queue.ReadAllAsync(stoppingToken))
         {
+            // The claim was taken at enqueue with a finite TTL; if this request sat
+            // queued past expiry, another run may own the PR now. Revalidate before
+            // spending an LLM run: re-claim if free, skip if a different run holds it.
+            if (!claims.IsHeldBy(request.Pr, request.RunId)
+                && !claims.TryClaim(request.Pr, request.RunId, out var holder))
+            {
+                logger.LogInformation(
+                    "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
+                    request.RunId, request.Pr, holder);
+                tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued");
+                continue; // finally-block of the run loop is not entered; nothing to release
+            }
+
             tracker.Set(request.RunId, request.Pr, RunState.Running);
             try
             {
