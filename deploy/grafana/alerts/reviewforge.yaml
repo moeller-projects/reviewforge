@@ -1,0 +1,80 @@
+# ReviewForge alert rules (PrometheusRule). PromQL against the Prometheus-sanitized
+# OBS-1 series names (dots -> underscores; histograms gain _bucket/_sum/_count).
+# Start with static thresholds; convert latency/cost rules to baseline-relative once
+# 2+ weeks of history exist. Route all to a low-noise channel first to measure false
+# positives before paging.
+
+groups:
+  - name: reviewforge
+    rules:
+      - alert: ReviewForgeQueueSaturated
+        expr: reviewforge_queue_depth / reviewforge_queue_capacity > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Review queue is over 80% full"
+          description: "Queue depth is {{ $value | humanizePercentage }} of capacity."
+
+      - alert: ReviewForgeQueueRejecting
+        expr: rate(reviewforge_queue_rejected_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Review queue is rejecting submissions"
+          description: "Submissions are being rejected (queue full) — lost review work."
+
+      - alert: ReviewForgeRunFailureRate
+        expr: rate(reviewforge_reviews_completed_total{result="failed"}[15m]) / rate(reviewforge_reviews_completed_total[15m]) > 0.05
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Review run failure rate exceeded 5%"
+          description: "{{ $value | humanizePercentage }} of recent runs failed."
+
+      - alert: ReviewForgeRunLatencyRegression
+        expr: histogram_quantile(0.95, rate(reviewforge_review_duration_ms_bucket[30m])) > 1.5 * (histogram_quantile(0.95, rate(reviewforge_review_duration_ms_bucket[7d])))
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Review run p95 latency regressed"
+          description: "p95 run latency is >1.5x the 7-day baseline."
+
+      - alert: ReviewForgeTokenSpike
+        expr: rate(reviewforge_llm_tokens_total[1h]) > 2 * (rate(reviewforge_llm_tokens_total[7d]))
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM token burn spiked"
+          description: "Token consumption is >2x the 7-day baseline — cost anomaly."
+
+      - alert: ReviewForgeTaskDoneMissing
+        expr: rate(reviewforge_agent_task_done_missing_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent reached iteration cap without task_done"
+          description: "The review agent is hitting its iteration cap without completing."
+
+      - alert: ReviewForgeEnrichmentFailing
+        expr: rate(reviewforge_enrichment_failures_total[15m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Context enrichment is failing"
+          description: "Enrichment is failing (fail-safe, non-fatal, but degrading context)."
+
+      - alert: ReviewForgeClaimsExpiring
+        expr: rate(reviewforge_claims_expired_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "In-flight claims are expiring"
+          description: "Claim expiry observed — possible P1-6 regression (claim lost while queued)."

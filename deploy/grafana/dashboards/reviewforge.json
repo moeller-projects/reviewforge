@@ -1,0 +1,215 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Run throughput",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(reviewforge_reviews_completed_total[5m]))",
+          "legendFormat": "{{result}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Run latency p50/p95/p99",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, rate(reviewforge_review_duration_ms_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, rate(reviewforge_review_duration_ms_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, rate(reviewforge_review_duration_ms_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage latency p95",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, rate(reviewforge_stage_duration_ms_bucket[5m])) by (stage)",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue depth vs capacity",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        { "refId": "A", "expr": "reviewforge_queue_depth", "legendFormat": "depth" },
+        { "refId": "B", "expr": "reviewforge_queue_capacity", "legendFormat": "capacity" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue rejections",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(reviewforge_queue_rejected_total[5m])",
+          "legendFormat": "rejections/s"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Token burn",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (token_type, model) (rate(reviewforge_llm_tokens_total[1h]))",
+          "legendFormat": "{{model}} {{token_type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Agent loop health",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(reviewforge_agent_task_done_missing_total[15m])",
+          "legendFormat": "task_done missing"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, rate(reviewforge_agent_iterations_bucket[1h]))",
+          "legendFormat": "p95 iterations"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Finding acceptance rate",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 8,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(reviewforge_findings_accepted_total[1h])) / sum(rate(reviewforge_findings_posted_total[1h] + reviewforge_findings_rejected_total[1h]))",
+          "legendFormat": "acceptance rate"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rejection reasons",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "id": 9,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(reviewforge_findings_rejected_total[1h]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "ADO health",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "id": 10,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, rate(reviewforge_ado_call_duration_ms_bucket[5m])) by (ado_operation)",
+          "legendFormat": "{{ado_operation}} p95"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(reviewforge_ado_call_failed_total[5m])",
+          "legendFormat": "failures/s"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Discovery sweep",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "id": 11,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "reviewforge_discovery_sweep_duration_ms",
+          "legendFormat": "sweep duration"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(reviewforge_discovery_enqueued_total[30m])",
+          "legendFormat": "enqueued/s"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Claims churn",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "id": 12,
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(reviewforge_claims_expired_total[15m])",
+          "legendFormat": "expired"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(reviewforge_claims_renewal_failed_total[15m])",
+          "legendFormat": "renewal failed"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["reviewforge"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ReviewForge",
+  "uid": "reviewforge-overview",
+  "version": 1
+}

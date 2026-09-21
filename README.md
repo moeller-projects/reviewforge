@@ -147,6 +147,34 @@ finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `Ma
 `MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts but
 never mirrors, and skips checkouts currently held by a review.
 
+## Observability model
+
+Signals and where they land:
+
+- **Traces** — `ActivitySource` `ReviewForge` (a `review.run` span with nested `stage.*`
+  spans; discovery-enqueued runs link back to the `discovery.sweep` span).
+- **Metrics** — `Meter` `ReviewForge`: run lifecycle (`reviewforge.reviews.*`), stage
+  latency (`reviewforge.stage.duration_ms`), queue gauges/rejections, claims, LLM tokens,
+  agent iterations / `task_done` misses, findings accepted/rejected/posted, ADO latency /
+  failures, discovery sweeps, enrichment failures, checkout evictions.
+- **Logs** — structured, with per-run scope properties `RunId`/`PrId`/`Org`/`Project`/
+  `RepositoryId`/`HeadSha`/`Stage` (OBS-2); per-run JSONL under `{WorkDir}/logs/{runId}.jsonl`.
+
+Backends:
+
+- **Dev** — the Aspire dashboard (see "Dev loop").
+- **Prod (optional)** — the compose `observability` profile runs a standalone Aspire
+  dashboard; point `OTEL_EXPORTER_OTLP_ENDPOINT` at any OTLP collector (or Seq) instead.
+- **Dashboards + alerts** — Grafana provisioning lives in `deploy/grafana/` (dashboard
+  `reviewforge.json`, alert rules `reviewforge.yaml`); alerts cover queue saturation/rejection,
+  run failure rate/latency, token spikes, `task_done` misses, enrichment failures, and claim
+  expiry.
+- **Run debugging** — Seq saved searches in `deploy/seq/searches.md` (`RunId = '...'`).
+
+Rollout gates (OBS-1→4): green `dotnet test` and inert instruments (no exporter) →
+24h staging log-volume check → traces/metrics/logs arrive in the backend → dashboards
+populate and alerts fire on a synthetic failure.
+
 ## Tests and coverage gate
 
 ```bash
