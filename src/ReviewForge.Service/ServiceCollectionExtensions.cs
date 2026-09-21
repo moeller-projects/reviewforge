@@ -1,4 +1,5 @@
 using System.Threading.RateLimiting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
@@ -10,6 +11,7 @@ using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Filesystem;
 using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
+using ReviewForge.Service.Logging;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
 
@@ -24,6 +26,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ReviewQueue>();
         services.AddSingleton<RunTracker>();
         services.AddSingleton<InFlightClaims>();
+
+        var runLogsEnabled = configuration.GetValue<bool?>(
+            $"{ReviewForgeServiceOptions.SectionName}:RunLogs:Enabled") ?? true;
+        if (runLogsEnabled)
+        {
+            services.AddLogging(logging => logging.AddProvider(new RunLogFileProvider(
+                configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:WorkDir")
+                    ?? Path.Combine(Path.GetTempPath(), "reviewforge"),
+                new RunLogOptions
+                {
+                    MinLevel = configuration.GetValue<LogLevel?>(
+                        $"{ReviewForgeServiceOptions.SectionName}:RunLogs:MinLevel") ?? LogLevel.Debug,
+                })));
+        }
 
         var ado = configuration.GetSection(AdoOptions.SectionName).Get<AdoOptions>()
                   ?? throw new InvalidOperationException($"configuration section '{AdoOptions.SectionName}' missing");

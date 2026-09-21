@@ -25,6 +25,7 @@ public sealed class DiscoveryService(
     RunTracker tracker,
     InFlightClaims claims,
     DiscoveryOptions options,
+    ILogger<DiscoveryService>? logger = null,
     TimeProvider? clock = null)
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
@@ -121,6 +122,15 @@ public sealed class DiscoveryService(
             enqueued.Add(candidate.Key);
         }
 
-        return new DiscoveryReport(candidates.Count, interesting, enqueued, skipped);
+        var report = new DiscoveryReport(candidates.Count, interesting, enqueued, skipped);
+        logger?.LogInformation(
+            "discovery sweep: {Candidates} candidates, {Interesting} interesting, {Enqueued} enqueued, {Skipped} skipped",
+            report.Candidates, report.Interesting, report.Enqueued.Count, report.Skipped.Count);
+        foreach (var skip in skipped)
+        {
+            logger?.LogDebug("discovery skipped {Pr}: {Reason}", skip.Pr, skip.Reason);
+        }
+
+        return report;
     }
 }

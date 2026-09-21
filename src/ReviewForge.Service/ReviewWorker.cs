@@ -1,6 +1,7 @@
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Service.Logging;
 using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
@@ -25,6 +26,14 @@ public sealed class ReviewWorker(
     {
         await foreach (var request in queue.ReadAllAsync(stoppingToken))
         {
+            using var runScope = logger.BeginScope(new Dictionary<string, object>
+            {
+                ["RunId"] = request.RunId,
+                ["Repo"] = request.Pr.RepositoryId,
+                ["PrId"] = request.Pr.PrId,
+                ["Pr"] = request.Pr.ToString(),
+            });
+
             // The claim was taken at enqueue with a finite TTL; if this request sat
             // queued past expiry, another run may own the PR now. Revalidate before
             // spending an LLM run: re-claim if free, skip if a different run holds it.
@@ -35,10 +44,12 @@ public sealed class ReviewWorker(
                     "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
                     request.RunId, request.Pr, holder);
                 tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued");
+                RunLogFileProvider.Current?.CloseRun(request.RunId);
                 continue; // finally-block of the run loop is not entered; nothing to release
             }
 
             tracker.Set(request.RunId, request.Pr, RunState.Running);
+            logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
             ReviewContext? ctx = null;
             try
             {
@@ -65,9 +76,10 @@ public sealed class ReviewWorker(
                     await heartbeat.ConfigureAwait(false);
                 }
 
-                tracker.Set(request.RunId, request.Pr,
-                    ctx.Terminated ? RunState.Skipped : RunState.Completed,
-                    ctx.TerminationReason);
+                var state = ctx.Terminated ? RunState.Skipped : RunState.Completed;
+                tracker.Set(request.RunId, request.Pr, state, ctx.TerminationReason);
+                logger.LogInformation("review run {RunId} {State}: {Reason}",
+                    request.RunId, state, ctx.TerminationReason ?? "ok");
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -83,6 +95,7 @@ public sealed class ReviewWorker(
             {
                 ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
+                RunLogFileProvider.Current?.CloseRun(request.RunId);
             }
         }
     }

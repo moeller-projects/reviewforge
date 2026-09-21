@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
@@ -46,8 +47,10 @@ public static class Endpoints
         ReviewQueue queue,
         RunTracker tracker,
         InFlightClaims claims,
-        TimeProvider clock)
+        TimeProvider clock,
+        ILoggerFactory loggerFactory)
     {
+        var logger = loggerFactory.CreateLogger("ReviewForge.Service.Endpoints");
         var errors = Validate(request);
         if (errors.Count > 0)
         {
@@ -58,6 +61,7 @@ public static class Endpoints
         var runId = Guid.NewGuid();
         if (!claims.TryClaim(pr, runId, out var holder))
         {
+            logger.LogWarning("review submit conflict for {Pr}: already in flight (run {RunId})", pr, holder);
             return TypedResults.Conflict(new {error = "a review for this pull request is already in flight", runId = holder});
         }
 
@@ -65,6 +69,7 @@ public static class Endpoints
         if (!result.Accepted)
         {
             claims.Release(pr, runId);
+            logger.LogWarning("review submit rejected for {Pr}: queue full (depth {Depth})", pr, result.QueueDepth);
             return TypedResults.Problem(
                 title: "Review queue full",
                 detail: $"Queue depth {result.QueueDepth} of {queue.Capacity}. Retry shortly.",
@@ -72,6 +77,7 @@ public static class Endpoints
         }
 
         tracker.Set(runId, pr, RunState.Queued);
+        logger.LogInformation("review submitted for {Pr}, run {RunId}", pr, runId);
 
         return TypedResults.Accepted($"/reviews/{runId}", new SubmitReviewResponse(runId, $"/reviews/{runId}"));
     }

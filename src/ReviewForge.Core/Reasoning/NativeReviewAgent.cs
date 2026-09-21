@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
@@ -19,6 +21,7 @@ public sealed record AgentOptions
     public string? RuleSetsPath { get; init; }
     public IEnumerable<string>? DenyPatterns { get; init; }
     public ReasoningEffort? Effort { get; init; }
+    public bool DebugLogging { get; init; }
 }
 
 /// <summary>Builds and runs the native review agent with read and review tools.</summary>
@@ -51,7 +54,7 @@ public sealed class NativeReviewAgent(
         IChatClient invoking = new ChatClientBuilder(guarded)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = _Options.MaxIterations)
             .Build();
-        IChatClient tracked = new UsageTrackingChatClient(invoking, usage ?? new TokenUsage());
+        IChatClient tracked = new UsageTrackingChatClient(invoking, usage ?? new TokenUsage(), _Logger, _Options.DebugLogging);
         return tracked.AsAIAgent(new ChatClientAgentOptions
         {
             Name = "reviewforge-native",
@@ -116,15 +119,33 @@ public sealed class NativeReviewAgent(
         }
     }
 
-    private sealed class UsageTrackingChatClient(IChatClient inner, TokenUsage usage) : DelegatingChatClient(inner)
+    private sealed class UsageTrackingChatClient(
+        IChatClient inner,
+        TokenUsage usage,
+        ILogger? logger = null,
+        bool debugArgs = false) : DelegatingChatClient(inner)
     {
         public override async Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            var sw = Stopwatch.StartNew();
             var response = await base.GetResponseAsync(messages, options, cancellationToken);
             usage.Add(response.Usage);
+            logger?.LogDebug(
+                "llm call: iteration tokens in={InputTokens} out={OutputTokens} elapsed={ElapsedMs}ms toolCalls={ToolCallCount}",
+                response.Usage?.InputTokenCount ?? 0, response.Usage?.OutputTokenCount ?? 0,
+                sw.ElapsedMilliseconds, response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>().Count());
+            if (debugArgs)
+            {
+                foreach (var call in response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>())
+                {
+                    logger?.LogDebug("tool call {Tool} argsLength={ArgsLength}", call.Name,
+                        call.Arguments is null ? 0 : JsonSerializer.Serialize(call.Arguments).Length);
+                }
+            }
+
             return response;
         }
 

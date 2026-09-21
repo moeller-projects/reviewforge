@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning.Rules;
@@ -12,7 +13,8 @@ public sealed class ReviewTools(
     ContextStore contextStore,
     RuleBook? ruleBook = null,
     IReadOnlySet<string>? changedFiles = null,
-    DiffIndex? diff = null)
+    DiffIndex? diff = null,
+    ILogger<ReviewTools>? logger = null)
 {
     private readonly IReadOnlySet<string>? _ChangedFiles = changedFiles;
     private readonly DiffIndex? _Diff = diff;
@@ -98,10 +100,12 @@ public sealed class ReviewTools(
         if (collector.IsKnown(key))
         {
             collector.MarkRedetected(key); // re-detected == still reproducing; triage must see this
+            logger?.LogDebug("finding deduped: key {DedupeKey} already known", key);
             return $"already recorded (dedupe key {key}) — skipped";
         }
         finding.DedupeKey = key;
         collector.AddFinding(finding);
+        logger?.LogDebug("finding recorded: key {DedupeKey}, rule {RuleId}, severity {Severity}", key, finding.RuleId, finding.Severity);
         return $"recorded finding {key}";
     }
 

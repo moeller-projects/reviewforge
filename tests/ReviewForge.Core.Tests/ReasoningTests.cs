@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 using Xunit;
@@ -162,6 +163,31 @@ public class ReviewToolsTests
 
         Assert.Contains("already recorded", second);
         Assert.Contains(key!, collector.RedetectedKeys);
+    }
+
+    [Fact]
+    public void ReviewTools_dedupe_reject_logs_breadcrumb()
+    {
+        var logger = new CapturingLogger<ReviewTools>();
+        var collector = new ReviewCollector();
+        var tools = new ReviewTools(collector, new ContextStore(), logger: logger);
+
+        tools.RecordFinding("r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 1);
+        var key = collector.Findings[0].DedupeKey!;
+        tools.RecordFinding("r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 99);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Debug && e.Message.Contains("finding deduped") && e.Message.Contains(key));
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
     }
 
     [Fact]

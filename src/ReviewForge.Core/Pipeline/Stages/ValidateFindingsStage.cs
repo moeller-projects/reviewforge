@@ -30,13 +30,13 @@ public sealed class ValidateFindingsStage(
         {
             if (finding.Anchor is null)
             {
-                logger.LogInformation("finding {Key} rejected because it has no changed-line anchor", finding.DedupeKey);
+                logger.LogDebug("finding {Key} rejected because it has no changed-line anchor", finding.DedupeKey);
                 continue;
             }
 
             if (!TryReanchor(finding, repoDir))
             {
-                logger.LogInformation("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
+                logger.LogDebug("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
                 continue;
             }
 

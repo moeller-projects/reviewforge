@@ -18,22 +18,45 @@ public sealed class ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<Rev
         runActivity?.SetTag("reviewforge.pr", ctx.Pr.ToString());
         runActivity?.SetTag("reviewforge.run_id", ctx.RunId.ToString());
 
-        foreach (var stage in _Stages)
+        IDisposable? headScope = null;
+        try
         {
-            if (ctx.Terminated)
+            foreach (var stage in _Stages)
             {
-                break;
+                if (ctx.Terminated)
+                {
+                    break;
+                }
+
+                // Per-stage scope: every line a stage (or the agent loop beneath it) emits is
+                // groupable per stage within the run.
+                using var stageScope = logger.BeginScope(new Dictionary<string, object>
+                {
+                    ["Stage"] = stage.Name,
+                });
+
+                using var stageActivity = ReviewForgeTelemetry.Source.StartActivity($"stage.{stage.Name}");
+                logger.LogInformation("stage {Stage} starting", stage.Name);
+                var sw = Stopwatch.StartNew();
+
+                await stage.ExecuteAsync(ctx, ct);
+
+                sw.Stop();
+                stageActivity?.SetTag("duration_ms", sw.ElapsedMilliseconds);
+                logger.LogInformation("stage {Stage} done in {ElapsedMs} ms", stage.Name, sw.ElapsedMilliseconds);
+
+                if (headScope is null && ctx.PullRequest is not null)
+                {
+                    headScope = logger.BeginScope(new Dictionary<string, object>
+                    {
+                        ["HeadSha"] = ctx.PullRequest.SourceCommitSha,
+                    });
+                }
             }
-
-            using var stageActivity = ReviewForgeTelemetry.Source.StartActivity($"stage.{stage.Name}");
-            logger.LogInformation("stage {Stage} starting", stage.Name);
-            var sw = Stopwatch.StartNew();
-
-            await stage.ExecuteAsync(ctx, ct);
-
-            sw.Stop();
-            stageActivity?.SetTag("duration_ms", sw.ElapsedMilliseconds);
-            logger.LogInformation("stage {Stage} done in {ElapsedMs} ms", stage.Name, sw.ElapsedMilliseconds);
+        }
+        finally
+        {
+            headScope?.Dispose();
         }
 
         if (ctx.Terminated)

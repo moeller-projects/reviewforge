@@ -42,6 +42,10 @@ public sealed class ReviewForgeServiceOptions
     public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }
 
+    /// <summary>Enables argument-length debug breadcrumbs in the agent loop (category
+    /// level Debug is still required). Default false.</summary>
+    public bool AgentDebugLogging { get; init; }
+
     /// <summary>Total diff budget for the review prompt (~50k tokens); oversized diffs are truncated with a marker.</summary>
     public int MaxDiffChars { get; init; } = 200_000;
 
@@ -77,6 +81,7 @@ public sealed class ReviewPipelineFactory(
             PromptOverridePath = opts.PromptOverridePath,
             RuleSetsPath = opts.RuleSetsPath,
             Effort = opts.ReasoningEffort,
+            DebugLogging = opts.AgentDebugLogging,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
         Directory.CreateDirectory(opts.WorkDir);
         var findingsDir = Path.Combine(opts.WorkDir, "findings");

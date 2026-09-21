@@ -51,6 +51,24 @@ public class ReviewPipelineTests
             pipeline.RunAsync(new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Head_scope_opens_after_stage_sets_pull_request()
+    {
+        var log = new List<string>();
+        var pipeline = new ReviewPipeline(
+            [
+                new RecordingStage("fetch", log, ctx => ctx.PullRequest = new PullRequest(1, "t", null, "head-sha", "base", "url", false)),
+                new RecordingStage("after", log),
+            ],
+            NullLogger<ReviewPipeline>.Instance);
+
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+        await pipeline.RunAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["fetch", "after"], log);
+        Assert.Equal("head-sha", ctx.PullRequest!.SourceCommitSha);
+    }
+
     private sealed class RecordingStage(string name, List<string> log, Action<ReviewContext>? act = null) : IReviewStage
     {
         public string Name => name;
