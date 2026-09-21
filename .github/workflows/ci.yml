@@ -23,7 +23,7 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Restore
-        run: dotnet restore ReviewForge.slnx
+        run: dotnet restore ReviewForge.slnx --locked-mode
 
       # -warnaserror: any compiler/analyzer warning fails the build.
       - name: Build

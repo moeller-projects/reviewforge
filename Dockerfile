@@ -5,11 +5,11 @@ ARG DOTNET_VERSION=10.0
 # ---------- restore: project files only → dependency layer stays cached across code changes ----------
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-alpine AS restore
 WORKDIR /src
-COPY Directory.Build.props ./
-COPY src/ReviewForge.Core/ReviewForge.Core.csproj src/ReviewForge.Core/
-COPY src/ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj src/ReviewForge.Infrastructure/
-COPY src/ReviewForge.Service/ReviewForge.Service.csproj src/ReviewForge.Service/
-RUN dotnet restore src/ReviewForge.Service/ReviewForge.Service.csproj
+COPY Directory.Build.props Directory.Packages.props ./
+COPY src/ReviewForge.Core/ReviewForge.Core.csproj src/ReviewForge.Core/packages.lock.json src/ReviewForge.Core/
+COPY src/ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj src/ReviewForge.Infrastructure/packages.lock.json src/ReviewForge.Infrastructure/
+COPY src/ReviewForge.Service/ReviewForge.Service.csproj src/ReviewForge.Service/packages.lock.json src/ReviewForge.Service/
+RUN dotnet restore src/ReviewForge.Service/ReviewForge.Service.csproj --locked-mode
 
 # ---------- publish: only the service closure; tests never enter the image ----------
 FROM restore AS publish

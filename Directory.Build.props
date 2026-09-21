@@ -7,6 +7,9 @@
         <LangVersion>latest</LangVersion>
         <!-- Experimental API surfaces: Agent Framework (MAAI001), OpenAI Responses (OPENAI001), MEAI (MEAI001) -->
         <NoWarn>$(NoWarn);MAAI001;OPENAI001;MEAI001</NoWarn>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+        <!-- CI sets RestoreLockedMode=true; local restores may update locks via force-evaluate. -->
+        <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
     </PropertyGroup>
 
 </Project>
