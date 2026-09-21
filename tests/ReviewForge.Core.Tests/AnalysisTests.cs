@@ -254,4 +254,58 @@ public class AnchorResolverTests
         var (result, _) = AnchorResolver.Resolve(Finding("not-present"), ["alpha"]);
         Assert.Equal(AnchorResolver.Resolution.Unverifiable, result);
     }
+
+    [Fact]
+    public void Trivial_snippet_trusts_anchor_instead_of_matching_anywhere()
+    {
+        // "}" (1 char) matches the first block close; it proves nothing — trust line 7.
+        var (result, anchor) = AnchorResolver.Resolve(Finding("}", line: 7), ["{", "}", "x"]);
+        Assert.Equal(AnchorResolver.Resolution.Verified, result);
+        Assert.Equal(7, anchor!.StartLine);
+    }
+
+    [Fact]
+    public void Snippet_at_or_above_min_chars_is_searched()
+    {
+        // 2 chars < MinSnippetChars(3): trusted as given (would otherwise reanchor to line 3).
+        var shortSnippet = Finding("x)", line: 1);
+        var (shortResult, shortAnchor) = AnchorResolver.Resolve(shortSnippet, ["unrelated", "unrelated", "x)"]);
+        Assert.Equal(AnchorResolver.Resolution.Verified, shortResult);
+        Assert.Equal(1, shortAnchor!.StartLine);
+
+        // 3 chars >= threshold: searched and reanchored.
+        var realSnippet = Finding("ab)", line: 1);
+        var (realResult, realAnchor) = AnchorResolver.Resolve(realSnippet, ["unrelated", "unrelated", "ab)"]);
+        Assert.Equal(AnchorResolver.Resolution.Reanchored, realResult);
+        Assert.Equal(3, realAnchor!.StartLine);
+    }
+
+    [Fact]
+    public void Duplicated_snippet_prefers_stated_line()
+    {
+        var file = new[] { "one", "beta", "three", "four", "five", "six", "seven", "eight", "beta", "ten" };
+
+        var (r1, a1) = AnchorResolver.Resolve(Finding("beta", line: 8), file);
+        Assert.Equal(AnchorResolver.Resolution.Reanchored, r1);
+        Assert.Equal(9, a1!.StartLine);
+
+        var (r2, a2) = AnchorResolver.Resolve(Finding("beta", line: 1), file);
+        Assert.Equal(AnchorResolver.Resolution.Reanchored, r2);
+        Assert.Equal(2, a2!.StartLine);
+    }
+
+    [Fact]
+    public void PreparedFile_resolves_multiple_findings()
+    {
+        var file = new AnchorResolver.PreparedFile(["alpha", "beta", "gamma"]);
+        Assert.Equal(3, file.Normalized.Length);
+        Assert.Equal("alpha", file.Normalized[0]);
+
+        var (r1, _) = AnchorResolver.Resolve(Finding("beta"), file);
+        Assert.Equal(AnchorResolver.Resolution.Verified, r1);
+
+        var (r2, a2) = AnchorResolver.Resolve(Finding("gamma", line: 1), file);
+        Assert.Equal(AnchorResolver.Resolution.Reanchored, r2);
+        Assert.Equal(3, a2!.StartLine);
+    }
 }

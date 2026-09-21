@@ -14,7 +14,7 @@ public sealed class ValidateFindingsStage(
     ILogger<ValidateFindingsStage> logger,
     Func<string, string[]>? lineReader = null) : IReviewStage
 {
-    private readonly Dictionary<string, string[]> _LineCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AnchorResolver.PreparedFile> _FileCache = new(StringComparer.Ordinal);
     private readonly Func<string, string[]> _LineReader = lineReader ?? File.ReadAllLines;
 
     public string Name => "validate-findings";
@@ -69,12 +69,12 @@ public sealed class ValidateFindingsStage(
         if (!PathSafety.IsContainedReal(repoDir, path) || !File.Exists(path))
             return false;
 
-        if (!_LineCache.TryGetValue(path, out var lines))
+        if (!_FileCache.TryGetValue(path, out var file))
         {
             try
             {
-                lines = _LineReader(path);
-                _LineCache[path] = lines;
+                file = new AnchorResolver.PreparedFile(_LineReader(path));
+                _FileCache[path] = file;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -83,7 +83,7 @@ public sealed class ValidateFindingsStage(
             }
         }
 
-        var (resolution, anchor) = AnchorResolver.Resolve(finding, lines);
+        var (resolution, anchor) = AnchorResolver.Resolve(finding, file);
         switch (resolution)
         {
             case AnchorResolver.Resolution.Unverifiable:

@@ -9,6 +9,12 @@ namespace ReviewForge.Core.Analysis;
 /// </summary>
 public static class AnchorResolver
 {
+    /// <summary>
+    /// Normalized needle shorter than this is trivially matchable anywhere in the file
+    /// ("}", ");", "x)") and verifies nothing — the anchor is trusted as given instead.
+    /// </summary>
+    public const int MinSnippetChars = 3;
+
     public enum Resolution
     {
         Verified,
@@ -17,10 +23,35 @@ public static class AnchorResolver
     }
 
     /// <summary>
-    /// Resolves a finding's anchor against file content (lines, 0-based array).
-    /// Returns the resolution and the effective anchor (corrected when reanchored).
+    /// File lines with the whitespace/casing normalization applied exactly once.
+    /// Cache one per file (per stage run) and reuse across findings.
     /// </summary>
+    public sealed class PreparedFile
+    {
+        public PreparedFile(string[] rawLines)
+        {
+            Raw = rawLines;
+            Normalized = new string[rawLines.Length];
+            for (var i = 0; i < rawLines.Length; i++)
+            {
+                Normalized[i] = DedupeKey.NormalizeSnippet(rawLines[i]);
+            }
+        }
+
+        public string[] Raw { get; }
+        public string[] Normalized { get; }
+    }
+
+    /// <summary>Resolves a finding's anchor against file content (lines, 0-based array).</summary>
     public static (Resolution Result, FindingAnchor? Anchor) Resolve(RichFinding finding, string[] fileLines)
+        => Resolve(finding, new PreparedFile(fileLines));
+
+    /// <summary>
+    /// Resolves a finding's anchor against a pre-normalized file. The scan loop runs
+    /// ordinal <see cref="string.Contains(string, StringComparison)"/> only — no regex,
+    /// no per-position normalization, no allocations.
+    /// </summary>
+    public static (Resolution Result, FindingAnchor? Anchor) Resolve(RichFinding finding, PreparedFile file)
     {
         if (finding.Anchor is null)
         {
@@ -40,13 +71,29 @@ public static class AnchorResolver
             .Select(DedupeKey.NormalizeSnippet)
             .ToArray();
 
-        for (var start = 0; start <= fileLines.Length - needleLines.Length; start++)
+        // Trivial snippet ("}", ");", …) — matches anywhere, proves nothing.
+        if (needleLines.Sum(l => l.Length) < MinSnippetChars)
         {
-            var matches = true;
-            for (var offset = 0; offset < needleLines.Length; offset++)
+            return (Resolution.Verified, finding.Anchor);
+        }
+
+        var norm = file.Normalized;
+        var firstNeedle = needleLines[0];
+        var bestStart = -1;
+        var bestDistance = int.MaxValue;
+
+        for (var start = 0; start <= norm.Length - needleLines.Length; start++)
+        {
+            // First-line prefilter: one ordinal substring search rejects nearly all positions.
+            if (!norm[start].Contains(firstNeedle, StringComparison.Ordinal))
             {
-                if (!DedupeKey.NormalizeSnippet(fileLines[start + offset])
-                        .Contains(needleLines[offset], StringComparison.Ordinal))
+                continue;
+            }
+
+            var matches = true;
+            for (var offset = 1; offset < needleLines.Length; offset++)
+            {
+                if (!norm[start + offset].Contains(needleLines[offset], StringComparison.Ordinal))
                 {
                     matches = false;
                     break;
@@ -55,14 +102,28 @@ public static class AnchorResolver
 
             if (matches)
             {
-                var startLine = start + 1;
-                var endLine = startLine + needleLines.Length - 1;
-                return startLine == finding.Anchor.StartLine && endLine == finding.Anchor.EndLine
-                    ? (Resolution.Verified, finding.Anchor)
-                    : (Resolution.Reanchored, finding.Anchor with {StartLine = startLine, EndLine = endLine});
+                var distance = Math.Abs(start + 1 - finding.Anchor.StartLine);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestStart = start;
+                    if (distance == 0)
+                    {
+                        break; // cannot do better than the stated line
+                    }
+                }
             }
         }
 
-        return (Resolution.Unverifiable, finding.Anchor);
+        if (bestStart < 0)
+        {
+            return (Resolution.Unverifiable, finding.Anchor);
+        }
+
+        var startLine = bestStart + 1;
+        var endLine = startLine + needleLines.Length - 1;
+        return startLine == finding.Anchor.StartLine && endLine == finding.Anchor.EndLine
+            ? (Resolution.Verified, finding.Anchor)
+            : (Resolution.Reanchored, finding.Anchor with { StartLine = startLine, EndLine = endLine });
     }
 }
