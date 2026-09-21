@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
@@ -31,12 +32,14 @@ public sealed class ValidateFindingsStage(
             if (finding.Anchor is null)
             {
                 logger.LogDebug("finding {Key} rejected because it has no changed-line anchor", finding.DedupeKey);
+                ReviewForgeTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "no-anchor" } });
                 continue;
             }
 
             if (!TryReanchor(finding, repoDir))
             {
                 logger.LogDebug("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
+                ReviewForgeTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "anchor-unverified" } });
                 continue;
             }
 
@@ -45,9 +48,11 @@ public sealed class ValidateFindingsStage(
                 (ctx.Diff is not null && !ctx.Diff.Contains(path, finding.Anchor.StartLine)))
             {
                 logger.LogInformation("finding {Key} rejected because its anchor is outside the current PR diff", finding.DedupeKey);
+                ReviewForgeTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "not-in-diff" } });
                 continue;
             }
 
+            ReviewForgeTelemetry.FindingsAccepted.Add(1);
             accepted.Add(finding);
         }
 

@@ -48,6 +48,17 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     }
 
     [Fact]
+    public async Task CheckoutDirectoryCount_counts_materialized_heads()
+    {
+        var pool = Pool(new TestGitOps());
+        Assert.Equal(0, pool.CheckoutDirectoryCount()); // checkout root missing
+
+        using var a = await pool.AcquireAsync("repo", "url", "base", "head1", CancellationToken.None);
+        using var b = await pool.AcquireAsync("repo", "url", "base", "head2", CancellationToken.None);
+        Assert.Equal(2, pool.CheckoutDirectoryCount());
+    }
+
+    [Fact]
     public async Task Acquire_ensures_commits_before_checkout()
     {
         var git = new TestGitOps();

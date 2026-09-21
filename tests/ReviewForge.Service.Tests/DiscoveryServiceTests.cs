@@ -323,6 +323,26 @@ public class DiscoveryServiceTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunSweepAsync(cts.Token));
         Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
     }
+
+    [Fact]
+    public void NormalizeReason_maps_known_reasons_to_bounded_buckets()
+    {
+        Assert.Equal("draft", DiscoveryService.NormalizeReason("draft"));
+        Assert.Equal("target-branch-not-watched", DiscoveryService.NormalizeReason("target branch 'feature/x' not in filter"));
+        Assert.Equal("creator-not-allowlisted", DiscoveryService.NormalizeReason("creator 'mallory' not in filter"));
+        Assert.Equal("no-linked-work-items", DiscoveryService.NormalizeReason("no linked work items"));
+        Assert.Equal("head-already-reviewed", DiscoveryService.NormalizeReason("head already reviewed"));
+        Assert.Equal("head-failing-backoff", DiscoveryService.NormalizeReason("head failing; backoff until 2026-01-01T00:00:00Z"));
+        Assert.Equal("enqueue-cap-reached", DiscoveryService.NormalizeReason("enqueue cap reached"));
+        Assert.Equal("already-in-flight", DiscoveryService.NormalizeReason("review already in flight"));
+        Assert.Equal("queue-full", DiscoveryService.NormalizeReason("queue full"));
+    }
+
+    [Fact]
+    public void NormalizeReason_slugs_unknown_reasons()
+    {
+        Assert.Equal("some-unknown-reason", DiscoveryService.NormalizeReason("some unknown reason!"));
+    }
 }
 
 public class DiscoverySweepWorkerTests

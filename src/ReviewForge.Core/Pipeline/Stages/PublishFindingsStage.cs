@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -59,6 +60,7 @@ public sealed class PublishFindingsStage(
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "during publish");
                     var threadId = await source.PostFindingThreadAsync(ctx.Pr, finding, ct).ConfigureAwait(false);
                     posted[finding.DedupeKey!] = threadId;
+                    ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "inline" } });
                     // Mechanism A: durable per-finding record immediately after the post, so a
                     // crash before finalize never loses the fact that this finding was posted.
                     await store.SetThreadIdAsync(ctx.RunId, finding.DedupeKey!, threadId, ct).ConfigureAwait(false);
@@ -79,6 +81,7 @@ public sealed class PublishFindingsStage(
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "during publish");
                     await source.PostGeneralCommentAsync(ctx.Pr, CommentFormatter.FormatFinding(finding), ct)
                         .ConfigureAwait(false);
+                    ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "general" } });
                 }
                 finally
                 {

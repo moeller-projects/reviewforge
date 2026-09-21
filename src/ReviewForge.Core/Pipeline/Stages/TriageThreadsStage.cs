@@ -65,12 +65,17 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
                 else
                 {
                     await source.ReplyToThreadAsync(ctx.Pr, op.ThreadId, text, ct).ConfigureAwait(false);
+                    ReviewForgeTelemetry.ThreadsReplied.Add(1);
                 }
             }
 
             if (op.NewStatus is { } status)
             {
                 await source.SetThreadStatusAsync(ctx.Pr, op.ThreadId, status, ct).ConfigureAwait(false);
+                if (status == ReviewThreadStatus.Fixed)
+                {
+                    ReviewForgeTelemetry.ThreadsResolved.Add(1);
+                }
             }
 
             logger.LogInformation("thread {ThreadId}: {Op}", op.ThreadId, op.Op);

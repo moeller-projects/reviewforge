@@ -89,6 +89,25 @@ public class AgentLoopTests : IDisposable
     }
 
     [Fact]
+    public async Task Token_usage_is_recorded_from_response_usage()
+    {
+        var withUsage = new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [new FunctionCallContent("call-0-TaskDone", "TaskDone",
+                new Dictionary<string, object?> { ["reviewSummary"] = "ok" })]))
+        {
+            Usage = new UsageDetails { InputTokenCount = 12, OutputTokenCount = 7, TotalTokenCount = 19 },
+        };
+        var script = new ScriptedChatClient(withUsage);
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var collector = new ReviewCollector();
+
+        var result = await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+
+        Assert.True(collector.Done);
+        Assert.Equal("agentic tool loop", result.ReviewDepth);
+    }
+
+    [Fact]
     public async Task Iteration_cap_without_task_done_flags_depth()
     {
         var noisy = Enumerable.Range(0, 10)

@@ -1,4 +1,5 @@
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 
 namespace ReviewForge.Service.Queue;
 
@@ -19,6 +20,18 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
     /// <summary>The claim lifetime used to expire queued/crashed reservations.</summary>
     public TimeSpan Ttl => _Ttl;
 
+    /// <summary>Number of currently held claims.</summary>
+    public int ActiveCount
+    {
+        get
+        {
+            lock (_Gate)
+            {
+                return _Claims.Count;
+            }
+        }
+    }
+
     /// <summary>Reserves the PR for this run; false (with the holder's run id) when already claimed.</summary>
     public bool TryClaim(PrKey pr, Guid runId, out Guid? holder)
     {
@@ -28,11 +41,18 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
             if (_Claims.TryGetValue(pr, out var existing) && now - existing.ClaimedAt <= _Ttl)
             {
                 holder = existing.RunId;
+                ReviewForgeTelemetry.ClaimRejected.Add(1);
                 return false;
+            }
+
+            if (_Claims.ContainsKey(pr))
+            {
+                ReviewForgeTelemetry.ClaimExpired.Add(1); // expired entry being replaced
             }
 
             _Claims[pr] = new ClaimEntry(runId, now);
             holder = null;
+            ReviewForgeTelemetry.ClaimAcquired.Add(1);
             return true;
         }
     }
@@ -53,9 +73,20 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
     {
         lock (_Gate)
         {
-            return _Claims.TryGetValue(pr, out var existing)
-                   && existing.RunId == runId
-                   && _Clock.GetUtcNow() - existing.ClaimedAt <= _Ttl;
+            if (_Claims.TryGetValue(pr, out var existing))
+            {
+                if (existing.RunId == runId && _Clock.GetUtcNow() - existing.ClaimedAt <= _Ttl)
+                {
+                    return true;
+                }
+
+                if (_Clock.GetUtcNow() - existing.ClaimedAt > _Ttl)
+                {
+                    ReviewForgeTelemetry.ClaimExpired.Add(1);
+                }
+            }
+
+            return false;
         }
     }
 
@@ -70,9 +101,11 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
             if (_Claims.TryGetValue(pr, out var existing) && existing.RunId == runId)
             {
                 _Claims[pr] = existing with {ClaimedAt = _Clock.GetUtcNow()};
+                ReviewForgeTelemetry.ClaimRenewed.Add(1);
                 return true;
             }
 
+            ReviewForgeTelemetry.ClaimRenewalFailed.Add(1);
             return false;
         }
     }

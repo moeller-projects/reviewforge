@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Reasoning.Rules;
@@ -101,6 +102,13 @@ public sealed class NativeReviewAgent(
         var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff);
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
+        var modelTag = new TagList { { "model", chatClientFactory.ModelName } };
+        ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
+        if (!collector.Done)
+        {
+            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
+        }
+
         return collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", ruleBook?.VersionHash);
     }
 
@@ -109,9 +117,11 @@ public sealed class NativeReviewAgent(
         public long InputTokens { get; private set; }
         public long OutputTokens { get; private set; }
         public long TotalTokens { get; private set; }
+        public int Turns { get; private set; }
 
         public void Add(UsageDetails? details)
         {
+            Turns++;
             if (details is null) return;
             InputTokens += details.InputTokenCount ?? 0;
             OutputTokens += details.OutputTokenCount ?? 0;
@@ -133,6 +143,20 @@ public sealed class NativeReviewAgent(
             var sw = Stopwatch.StartNew();
             var response = await base.GetResponseAsync(messages, options, cancellationToken);
             usage.Add(response.Usage);
+            var model = options?.ModelId ?? "default";
+            ReviewForgeTelemetry.LlmRequests.Add(1, new TagList { { "model", model } });
+            var inputTokens = response.Usage?.InputTokenCount ?? 0;
+            var outputTokens = response.Usage?.OutputTokenCount ?? 0;
+            if (inputTokens > 0)
+            {
+                ReviewForgeTelemetry.LlmTokens.Add(inputTokens, new TagList { { "token_type", "input" }, { "model", model } });
+            }
+
+            if (outputTokens > 0)
+            {
+                ReviewForgeTelemetry.LlmTokens.Add(outputTokens, new TagList { { "token_type", "output" }, { "model", model } });
+            }
+
             logger?.LogDebug(
                 "llm call: iteration tokens in={InputTokens} out={OutputTokens} elapsed={ElapsedMs}ms toolCalls={ToolCallCount}",
                 response.Usage?.InputTokenCount ?? 0, response.Usage?.OutputTokenCount ?? 0,

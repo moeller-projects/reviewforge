@@ -137,4 +137,18 @@ public class InFlightClaimsTests
         cts.Cancel();
         await heartbeat;
     }
+
+    [Fact]
+    public void ActiveCount_reflects_live_claims()
+    {
+        var claims = new InFlightClaims();
+        Assert.Equal(0, claims.ActiveCount);
+
+        var runId = Guid.NewGuid();
+        Assert.True(claims.TryClaim(Key, runId, out _));
+        Assert.Equal(1, claims.ActiveCount);
+
+        claims.Release(Key, runId);
+        Assert.Equal(0, claims.ActiveCount);
+    }
 }

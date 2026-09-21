@@ -51,6 +51,9 @@ public sealed class ReviewForgeServiceOptions
 
     /// <summary>Per-file diff budget; files over it keep their header plus a bounded prefix.</summary>
     public int MaxDiffCharsPerFile { get; init; } = 40_000;
+
+    /// <summary>Opt-in: exports OTel traces/metrics via OTLP. Default false (no exporter).</summary>
+    public bool OtlpEnabled { get; init; }
 }
 
 public sealed class ReviewPipelineFactory(

@@ -2,6 +2,7 @@ using System.Threading.RateLimiting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
@@ -45,7 +46,7 @@ public static class ServiceCollectionExtensions
                   ?? throw new InvalidOperationException($"configuration section '{AdoOptions.SectionName}' missing");
         ado.Pat = Environment.GetEnvironmentVariable(AdoOptions.PatEnvironmentVariable);
         services.AddSingleton(ado);
-        services.AddSingleton<IPullRequestSource>(_ => new AdoPullRequestSource(ado));
+        services.AddSingleton<IPullRequestSource>(_ => new InstrumentedPullRequestSource(new AdoPullRequestSource(ado)));
 
         var reasoning = configuration.GetSection(ReasoningOptions.SectionName).Get<ReasoningOptions>()
                         ?? throw new InvalidOperationException($"configuration section '{ReasoningOptions.SectionName}' missing");
@@ -112,6 +113,7 @@ public static class ServiceCollectionExtensions
 
         services.AddHostedService<DiscoverySweepWorker>();
         services.AddHostedService<CheckoutEvictionWorker>();
+        services.AddHostedService<TelemetryGaugeRegistration>();
 
         // API-key auth: env REVIEWFORGE_API_KEYS (',' or ';' separated) wins over Api:Keys config.
         services.AddOptions<ApiKeyOptions>()
@@ -154,18 +156,32 @@ public static class ServiceCollectionExtensions
             http.AddServiceDiscovery();
         });
 
-        services.AddOpenTelemetry()
-            .WithTracing(tracing => tracing
-                .AddAspNetCoreInstrumentation()
+        var otlpEnabled = configuration.GetValue<bool?>($"{ReviewForgeServiceOptions.SectionName}:OtlpEnabled") is true
+                          || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
+        var otel = services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource
+                .AddService(serviceName: "reviewforge", serviceInstanceId: Environment.MachineName));
+        otel.WithTracing(tracing =>
+        {
+            tracing.AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
-                .AddSource(ReviewForgeTelemetry.SourceName)
-                .AddOtlpExporter())
-            .WithMetrics(metrics => metrics
-                .AddAspNetCoreInstrumentation()
+                .AddSource(ReviewForgeTelemetry.SourceName);
+            if (otlpEnabled)
+            {
+                tracing.AddOtlpExporter();
+            }
+        });
+        otel.WithMetrics(metrics =>
+        {
+            metrics.AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
-                .AddMeter(ReviewForgeTelemetry.SourceName)
-                .AddOtlpExporter());
+                .AddMeter(ReviewForgeTelemetry.SourceName);
+            if (otlpEnabled)
+            {
+                metrics.AddOtlpExporter();
+            }
+        });
         return services;
     }
 }

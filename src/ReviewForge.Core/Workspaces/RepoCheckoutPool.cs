@@ -122,6 +122,7 @@ public sealed class RepoCheckoutPool
                     bytes += size;
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(1);
+                    ReviewForgeTelemetry.CheckoutEvictedBytes.Add(size);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -151,6 +152,24 @@ public sealed class RepoCheckoutPool
 
     internal string CheckoutPath(string repositoryId, string headSha)
         => Path.Combine(_Root, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));
+
+    /// <summary>Number of materialized head checkouts currently on disk.</summary>
+    public int CheckoutDirectoryCount()
+    {
+        var checkoutsRoot = Path.Combine(_Root, "checkouts");
+        if (!_Fs.DirectoryExists(checkoutsRoot))
+        {
+            return 0;
+        }
+
+        var count = 0;
+        foreach (var repoDir in _Fs.EnumerateDirectories(checkoutsRoot))
+        {
+            count += _Fs.EnumerateDirectories(repoDir).Count;
+        }
+
+        return count;
+    }
 
     internal static string CheckoutKey(string repositoryId, string headSha)
         => EncodedCheckoutKey(KeyComponent(repositoryId), KeyComponent(headSha));

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Ports;
 
@@ -36,6 +37,8 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
         }
         catch (Exception ex)
         {
+            ReviewForgeTelemetry.EnrichmentFailures.Add(1,
+                new TagList { { ReviewForgeTelemetry.TagReason, ex.GetType().Name } });
             logger.LogWarning(ex, "context enrichment failed — continuing without it");
         }
     }

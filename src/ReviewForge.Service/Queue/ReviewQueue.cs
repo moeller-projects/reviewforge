@@ -1,10 +1,12 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 
 namespace ReviewForge.Service.Queue;
 
-public sealed record ReviewRequest(Guid RunId, PrKey Pr, DateTimeOffset EnqueuedAt);
+public sealed record ReviewRequest(
+    Guid RunId, PrKey Pr, DateTimeOffset EnqueuedAt, ActivityContext? EnqueueContext = null);
 
 public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 
@@ -35,8 +37,6 @@ public sealed class ReviewQueue
                 SingleReader = false,
                 SingleWriter = false,
             });
-        ReviewForgeTelemetry.Meter.CreateObservableGauge(
-            "reviewforge.queue.depth", () => _Channel.Reader.Count);
     }
 
     public int Capacity => _Capacity;

@@ -1,4 +1,7 @@
+using System.Diagnostics;
+using System.Text;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 
@@ -34,10 +37,19 @@ public sealed class DiscoveryService(
     public async Task<DiscoveryReport> RunSweepAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        using var sweepActivity = ReviewForgeTelemetry.Source.StartActivity("discovery.sweep");
+        var sweepStart = Stopwatch.GetTimestamp();
         var candidates = await source.GetOpenPullRequestsAsync(ct);
+        ReviewForgeTelemetry.DiscoveryCandidates.Add(candidates.Count);
         var enqueued = new List<PrKey>();
         var skipped = new List<SkippedPr>();
         var interesting = 0;
+
+        void Skip(PrKey pr, string reason)
+        {
+            skipped.Add(new SkippedPr(pr, reason));
+            ReviewForgeTelemetry.DiscoverySkipped.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, NormalizeReason(reason) } });
+        }
 
         foreach (var candidate in candidates)
         {
@@ -45,7 +57,7 @@ public sealed class DiscoveryService(
             var cheap = DiscoveryFilter.Evaluate(candidate, linkedWorkItemCount: 1, lastReviewedHeadSha: null, _Rules);
             if (!cheap.Interesting)
             {
-                skipped.Add(new SkippedPr(candidate.Key, cheap.Reason));
+                Skip(candidate.Key, cheap.Reason);
                 continue;
             }
 
@@ -53,7 +65,7 @@ public sealed class DiscoveryService(
             var workItemDecision = DiscoveryFilter.Evaluate(candidate, workItems.Count, lastReviewedHeadSha: null, _Rules);
             if (!workItemDecision.Interesting)
             {
-                skipped.Add(new SkippedPr(candidate.Key, workItemDecision.Reason));
+                Skip(candidate.Key, workItemDecision.Reason);
                 continue;
             }
 
@@ -76,7 +88,7 @@ public sealed class DiscoveryService(
                 candidate, workItems.Count, prior?.HeadSha, _Rules, hasNewHumanComments);
             if (!headDecision.Interesting)
             {
-                skipped.Add(new SkippedPr(candidate.Key, headDecision.Reason));
+                Skip(candidate.Key, headDecision.Reason);
                 continue;
             }
 
@@ -88,14 +100,14 @@ public sealed class DiscoveryService(
                 new FailureBackoffPolicy(options.FailureBackoffBase, options.FailureBackoffMax));
             if (blockedUntil is not null)
             {
-                skipped.Add(new SkippedPr(candidate.Key, $"head failing; backoff until {blockedUntil.Value:u}"));
+                Skip(candidate.Key, $"head failing; backoff until {blockedUntil.Value:u}");
                 continue;
             }
 
             interesting++;
             if (enqueued.Count >= _Rules.MaxEnqueues)
             {
-                skipped.Add(new SkippedPr(candidate.Key, "enqueue cap reached"));
+                Skip(candidate.Key, "enqueue cap reached");
                 continue;
             }
 
@@ -106,18 +118,20 @@ public sealed class DiscoveryService(
             var runId = Guid.NewGuid();
             if (!claims.TryClaim(candidate.Key, runId, out _))
             {
-                skipped.Add(new SkippedPr(candidate.Key, "review already in flight"));
+                Skip(candidate.Key, "review already in flight");
                 continue;
             }
 
-            var result = queue.TryEnqueue(new ReviewRequest(runId, candidate.Key, _Clock.GetUtcNow()));
+            var result = queue.TryEnqueue(new ReviewRequest(
+                runId, candidate.Key, _Clock.GetUtcNow(), Activity.Current?.Context));
             if (!result.Accepted)
             {
                 claims.Release(candidate.Key, runId);
-                skipped.Add(new SkippedPr(candidate.Key, "queue full"));
+                Skip(candidate.Key, "queue full");
                 continue;
             }
 
+            ReviewForgeTelemetry.DiscoveryEnqueued.Add(1);
             tracker.Set(runId, candidate.Key, RunState.Queued);
             enqueued.Add(candidate.Key);
         }
@@ -131,6 +145,65 @@ public sealed class DiscoveryService(
             logger?.LogDebug("discovery skipped {Pr}: {Reason}", skip.Pr, skip.Reason);
         }
 
+        ReviewForgeTelemetry.DiscoverySweepDurationMilliseconds.Record(
+            Stopwatch.GetElapsedTime(sweepStart).TotalMilliseconds);
         return report;
+    }
+
+    /// <summary>Maps a skip reason to a bounded, low-cardinality label for metrics.</summary>
+    internal static string NormalizeReason(string reason)
+    {
+        if (reason == "draft")
+        {
+            return "draft";
+        }
+
+        if (reason.StartsWith("target branch", StringComparison.Ordinal))
+        {
+            return "target-branch-not-watched";
+        }
+
+        if (reason.StartsWith("creator ", StringComparison.Ordinal))
+        {
+            return "creator-not-allowlisted";
+        }
+
+        if (reason == "no linked work items")
+        {
+            return "no-linked-work-items";
+        }
+
+        if (reason == "head already reviewed")
+        {
+            return "head-already-reviewed";
+        }
+
+        if (reason.StartsWith("head failing; backoff", StringComparison.Ordinal))
+        {
+            return "head-failing-backoff";
+        }
+
+        if (reason == "enqueue cap reached")
+        {
+            return "enqueue-cap-reached";
+        }
+
+        if (reason == "review already in flight")
+        {
+            return "already-in-flight";
+        }
+
+        if (reason == "queue full")
+        {
+            return "queue-full";
+        }
+
+        var sb = new StringBuilder(reason.Length);
+        foreach (var ch in reason)
+        {
+            sb.Append(char.IsLetterOrDigit(ch) ? char.ToLowerInvariant(ch) : '-');
+        }
+
+        return sb.ToString().Trim('-');
     }
 }

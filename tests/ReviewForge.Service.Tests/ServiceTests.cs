@@ -811,6 +811,37 @@ public class ApiDocsEnabledTests : IAsyncLifetime
 }
 
 [Collection("ReviewForge service host")]
+public class OtlpEnabledTests : IAsyncLifetime
+{
+    private readonly ReviewForgeFactory _Factory = new();
+
+    // Read by AddReviewForge when the OTel SDK is realized (lazy, on host start) — set it in
+    // the constructor and clear it on dispose, since env vars are process-wide.
+    public OtlpEnabledTests()
+    {
+        Environment.SetEnvironmentVariable("ReviewForge__OtlpEnabled", "true");
+    }
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync()
+    {
+        _Factory.Dispose();
+        Environment.SetEnvironmentVariable("ReviewForge__OtlpEnabled", null);
+        return Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Host_boots_with_otlp_exporter_enabled()
+    {
+        var client = _Factory.CreateClient();
+        var response = await client.GetAsync("/health");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+}
+
+[Collection("ReviewForge service host")]
 public sealed class EndpointFailureTests
 {
     [Fact]

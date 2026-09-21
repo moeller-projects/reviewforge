@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
@@ -64,6 +65,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     /// <summary>Optional host-owned guard checked immediately before external publication.</summary>
     public Func<bool>? PublishGuard { get; set; }
+
+    /// <summary>Trace context of the discovery enqueue that created this run (span link source).</summary>
+    public ActivityContext? EnqueueContext { get; set; }
 
     public void Dispose()
     {

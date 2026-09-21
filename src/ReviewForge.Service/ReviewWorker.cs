@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
@@ -50,12 +51,16 @@ public sealed class ReviewWorker(
 
             tracker.Set(request.RunId, request.Pr, RunState.Running);
             logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
+            var repoTag = new TagList { { ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId } };
+            ReviewForgeTelemetry.ReviewsStarted.Add(1, repoTag);
+            var runStart = Stopwatch.GetTimestamp();
             ReviewContext? ctx = null;
             try
             {
                 ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId)
                 {
                     PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
+                    EnqueueContext = request.EnqueueContext,
                 };
 
                 // Keep the reservation alive for the whole run so a review that outlives the
@@ -80,6 +85,11 @@ public sealed class ReviewWorker(
                 tracker.Set(request.RunId, request.Pr, state, ctx.TerminationReason);
                 logger.LogInformation("review run {RunId} {State}: {Reason}",
                     request.RunId, state, ctx.TerminationReason ?? "ok");
+                var tags = repoTag;
+                tags.Add(ReviewForgeTelemetry.TagResult, ctx.Terminated ? "skipped" : "completed");
+                ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);
+                ReviewForgeTelemetry.ReviewDurationMilliseconds.Record(
+                    Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -89,6 +99,11 @@ public sealed class ReviewWorker(
             {
                 logger.LogError(ex, "run {RunId} for {Pr} failed", request.RunId, request.Pr);
                 tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message);
+                var tags = repoTag;
+                tags.Add(ReviewForgeTelemetry.TagResult, "failed");
+                ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);
+                ReviewForgeTelemetry.ReviewDurationMilliseconds.Record(
+                    Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
                 await PersistFailureAsync(request, ctx, stoppingToken);
             }
             finally
