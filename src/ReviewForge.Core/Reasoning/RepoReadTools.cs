@@ -16,6 +16,9 @@ public class RepoReadTools
     public const int DefaultMaxLines = 2000;
     public const int MaxMatches = 200;
 
+    /// <summary>Per-file size cap for Grep; larger files are skipped (generated/minified output).</summary>
+    public const long DefaultMaxGrepFileBytes = 1_048_576;
+
     private static readonly string[] DefaultDenyPatterns =
     [
         @"\.git(/|$)",
@@ -29,15 +32,29 @@ public class RepoReadTools
         @"secrets", @"credentials",
     ];
 
+    private static readonly string[] DefaultExcludeDirs =
+    [
+        "bin", "obj", "node_modules", ".git", ".vs", "packages",
+    ];
+
     private readonly Regex[] _Deny;
+    private readonly HashSet<string> _ExcludeDirs;
+    private readonly long _MaxGrepFileBytes;
     private readonly int _MaxLines;
 
     private readonly string _Root;
 
-    public RepoReadTools(string rootDir, IEnumerable<string>? denyPatterns = null, int maxLines = DefaultMaxLines)
+    public RepoReadTools(
+        string rootDir,
+        IEnumerable<string>? denyPatterns = null,
+        int maxLines = DefaultMaxLines,
+        IEnumerable<string>? excludeDirs = null,
+        long maxGrepFileBytes = DefaultMaxGrepFileBytes)
     {
         _Root = Path.GetFullPath(rootDir);
         _MaxLines = maxLines;
+        _ExcludeDirs = new HashSet<string>(excludeDirs ?? DefaultExcludeDirs, StringComparer.OrdinalIgnoreCase);
+        _MaxGrepFileBytes = maxGrepFileBytes;
         _Deny =
         [
             .. (denyPatterns ?? DefaultDenyPatterns)
@@ -95,38 +112,41 @@ public class RepoReadTools
             return $"not found: {path}";
         }
 
-        string[] lines;
+        var start = Math.Max(1, startLine);
+        var take = Math.Min(maxLines ?? _MaxLines, _MaxLines);
+        var sb = new StringBuilder();
+        var lineNo = 0;
+        var emitted = 0;
         try
         {
-            lines = ReadAllLines(file);
+            foreach (var line in ReadLinesSafe(file))
+            {
+                lineNo++;
+                if (line.Contains('\0'))
+                {
+                    return "refused: binary file";
+                }
+
+                if (lineNo >= start && emitted < take)
+                {
+                    sb.Append(lineNo).Append(": ").AppendLine(line);
+                    emitted++;
+                }
+            }
         }
         catch (IOException ex)
         {
             return $"unreadable: {ex.Message}";
         }
 
-        if (lines.Any(l => l.Contains('\0')))
+        if (emitted == 0 && lineNo < start)
         {
-            return "refused: binary file";
+            return $"file has {lineNo} lines; startLine {start} is out of range";
         }
 
-        var start = Math.Max(1, startLine);
-        var take = Math.Min(maxLines ?? _MaxLines, _MaxLines);
-        if (start > lines.Length)
+        if (lineNo >= start + emitted)
         {
-            return $"file has {lines.Length} lines; startLine {start} is out of range";
-        }
-
-        var slice = lines.Skip(start - 1).Take(take).ToArray();
-        var sb = new StringBuilder();
-        for (var i = 0; i < slice.Length; i++)
-        {
-            sb.Append(start + i).Append(": ").AppendLine(slice[i]);
-        }
-
-        if (start - 1 + slice.Length < lines.Length)
-        {
-            sb.AppendLine($"…[{lines.Length - (start - 1 + slice.Length)} more lines]");
+            sb.AppendLine($"…[{lineNo - (start - 1 + emitted)} more lines]");
         }
 
         return sb.ToString();
@@ -143,7 +163,9 @@ public class RepoReadTools
         Regex matcher;
         try
         {
-            matcher = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(2));
+            // One-shot pattern: interpretation startup is far cheaper than RegexOptions.Compiled
+            // codegen; the 2s timeout still guards against catastrophic backtracking.
+            matcher = new Regex(pattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2));
         }
         catch (ArgumentException ex)
         {
@@ -163,43 +185,51 @@ public class RepoReadTools
 
         var sb = new StringBuilder();
         var matches = 0;
-        foreach (var file in Directory.EnumerateFiles(dir, glob ?? "*", SearchOption.AllDirectories))
+        foreach (var file in EnumerateSearchableFiles(dir, glob ?? "*"))
         {
             var rel = Path.GetRelativePath(_Root, file).Replace('\\', '/');
-            if (IsDenied(rel) || !PathSafety.IsContainedReal(_Root, file))
+            if (IsDenied(rel))
             {
                 continue;
             }
 
-            string[] lines;
             try
             {
-                lines = ReadAllLines(file);
-            }
-            catch (IOException)
-            {
-                continue;
-            }
-
-            for (var i = 0; i < lines.Length; i++)
-            {
-                if (lines[i].Contains('\0'))
+                // Lexical check is free; only reparse points get the real (stat'ing) check —
+                // a symlinked FILE can still point outside the root even under a contained dir.
+                if (!PathContainment.IsContained(_Root, file)
+                    || (File.GetAttributes(file).HasFlag(FileAttributes.ReparsePoint)
+                        && !PathSafety.IsContainedReal(_Root, file))
+                    || new FileInfo(file).Length > _MaxGrepFileBytes)
                 {
-                    break; // binary
+                    continue; // escaping, reparse-point escape, or oversized/generated output
                 }
 
-                if (matcher.IsMatch(lines[i]))
+                var lineNo = 0;
+                foreach (var line in ReadLinesSafe(file))
                 {
-                    sb.Append(rel).Append(':').Append(i + 1).Append(": ").AppendLine(lines[i].Trim());
-                    if (++matches >= MaxMatches)
+                    lineNo++;
+                    if (line.Contains('\0'))
                     {
-                        sb.AppendLine("…[match cap reached]");
-                        return sb.ToString();
+                        break; // binary
+                    }
+
+                    if (matcher.IsMatch(line))
+                    {
+                        sb.Append(rel).Append(':').Append(lineNo).Append(": ").AppendLine(line.Trim());
+                        if (++matches >= MaxMatches)
+                        {
+                            sb.AppendLine("…[match cap reached]");
+                            return sb.ToString();
+                        }
                     }
                 }
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // File vanished or became unreadable mid-scan — skip it.
+            }
         }
-
 
         return matches == 0 ? "no matches" : sb.ToString();
     }
@@ -231,6 +261,57 @@ public class RepoReadTools
     private bool IsDenied(string relativePath)
         => _Deny.Any(d => d.IsMatch(relativePath));
 
-    /// <summary>IO seam for tests — production code always hits the filesystem.</summary>
-    protected virtual string[] ReadAllLines(string path) => File.ReadAllLines(path);
+    /// <summary>Streaming read seam for tests — production reads line-by-line without materializing the file.</summary>
+    protected virtual IEnumerable<string> ReadLinesSafe(string file)
+    {
+        using var reader = new StreamReader(file);
+        while (reader.ReadLine() is { } line)
+        {
+            yield return line;
+        }
+    }
+
+    /// <summary>Recursive enumeration that never descends into excluded directory names.</summary>
+    private IEnumerable<string> EnumerateSearchableFiles(string startDir, string glob)
+    {
+        var pending = new Stack<string>();
+        pending.Push(startDir);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            string[] subdirs;
+            string[] files;
+            try
+            {
+                subdirs = Directory.GetDirectories(current);
+                files = Directory.GetFiles(current, glob);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (var sub in subdirs)
+            {
+                if (_ExcludeDirs.Contains(Path.GetFileName(sub)))
+                {
+                    continue;
+                }
+
+                // Never descend into a reparse point (symlinked directory): it can point
+                // outside the workspace root and bypass lexical containment.
+                if ((File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0)
+                {
+                    continue;
+                }
+
+                pending.Push(sub);
+            }
+
+            foreach (var file in files)
+            {
+                yield return file;
+            }
+        }
+    }
 }

@@ -112,6 +112,22 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public void ChangedFiles_is_cached_until_manifest_reassigned()
+    {
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow);
+        ctx.ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)];
+
+        var first = ctx.ChangedFiles;
+        var second = ctx.ChangedFiles;
+        Assert.Same(first, second); // cached projection
+
+        ctx.ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Edit)];
+        var third = ctx.ChangedFiles;
+        Assert.NotSame(first, third);
+        Assert.Equal(["b.cs"], third);
+    }
+
+    [Fact]
     public async Task Fetch_populates_context()
     {
         var source = new FakePullRequestSource();

@@ -21,6 +21,8 @@ public sealed record AgentOptions
     public string? PromptOverridePath { get; init; }
     public string? RuleSetsPath { get; init; }
     public IEnumerable<string>? DenyPatterns { get; init; }
+    /// <summary>Directory names Grep never descends into; null = defaults (bin, obj, node_modules, .git, .vs, packages).</summary>
+    public IEnumerable<string>? GrepExcludeDirs { get; init; }
     public ReasoningEffort? Effort { get; init; }
     public bool DebugLogging { get; init; }
 }
@@ -49,7 +51,7 @@ public sealed class NativeReviewAgent(
         IReadOnlySet<string>? changedFiles,
         DiffIndex? diff)
     {
-        var repoTools = new RepoReadTools(repoDir, _Options.DenyPatterns, _Options.ReadMaxLines);
+        var repoTools = new RepoReadTools(repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs);
         var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff);
         IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
         IChatClient invoking = new ChatClientBuilder(guarded)

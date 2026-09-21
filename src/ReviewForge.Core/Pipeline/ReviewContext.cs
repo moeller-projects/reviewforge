@@ -20,8 +20,22 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public PullRequest? PullRequest { get; set; }
     public IReadOnlyList<WorkItem> WorkItems { get; set; } = [];
     public IReadOnlyList<ReviewThread> Threads { get; set; } = [];
-    public IReadOnlyList<ChangedFile> ChangedFileManifest { get; set; } = [];
-    public IReadOnlyList<string> ChangedFiles => ChangedFileManifest.Select(file => file.Path).ToArray();
+    private IReadOnlyList<ChangedFile> _changedFileManifest = [];
+    private IReadOnlyList<string>? _changedFiles;
+
+    public IReadOnlyList<ChangedFile> ChangedFileManifest
+    {
+        get => _changedFileManifest;
+        set
+        {
+            _changedFileManifest = value;
+            _changedFiles = null; // invalidate the projection cache
+        }
+    }
+
+    /// <summary>Lazy projection of <see cref="ChangedFileManifest"/>; computed once per assignment.</summary>
+    public IReadOnlyList<string> ChangedFiles
+        => _changedFiles ??= ChangedFileManifest.Select(file => file.Path).ToArray();
     public CurrentUser? CurrentUser { get; set; }
     public PriorRun? PriorRun { get; set; }
 

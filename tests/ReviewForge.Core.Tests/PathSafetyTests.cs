@@ -60,4 +60,26 @@ public class PathSafetyTests : IDisposable
 
         Assert.False(PathSafety.IsContainedReal(_Root, Path.Combine(link, "file.cs")));
     }
+
+    [Fact]
+    public void ResolveReal_returns_final_target_for_nested_links()
+    {
+        var target = Path.Combine(_Root, "sub", "real");
+        Directory.CreateDirectory(target);
+        var link = Path.Combine(_Root, "sub", "link1");
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+
+        Assert.Equal(Path.GetFullPath(target), PathSafety.ResolveReal(link));
+    }
 }

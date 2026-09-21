@@ -156,6 +156,6 @@ public class RepoReadToolsGapTests : IDisposable
 
     private sealed class FailingIoTools(string root) : RepoReadTools(root)
     {
-        protected override string[] ReadAllLines(string path) => throw new IOException("io failed");
+        protected override IEnumerable<string> ReadLinesSafe(string file) => throw new IOException("io failed");
     }
 }

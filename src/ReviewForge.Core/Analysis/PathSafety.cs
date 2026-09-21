@@ -7,12 +7,12 @@ namespace ReviewForge.Core.Analysis;
 /// </summary>
 internal static class PathSafety
 {
+    /// <summary>Fully resolves symlinks/junctions in <paramref name="path"/> and returns the
+    /// real path. Does NOT check containment — pair with <see cref="PathContainment.IsContained"/>.</summary>
+    public static string ResolveReal(string path) => ResolveLinks(path);
+
     public static bool IsContainedReal(string root, string candidate)
-    {
-        var resolvedRoot = ResolveLinks(Path.GetFullPath(root));
-        var resolvedCandidate = ResolveLinks(Path.GetFullPath(candidate));
-        return PathContainment.IsContained(resolvedRoot, resolvedCandidate);
-    }
+        => PathContainment.IsContained(ResolveReal(root), ResolveReal(candidate));
 
 
     private static string ResolveLinks(string path)
