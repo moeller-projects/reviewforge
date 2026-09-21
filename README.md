@@ -41,22 +41,27 @@ tests/
 
 ```bash
 export REVIEWFORGE_ADO_PAT=...            # ADO personal access token (never in config files)
+export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for the /reviews endpoints
 # provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist)
 # provider openai:       export OPENAI_API_KEY=...
 
 dotnet run --project src/ReviewForge.Service          # serves http://localhost:5080
 
 dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll submit \
-  --org my-org --project my-project --repo my-repo --pr 1234
-dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid>
+  --org my-org --project my-project --repo my-repo --pr 1234 --api-key ...
+dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid> --api-key ...
 ```
 
-Endpoints: `POST /reviews` → 202 `{runId, statusUrl}` or 503 when the bounded queue is full ·
-`GET /reviews/{runId}` · `GET /health` · `POST /reviews/discover` → 200 sweep report.
+Endpoints (all `/reviews*` require the `X-Api-Key` header; keys are configured via the
+`REVIEWFORGE_API_KEYS` environment variable, comma-separated for rotation):
+`POST /reviews` → 202 `{runId, statusUrl}`, 401 without a valid key, 429 over the per-key
+submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`, default 10/60s), 503
+when the bounded queue is full · `GET /reviews/{runId}` · `POST /reviews/discover` ·
+`GET /health` (unauthenticated).
 
 ## API docs (opt-in)
 
-Off by default (the API has no auth — the schema must not be published unless enabled). Set
+Off by default (the API schema must not be published unless explicitly enabled). Set
 `ApiDocs:Enabled=true` to expose:
 
 - `GET /openapi/v1.json` — OpenAPI 3.x document (title/version/description from `ApiDocs:Title`/`ApiDocs:Version`).

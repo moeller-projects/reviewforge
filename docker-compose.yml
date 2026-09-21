@@ -9,11 +9,13 @@ services:
     container_name: reviewforge
     restart: unless-stopped
     ports:
-      # host 5080 matches the CLI default (--service-url http://localhost:5080)
-      - "5080:8080"
+      # Loopback by default: the CLI talks to http://localhost:5080. Set REVIEWFORGE_BIND
+      # to expose beyond the host — only behind a TLS reverse proxy with network ACLs.
+      - "${REVIEWFORGE_BIND:-127.0.0.1}:5080:8080"
     environment:
       # Secrets come from the host environment only — never commit values here.
       REVIEWFORGE_ADO_PAT: ${REVIEWFORGE_ADO_PAT:?set REVIEWFORGE_ADO_PAT (Azure DevOps PAT)}
+      REVIEWFORGE_API_KEYS: ${REVIEWFORGE_API_KEYS:?set REVIEWFORGE_API_KEYS (comma-separated API keys for the /reviews endpoints)}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-} # only needed with Reasoning__Provider=openai
 
       # Configuration overrides (double underscore maps to ':' in .NET configuration).

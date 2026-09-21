@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Console;
 using OpenTelemetry.Logs;
 using ReviewForge.Service;
+using ReviewForge.Service.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddConsole(options => options.FormatterName = CompactConsoleFormatter.FormatterName);
@@ -20,6 +21,8 @@ builder.Services.AddReviewForge(builder.Configuration);
 builder.Services.AddOpenApi(ApiDocsRegistration.Configure);
 
 var app = builder.Build();
+app.UseMiddleware<ApiKeyAuthenticationMiddleware>(); // reject unauthenticated before they consume rate budget
+app.UseRateLimiter();
 app.MapHealthChecks("/health");
 app.MapHealthChecks("/alive", new HealthCheckOptions {Predicate = _ => false});
 app.MapReviewForgeEndpoints();

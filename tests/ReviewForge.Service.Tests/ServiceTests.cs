@@ -13,6 +13,7 @@ using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
+using ReviewForge.Service.Security;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -38,6 +39,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("ReviewForge__WorkDir", WorkDir);
         Environment.SetEnvironmentVariable("ReviewForge__WorkerCount", "2");
         Environment.SetEnvironmentVariable("ReviewForge__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
+        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, "test-key-1,test-key-2");
     }
 
     public FakePullRequestSource Source { get; } = new();
@@ -53,6 +55,35 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
     {
         _WithoutWorkers = true;
         return this;
+    }
+
+    /// <summary>Clears configured API keys so the host boots without any — fail-closed or opt-out paths.</summary>
+    public ReviewForgeFactory WithoutApiKeys()
+    {
+        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, null);
+        return this;
+    }
+
+    /// <summary>No keys + the explicit development opt-out, so /reviews stays reachable.</summary>
+    public ReviewForgeFactory WithDevelopmentOptOut()
+    {
+        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("Api__AllowUnauthenticatedForDevelopment", "true");
+        return this;
+    }
+
+    /// <summary>Overrides the fixed-window submit limit for rate-limit tests.</summary>
+    public ReviewForgeFactory WithSubmitLimit(int permitLimit, int windowSeconds)
+    {
+        Environment.SetEnvironmentVariable("Api__SubmitPermitLimit", permitLimit.ToString());
+        Environment.SetEnvironmentVariable("Api__SubmitWindowSeconds", windowSeconds.ToString());
+        return this;
+    }
+
+    protected override void ConfigureClient(HttpClient client)
+    {
+        base.ConfigureClient(client);
+        client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "test-key-1");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -91,7 +122,13 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            foreach (var key in new[] {"Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model", "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString"})
+            foreach (var key in new[]
+            {
+                "Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model",
+                "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString",
+                ApiKeyOptions.KeysEnvironmentVariable, "Api__AllowUnauthenticatedForDevelopment",
+                "Api__SubmitPermitLimit", "Api__SubmitWindowSeconds",
+            })
             {
                 Environment.SetEnvironmentVariable(key, null);
             }

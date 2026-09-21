@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
@@ -10,6 +11,7 @@ using ReviewForge.Infrastructure.Filesystem;
 using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Service.Queue;
+using ReviewForge.Service.Security;
 
 namespace ReviewForge.Service;
 
@@ -78,6 +80,40 @@ public static class ServiceCollectionExtensions
 
         services.AddHostedService<DiscoverySweepWorker>();
         services.AddHostedService<CheckoutEvictionWorker>();
+
+        // API-key auth: env REVIEWFORGE_API_KEYS (',' or ';' separated) wins over Api:Keys config.
+        services.AddOptions<ApiKeyOptions>()
+            .Bind(configuration.GetSection(ApiKeyOptions.SectionName))
+            .PostConfigure(opts =>
+            {
+                var fromEnv = Environment.GetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable);
+                if (!string.IsNullOrWhiteSpace(fromEnv))
+                {
+                    opts.Keys = fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                }
+            })
+            .Validate(opts => opts.AllowUnauthenticatedForDevelopment || opts.Keys.Length > 0,
+                $"No API keys configured. Set {ApiKeyOptions.KeysEnvironmentVariable} or Api:Keys, " +
+                "or set Api:AllowUnauthenticatedForDevelopment=true for local development only.")
+            .ValidateOnStart();
+
+        services.AddRateLimiter(limiter =>
+        {
+            limiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            limiter.AddPolicy(ApiKeyOptions.SubmitPolicy, httpContext =>
+            {
+                var api = httpContext.RequestServices.GetRequiredService<IOptions<ApiKeyOptions>>().Value;
+                var partition = httpContext.Request.Headers[ApiKeyOptions.HeaderName].FirstOrDefault()
+                                ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                                ?? "anonymous";
+                return RateLimitPartition.GetFixedWindowLimiter(partition, _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = api.SubmitPermitLimit,
+                    Window = TimeSpan.FromSeconds(api.SubmitWindowSeconds),
+                    QueueLimit = 0,
+                });
+            });
+        });
 
         services.AddServiceDiscovery();
         services.ConfigureHttpClientDefaults(http =>

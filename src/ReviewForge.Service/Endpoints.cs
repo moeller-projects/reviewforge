@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Queue;
+using ReviewForge.Service.Security;
 
 namespace ReviewForge.Service;
 
@@ -18,6 +19,7 @@ public static class Endpoints
     public static WebApplication MapReviewForgeEndpoints(this WebApplication app)
     {
         app.MapPost("/reviews", SubmitReview)
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
             .Produces<SubmitReviewResponse>(202)
@@ -25,6 +27,7 @@ public static class Endpoints
             .ProducesProblem(503);
 
         app.MapPost("/reviews/discover", DiscoverPullRequests)
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("DiscoverPullRequests")
             .WithTags("Reviews")
             .Produces<DiscoveryReport>(200);
