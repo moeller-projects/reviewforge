@@ -95,7 +95,11 @@ public sealed class ReviewTools(
         }
 
         var key = DedupeKey.Compute(finding.RuleId, finding.Anchor?.FilePath ?? "-", finding.Snippet);
-        if (collector.IsKnown(key)) return $"already recorded (dedupe key {key}) — skipped";
+        if (collector.IsKnown(key))
+        {
+            collector.MarkRedetected(key); // re-detected == still reproducing; triage must see this
+            return $"already recorded (dedupe key {key}) — skipped";
+        }
         finding.DedupeKey = key;
         collector.AddFinding(finding);
         return $"recorded finding {key}";

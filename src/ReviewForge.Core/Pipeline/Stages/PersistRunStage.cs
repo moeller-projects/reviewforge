@@ -16,6 +16,8 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var acceptedKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
+
         var findings = ctx.AcceptedFindings
             .Select(f => new StoredFinding(
                 f.DedupeKey!,
@@ -25,6 +27,11 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
                 f.Anchor?.FilePath,
                 f.Anchor?.StartLine,
                 ctx.PostedThreadIds.TryGetValue(f.DedupeKey!, out var threadId) ? threadId : null))
+            // Carry prior findings forward: they are still known identities (still posted,
+            // still deduped) even though they were not re-accepted this run. Prior ThreadId
+            // is preserved — it still points at the live ADO thread.
+            .Concat((ctx.PriorRun?.Findings ?? [])
+                .Where(p => !acceptedKeys.Contains(p.DedupeKey)))
             .ToList();
 
         var run = new ReviewRun(

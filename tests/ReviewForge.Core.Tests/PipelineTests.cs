@@ -396,6 +396,44 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Triage_keeps_thread_when_key_in_prior_run()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(2, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k"]);
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.StatusChanges);
+        Assert.Empty(source.Replies);
+    }
+
+    [Fact]
+    public async Task Triage_keeps_thread_when_finding_redetected()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(2, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.Collector.MarkRedetected("k");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.StatusChanges);
+        Assert.Empty(source.Replies);
+    }
+
+    [Fact]
     public async Task Publish_posts_inline_general_summary_and_vote()
     {
         var source = new FakePullRequestSource();
@@ -541,6 +579,48 @@ public class StageTests : IDisposable
         Assert.Equal("head-sha", run.HeadSha);
         Assert.True(run.Success);
         Assert.Equal(1000, run.Findings[0].ThreadId);
+    }
+
+    [Fact]
+    public async Task Persist_carries_forward_prior_findings()
+    {
+        var store = new FakeFindingStore();
+        var accepted = FindingOnLine(3);
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [accepted];
+        ctx.PostedThreadIds = new Dictionary<string, int> {["k3"] = 1000};
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        var run = Assert.Single(store.Runs);
+        Assert.Equal(2, run.Findings.Count);
+        var carried = Assert.Single(run.Findings, f => f.DedupeKey == "k2");
+        Assert.Equal(42, carried.ThreadId);
+        var acceptedRow = Assert.Single(run.Findings, f => f.DedupeKey == "k3");
+        Assert.Equal(1000, acceptedRow.ThreadId);
+    }
+
+    [Fact]
+    public async Task Persist_does_not_duplicate_key_accepted_again()
+    {
+        var store = new FakeFindingStore();
+        var accepted = FindingOnLine(2);
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [accepted];
+        ctx.PostedThreadIds = new Dictionary<string, int> {["k2"] = 1000};
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        var run = Assert.Single(store.Runs);
+        var finding = Assert.Single(run.Findings); // prior "k2" not carried; accepted "k2" wins
+        Assert.Equal("k2", finding.DedupeKey);
+        Assert.Equal(1000, finding.ThreadId);
     }
 }
 

@@ -16,6 +16,7 @@ public sealed class ReviewCollector
     private readonly object _Gate = new();
     private readonly TextWriter? _Jsonl;
     private readonly HashSet<string> _KnownKeys;
+    private readonly HashSet<string> _RedetectedKeys = new(StringComparer.Ordinal);
     private readonly List<ReviewUncertainty> _Uncertainties = [];
     private readonly Guid? _RunId;
     private readonly string? _HeadSha;
@@ -67,6 +68,28 @@ public sealed class ReviewCollector
         lock (_Gate)
         {
             return _KnownKeys.Contains(dedupeKey);
+        }
+    }
+
+    /// <summary>Keys the agent re-detected this run that were rejected as already known —
+    /// positive evidence the finding still reproduces.</summary>
+    public IReadOnlyCollection<string> RedetectedKeys
+    {
+        get
+        {
+            lock (_Gate)
+            {
+                return [.. _RedetectedKeys];
+            }
+        }
+    }
+
+    /// <summary>Records that a known key was re-detected (dedupe-rejected) this run.</summary>
+    public void MarkRedetected(string dedupeKey)
+    {
+        lock (_Gate)
+        {
+            _RedetectedKeys.Add(dedupeKey);
         }
     }
 

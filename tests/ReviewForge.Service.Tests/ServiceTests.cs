@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.AI;
@@ -338,6 +340,88 @@ public class ServiceTests : IAsyncLifetime
         catch (IOException)
         {
         }
+    }
+
+    private static string CheckoutDir(string workDir, string repositoryId, string headSha)
+    {
+        static string KeyComponent(string id)
+        {
+            var readable = string.Concat(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id)))[..12].ToLowerInvariant();
+            return $"{readable}-{hash}";
+        }
+
+        return Path.Combine(workDir, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));
+    }
+
+    [Fact]
+    public async Task Second_run_on_same_pr_does_not_resolve_or_repost()
+    {
+        var pr = new PrKey("o", "p", "r", 42);
+        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n";
+
+        // Pre-seed the checkout so the finding's anchor verifies against a real file.
+        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "line three"]);
+
+        static Dictionary<string, object?> FindingArgs() => new()
+        {
+            ["ruleId"] = "general.other",
+            ["title"] = "bad code",
+            ["severity"] = "high",
+            ["category"] = "bug",
+            ["description"] = "bad code found",
+            ["snippet"] = "bad code here",
+            ["filePath"] = "src/A.cs",
+            ["startLine"] = 2,
+        };
+
+        // Run 1: record finding K then finish.
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var client = _Factory.CreateClient();
+        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body1!.RunId, RunState.Completed);
+
+        var run1 = Assert.Single(_Factory.Store.Runs);
+        var finding1 = Assert.Single(run1.Findings);
+        var key = finding1.DedupeKey;
+        var threadId = finding1.ThreadId!.Value;
+        Assert.Single(_Factory.Source.PostedFindings);
+
+        // Wait for the worker to release the claim before re-submitting the same PR.
+        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        // Simulate the live ADO thread plus a new human comment (so run 2 clears the gate as FollowUp).
+        _Factory.Source.Threads.Add(new ReviewThread(threadId, key, ReviewThreadStatus.Active,
+        [
+            new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow.AddMinutes(-2)),
+            new ThreadComment("human", "author", false, "still failing?", DateTimeOffset.UtcNow),
+        ]));
+        _Factory.Store.LastRun = new PriorRun(pr, "head-sha", DateTimeOffset.UtcNow.AddMinutes(-1), [key],
+            [new StoredFinding(key, "general.other", "high", "bad code", "src/A.cs", 2, threadId)]);
+
+        // Run 2: re-record K (dedupe-rejected) and finish.
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body2!.RunId, RunState.Completed);
+
+        Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
+        Assert.DoesNotContain(_Factory.Source.StatusChanges, s => s.Status == ReviewThreadStatus.Fixed);
+        Assert.Contains(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key); // carried forward
     }
 
     private sealed class ExplosiveGitOps(string repoDir) : FakeGitOps

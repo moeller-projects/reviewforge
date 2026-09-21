@@ -152,6 +152,19 @@ public class ReviewToolsTests
     }
 
     [Fact]
+    public void RecordFinding_marks_redetected_when_key_is_known()
+    {
+        var (tools, collector) = Create();
+        tools.RecordFinding("r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 1);
+        var key = Assert.Single(collector.Findings).DedupeKey;
+
+        var second = tools.RecordFinding("r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 99);
+
+        Assert.Contains("already recorded", second);
+        Assert.Contains(key!, collector.RedetectedKeys);
+    }
+
+    [Fact]
     public void RecordFinding_without_file_is_pr_level()
     {
         var (tools, collector) = Create();

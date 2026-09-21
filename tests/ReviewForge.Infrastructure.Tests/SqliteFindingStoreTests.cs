@@ -94,6 +94,29 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetLastCompletedRun_returns_finding_rows()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42)]);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+
+        Assert.NotNull(last);
+        Assert.Equal(["k1"], last.FindingKeys);
+        var finding = Assert.Single(last.Findings!);
+        Assert.Equal("k1", finding.DedupeKey);
+        Assert.Equal("rule", finding.RuleId);
+        Assert.Equal("high", finding.Severity);
+        Assert.Equal("title", finding.Title);
+        Assert.Equal("f.cs", finding.FilePath);
+        Assert.Equal(1, finding.Line);
+        Assert.Equal(42, finding.ThreadId);
+    }
+
+    [Fact]
     public async Task Known_keys_are_distinct_across_runs_and_scoped_to_pr()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);

@@ -16,7 +16,16 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
     {
         var botThreads = ctx.Threads.Where(t => t.DedupeKey is not null).ToList();
         var agentActions = ctx.Result!.Narrative.ThreadActions ?? [];
+
+        // A finding "still reproduces" when it was accepted this run, was posted by a prior run,
+        // or was re-detected this run but dedupe-rejected. Auto-resolve is reserved for keys that
+        // are absent from all three — never for a finding merely filtered out by dedupe.
         var currentKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
+        if (ctx.PriorRun is { } prior)
+        {
+            currentKeys.UnionWith(prior.FindingKeys);
+        }
+        currentKeys.UnionWith(ctx.Collector.RedetectedKeys);
 
         ctx.TriagePlan = ThreadTriage.Plan(botThreads, currentKeys, agentActions);
         ctx.UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions);

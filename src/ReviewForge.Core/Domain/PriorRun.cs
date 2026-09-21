@@ -8,7 +8,11 @@ public sealed record PriorRun(
     PrKey Pr,
     string HeadSha,
     DateTimeOffset CompletedAt,
-    IReadOnlyList<string> FindingKeys);
+    IReadOnlyList<string> FindingKeys,
+    /// <summary>Full finding rows of that run; lets the next run carry them forward so the
+    /// known-key set does not decay to accepted-findings-only. Null when loaded from a
+    /// source that only has keys.</summary>
+    IReadOnlyList<StoredFinding>? Findings = null);
 
 /// <summary>A full run record persisted by IFindingStore.</summary>
 [ExcludeFromCodeCoverage]

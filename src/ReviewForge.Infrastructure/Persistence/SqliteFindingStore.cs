@@ -39,7 +39,13 @@ public sealed class SqliteFindingStore : IFindingStore
         var run = runs.MaxBy(r => r.CompletedAt);
         return run is null
             ? null
-            : new PriorRun(pr, run.HeadSha, run.CompletedAt!.Value, [.. run.Findings.Select(f => f.DedupeKey)]);
+            : new PriorRun(
+                pr,
+                run.HeadSha,
+                run.CompletedAt!.Value,
+                [.. run.Findings.Select(f => f.DedupeKey)],
+                [.. run.Findings.Select(f => new StoredFinding(
+                    f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))]);
     }
 
     public async Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct)
