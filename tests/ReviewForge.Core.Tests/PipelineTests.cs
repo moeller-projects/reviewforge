@@ -717,6 +717,169 @@ public class StageTests : IDisposable
         Assert.Contains(store.ThreadIdBackfills, b => b.Key == "k2"); // successful post backfilled before the fault
         Assert.DoesNotContain(store.ThreadIdBackfills, b => b.Key == "k3");
     }
+
+    [Fact]
+    public async Task Triage_throws_when_claim_lost_before_writes()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "reply", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.PublishGuard = () => false;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Answer, "answer")]},
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Empty(source.Replies);
+        Assert.Empty(source.StatusChanges);
+    }
+
+    [Fact]
+    public async Task Triage_stops_mid_batch_when_claim_lost()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "reply", t0)]));
+        source.Threads.Add(new ReviewThread(2, "k2", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "reply", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative
+            {
+                ThreadActions =
+                [
+                    new ThreadAction(1, ThreadActionKind.Answer, "answer 1"),
+                    new ThreadAction(2, ThreadActionKind.Answer, "answer 2"),
+                ],
+            },
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        var guardCalls = 0;
+        ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-triage + one op pass
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(source.Replies); // exactly one reply before the claim was lost
+    }
+
+    [Fact]
+    public async Task Triage_retry_does_not_duplicate_reply()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+        [
+            new ThreadComment("b", "bot", true, "finding", t0),
+            new ThreadComment("u", "human", false, "why?", t0.AddMinutes(1)),
+            new ThreadComment("b", "bot", true, "answer", t0.AddMinutes(2)),
+        ]));
+
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Resolve, "answer")]},
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies); // reply already posted by a previous attempt
+        Assert.Contains(source.StatusChanges, s => s.ThreadId == 1 && s.Status == ReviewThreadStatus.Fixed);
+    }
+
+    [Fact]
+    public async Task Triage_skips_reply_when_competitor_posted_after_fetch()
+    {
+        var source = new CompetitorRepliedSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "why?", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Resolve, "answer")]},
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies); // competitor's reply detected on re-fetch
+        Assert.Contains(source.StatusChanges, s => s.ThreadId == 1 && s.Status == ReviewThreadStatus.Fixed);
+    }
+
+    [Fact]
+    public async Task Publish_stops_mid_fanout_when_claim_lost()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var findings = Enumerable.Range(0, 3).Select(i => FindingOnLine(2 + i)).ToArray();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = findings;
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = findings, Uncertainties = []};
+
+        var guardCalls = 0;
+        ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-publish + one post pass
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(source.PostedFindings); // exactly one post before the claim was lost
+        Assert.Empty(source.GeneralComments); // summary never reached
+        Assert.Empty(source.Votes); // vote never reached
+    }
+
+    [Fact]
+    public async Task Publish_guard_false_before_summary_blocks_summary_and_vote()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var finding = FindingOnLine(2);
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        var guardCalls = 0;
+        ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-publish + post pass, summary fails
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(source.PostedFindings); // finding posted
+        Assert.Empty(source.GeneralComments); // summary blocked
+        Assert.Empty(source.Votes); // vote blocked
+    }
+
+    private sealed class CompetitorRepliedSource : FakePullRequestSource
+    {
+        public override Task<IReadOnlyList<ReviewThread>> GetThreadsAsync(PrKey pr, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<ReviewThread>>(Threads
+                .Select(t => new ReviewThread(t.Id, t.DedupeKey, t.Status,
+                    [.. t.Comments, new ThreadComment("b", "bot", true, "answer", DateTimeOffset.UtcNow)]))
+                .ToArray());
+    }
 }
 
 public class CommentFormatterTests

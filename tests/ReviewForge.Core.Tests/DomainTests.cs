@@ -222,4 +222,66 @@ public class ThreadTriageTests
         var threads = new[] {BotThread(5, "k", ReviewThreadStatus.Active, humanLast: true)};
         Assert.Empty(ThreadTriage.Unanswered(threads, [new ThreadAction(5, ThreadActionKind.Answer, "a")]));
     }
+
+    private static ReviewThread ThreadWithBotReply(string botReply)
+        => new(1, "k", ReviewThreadStatus.Active,
+        [
+            new ThreadComment("b", "bot", true, "finding", T0),
+            new ThreadComment("u", "human", false, "why?", T0.AddMinutes(1)),
+            new ThreadComment("b", "bot", true, botReply, T0.AddMinutes(2)),
+        ]);
+
+    [Fact]
+    public void Plan_skips_reply_when_last_comment_is_bot_with_same_text()
+    {
+        var plan = ThreadTriage.Plan(
+            [ThreadWithBotReply("because X")],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Answer, "because X")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Answer, op.Op);
+        Assert.Null(op.Comment);
+        Assert.Null(op.NewStatus);
+    }
+
+    [Fact]
+    public void Plan_keeps_status_change_when_reply_already_posted()
+    {
+        var plan = ThreadTriage.Plan(
+            [ThreadWithBotReply("fixed in latest push")],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Resolve, "fixed in latest push")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Resolve, op.Op);
+        Assert.Null(op.Comment);
+        Assert.Equal(ReviewThreadStatus.Fixed, op.NewStatus);
+    }
+
+    [Fact]
+    public void Plan_posts_reply_when_last_bot_comment_differs()
+    {
+        var plan = ThreadTriage.Plan(
+            [ThreadWithBotReply("something else")],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Answer, "because X")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Answer, op.Op);
+        Assert.Equal("because X", op.Comment);
+    }
+
+    [Fact]
+    public void Plan_posts_reply_when_last_comment_is_human()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(1, "k", ReviewThreadStatus.Active, humanLast: true)],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Answer, "because X")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Answer, op.Op);
+        Assert.Equal("because X", op.Comment);
+    }
 }

@@ -23,6 +23,15 @@ public static class ThreadTriage
         IReadOnlyList<ReviewThread> botThreads,
         IReadOnlyCollection<string> currentFindingKeys,
         IReadOnlyList<ThreadAction> agentActions)
+        => Plan(botThreads, currentFindingKeys, agentActions, postedText => postedText);
+
+    /// <param name="replyTextForMatch">Maps a planned comment to the exact text a previous
+    /// attempt would have posted (e.g. CommentFormatter.WithBotPreamble).</param>
+    public static IReadOnlyList<TriageOperation> Plan(
+        IReadOnlyList<ReviewThread> botThreads,
+        IReadOnlyCollection<string> currentFindingKeys,
+        IReadOnlyList<ThreadAction> agentActions,
+        Func<string, string> replyTextForMatch)
     {
         var operations = new List<TriageOperation>();
 
@@ -30,16 +39,17 @@ public static class ThreadTriage
         {
             var action = agentActions.FirstOrDefault(a => a.ThreadId == thread.Id);
 
+            // An agent action always wins over the heuristics: apply it, deduping the reply
+            // when a previous attempt already posted the same text (retry after a crash).
+            if (action is not null)
+            {
+                operations.Add(WithRetryDedupe(thread, action, replyTextForMatch));
+                continue;
+            }
+
             if (thread.HasPendingHumanReply)
             {
-                operations.Add(action is null
-                    ? new TriageOperation(thread.Id, TriageOp.None, null, null) // flagged by caller as manual
-                    : action.Action switch
-                    {
-                        ThreadActionKind.Resolve => new(thread.Id, TriageOp.Resolve, action.Comment, ReviewThreadStatus.Fixed),
-                        ThreadActionKind.Reopen => new(thread.Id, TriageOp.Reopen, action.Comment, ReviewThreadStatus.Active),
-                        _ => new(thread.Id, TriageOp.Answer, action.Comment, null),
-                    });
+                operations.Add(new TriageOperation(thread.Id, TriageOp.None, null, null)); // flagged by caller as manual
                 continue;
             }
 
@@ -55,6 +65,37 @@ public static class ThreadTriage
         }
 
         return operations;
+    }
+
+    /// <summary>
+    /// Retry-aware: when the previous attempt already posted this exact reply (last
+    /// comment is the bot's, text matches), skip the duplicate reply but keep the
+    /// pending status change.
+    /// </summary>
+    private static TriageOperation WithRetryDedupe(
+        ReviewThread thread, ThreadAction action, Func<string, string> replyTextForMatch)
+    {
+        TriageOp op;
+        ReviewThreadStatus? status;
+        switch (action.Action)
+        {
+            case ThreadActionKind.Resolve:
+                op = TriageOp.Resolve;
+                status = ReviewThreadStatus.Fixed;
+                break;
+            case ThreadActionKind.Reopen:
+                op = TriageOp.Reopen;
+                status = ReviewThreadStatus.Active;
+                break;
+            default:
+                op = TriageOp.Answer;
+                status = null;
+                break;
+        }
+
+        var alreadyPosted = thread.LastComment is { IsBot: true } last
+                            && string.Equals(last.Text.Trim(), replyTextForMatch(action.Comment).Trim(), StringComparison.Ordinal);
+        return new TriageOperation(thread.Id, op, alreadyPosted ? null : action.Comment, status);
     }
 
     /// <summary>Thread ids with a pending human reply the agent did not act on.</summary>

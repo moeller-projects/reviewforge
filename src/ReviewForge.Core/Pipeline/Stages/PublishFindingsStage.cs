@@ -41,10 +41,7 @@ public sealed class PublishFindingsStage(
             logger.LogInformation("suppressing finding {Key}: live bot thread already exists", suppressed.DedupeKey);
         }
 
-        if (ctx.PublishGuard is not null && !ctx.PublishGuard())
-        {
-            throw new InvalidOperationException("review claim expired before publication");
-        }
+        PublishGuardChecks.ThrowIfClaimLost(ctx, "before publish");
 
         var posted = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
 
@@ -57,6 +54,7 @@ public sealed class PublishFindingsStage(
                 await gate.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
+                    PublishGuardChecks.ThrowIfClaimLost(ctx, "during publish");
                     var threadId = await source.PostFindingThreadAsync(ctx.Pr, finding, ct).ConfigureAwait(false);
                     posted[finding.DedupeKey!] = threadId;
                     // Mechanism A: durable per-finding record immediately after the post, so a
@@ -76,6 +74,7 @@ public sealed class PublishFindingsStage(
                 await gate.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
+                    PublishGuardChecks.ThrowIfClaimLost(ctx, "during publish");
                     await source.PostGeneralCommentAsync(ctx.Pr, CommentFormatter.FormatFinding(finding), ct)
                         .ConfigureAwait(false);
                 }
@@ -90,6 +89,7 @@ public sealed class PublishFindingsStage(
         ctx.PostedThreadIds = posted;
 
         // Summary must post AFTER findings (readers of the PR see findings first).
+        PublishGuardChecks.ThrowIfClaimLost(ctx, "before summary");
         await source.PostGeneralCommentAsync(ctx.Pr,
                 CommentFormatter.FormatSummary(ctx.Result!, ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind), ct)
             .ConfigureAwait(false);
@@ -97,6 +97,7 @@ public sealed class PublishFindingsStage(
         var acUnmet = (ctx.Result!.Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);
         if (ctx.AcceptedFindings.Count > 0 || acUnmet || ctx.UnansweredThreads.Count > 0)
         {
+            PublishGuardChecks.ThrowIfClaimLost(ctx, "before vote");
             await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, ReviewerVote.WaitingForAuthor, ct);
             logger.LogInformation("reviewer vote set to waiting-for-author for {User}", ctx.CurrentUser!.DisplayName);
         }
