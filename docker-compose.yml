@@ -8,6 +8,7 @@ services:
     image: reviewforge:latest
     container_name: reviewforge
     restart: unless-stopped
+    profiles: ["default", "observability"]
     ports:
       # Loopback by default: the CLI talks to http://localhost:5080. Set REVIEWFORGE_BIND
       # to expose beyond the host — only behind a TLS reverse proxy with network ACLs.
@@ -23,6 +24,14 @@ services:
       Ado__Project: ${ADO_PROJECT:-Laekker.Kitchen}
       Reasoning__Provider: ${REASONING_PROVIDER:-openai-codex}
       Reasoning__Model: ${REASONING_MODEL:-openai-codex:gpt-5.6-luna}
+
+      # OTLP export is env-driven and OFF unless an endpoint is configured. Leave unset for
+      # today's behavior (no export). To ship telemetry to the bundled dashboard, run:
+      #   OTEL_EXPORTER_OTLP_ENDPOINT=http://dashboard:18889 docker compose --profile observability up -d
+      # or point the host env var at any OTLP collector (gRPC). Do not hardcode a committed
+      # endpoint here — the contract matches Aspire (OTEL_EXPORTER_OTLP_* variables).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
     volumes:
       # Codex OAuth credentials. Mount the directory, not the file, and keep it
       # read-write: token rotation rewrites auth.json atomically (temp + move).
@@ -38,7 +47,33 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    networks:
+      - reviewforge
     # The Dockerfile HEALTHCHECK hits /health; no compose-level check needed.
+
+  # Optional: standalone Aspire dashboard for prod observability without Aspire hosting.
+  # Start with: OTEL_EXPORTER_OTLP_ENDPOINT=http://dashboard:18889 docker compose --profile observability up -d
+  # UI: http://localhost:18888 (bound to localhost only — front with a proxy for remote access)
+  dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest   # pin a major tag in practice (P2-18)
+    container_name: reviewforge-dashboard
+    restart: unless-stopped
+    profiles: ["observability"]
+    ports:
+      - "127.0.0.1:18888:18888"   # dashboard UI
+      - "127.0.0.1:4317:18889"    # OTLP gRPC ingest (container-internal port 18889)
+    environment:
+      # Localhost-bound single-operator deployment: anonymous access acceptable.
+      # For any shared/remote exposure, REMOVE this and use the dashboard's
+      # browser-token login (printed to the container log on startup) or a fronting proxy.
+      Dashboard__Frontend__AuthMode: Unsecured
+      Dashboard__Otlp__AuthMode: Unsecured
+      DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
+    networks:
+      - reviewforge
 
 volumes:
   reviewforge-data:
+
+networks:
+  reviewforge:

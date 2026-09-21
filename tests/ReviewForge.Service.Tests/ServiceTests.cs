@@ -30,6 +30,7 @@ public sealed class ReviewForgeServiceCollectionDefinition
 public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 {
     private bool _WithoutWorkers;
+    private List<string>? _LogSink;
 
     public ReviewForgeFactory()
     {
@@ -66,6 +67,13 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         return this;
     }
 
+    /// <summary>Captures formatted log messages into the supplied sink (for startup-log assertions).</summary>
+    public ReviewForgeFactory WithLogCollector(List<string> sink)
+    {
+        _LogSink = sink;
+        return this;
+    }
+
     /// <summary>No keys + the explicit development opt-out, so /reviews stays reachable.</summary>
     public ReviewForgeFactory WithDevelopmentOptOut()
     {
@@ -92,6 +100,11 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
     {
         Directory.CreateDirectory(WorkDir);
         Git.RepoDir = WorkDir;
+
+        if (_LogSink is not null)
+        {
+            builder.ConfigureLogging(logging => logging.AddProvider(new CollectingLoggerProvider(_LogSink)));
+        }
 
         builder.ConfigureServices(services =>
         {

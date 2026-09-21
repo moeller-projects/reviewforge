@@ -156,6 +156,11 @@ public static class ServiceCollectionExtensions
             http.AddServiceDiscovery();
         });
 
+        // OTLP exporters are intentionally configured ONLY from the standard environment
+        // variables (OTEL_EXPORTER_OTLP_ENDPOINT / _HEADERS / _PROTOCOL, or the per-signal
+        // variants). Aspire injects these when running under the AppHost; production sets
+        // them via docker-compose / the container environment. Never bind exporter options
+        // to appsettings — a committed endpoint breaks both environments.
         var otlpEnabled = configuration.GetValue<bool?>($"{ReviewForgeServiceOptions.SectionName}:OtlpEnabled") is true
                           || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
         var otel = services.AddOpenTelemetry()

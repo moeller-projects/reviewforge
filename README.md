@@ -59,6 +59,34 @@ submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`, default 10/
 when the bounded queue is full · `GET /reviews/{runId}` · `POST /reviews/discover` ·
 `GET /health` (unauthenticated).
 
+## Dev loop: Aspire vs Docker Compose
+
+**Local dev — Aspire dashboard.** `aspire run` (or `dotnet run --project src/ReviewForge.AppHost`)
+starts the service with a live dashboard for traces, metrics, and logs. Set the two secret
+parameters first:
+
+```bash
+cd src/ReviewForge.AppHost
+dotnet user-secrets set "Parameters:ado-pat" "<ado-pat>"
+dotnet user-secrets set "Parameters:openai-api-key" "<openai-key>"
+```
+
+The dashboard URL is printed on startup; `WorkDir` is `%TEMP%/reviewforge`. Aspire injects the
+`OTEL_EXPORTER_OTLP_*` variables automatically, so no OTLP endpoint is ever hardcoded.
+
+**Production — Docker Compose.** `docker compose up -d` runs exactly as before (no telemetry
+export). To add the standalone Aspire dashboard as an opt-in sink:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://dashboard:18889 docker compose --profile observability up -d
+# UI: http://localhost:18888 (localhost-bound; front with an authenticated proxy for remote access)
+```
+
+To ship telemetry to a real backend instead, set `OTEL_EXPORTER_OTLP_ENDPOINT` (+ `_HEADERS`)
+in the host environment and skip the profile. The dashboard profile is a documented option,
+not the default: its UI is unauthenticated unless fronted, and it ingests all telemetry
+including scoped log properties.
+
 ## API docs (opt-in)
 
 Off by default (the API schema must not be published unless explicitly enabled). Set
