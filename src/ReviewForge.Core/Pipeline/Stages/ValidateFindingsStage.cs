@@ -24,7 +24,7 @@ public sealed class ValidateFindingsStage(
         var repoDir = ctx.RequireRepoDir();
         var accepted = new List<RichFinding>();
         var changedFiles = ctx.ChangedFiles
-            .Select(Normalize)
+            .Select(RepoPath.Normalize)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var finding in ctx.Result!.Findings)
@@ -43,7 +43,7 @@ public sealed class ValidateFindingsStage(
                 continue;
             }
 
-            var path = Normalize(finding.Anchor.FilePath);
+            var path = RepoPath.Normalize(finding.Anchor.FilePath);
             if (!changedFiles.Contains(path) ||
                 (ctx.Diff is not null && !ctx.Diff.Contains(path, finding.Anchor.StartLine)))
             {
@@ -101,6 +101,4 @@ public sealed class ValidateFindingsStage(
         return true;
     }
 
-    private static string Normalize(string path)
-        => path.Replace('\\', '/').TrimStart('/');
-}
+    }

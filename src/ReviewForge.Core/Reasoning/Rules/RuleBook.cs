@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+using ReviewForge.Core.Analysis;
+
 namespace ReviewForge.Core.Reasoning.Rules;
 
 [ExcludeFromCodeCoverage]
@@ -106,7 +108,7 @@ public sealed class RuleBookComposer
     private static bool IsActive(RulePack pack, IReadOnlyList<string> changedFiles, IReadOnlyList<string> rootFiles)
     {
         if (pack.Activation.Always) return true;
-        var files = changedFiles.Select(Normalize).ToArray();
+        var files = changedFiles.Select(RepoPath.Normalize).ToArray();
         return files.Any(file => pack.Activation.Extensions.Any(ext => file.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
                                  || pack.Activation.PathPatterns.Any(pattern => files.Any(file => GlobMatch(pattern, file))))
                || rootFiles.Select(Path.GetFileName).Any(root => pack.Activation.RootFiles.Any(expected => string.Equals(root, expected, StringComparison.OrdinalIgnoreCase)));
@@ -114,15 +116,13 @@ public sealed class RuleBookComposer
 
     private static bool GlobMatch(string pattern, string value)
     {
-        var normalizedPattern = Normalize(pattern);
+        var normalizedPattern = RepoPath.Normalize(pattern);
         var candidate = normalizedPattern.Contains("/", StringComparison.Ordinal)
             ? value
             : Path.GetFileName(value).Replace('\\', '/');
         var regex = "^" + Regex.Escape(normalizedPattern).Replace("\\*\\*", ".*").Replace("\\*", "[^/]*") + "$";
         return Regex.IsMatch(candidate, regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
-
-    private static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
 
     private static IReadOnlyList<RulePack> LoadEmbeddedPacksCore()
     {

@@ -449,3 +449,18 @@ public class AnchorResolverTests
         Assert.Equal(3, a2!.StartLine);
     }
 }
+
+public class RepoPathTests
+{
+    [Theory]
+    [InlineData(@"src\Foo\Bar.cs", "src/Foo/Bar.cs")]
+    [InlineData("/src/Foo.cs", "src/Foo.cs")]
+    [InlineData(@"\\server\share\f.cs", "server/share/f.cs")]
+    [InlineData("already/fine.cs", "already/fine.cs")]
+    public void Normalize_canonicalizes(string input, string expected)
+        => Assert.Equal(expected, RepoPath.Normalize(input));
+
+    [Fact]
+    public void NormalizeKey_lowercases()
+        => Assert.Equal("src/foo.cs", RepoPath.NormalizeKey(@"\Src\Foo.cs"));
+}

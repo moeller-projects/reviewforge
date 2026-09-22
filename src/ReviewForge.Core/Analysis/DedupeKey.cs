@@ -17,7 +17,7 @@ public static class DedupeKey
     {
         var input = string.Join('|',
             ruleId.Trim().ToLowerInvariant(),
-            filePath.Replace('\\', '/').TrimStart('/').ToLowerInvariant(),
+            RepoPath.NormalizeKey(filePath),
             NormalizeSnippet(snippet));
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input)))[..16].ToLowerInvariant();

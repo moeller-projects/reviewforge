@@ -27,7 +27,7 @@ public sealed class PrepareRepositoryStage(
         var reviewable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in ctx.ChangedFileManifest.Where(f => f.ChangeType != ChangedFileType.Delete))
         {
-            var path = Normalize(file.Path);
+            var path = RepoPath.Normalize(file.Path);
             if (nonReviewable.Contains(path))
             {
                 logger.LogInformation("excluding non-reviewable file {Path} ({Kind}) from review scope",
@@ -43,7 +43,7 @@ public sealed class PrepareRepositoryStage(
             reviewable.Add(path);
         }
 
-        var diffFiles = ctx.Diff.Files.Select(Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var diffFiles = ctx.Diff.Files.Select(RepoPath.Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var missingFromDiff = reviewable.Where(f => !diffFiles.Contains(f)).ToArray();
         foreach (var orphan in missingFromDiff)
         {
@@ -61,6 +61,4 @@ public sealed class PrepareRepositoryStage(
         ctx.ReviewableFiles = reviewable;
     }
 
-    private static string Normalize(string path)
-        => path.Replace('\\', '/').TrimStart('/');
-}
+    }

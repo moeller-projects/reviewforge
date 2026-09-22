@@ -83,7 +83,7 @@ public sealed class ReviewTools(
             if (finding.Anchor is not { } anchor)
                 return "finding rejected: a changed file and line are required for this pull-request review";
 
-            var path = Normalize(anchor.FilePath);
+            var path = RepoPath.Normalize(anchor.FilePath);
             if (!_ChangedFiles.Contains(path))
                 return $"finding rejected: '{anchor.FilePath}' is outside the current pull-request diff";
             if (_Diff is not null && !_Diff.Contains(path, anchor.StartLine))
@@ -155,6 +155,4 @@ public sealed class ReviewTools(
         return errors;
     }
 
-    private static string Normalize(string path)
-        => path.Replace('\\', '/').TrimStart('/');
-}
+    }

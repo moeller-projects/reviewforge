@@ -222,12 +222,12 @@ public sealed class DiffIndex
 
     /// <summary>Number of coalesced ranges for a file (test seam — asserts coalescing).</summary>
     internal int RangeCount(string filePath)
-        => _ChangedLines.TryGetValue(NormalizePath(filePath), out var ranges) ? ranges.Count : 0;
+        => _ChangedLines.TryGetValue(RepoPath.Normalize(filePath), out var ranges) ? ranges.Count : 0;
 
     /// <summary>True when the line is part of the PR's changed (added-side) lines.</summary>
     public bool Contains(string filePath, int line)
     {
-        var normalized = NormalizePath(filePath);
+        var normalized = RepoPath.Normalize(filePath);
         if (!_ChangedLines.TryGetValue(normalized, out var ranges))
         {
             return false;
@@ -257,6 +257,4 @@ public sealed class DiffIndex
         return false;
     }
 
-    private static string NormalizePath(string filePath)
-        => filePath.Replace('\\', '/').TrimStart('/');
-}
+    }
