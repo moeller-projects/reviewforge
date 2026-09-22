@@ -199,6 +199,36 @@ public class ReviewWorkerTests
     }
 
     [Fact]
+    public async Task Worker_preserves_enqueued_head_when_initial_fetch_fails()
+    {
+        using var h = new Harness(source: new FailingFetchSource());
+        var runId = Guid.NewGuid();
+        Assert.True(h.Claims.TryClaim(Key, runId, out _));
+        Assert.True(h.Queue.TryEnqueue(
+            new ReviewRequest(runId, Key, h.Clock.GetUtcNow(), HeadSha: "candidate-head")).Accepted);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var workerTask = h.Worker.StartAsync(cts.Token);
+
+        for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
+        {
+            await Task.Delay(25);
+        }
+
+        var failed = Assert.Single(h.Store.RecentRuns);
+        Assert.Equal("candidate-head", failed.HeadSha);
+
+        await cts.CancelAsync();
+        try
+        {
+            await workerTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    [Fact]
     public async Task Worker_failure_persist_never_throws_when_store_fails()
     {
         using var h = new Harness(git: new ThrowingGitOps(), store: new ThrowingStore());
@@ -242,6 +272,12 @@ public class ReviewWorkerTests
     {
         public override Task SaveRunAsync(ReviewRun run, CancellationToken ct)
             => throw new InvalidOperationException("store down");
+    }
+
+    private sealed class FailingFetchSource : FakePullRequestSource
+    {
+        public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+            => Task.FromException<PullRequest>(new InvalidOperationException("fetch failed"));
     }
 
     /// <summary>Source that hangs in the PR fetch until the run token is cancelled.</summary>

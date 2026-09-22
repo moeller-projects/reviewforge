@@ -145,7 +145,11 @@ public sealed class DiscoveryService(
                     // fast worker can never resurrect a finished run with a stale write.
                     tracker.Set(runId, candidate.Key, RunState.Queued);
                     var result = queue.TryEnqueue(new ReviewRequest(
-                        runId, candidate.Key, _Clock.GetUtcNow(), Activity.Current?.Context));
+                        runId,
+                        candidate.Key,
+                        _Clock.GetUtcNow(),
+                        Activity.Current?.Context,
+                        candidate.Pr.SourceCommitSha));
                     if (!result.Accepted)
                     {
                         tracker.Remove(runId);

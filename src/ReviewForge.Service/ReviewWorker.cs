@@ -133,7 +133,7 @@ public sealed class ReviewWorker(
             await store.SaveRunAsync(new ReviewRun(
                 request.RunId,
                 request.Pr,
-                ctx?.PullRequest?.SourceCommitSha ?? string.Empty,
+                ctx?.PullRequest?.SourceCommitSha ?? request.HeadSha ?? string.Empty,
                 ctx?.Kind ?? ReviewKind.Full,
                 ctx?.StartedAt ?? request.EnqueuedAt,
                 _Clock.GetUtcNow(),

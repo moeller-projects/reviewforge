@@ -6,7 +6,11 @@ using ReviewForge.Core.Pipeline;
 namespace ReviewForge.Service.Queue;
 
 public sealed record ReviewRequest(
-    Guid RunId, PrKey Pr, DateTimeOffset EnqueuedAt, ActivityContext? EnqueueContext = null);
+    Guid RunId,
+    PrKey Pr,
+    DateTimeOffset EnqueuedAt,
+    ActivityContext? EnqueueContext = null,
+    string? HeadSha = null);
 
 public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 
