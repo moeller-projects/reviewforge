@@ -10,8 +10,19 @@ using Xunit;
 namespace ReviewForge.Core.Tests;
 
 /// <summary>Tests pinned to specific pipeline behaviors that the happy-path suite does not reach.</summary>
-public class CoverageGapTests
+public class CoverageGapTests : IDisposable
 {
+    // The pool constructor creates checkouts/ + mirror/; keep it out of the shared temp root.
+    private readonly string _PoolRoot = Path.Combine(Path.GetTempPath(), "reviewforge-coverage-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_PoolRoot))
+        {
+            Directory.Delete(_PoolRoot, recursive: true);
+        }
+    }
+
     [Fact]
     public void All_stages_have_stable_names()
     {
@@ -23,7 +34,7 @@ public class CoverageGapTests
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(),
-            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath()), NullLogger<PrepareRepositoryStage>.Instance),
+            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), _PoolRoot), NullLogger<PrepareRepositoryStage>.Instance),
             new ClassifyRunStage(source),
             new EnrichContextStage(null, NullLogger<EnrichContextStage>.Instance),
             new ExecuteReasoningStage(agent),
