@@ -10,11 +10,12 @@ namespace ReviewForge.Infrastructure.Git;
 /// </summary>
 public sealed class GitOperationScheduler : IDisposable
 {
-    private sealed record WorkItem(
-        Func<object?> Work,
-        TaskCompletionSource<object?> Completion,
-        CancellationToken Ct,
-        CancellationTokenRegistration Registration);
+    private sealed class WorkItem(Func<object?> work, TaskCompletionSource<object?> completion, CancellationToken ct)
+    {
+        public Func<object?> Work { get; } = work;
+        public TaskCompletionSource<object?> Completion { get; } = completion;
+        public CancellationToken Ct { get; } = ct;
+    }
 
     private readonly BlockingCollection<WorkItem> _Queue = new(new ConcurrentQueue<WorkItem>());
     private readonly Thread[] _Threads;
@@ -42,23 +43,20 @@ public sealed class GitOperationScheduler : IDisposable
         ObjectDisposedException.ThrowIf(_Disposed != 0, this);
         var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // A pre-cancelled token fires the registration synchronously and then faults the
-        // enqueue; both paths funnel through the cancellation handling below.
-        var registration = ct.Register(() => completion.TrySetCanceled(ct));
         try
         {
             _Queue.Add(new WorkItem(() =>
             {
                 ct.ThrowIfCancellationRequested();
                 return work();
-            }, completion, ct, registration), ct);
+            }, completion, ct), ct);
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
         {
             // Cancelled before enqueue, or scheduler is completing.
-            registration.Dispose();
             completion.TrySetCanceled(ct.IsCancellationRequested ? ct : CancellationToken.None);
         }
+
 
         return Unwrap<T>(completion);
     }
@@ -84,10 +82,6 @@ public sealed class GitOperationScheduler : IDisposable
                 {
                     item.Completion.TrySetException(ex);
                 }
-                finally
-                {
-                    item.Registration.Dispose();
-                }
             }
         }
         catch (ObjectDisposedException)
@@ -104,7 +98,10 @@ public sealed class GitOperationScheduler : IDisposable
         }
 
         _Queue.CompleteAdding();
-        // Threads are background; in-flight LibGit2Sharp calls finish on their own.
+        foreach (var thread in _Threads)
+        {
+            thread.Join();
+        }
         _Queue.Dispose();
     }
 }

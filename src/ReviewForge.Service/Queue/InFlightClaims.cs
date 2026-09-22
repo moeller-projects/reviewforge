@@ -20,14 +20,15 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
     /// <summary>The claim lifetime used to expire queued/crashed reservations.</summary>
     public TimeSpan Ttl => _Ttl;
 
-    /// <summary>Number of currently held claims.</summary>
+    /// <summary>Number of currently held, unexpired claims.</summary>
     public int ActiveCount
     {
         get
         {
             lock (_Gate)
             {
-                return _Claims.Count;
+                var now = _Clock.GetUtcNow();
+                return _Claims.Values.Count(claim => now - claim.ClaimedAt <= _Ttl);
             }
         }
     }

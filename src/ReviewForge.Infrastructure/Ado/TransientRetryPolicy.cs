@@ -42,17 +42,17 @@ public sealed class TransientRetryPolicy(
                                        && !ct.IsCancellationRequested
                                        && isTransient(ex))
             {
-                var wait = retryAfterProbe?.Invoke(ex) is { } serverDelay
-                    ? Clamp(serverDelay)
-                    : Clamp(delay);
-                wait = Jitter(wait);
+                var serverDelay = retryAfterProbe?.Invoke(ex);
+                var wait = serverDelay is { } delayFromServer
+                    ? Clamp(delayFromServer)
+                    : Jitter(Clamp(delay));
 
                 logger?.LogWarning(ex,
                     "ADO call {Operation} failed transiently (attempt {Attempt}/{MaxAttempts}); retrying in {DelayMs} ms",
                     operationName, attempt, options.MaxAttempts, wait.TotalMilliseconds);
 
                 await Task.Delay(wait, _Clock, ct).ConfigureAwait(false);
-                delay += delay;
+                delay = delay >= options.MaxDelay - delay ? options.MaxDelay : delay + delay;
             }
         }
     }

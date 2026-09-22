@@ -146,7 +146,11 @@ internal sealed class RunLogWriter : IDisposable
     private readonly object _Gate = new();
 
     public RunLogWriter(string path)
-        => _Writer = new StreamWriter(path, append: true) {AutoFlush = true};
+        => _Writer = new StreamWriter(
+            new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read))
+        {
+            AutoFlush = true,
+        };
 
     public void Write(RunLogEntry entry)
     {

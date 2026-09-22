@@ -169,16 +169,17 @@ public sealed class LibGit2SharpGitOps : IGitOps
             }
 
             var text = entry.Patch ?? string.Empty;
-            if (text.Length > budget.MaxPerFileBytes)
+            var textBytes = Encoding.UTF8.GetByteCount(text);
+            if (textBytes > budget.MaxPerFileBytes)
             {
                 sb.Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
                   .Append("--- a/").Append(path).Append('\n')
                   .Append("+++ b/").Append(path).Append('\n')
-                  .Append("…[file diff skipped — ").Append(text.Length).Append(" bytes exceeds the per-file budget; use repo_read_file]\n");
+                  .Append("…[file diff skipped — ").Append(textBytes).Append(" bytes exceeds the per-file budget; use repo_read_file]\n");
                 continue;
             }
 
-            if (total + text.Length > budget.MaxTotalBytes)
+            if (total + textBytes > budget.MaxTotalBytes)
             {
                 sb.Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
                   .Append("--- a/").Append(path).Append('\n')
@@ -188,7 +189,7 @@ public sealed class LibGit2SharpGitOps : IGitOps
             }
 
             sb.Append(text);
-            total += text.Length;
+            total += textBytes;
         }
 
         return sb.ToString();

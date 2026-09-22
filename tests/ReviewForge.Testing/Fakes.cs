@@ -238,6 +238,7 @@ public class FakeFindingStore : IFindingStore
     {
         Runs.RemoveAll(r => r.Id == run.Id);
         Runs.Add(run);
+        RecentRuns.RemoveAll(r => r.Id == run.Id);
         RecentRuns.Add(run);
         return Task.CompletedTask;
     }

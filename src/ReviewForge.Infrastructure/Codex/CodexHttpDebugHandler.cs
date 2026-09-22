@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Text;
 
 namespace ReviewForge.Infrastructure.Codex;
 
@@ -63,9 +64,27 @@ public sealed class CodexHttpDebugHandler : DelegatingHandler
     }
 
     internal string Truncate(string body)
-        => body.Length <= _MaxBodyBytes
-            ? body
-            : string.Concat(body.AsSpan(0, _MaxBodyBytes), $"... [truncated {body.Length - _MaxBodyBytes} chars]");
+    {
+        var byteCount = Encoding.UTF8.GetByteCount(body);
+        if (byteCount <= _MaxBodyBytes)
+        {
+            return body;
+        }
+
+        var length = Math.Min(body.Length, _MaxBodyBytes);
+        while (Encoding.UTF8.GetByteCount(body.AsSpan(0, length)) > _MaxBodyBytes)
+        {
+            length--;
+        }
+
+        if (length > 0 && length < body.Length &&
+            char.IsHighSurrogate(body[length - 1]) && char.IsLowSurrogate(body[length]))
+        {
+            length--;
+        }
+
+        return $"{body[..length]}... [truncated {Encoding.UTF8.GetByteCount(body.AsSpan(length))} bytes]";
+    }
 
     private static string SafeHeaders(HttpHeaders headers)
         => string.Join(", ", headers.Select(h => RedactedHeaders.Contains(h.Key)

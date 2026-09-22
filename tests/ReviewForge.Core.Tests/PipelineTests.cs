@@ -586,7 +586,7 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Triage_keeps_thread_when_key_in_prior_run()
+    public async Task Triage_resolves_thread_when_key_only_exists_in_prior_run()
     {
         var source = new FakePullRequestSource();
         var t0 = DateTimeOffset.UtcNow;
@@ -600,8 +600,9 @@ public class StageTests : IDisposable
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(source.StatusChanges);
-        Assert.Empty(source.Replies);
+        Assert.Contains(source.StatusChanges, s => s.ThreadId == 2 && s.Status == ReviewThreadStatus.Fixed);
+        Assert.Contains(source.Replies, r => r.ThreadId == 2 && r.Text == CommentFormatter.WithBotPreamble(
+            "Resolved: this finding no longer reproduces in the latest iteration."));
     }
 
     [Fact]
@@ -1264,7 +1265,14 @@ public class StageTests : IDisposable
         try
         {
             Directory.CreateDirectory(Path.Combine(_RepoDir, "linked"));
-            File.CreateSymbolicLink(Path.Combine(_RepoDir, "linked", "secret.txt"), outside);
+            try
+            {
+                File.CreateSymbolicLink(Path.Combine(_RepoDir, "linked", "secret.txt"), outside);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                return; // Windows symlinks require Developer Mode or SeCreateSymbolicLinkPrivilege.
+            }
 
             var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("linked/secret.txt", 1, 1), Snippet = "MARKER-UNIQUE-SECRET"};
             var ctx = Ctx();
@@ -1286,7 +1294,14 @@ public class StageTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_RepoDir, "real"));
         File.WriteAllText(Path.Combine(_RepoDir, "real", "b.txt"), "MARKER-INSIDE");
         Directory.CreateDirectory(Path.Combine(_RepoDir, "a"));
-        File.CreateSymbolicLink(Path.Combine(_RepoDir, "a", "b.txt"), Path.Combine(_RepoDir, "real", "b.txt"));
+        try
+        {
+            File.CreateSymbolicLink(Path.Combine(_RepoDir, "a", "b.txt"), Path.Combine(_RepoDir, "real", "b.txt"));
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return; // Windows symlinks require Developer Mode or SeCreateSymbolicLinkPrivilege.
+        }
 
         var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("a/b.txt", 1, 1), Snippet = "MARKER-INSIDE"};
         var ctx = Ctx();

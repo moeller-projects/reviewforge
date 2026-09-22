@@ -19,6 +19,9 @@ public static class FailureBackoff
         DateTimeOffset now,
         FailureBackoffPolicy policy)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(policy.Base, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThan(policy.Max, policy.Base);
+
         var streak = 0;
         DateTimeOffset? lastFailure = null;
         foreach (var run in recentRuns)

@@ -74,7 +74,10 @@ public sealed class SqliteFindingStore : IFindingStore
     public async Task PingAsync(CancellationToken ct)
     {
         await using var db = CreateContext();
-        await db.Database.CanConnectAsync(ct);
+        if (!await db.Database.CanConnectAsync(ct).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("SQLite database connection failed.");
+        }
     }
 
     public async Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct)

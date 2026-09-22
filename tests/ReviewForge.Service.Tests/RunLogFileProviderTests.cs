@@ -52,13 +52,14 @@ public class RunLogFileProviderTests : IDisposable
     [Fact]
     public void Scoped_entry_writes_one_json_line()
     {
-        var logger = BuildLogger(out _);
+        var logger = BuildLogger(out var provider);
         var runId = Guid.NewGuid();
 
         using (logger.BeginScope(new Dictionary<string, object> {["RunId"] = runId}))
         {
             logger.LogInformation("stage {Stage} done", "x");
         }
+        provider.CloseRun(runId);
 
         var file = Assert.Single(Directory.GetFiles(LogsDir));
         Assert.Equal($"{runId:N}.jsonl", Path.GetFileName(file));
@@ -84,6 +85,7 @@ public class RunLogFileProviderTests : IDisposable
         {
             logger.LogInformation("second");
         }
+        provider.CloseRun(runId);
 
         var file = Assert.Single(Directory.GetFiles(LogsDir));
         Assert.Equal(2, File.ReadLines(file).Count());
@@ -92,7 +94,7 @@ public class RunLogFileProviderTests : IDisposable
     [Fact]
     public void MinLevel_filters_debug_entries()
     {
-        var logger = BuildLogger(out _, new RunLogOptions {MinLevel = LogLevel.Information});
+        var logger = BuildLogger(out var provider, new RunLogOptions {MinLevel = LogLevel.Information});
         var runId = Guid.NewGuid();
 
         using (logger.BeginScope(new Dictionary<string, object> {["RunId"] = runId}))
@@ -100,6 +102,7 @@ public class RunLogFileProviderTests : IDisposable
             logger.LogDebug("debug detail");
             logger.LogInformation("info detail");
         }
+        provider.CloseRun(runId);
 
         var file = Assert.Single(Directory.GetFiles(LogsDir));
         var text = File.ReadAllText(file);

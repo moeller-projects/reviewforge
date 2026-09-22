@@ -62,6 +62,7 @@ public class CoverageGapTests : IDisposable
 
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
         {
+            PullRequest = source.Pr,
             Threads = source.Threads,
             Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
             AcceptedFindings = [],

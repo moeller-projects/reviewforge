@@ -81,7 +81,7 @@ public class CodexHttpDebugHandlerTests
             new StringContent(body, Encoding.UTF8, "application/json"));
 
         var log = output.ToString();
-        Assert.Contains("... [truncated 5904 chars]", log);
+        Assert.Contains("... [truncated 5904 bytes]", log);
         Assert.DoesNotContain(new string('x', 4097), log);
     }
 
@@ -154,7 +154,7 @@ public class CodexHttpDebugHandlerTests
                 new StringContent(new string('y', 100), Encoding.UTF8, "application/json"));
 
             var log = output.ToString();
-            Assert.Contains("... [truncated 84 chars]", log);
+            Assert.Contains("... [truncated 84 bytes]", log);
             Assert.DoesNotContain(new string('y', 17), log);
         }
         finally

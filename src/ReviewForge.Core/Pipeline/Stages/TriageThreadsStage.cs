@@ -22,15 +22,17 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
         var botThreads = ctx.Threads.Where(t => t.DedupeKey is not null).ToList();
         var agentActions = ctx.RequireResult().Narrative.ThreadActions ?? [];
 
-        // A finding "still reproduces" when it was accepted this run, was posted by a prior run,
-        // or was re-detected this run but dedupe-rejected. Auto-resolve is reserved for keys that
-        // are absent from all three — never for a finding merely filtered out by dedupe.
+        // Only findings validated in this run count as current. Prior keys remain in
+        // persistence for deduplication, but must not keep stale bot threads alive.
         var currentKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
-        if (ctx.PriorRun is { } prior)
-        {
-            currentKeys.UnionWith(prior.FindingKeys);
-        }
         currentKeys.UnionWith(ctx.Collector.RedetectedKeys);
+
+        var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
+        var reviewed = ctx.RequirePullRequest().SourceCommitSha;
+        if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new PrHeadChangedException(reviewed, current.SourceCommitSha);
+        }
 
         ctx.TriagePlan = ThreadTriage.Plan(botThreads, currentKeys, agentActions, CommentFormatter.WithBotPreamble);
         ctx.UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions);
@@ -70,6 +72,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
                     ReviewForgeTelemetry.ThreadsReplied.Add(1);
                 }
             }
+            PublishGuardChecks.ThrowIfClaimLost(ctx, $"before status write on thread {op.ThreadId}");
 
             if (op.NewStatus is { } status)
             {

@@ -18,9 +18,9 @@ public sealed class FetchPrContextStage(IPullRequestSource source, IFindingStore
         var userTask = source.GetCurrentUserAsync(ct);
         var priorRunTask = store.GetLastCompletedRunAsync(ctx.Pr, ct);
 
-        await Task.WhenAll(prTask, workItemsTask, filesTask, threadsTask, userTask, priorRunTask);
-
         ctx.PullRequest = await prTask;
+        await Task.WhenAll(workItemsTask, filesTask, threadsTask, userTask, priorRunTask);
+
         ctx.WorkItems = await workItemsTask;
         ctx.ChangedFileManifest = await filesTask;
         ctx.Threads = await threadsTask;

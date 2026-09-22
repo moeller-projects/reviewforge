@@ -105,10 +105,12 @@ public static class PromptBuilder
         }
 
         sb.AppendLine("## Changed files");
+        sb.AppendLine(UntrustedBegin);
         foreach (var file in input.ChangedFiles)
         {
-            sb.AppendLine($"- {file}");
+            sb.AppendLine($"- {Sanitize(file)}");
         }
+        sb.AppendLine(UntrustedEnd);
 
         sb.AppendLine("You may read unchanged files for dependency context, but every file-specific finding MUST target a changed file and changed line in this pull request. Do not report pre-existing issues from unchanged files or use a general finding to bypass this scope.");
         sb.AppendLine();

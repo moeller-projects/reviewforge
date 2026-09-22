@@ -95,9 +95,10 @@ public sealed class DiscoveryService(
                     && string.Equals(candidate.Pr.SourceCommitSha, prior.HeadSha, StringComparison.Ordinal))
                 {
                     var threads = await source.GetThreadsAsync(candidate.Key, token);
+                    var watermark = prior.LastObservedCommentAt ?? prior.CompletedAt;
                     hasNewHumanComments = threads
                         .SelectMany(t => t.Comments)
-                        .Any(c => !c.IsBot && c.PublishedAt > prior.CompletedAt);
+                        .Any(c => !c.IsBot && c.PublishedAt > watermark);
                 }
 
                 var headDecision = DiscoveryFilter.Evaluate(

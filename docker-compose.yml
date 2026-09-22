@@ -10,7 +10,6 @@ services:
     image: reviewforge:latest
     container_name: reviewforge
     restart: unless-stopped
-    profiles: ["default", "observability"]
     ports:
       # Loopback by default: the CLI talks to http://localhost:5080. Set REVIEWFORGE_BIND
       # to expose beyond the host — only behind a TLS reverse proxy with network ACLs.

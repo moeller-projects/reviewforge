@@ -86,6 +86,8 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(DiscoveryOptions.SectionName))
             .ValidateDataAnnotations()
             .Validate(o => o.MaxEnqueuesPerSweep >= 1, "Discovery:MaxEnqueuesPerSweep must be at least 1")
+            .Validate(o => o.FailureBackoffBase > TimeSpan.Zero, "Discovery:FailureBackoffBase must be greater than 0")
+            .Validate(o => o.FailureBackoffMax >= o.FailureBackoffBase, "Discovery:FailureBackoffMax must be at least FailureBackoffBase")
             .ValidateOnStart();
         services.AddSingleton(sp => new GitOperationScheduler(
             sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.GitMaxConcurrency));
@@ -156,10 +158,14 @@ public static class ServiceCollectionExtensions
                 {
                     opts.Keys = fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 }
+                opts.Keys = [.. opts.Keys.Where(key => !string.IsNullOrWhiteSpace(key))];
             })
-            .Validate(opts => opts.AllowUnauthenticatedForDevelopment || opts.Keys.Length > 0,
+            .Validate(opts => opts.AllowUnauthenticatedForDevelopment ||
+                              opts.Keys.Any(key => !string.IsNullOrWhiteSpace(key)),
                 $"No API keys configured. Set {ApiKeyOptions.KeysEnvironmentVariable} or Api:Keys, " +
                 "or set Api:AllowUnauthenticatedForDevelopment=true for local development only.")
+            .Validate(opts => opts.SubmitPermitLimit > 0, "Api:SubmitPermitLimit must be greater than 0.")
+            .Validate(opts => opts.SubmitWindowSeconds > 0, "Api:SubmitWindowSeconds must be greater than 0.")
             .ValidateOnStart();
 
         services.AddRateLimiter(limiter =>

@@ -14,4 +14,8 @@
         <ProjectReference Include="../ReviewForge.Service/ReviewForge.Service.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+        <PackageReference Include="Aspire.Hosting.AppHost"/>
+    </ItemGroup>
+
 </Project>

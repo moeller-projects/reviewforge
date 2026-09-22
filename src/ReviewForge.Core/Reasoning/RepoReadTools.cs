@@ -25,7 +25,7 @@ public class RepoReadTools
         @"\.env($|\.)", @"\.envrc$",
         @"\.pem$", @"\.key$", @"\.pfx$", @"\.p12$", @"\.snk$",
         @"(^|/)id_(rsa|dsa|ecdsa|ed25519)$",
-        @"(^|/|\.)(kube)?config$",          // .kubeconfig, kubeconfig
+        @"(^|/)\.kube/config$|(^|/|\.)kubeconfig$",
         @"(^|/)\.aws/",                     // AWS credentials & config
         @"(^|/)\.npmrc$", @"(^|/)\.pypirc$", // registry tokens
         @"(^|/)appsettings\.[^/]+\.json$",  // environment-specific settings (base appsettings.json stays readable)

@@ -19,8 +19,8 @@ public sealed class RepoCheckoutPool
     private readonly string? _Pat;
     private readonly string _Root;
 
-    // path -> byte size. Checkouts are keyed by head SHA and immutable after
-    // materialization, so a cached size never goes stale; entries are removed on delete.
+    // path -> byte size. Checkouts can gain Git objects during targeted fetches, so
+    // the reuse path refreshes the cached measurement after a successful fetch.
     private readonly ConcurrentDictionary<string, long> _SizeCache = new(StringComparer.Ordinal);
 
     public RepoCheckoutPool(IGitOps git, IWorkspaceFs fs, string root, string? pat = null)
@@ -49,6 +49,7 @@ public sealed class RepoCheckoutPool
                 string.Equals(await _Git.GetHeadShaAsync(path, ct).ConfigureAwait(false), headSha, StringComparison.OrdinalIgnoreCase))
             {
                 await _Git.EnsureCommitsAsync(path, cloneUrl, baseSha, headSha, _Pat, ct).ConfigureAwait(false);
+                RefreshCachedSize(path);
                 _Fs.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
@@ -71,14 +72,7 @@ public sealed class RepoCheckoutPool
                         _Fs.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
                     }
 
-                    try
-                    {
-                        _SizeCache[repoPath] = DirectorySize(repoPath);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        _SizeCache.TryRemove(repoPath, out _); // measure later during eviction
-                    }
+                    RefreshCachedSize(repoPath);
 
                     ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                     return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
@@ -153,6 +147,7 @@ public sealed class RepoCheckoutPool
                 if (evictionLease is null)
                 {
                     inUse++;
+                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path)));
                     continue;
                 }
 
@@ -254,6 +249,18 @@ public sealed class RepoCheckoutPool
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return 0; // transient — measured again next sweep
+        }
+    }
+
+    private void RefreshCachedSize(string path)
+    {
+        try
+        {
+            _SizeCache[path] = DirectorySize(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _SizeCache.TryRemove(path, out _);
         }
     }
 

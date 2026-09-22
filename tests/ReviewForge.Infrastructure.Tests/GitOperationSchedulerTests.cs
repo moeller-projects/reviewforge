@@ -106,16 +106,15 @@ public class GitOperationSchedulerTests
         }, cts.Token);
 
         cts.Cancel();
+        release.Set();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
         Assert.False(ran);
-
-        release.Set();
         await blocking;
     }
 
     [Fact]
-    public async Task RunAsync_cancellation_of_running_item_completes_caller_but_finishes_work()
+    public async Task RunAsync_cancellation_of_running_item_waits_for_native_work()
     {
         using var scheduler = new GitOperationScheduler(1);
         using var started = new ManualResetEventSlim(false);
@@ -132,17 +131,12 @@ public class GitOperationSchedulerTests
         }, cts.Token);
 
         started.Wait();
-        cts.Cancel(); // cancels the caller's task while the native work keeps running
+        cts.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+        Assert.False(task.IsCompleted);
+        finish.Set();
 
-        finish.Set(); // native work completes in the background
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!sideEffect && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(10);
-        }
-
+        Assert.True(await task);
         Assert.True(sideEffect);
     }
 

@@ -6,6 +6,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 // names only here — never commit real credentials.
 var adoPat = builder.AddParameter("ado-pat", secret: true);
 var openAiKey = builder.AddParameter("openai-api-key", secret: true);
+var apiKey = builder.AddParameter("api-key", secret: true);
 
 // Dev-loop scratch state under temp (matches the prior env pass-through behavior).
 var reviewforgeWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge");
@@ -24,6 +25,7 @@ var service = builder.AddProject<Projects.ReviewForge_Service>("reviewforge")
         $"Data Source={Path.Combine(reviewforgeWorkDir, "reviewforge.db")}")
     .WithEnvironment("REVIEWFORGE_ADO_PAT", adoPat)
     .WithEnvironment("OPENAI_API_KEY", openAiKey)
+    .WithEnvironment("REVIEWFORGE_API_KEYS", apiKey)
     // Make the env-driven OTLP contract explicit and greppable. Aspire injects
     // OTEL_EXPORTER_OTLP_ENDPOINT for hosted projects automatically; this assertion
     // documents intent — do NOT set the endpoint here.
