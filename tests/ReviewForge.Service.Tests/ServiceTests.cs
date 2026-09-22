@@ -870,6 +870,35 @@ public sealed class QueueFailureTests
         var claims = factory.Services.GetRequiredService<InFlightClaims>();
         Assert.True(claims.TryClaim(new PrKey("o", "p", "closed", 99), Guid.NewGuid(), out _));
     }
+
+    [Fact]
+    public async Task SubmitReview_fast_worker_never_reports_queued_after_completion()
+    {
+        using var factory = new ReviewForgeFactory();
+        var tracker = factory.Services.GetRequiredService<RunTracker>();
+        var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = 1});
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        Assert.NotNull(body);
+
+        // Wait for the run to reach a terminal state, then keep polling briefly: the
+        // sticky-terminal invariant guarantees it can never flip back to Queued.
+        for (var i = 0; i < 400 && tracker.Get(body.RunId)?.State is not (RunState.Completed or RunState.Failed or RunState.Skipped); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.True(tracker.Get(body.RunId)?.State is RunState.Completed or RunState.Failed,
+            $"expected a terminal state, got {tracker.Get(body.RunId)?.State}");
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.NotEqual(RunState.Queued, tracker.Get(body.RunId)?.State);
+            await Task.Delay(10);
+        }
+    }
 }
 
 [Collection("ReviewForge service host")]

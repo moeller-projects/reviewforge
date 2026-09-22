@@ -140,17 +140,20 @@ public sealed class DiscoveryService(
                         return;
                     }
 
+                    // Track-then-enqueue (P2-25): Queued is recorded before the channel write so a
+                    // fast worker can never resurrect a finished run with a stale write.
+                    tracker.Set(runId, candidate.Key, RunState.Queued);
                     var result = queue.TryEnqueue(new ReviewRequest(
                         runId, candidate.Key, _Clock.GetUtcNow(), Activity.Current?.Context));
                     if (!result.Accepted)
                     {
+                        tracker.Remove(runId);
                         claims.Release(candidate.Key, runId);
                         Skip(candidate.Key, "queue full");
                         return;
                     }
 
                     ReviewForgeTelemetry.DiscoveryEnqueued.Add(1);
-                    tracker.Set(runId, candidate.Key, RunState.Queued);
                     enqueued.Enqueue(candidate.Key);
                 }
             });

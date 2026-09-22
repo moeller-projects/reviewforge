@@ -298,13 +298,18 @@ public class DiscoveryServiceTests
         };
         var queue = new ReviewQueue(capacity: 1);
         var claims = new InFlightClaims();
-        var service = Service(source, new FakeFindingStore(), queue, new RunTracker(), claims: claims);
+        var tracker = new RunTracker();
+        var service = Service(source, new FakeFindingStore(), queue, tracker, claims: claims);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 
+        // The candidates race for the single slot (parallel fan-out); whichever one loses
+        // the queue must be the skipped one, with its claim released and no tracker entry.
         Assert.Single(report.Enqueued);
-        Assert.Contains(report.Skipped, skipped => skipped.Pr.PrId == 2 && skipped.Reason == "queue full");
-        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 2), Guid.NewGuid(), out _));
+        var skippedEntry = Assert.Single(report.Skipped);
+        Assert.Equal("queue full", skippedEntry.Reason);
+        Assert.True(claims.TryClaim(skippedEntry.Pr, Guid.NewGuid(), out _), "the loser's claim must be released");
+        Assert.Equal(RunState.Queued, Assert.Single(tracker.Snapshot()).State);
     }
 
     [Fact]

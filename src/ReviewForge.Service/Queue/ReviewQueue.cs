@@ -82,9 +82,37 @@ public sealed class RunTracker(
     {
         lock (_Gate)
         {
+            // Terminal states are sticky: a late/stale writer (e.g. a Queued write racing a
+            // fast worker) must never resurrect a finished run.
+            if (_Runs.TryGetValue(runId, out var existing)
+                && IsTerminal(existing.State)
+                && !IsTerminal(state))
+            {
+                return;
+            }
+
             var now = _Clock.GetUtcNow();
             _Runs[runId] = new RunStatus(runId, pr, state, detail, now);
             Evict(now);
+        }
+    }
+
+    /// <summary>Removes an entry (enqueue rollback). Idempotent.</summary>
+    public void Remove(Guid runId)
+    {
+        lock (_Gate)
+        {
+            _Runs.Remove(runId);
+        }
+    }
+
+    /// <summary>Point-in-time copy of every tracked run (tests and diagnostics).</summary>
+    public IReadOnlyList<RunStatus> Snapshot()
+    {
+        lock (_Gate)
+        {
+            Evict(_Clock.GetUtcNow());
+            return [.. _Runs.Values];
         }
     }
 

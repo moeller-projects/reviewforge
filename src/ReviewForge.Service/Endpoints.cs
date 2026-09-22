@@ -65,9 +65,14 @@ public static class Endpoints
             return TypedResults.Conflict(new {error = "a review for this pull request is already in flight", runId = holder});
         }
 
+        // Track-then-enqueue: the run is visible as Queued before the channel write, so a
+        // fast worker can never overwrite a fresh RunTracker write with a stale one
+        // (P2-25). Roll back the tracker entry if the queue rejects.
+        tracker.Set(runId, pr, RunState.Queued);
         var result = queue.TryEnqueue(new ReviewRequest(runId, pr, clock.GetUtcNow()));
         if (!result.Accepted)
         {
+            tracker.Remove(runId);
             claims.Release(pr, runId);
             logger.LogWarning("review submit rejected for {Pr}: queue full (depth {Depth})", pr, result.QueueDepth);
             return TypedResults.Problem(
@@ -76,7 +81,6 @@ public static class Endpoints
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        tracker.Set(runId, pr, RunState.Queued);
         logger.LogInformation("review submitted for {Pr}, run {RunId}", pr, runId);
 
         return TypedResults.Accepted($"/reviews/{runId}", new SubmitReviewResponse(runId, $"/reviews/{runId}"));
