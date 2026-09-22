@@ -36,6 +36,9 @@ public class ReviewWorkerTests
             string cleanVote = "Approved")
         {
             _WorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-worker-" + Guid.NewGuid().ToString("N"));
+            // The real host creates these at startup (P3-m); this direct-factory harness
+            // must prepare its own fixtures.
+            Directory.CreateDirectory(Path.Combine(_WorkDir, "findings"));
             Claims = new InFlightClaims(Clock, Ttl);
             Store = store ?? new FakeFindingStore();
             Source = source ?? new FakePullRequestSource();
@@ -280,6 +283,40 @@ public class ReviewWorkerTests
     {
         using var h = new Harness(cleanVote: "None");
         Assert.NotNull(h.Factory.Create());
+    }
+
+    [Fact]
+    public void FactoryCreate_does_not_touch_the_filesystem()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "reviewforge-nofs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = root});
+            var factory = new ReviewPipelineFactory(
+                new FakePullRequestSource(),
+                new FakeFindingStore(),
+                new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root),
+                new FakeChatClientFactory(
+                    new ScriptedChatClient(
+                        ScriptedChatClient.FunctionCalls(
+                            ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
+                options,
+                LoggerFactory.Create(_ => { }));
+
+            factory.Create();
+            factory.Create();
+
+            // Only the host startup (P3-m) may create the runtime directories; the per-run
+            // factory must not. (The pool itself creates checkouts/ + mirror/ on its own.)
+            Assert.False(Directory.Exists(Path.Combine(root, "findings")));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     /// <summary>Returns a changed PR head on the second fetch (force-push mid-run).</summary>

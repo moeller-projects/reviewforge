@@ -28,6 +28,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<RunTracker>();
         services.AddSingleton<InFlightClaims>();
 
+        // Runtime directories are created once at composition time; the per-run pipeline
+        // factory must not touch the filesystem (P3-m). RunLogFileProvider uses the same
+        // work dir resolution below.
+        var workDir = configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:WorkDir")
+                      ?? Path.Combine(Path.GetTempPath(), "reviewforge");
+        Directory.CreateDirectory(workDir);
+        Directory.CreateDirectory(Path.Combine(workDir, "findings"));
+
         var runLogsEnabled = configuration.GetValue<bool?>(
             $"{ReviewForgeServiceOptions.SectionName}:RunLogs:Enabled") ?? true;
         if (runLogsEnabled)

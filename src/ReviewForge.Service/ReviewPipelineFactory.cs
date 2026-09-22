@@ -92,9 +92,8 @@ public sealed class ReviewPipelineFactory(
             Effort = opts.ReasoningEffort,
             DebugLogging = opts.AgentDebugLogging,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
-        Directory.CreateDirectory(opts.WorkDir);
+
         var findingsDir = Path.Combine(opts.WorkDir, "findings");
-        Directory.CreateDirectory(findingsDir);
 
         var diffBudget = new DiffBudget(
             opts.MaxDiffBytes,
