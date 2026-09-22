@@ -106,4 +106,34 @@ public class RunLogFileProviderTests : IDisposable
         Assert.Contains("info detail", text);
         Assert.DoesNotContain("debug detail", text);
     }
+
+    [Fact]
+    public void Scoped_entry_accepts_a_string_run_id()
+    {
+        var logger = BuildLogger(out _);
+        var runId = Guid.NewGuid();
+
+        using (logger.BeginScope(new Dictionary<string, object> {["RunId"] = runId.ToString("N")}))
+        {
+            logger.LogInformation("in run");
+        }
+
+        var file = Assert.Single(Directory.GetFiles(LogsDir));
+        Assert.Equal($"{runId:N}.jsonl", Path.GetFileName(file));
+    }
+
+    [Fact]
+    public void RunLogger_scopes_are_noops()
+    {
+        var provider = new RunLogFileProvider(_WorkDir, new RunLogOptions());
+        try
+        {
+            var logger = provider.CreateLogger("t");
+            Assert.Null(logger.BeginScope(("k", "v")));
+        }
+        finally
+        {
+            provider.Dispose();
+        }
+    }
 }

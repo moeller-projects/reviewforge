@@ -27,13 +27,20 @@ public class ReviewWorkerTests
         public FakeFindingStore Store { get; }
         public ReviewWorker Worker { get; }
 
-        public Harness(FakeGitOps? git = null, FakeFindingStore? store = null)
+        public ReviewPipelineFactory Factory { get; }
+
+        public Harness(
+            FakePullRequestSource? source = null,
+            FakeGitOps? git = null,
+            FakeFindingStore? store = null,
+            string cleanVote = "Approved")
         {
             _WorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-worker-" + Guid.NewGuid().ToString("N"));
             Claims = new InFlightClaims(Clock, Ttl);
             Store = store ?? new FakeFindingStore();
-            var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = _WorkDir});
-            var factory = new ReviewPipelineFactory(
+            Source = source ?? new FakePullRequestSource();
+            var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = _WorkDir, CleanRunVote = cleanVote});
+            Factory = new ReviewPipelineFactory(
                 Source,
                 Store,
                 new RepoCheckoutPool(git ?? new FakeGitOps(), new FakeWorkspaceFs(), _WorkDir),
@@ -42,7 +49,7 @@ public class ReviewWorkerTests
                         ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
                 LoggerFactory.Create(_ => { }));
-            Worker = new ReviewWorker(Queue, Tracker, factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock);
+            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock);
         }
 
         public void Dispose()
@@ -159,7 +166,7 @@ public class ReviewWorkerTests
     [Fact]
     public async Task Worker_persists_failed_run()
     {
-        using var h = new Harness(new ThrowingGitOps());
+        using var h = new Harness(git: new ThrowingGitOps());
         var runId = Guid.NewGuid();
         Assert.True(h.Claims.TryClaim(Key, runId, out _));
         Assert.True(h.Queue.TryEnqueue(new ReviewRequest(runId, Key, h.Clock.GetUtcNow())).Accepted);
@@ -191,7 +198,7 @@ public class ReviewWorkerTests
     [Fact]
     public async Task Worker_failure_persist_never_throws_when_store_fails()
     {
-        using var h = new Harness(new ThrowingGitOps(), new ThrowingStore());
+        using var h = new Harness(git: new ThrowingGitOps(), store: new ThrowingStore());
         var pr2 = Key with {PrId = 2};
         var runA = Guid.NewGuid();
         var runB = Guid.NewGuid();
@@ -232,5 +239,46 @@ public class ReviewWorkerTests
     {
         public override Task SaveRunAsync(ReviewRun run, CancellationToken ct)
             => throw new InvalidOperationException("store down");
+    }
+
+    /// <summary>Source that hangs in the PR fetch until the run token is cancelled.</summary>
+    private sealed class StallingSource : FakePullRequestSource
+    {
+        public override async Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct).ConfigureAwait(false);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
+    [Fact]
+    public async Task Worker_returns_cleanly_when_host_cancels_mid_run()
+    {
+        using var h = new Harness(source: new StallingSource());
+        var runId = Guid.NewGuid();
+        Assert.True(h.Claims.TryClaim(Key, runId, out _));
+        Assert.True(h.Queue.TryEnqueue(new ReviewRequest(runId, Key, h.Clock.GetUtcNow())).Accepted);
+
+        using var cts = new CancellationTokenSource();
+        _ = h.Worker.StartAsync(cts.Token);
+
+        for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Running; i++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(RunState.Running, h.Tracker.Get(runId)?.State); // stalled inside the run
+        // StopAsync cancels the worker token and waits for the run loop to unwind — the
+        // worker must swallow the shutdown OCE rather than rethrowing it.
+        await h.Worker.StopAsync(CancellationToken.None);
+
+        Assert.False(h.Claims.IsHeldBy(Key, runId), "claim must be released even on shutdown mid-run");
+    }
+
+    [Fact]
+    public void Factory_accepts_clean_run_vote_none()
+    {
+        using var h = new Harness(cleanVote: "None");
+        Assert.NotNull(h.Factory.Create());
     }
 }

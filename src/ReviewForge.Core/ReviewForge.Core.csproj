@@ -6,6 +6,7 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="ReviewForge.Core.Tests"/>
+        <InternalsVisibleTo Include="ReviewForge.Service.Tests"/>
     </ItemGroup>
 
     <ItemGroup>
