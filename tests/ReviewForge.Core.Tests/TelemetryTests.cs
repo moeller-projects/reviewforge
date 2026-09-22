@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
@@ -35,7 +36,7 @@ public sealed class TelemetryTests
     [Fact]
     public async Task Stage_duration_uses_only_bounded_tags()
     {
-        var recordedTags = new List<KeyValuePair<string, object?>>();
+        var recordedTags = new ConcurrentBag<KeyValuePair<string, object?>>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
@@ -108,7 +109,6 @@ public sealed class TelemetryTests
             return Task.CompletedTask;
         }
     }
-
 
     private sealed class NoOpStage : IReviewStage
     {
