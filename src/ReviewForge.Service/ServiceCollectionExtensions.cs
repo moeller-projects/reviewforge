@@ -50,18 +50,43 @@ public static class ServiceCollectionExtensions
                 })));
         }
 
-        var ado = configuration.GetSection(AdoOptions.SectionName).Get<AdoOptions>()
-                  ?? throw new InvalidOperationException($"configuration section '{AdoOptions.SectionName}' missing");
-        ado.Pat = Environment.GetEnvironmentVariable(AdoOptions.PatEnvironmentVariable);
-        services.AddSingleton(ado);
-        services.AddSingleton<IPullRequestSource>(_ => new InstrumentedPullRequestSource(new AdoPullRequestSource(ado)));
+        // Validated options (P3-d): DataAnnotations + rule checks, fail-fast at startup and on
+        // first IOptions<T>.Value access — README's "typed options with validation, fail-fast"
+        // was previously just comments on the classes.
+        services.AddOptions<AdoOptions>()
+            .Bind(configuration.GetSection(AdoOptions.SectionName))
+            .PostConfigure(o => o.Pat = Environment.GetEnvironmentVariable(AdoOptions.PatEnvironmentVariable))
+            .ValidateDataAnnotations()
+            .Validate(o => o.OrgUrl?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true,
+                "Ado:OrgUrl must be an https:// URL — the PAT is sent to this endpoint.")
+            .ValidateOnStart();
+        services.AddSingleton<IPullRequestSource>(sp =>
+            new InstrumentedPullRequestSource(
+                new AdoPullRequestSource(sp.GetRequiredService<IOptions<AdoOptions>>().Value)));
 
-        var reasoning = configuration.GetSection(ChatProviderOptions.SectionName).Get<ChatProviderOptions>()
-                        ?? throw new InvalidOperationException($"configuration section '{ChatProviderOptions.SectionName}' missing");
-        services.AddSingleton(reasoning);
-        services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(sp.GetRequiredService<ChatProviderOptions>()));
-        services.Configure<ReviewForgeServiceOptions>(configuration.GetSection(ReviewForgeServiceOptions.SectionName));
-        services.Configure<ApiDocsOptions>(configuration.GetSection(ApiDocsOptions.SectionName));
+        services.AddOptions<ChatProviderOptions>()
+            .Bind(configuration.GetSection(ChatProviderOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddSingleton<IChatClientFactory>(sp =>
+            new ChatClientFactory(sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value));
+
+        services.AddOptions<ReviewForgeServiceOptions>()
+            .Bind(configuration.GetSection(ReviewForgeServiceOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(o => o.WorkerCount >= 1, "ReviewForge:WorkerCount must be at least 1")
+            .ValidateOnStart();
+
+        services.AddOptions<ApiDocsOptions>()
+            .Bind(configuration.GetSection(ApiDocsOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        services.AddOptions<DiscoveryOptions>()
+            .Bind(configuration.GetSection(DiscoveryOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(o => o.MaxEnqueuesPerSweep >= 1, "Discovery:MaxEnqueuesPerSweep must be at least 1")
+            .ValidateOnStart();
         services.AddSingleton(sp => new GitOperationScheduler(
             sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.GitMaxConcurrency));
         services.AddSingleton<IGitOps>(sp =>
@@ -75,9 +100,9 @@ public static class ServiceCollectionExtensions
         {
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
             var git = sp.GetRequiredService<IGitOps>();
-            return new RepoCheckoutPool(git, sp.GetRequiredService<IWorkspaceFs>(), opts.WorkDir, ado.Pat);
+            return new RepoCheckoutPool(git, sp.GetRequiredService<IWorkspaceFs>(), opts.WorkDir,
+                sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat);
         });
-        services.Configure<DiscoveryOptions>(configuration.GetSection(DiscoveryOptions.SectionName));
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         services.AddSingleton<DiscoveryService>();
 
@@ -107,12 +132,10 @@ public static class ServiceCollectionExtensions
             enricher: null,
             clock: sp.GetRequiredService<TimeProvider>()));
 
+        // WorkerCount < 1 is rejected by the options validation above (fail-fast at startup);
+        // when unset it defaults to a processor-count-derived clamp, always >= 2.
         var workerCount = configuration.GetValue<int?>($"{ReviewForgeServiceOptions.SectionName}:WorkerCount")
                           ?? Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
-        if (workerCount < 1)
-        {
-            throw new InvalidOperationException("ReviewForge:WorkerCount must be at least 1");
-        }
 
         for (var i = 0; i < workerCount; i++)
         {

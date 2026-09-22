@@ -14,6 +14,7 @@ using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
 using ReviewForge.Testing;
@@ -669,11 +670,16 @@ public class DiWiringTests
     }
 
     [Fact]
-    public void Missing_sections_fail_fast()
+    public void Missing_sections_fail_fast_on_first_resolution()
     {
         var config = new ConfigurationBuilder().Build();
         var services = new ServiceCollection();
-        Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(config));
+        services.AddReviewForge(config);
+        using var provider = services.BuildServiceProvider();
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<AdoOptions>>().Value);
+        Assert.Contains("OrgUrl", ex.Message);
     }
 
     [Fact]
@@ -809,7 +815,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Rejects_zero_worker_count_during_registration()
+    public void Rejects_zero_worker_count_via_options_validation()
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
@@ -822,8 +828,13 @@ public class ApiDocsEnabledTests : IAsyncLifetime
                 ["ReviewForge:WorkerCount"] = "0",
             })
             .Build();
+        services.AddReviewForge(configuration);
+        using var provider = services.BuildServiceProvider();
 
-        Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(configuration));
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("WorkerCount must be at least 1", ex.Message);
     }
 }
 
