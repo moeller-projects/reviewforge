@@ -24,6 +24,24 @@ public sealed class CollectingLoggerProvider(List<string> sink) : ILoggerProvide
     }
 }
 
+public class OtlpConfigurationTests
+{
+    [Theory]
+    [InlineData(true, null, null)]
+    [InlineData(false, "http://collector:4317", null)]
+    [InlineData(false, null, "http://collector:4318")]
+    public void Exporter_is_enabled_by_config_common_or_signal_endpoint(
+        bool configured,
+        string? commonEndpoint,
+        string? signalEndpoint)
+        => Assert.True(ServiceCollectionExtensions.ShouldEnableOtlpExporter(
+            configured, commonEndpoint, signalEndpoint));
+
+    [Fact]
+    public void Exporter_is_disabled_without_any_endpoint()
+        => Assert.False(ServiceCollectionExtensions.ShouldEnableOtlpExporter(false, null, " "));
+}
+
 [Collection("ReviewForge service host")]
 public class OtlpEndpointLogTests : IAsyncLifetime
 {

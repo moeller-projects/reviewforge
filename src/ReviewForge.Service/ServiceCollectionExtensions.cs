@@ -195,8 +195,17 @@ public static class ServiceCollectionExtensions
         // variants). Aspire injects these when running under the AppHost; production sets
         // them via docker-compose / the container environment. Never bind exporter options
         // to appsettings — a committed endpoint breaks both environments.
-        var otlpEnabled = configuration.GetValue<bool?>($"{ReviewForgeServiceOptions.SectionName}:OtlpEnabled") is true
-                          || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
+        var explicitOtlpEnabled =
+            configuration.GetValue<bool?>($"{ReviewForgeServiceOptions.SectionName}:OtlpEnabled") is true;
+        var commonOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+        var tracesOtlpEnabled = ShouldEnableOtlpExporter(
+            explicitOtlpEnabled,
+            commonOtlpEndpoint,
+            Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"));
+        var metricsOtlpEnabled = ShouldEnableOtlpExporter(
+            explicitOtlpEnabled,
+            commonOtlpEndpoint,
+            Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"));
         var otel = services.AddOpenTelemetry()
             .ConfigureResource(resource => resource
                 .AddService(serviceName: "reviewforge", serviceInstanceId: Environment.MachineName));
@@ -205,7 +214,7 @@ public static class ServiceCollectionExtensions
             tracing.AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddSource(ReviewForgeTelemetry.SourceName);
-            if (otlpEnabled)
+            if (tracesOtlpEnabled)
             {
                 tracing.AddOtlpExporter();
             }
@@ -216,11 +225,19 @@ public static class ServiceCollectionExtensions
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
                 .AddMeter(ReviewForgeTelemetry.SourceName);
-            if (otlpEnabled)
+            if (metricsOtlpEnabled)
             {
                 metrics.AddOtlpExporter();
             }
         });
         return services;
     }
+
+    internal static bool ShouldEnableOtlpExporter(
+        bool configured,
+        string? commonEndpoint,
+        string? signalEndpoint)
+        => configured ||
+           !string.IsNullOrWhiteSpace(commonEndpoint) ||
+           !string.IsNullOrWhiteSpace(signalEndpoint);
 }
