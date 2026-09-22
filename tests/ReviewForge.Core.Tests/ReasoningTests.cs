@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 using Xunit;
@@ -77,6 +78,44 @@ public class ReviewCollectorTests
         Assert.True(collector.IsKnown("old"));
         Assert.False(collector.IsKnown("new"));
     }
+    [Fact]
+    public void Prior_key_state_is_distinct_from_current_run()
+    {
+        var collector = new ReviewCollector(["old"]);
+
+        Assert.True(collector.WasKnownAtStart("old"));
+        Assert.False(collector.WasKnownAtStart("new"));
+        Assert.False(collector.WasKnownAtStart("added"));
+
+        collector.AddFinding(Finding("added"));
+
+        Assert.True(collector.IsKnown("added"));
+        Assert.False(collector.WasKnownAtStart("added"));
+    }
+
+    [Fact]
+    public void MarkRedetected_is_idempotent_and_returns_a_snapshot()
+    {
+        var collector = new ReviewCollector();
+        collector.MarkRedetected("k");
+        collector.MarkRedetected("k");
+
+        var keys = collector.RedetectedKeys;
+
+        Assert.Single(keys);
+        Assert.Contains("k", keys);
+    }
+
+    [Fact]
+    public void AddFinding_without_key_does_not_make_empty_key_known()
+    {
+        var collector = new ReviewCollector();
+        collector.AddFinding(Finding(string.Empty));
+
+        Assert.Single(collector.Findings);
+        Assert.False(collector.IsKnown(string.Empty));
+    }
+
 
     [Fact]
     public void Complete_is_idempotent_first_narrative_wins()
@@ -162,6 +201,20 @@ public class ReviewToolsTests
 
         Assert.Contains("already recorded", second);
         Assert.Empty(collector.RedetectedKeys);
+    }
+
+    [Fact]
+    public void RecordFinding_marks_prior_run_duplicate_as_redetected()
+    {
+        var key = DedupeKey.Compute("r", "f.cs", "s");
+        var collector = new ReviewCollector([key]);
+        var tools = new ReviewTools(collector, new ContextStore());
+
+        var result = tools.RecordFinding(
+            "r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 99);
+
+        Assert.Contains("already recorded", result);
+        Assert.Contains(key, collector.RedetectedKeys);
     }
 
     [Fact]

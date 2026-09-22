@@ -106,6 +106,10 @@ public sealed class ReviewTools(
         var key = DedupeKey.Compute(finding.RuleId, finding.Anchor?.FilePath ?? "-", finding.Snippet);
         if (collector.IsKnown(key))
         {
+            if (collector.WasKnownAtStart(key))
+            {
+                collector.MarkRedetected(key);
+            }
             logger?.LogDebug("finding deduped: key {DedupeKey} already known", key);
             return $"already recorded (dedupe key {key}) — skipped";
         }

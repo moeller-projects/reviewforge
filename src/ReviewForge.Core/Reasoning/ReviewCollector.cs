@@ -16,6 +16,7 @@ public sealed class ReviewCollector
     private readonly object _Gate = new();
     private readonly TextWriter? _Jsonl;
     private readonly HashSet<string> _KnownKeys;
+    private readonly HashSet<string> _PriorKnownKeys;
     private readonly HashSet<string> _RedetectedKeys = new(StringComparer.Ordinal);
     private readonly List<ReviewUncertainty> _Uncertainties = [];
     private readonly Guid? _RunId;
@@ -29,7 +30,8 @@ public sealed class ReviewCollector
         string? headSha = null,
         TimeProvider? clock = null)
     {
-        _KnownKeys = new HashSet<string>(knownDedupeKeys ?? [], StringComparer.Ordinal);
+        _PriorKnownKeys = new HashSet<string>(knownDedupeKeys ?? [], StringComparer.Ordinal);
+        _KnownKeys = new HashSet<string>(_PriorKnownKeys, StringComparer.Ordinal);
         _Jsonl = jsonlSink;
         _RunId = runId;
         _HeadSha = headSha;
@@ -71,6 +73,15 @@ public sealed class ReviewCollector
         }
     }
 
+    /// <summary>True when the key came from a prior persisted run rather than this run.</summary>
+    public bool WasKnownAtStart(string dedupeKey)
+    {
+        lock (_Gate)
+        {
+            return _PriorKnownKeys.Contains(dedupeKey);
+        }
+    }
+
     /// <summary>Keys the agent re-detected this run that were rejected as already known —
     /// positive evidence the finding still reproduces.</summary>
     public IReadOnlyCollection<string> RedetectedKeys
@@ -99,9 +110,9 @@ public sealed class ReviewCollector
         lock (_Gate)
         {
             _Findings.Add(finding);
-            if (finding.DedupeKey is not null)
+            if (finding.DedupeKey is { Length: > 0 } dedupeKey)
             {
-                _KnownKeys.Add(finding.DedupeKey);
+                _KnownKeys.Add(dedupeKey);
             }
 
             if (_Jsonl is not null)
