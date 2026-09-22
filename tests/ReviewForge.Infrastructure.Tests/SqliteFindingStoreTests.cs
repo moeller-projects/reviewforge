@@ -266,4 +266,79 @@ public class SqliteFindingStoreTests : IDisposable
         var last = await verify.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.Equal(["k1"], last!.FindingKeys);
     }
+
+    [Fact]
+    public async Task Save_and_read_round_trips_last_observed_comment_at()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var watermark = t0.AddMinutes(3);
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)],
+            LastObservedCommentAt: watermark);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.Equal(watermark, last!.LastObservedCommentAt);
+        Assert.Equal(["k1"], last.FindingKeys);
+    }
+
+    [Fact]
+    public void Constructor_upgrades_existing_database_without_watermark_column()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-legacy-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            // A database created by an older binary: Runs without LastObservedCommentAt.
+            using (var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE Runs (
+                        Id TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                        RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, HeadSha TEXT NOT NULL,
+                        Kind TEXT NOT NULL, StartedAt TEXT NOT NULL, CompletedAt TEXT NULL, Success INTEGER NOT NULL);
+                    CREATE TABLE Findings (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT, RunId TEXT NOT NULL, DedupeKey TEXT NOT NULL,
+                        RuleId TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
+                        FilePath TEXT NULL, Line INTEGER NULL, ThreadId INTEGER NULL);
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var store = new SqliteFindingStore($"Data Source={dbPath};Pooling=False");
+
+            using var check = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            check.Open();
+            using var pragma = check.CreateCommand();
+            pragma.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
+            Assert.Equal(1L, Convert.ToInt64(pragma.ExecuteScalar()));
+        }
+        finally
+        {
+            foreach (var suffix in new[] {"", "-wal", "-shm"})
+            {
+                if (File.Exists(dbPath + suffix))
+                {
+                    File.Delete(dbPath + suffix);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Legacy_row_without_watermark_returns_null_watermark()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        await _Store.SaveRunAsync(new ReviewRun(
+            Guid.NewGuid(), Key, "head", ReviewKind.Full, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)],
+            LastObservedCommentAt: null), CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+
+        Assert.NotNull(last);
+        Assert.Null(last.LastObservedCommentAt);
+    }
 }

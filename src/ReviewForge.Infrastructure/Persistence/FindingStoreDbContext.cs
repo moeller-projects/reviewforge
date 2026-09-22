@@ -13,6 +13,11 @@ public sealed class RunEntity
     public required string Kind { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+
+    /// <summary>Newest observed comment timestamp (ADO server time) at fetch; the follow-up
+    /// gate compares against this instead of the local-clock CompletedAt (P2-24).</summary>
+    public DateTimeOffset? LastObservedCommentAt { get; set; }
+
     public bool Success { get; set; }
     public List<FindingEntity> Findings { get; set; } = [];
 }

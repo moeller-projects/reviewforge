@@ -23,6 +23,28 @@ public sealed class SqliteFindingStore : IFindingStore
         using var db = CreateContext();
         db.Database.EnsureCreated();
         db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
+
+        // EnsureCreated never alters existing tables; upgrade pre-watermark databases
+        // in place so the gate's server-time comparison works on old data files.
+        var hasWatermarkColumn = false;
+        using (var cmd = db.Database.GetDbConnection().CreateCommand())
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
+            db.Database.OpenConnection();
+            try
+            {
+                hasWatermarkColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+            }
+            finally
+            {
+                db.Database.CloseConnection();
+            }
+        }
+
+        if (!hasWatermarkColumn)
+        {
+            db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN LastObservedCommentAt TEXT NULL");
+        }
     }
 
     public async Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
@@ -45,7 +67,8 @@ public sealed class SqliteFindingStore : IFindingStore
                 run.CompletedAt!.Value,
                 [.. run.Findings.Select(f => f.DedupeKey)],
                 [.. run.Findings.Select(f => new StoredFinding(
-                    f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))]);
+                    f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))],
+                run.LastObservedCommentAt);
     }
 
     public async Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct)
@@ -83,6 +106,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 Kind = run.Kind.ToString(),
                 StartedAt = run.StartedAt,
                 CompletedAt = run.CompletedAt,
+                LastObservedCommentAt = run.LastObservedCommentAt,
                 Success = run.Success,
                 Findings = [.. run.Findings.Select(f => ToEntity(f, run.Id))],
             });
@@ -94,6 +118,7 @@ public sealed class SqliteFindingStore : IFindingStore
             existing.HeadSha = run.HeadSha;
             existing.Kind = run.Kind.ToString();
             existing.CompletedAt = run.CompletedAt;
+            existing.LastObservedCommentAt = run.LastObservedCommentAt;
             existing.Success = run.Success;
             var knownKeys = existing.Findings.Select(f => f.DedupeKey).ToHashSet(StringComparer.Ordinal);
             foreach (var finding in run.Findings.Where(f => !knownKeys.Contains(f.DedupeKey)))
@@ -143,7 +168,8 @@ public sealed class SqliteFindingStore : IFindingStore
                 .Select(r => new ReviewRun(
                     r.Id, pr, r.HeadSha, Enum.Parse<ReviewKind>(r.Kind),
                     r.StartedAt, r.CompletedAt, r.Success,
-                    [.. r.Findings.Select(f => new StoredFinding(f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))]))
+                    [.. r.Findings.Select(f => new StoredFinding(f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))],
+                    r.LastObservedCommentAt))
         ];
     }
 

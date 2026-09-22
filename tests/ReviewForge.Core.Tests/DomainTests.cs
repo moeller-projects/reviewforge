@@ -61,6 +61,58 @@ public class DomainTests
     }
 
     [Fact]
+    public void Gate_reviews_new_comment_after_watermark()
+    {
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), [],
+            LastObservedCommentAt: Now.AddHours(-3));
+        Assert.True(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddMinutes(-2))], Now).ShouldReview); // T + 1 min > watermark
+    }
+
+    [Fact]
+    public void Gate_skips_comment_before_watermark()
+    {
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), [],
+            LastObservedCommentAt: Now.AddHours(-2));
+        Assert.False(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddHours(-3))], Now).ShouldReview);
+    }
+
+    [Fact]
+    public void Gate_skips_when_local_clock_skewed_behind()
+    {
+        // The prior run completed 10 min before the watermark it observed (local clock
+        // behind ADO at persist time) — previously CompletedAt made this review forever.
+        // The comment sits between CompletedAt (-2h) and the watermark (-1h): it was
+        // already observed, so the run must still be skipped.
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-2), [],
+            LastObservedCommentAt: Now.AddHours(-1));
+        Assert.False(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddHours(-2).AddMinutes(30))], Now).ShouldReview);
+    }
+
+    [Fact]
+    public void Gate_reviews_when_local_clock_skewed_ahead()
+    {
+        // CompletedAt is 10 min AFTER the watermark; a comment between the two was
+        // previously swallowed as "already reviewed".
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now, [],
+            LastObservedCommentAt: Now.AddMinutes(-20));
+        Assert.True(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddMinutes(-10))], Now).ShouldReview);
+    }
+
+    [Fact]
+    public void Gate_legacy_run_without_watermark_falls_back_to_completed_at()
+    {
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), []);
+        Assert.False(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddHours(-2))], Now).ShouldReview);
+        Assert.True(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddMinutes(-30))], Now).ShouldReview);
+    }
+
+    [Fact]
     public void GateDecision_factories()
     {
         Assert.True(GateDecision.Review().ShouldReview);

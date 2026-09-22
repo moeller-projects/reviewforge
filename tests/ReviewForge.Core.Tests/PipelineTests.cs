@@ -926,6 +926,44 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Persist_run_persists_max_observed_comment_timestamp()
+    {
+        var store = new FakeFindingStore();
+        var t1 = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var t2 = DateTimeOffset.UtcNow;
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.Threads =
+        [
+            new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+                [new ThreadComment("b", "bot", true, "note", t1)]),
+            new ReviewThread(2, null, ReviewThreadStatus.Active,
+                [new ThreadComment("u", "human", false, "reply", t2)]),
+        ];
+        ctx.AcceptedFindings = [];
+        ctx.PostedThreadIds = new Dictionary<string, int>();
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(t2, Assert.Single(store.Runs).LastObservedCommentAt);
+    }
+
+    [Fact]
+    public async Task Persist_run_without_threads_persists_null_watermark()
+    {
+        var store = new FakeFindingStore();
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.Threads = [];
+        ctx.AcceptedFindings = [];
+        ctx.PostedThreadIds = new Dictionary<string, int>();
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Null(Assert.Single(store.Runs).LastObservedCommentAt);
+    }
+
+    [Fact]
     public async Task Triage_throws_when_claim_lost_before_writes()
     {
         var source = new FakePullRequestSource();

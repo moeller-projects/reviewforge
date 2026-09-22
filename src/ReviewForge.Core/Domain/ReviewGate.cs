@@ -29,9 +29,13 @@ public static class ReviewGate
             return GateDecision.Review();
         }
 
+        // Server-time watermark: compare ADO comment timestamps against the newest comment
+        // timestamp the prior run observed (also ADO time), never against our local clock.
+        // CompletedAt is only a fallback for rows persisted before the watermark existed.
+        var watermark = priorRun.LastObservedCommentAt ?? priorRun.CompletedAt;
         var newHumanComments = threads
             .SelectMany(t => t.Comments)
-            .Any(c => !c.IsBot && c.PublishedAt > priorRun.CompletedAt);
+            .Any(c => !c.IsBot && c.PublishedAt > watermark);
 
         return newHumanComments
             ? GateDecision.Review()
