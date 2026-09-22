@@ -855,7 +855,7 @@ public class OtlpEnabledTests : IAsyncLifetime
 }
 
 [Collection("ReviewForge service host")]
-public sealed class EndpointFailureTests
+public sealed class QueueFailureTests
 {
     [Fact]
     public async Task Queue_failure_releases_claim()
@@ -869,5 +869,107 @@ public sealed class EndpointFailureTests
         Assert.NotEqual(HttpStatusCode.Accepted, response.StatusCode);
         var claims = factory.Services.GetRequiredService<InFlightClaims>();
         Assert.True(claims.TryClaim(new PrKey("o", "p", "closed", 99), Guid.NewGuid(), out _));
+    }
+}
+
+[Collection("ReviewForge service host")]
+public sealed class ApiDocsTests
+{
+    [Fact]
+    public void WarnIfExposed_enabled_without_auth_logs_warning()
+    {
+        var sink = new List<string>();
+        var provider = new CollectingLoggerProvider(sink);
+
+        ApiDocsRegistration.WarnIfExposed(
+            new ApiDocsOptions {Enabled = true},
+            authConfigured: false,
+            provider.CreateLogger("test"));
+
+        Assert.Contains(sink, m => m.Contains("no authentication"));
+    }
+
+    [Fact]
+    public void WarnIfExposed_enabled_with_auth_stays_silent()
+    {
+        var sink = new List<string>();
+        var provider = new CollectingLoggerProvider(sink);
+
+        ApiDocsRegistration.WarnIfExposed(
+            new ApiDocsOptions {Enabled = true},
+            authConfigured: true,
+            provider.CreateLogger("test"));
+
+        Assert.Empty(sink);
+    }
+
+    [Fact]
+    public void WarnIfExposed_disabled_stays_silent()
+    {
+        var sink = new List<string>();
+        var provider = new CollectingLoggerProvider(sink);
+
+        ApiDocsRegistration.WarnIfExposed(
+            new ApiDocsOptions {Enabled = false},
+            authConfigured: false,
+            provider.CreateLogger("test"));
+
+        Assert.Empty(sink);
+    }
+
+    [Fact]
+    public async Task DocsEndpoints_are_not_mapped_by_default()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/openapi/v1.json");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Enabled_without_api_keys_warns_at_startup()
+    {
+        var previous = Environment.GetEnvironmentVariable("ApiDocs__Enabled");
+        try
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", "true");
+            var sink = new List<string>();
+            // No keys + the development opt-out: the host boots (fail-closed otherwise)
+            // and the docs warning must fire for the effectively unauthenticated API.
+            using var factory = new ReviewForgeFactory()
+                .WithoutWorkers()
+                .WithDevelopmentOptOut()
+                .WithLogCollector(sink);
+            _ = factory.CreateClient();
+
+            Assert.Contains(sink, m => m.Contains("no authentication"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", previous);
+        }
+    }
+
+    [Fact]
+    public async Task DocsEndpoints_are_mapped_when_enabled()
+    {
+        var previous = Environment.GetEnvironmentVariable("ApiDocs__Enabled");
+        try
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", "true");
+            using var factory = new ReviewForgeFactory().WithoutWorkers();
+            var client = factory.CreateClient();
+
+            var response = await client.GetAsync("/openapi/v1.json");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains("application/json", response.Content.Headers.ContentType?.MediaType);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", previous);
+        }
     }
 }

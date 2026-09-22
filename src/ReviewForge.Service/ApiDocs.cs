@@ -24,12 +24,28 @@ public static class ApiDocsRegistration
     /// <summary>Maps /openapi/{doc}.json and /scalar/{doc} only when ApiDocs:Enabled is true.</summary>
     public static WebApplication MapDocsEndpoints(this WebApplication app)
     {
-        if (app.Services.GetRequiredService<IOptions<ApiDocsOptions>>().Value.Enabled)
+        var options = app.Services.GetRequiredService<IOptions<ApiDocsOptions>>().Value;
+        if (options.Enabled)
         {
+            var api = app.Services.GetRequiredService<IOptions<Security.ApiKeyOptions>>().Value;
+            WarnIfExposed(options, authConfigured: api.Keys.Length > 0,
+                app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ApiDocsRegistration)));
             app.MapOpenApi();
             app.MapScalarApiReference();
         }
 
         return app;
+    }
+
+    /// <summary>Warns when the API schema is served while the API itself is unauthenticated.</summary>
+    public static void WarnIfExposed(ApiDocsOptions options, bool authConfigured, ILogger logger)
+    {
+        if (options.Enabled && !authConfigured)
+        {
+            logger.LogWarning(
+                "ApiDocs is enabled (OpenAPI + Scalar UI at /openapi and /scalar) but the API has no " +
+                "authentication configured — the docs advertise an unauthenticated attack surface. " +
+                "Set ApiDocs:Enabled=false outside trusted dev networks.");
+        }
     }
 }

@@ -95,7 +95,8 @@ including scoped log properties.
 ## API docs (opt-in)
 
 Off by default (the API schema must not be published unless explicitly enabled). Set
-`ApiDocs:Enabled=true` to expose:
+`ApiDocs:Enabled=true` to expose — startup then warns unless `Api:Keys`/`REVIEWFORGE_API_KEYS`
+are configured, because the docs describe the `/reviews*` surface:
 
 - `GET /openapi/v1.json` — OpenAPI 3.x document (title/version/description from `ApiDocs:Title`/`ApiDocs:Version`).
 - `GET /scalar/v1` — Scalar reference UI.
