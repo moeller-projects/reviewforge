@@ -183,6 +183,14 @@ public sealed class NativeReviewAgent(
         {
             await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
             {
+                // Usage arrives as a UsageContent on the terminal streaming update; the
+                // Codex provider is always streaming under the hood, so skipping this
+                // would silently under-count tokens versus the GetResponseAsync path.
+                foreach (var usageContent in update.Contents.OfType<UsageContent>())
+                {
+                    usage.Add(usageContent.Details);
+                }
+
                 yield return update;
             }
         }
