@@ -276,13 +276,20 @@ public sealed class AdoPullRequestSource : IPullRequestSource
         return created.Id;
     }
 
-    public async Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
+    public async Task PostGeneralCommentAsync(
+        PrKey pr,
+        string text,
+        string? dedupeKey,
+        CancellationToken ct)
     {
         var git = await GitClientAsync(ct);
         var thread = new GitPullRequestCommentThread
         {
             Comments = [new AdoComment {Content = text, CommentType = AdoCommentType.Text}],
             Status = AdoThreadStatus.Active,
+            Properties = dedupeKey is null
+                ? null
+                : new PropertiesCollection {[DedupeKeyProperty] = dedupeKey},
         };
         await git.CreateThreadAsync(thread, pr.Project, pr.RepositoryId, pr.PrId, cancellationToken: ct);
     }

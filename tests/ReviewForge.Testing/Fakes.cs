@@ -29,6 +29,7 @@ public class FakePullRequestSource : IPullRequestSource
 
     public List<(RichFinding Finding, int ThreadId)> PostedFindings { get; } = [];
     public List<string> GeneralComments { get; } = [];
+    public List<string?> GeneralCommentDedupeKeys { get; } = [];
     public List<(int ThreadId, string Text)> Replies { get; } = [];
     public List<(int ThreadId, ReviewThreadStatus Status)> StatusChanges { get; } = [];
     public List<(string ReviewerId, ReviewerVote Vote)> Votes { get; } = [];
@@ -91,11 +92,16 @@ public class FakePullRequestSource : IPullRequestSource
         }
     }
 
-    public virtual Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
+    public virtual Task PostGeneralCommentAsync(
+        PrKey pr,
+        string text,
+        string? dedupeKey,
+        CancellationToken ct)
     {
         lock (_Gate)
         {
             GeneralComments.Add(text);
+            GeneralCommentDedupeKeys.Add(dedupeKey);
         }
 
         return Task.CompletedTask;
@@ -186,10 +192,14 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
         }
     }
 
-    public override async Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
+    public override async Task PostGeneralCommentAsync(
+        PrKey pr,
+        string text,
+        string? dedupeKey,
+        CancellationToken ct)
     {
         await DelayAsync(ct);
-        await base.PostGeneralCommentAsync(pr, text, ct);
+        await base.PostGeneralCommentAsync(pr, text, dedupeKey, ct);
         lock (_LogGate)
         {
             WriteLog.Add($"comment {_CommentCount++}");

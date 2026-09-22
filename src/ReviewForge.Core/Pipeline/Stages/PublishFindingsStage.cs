@@ -92,7 +92,8 @@ public sealed class PublishFindingsStage(
                 try
                 {
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "during publish");
-                    await source.PostGeneralCommentAsync(ctx.Pr, CommentFormatter.FormatFinding(finding), ct)
+                    await source.PostGeneralCommentAsync(
+                            ctx.Pr, CommentFormatter.FormatFinding(finding), finding.DedupeKey, ct)
                         .ConfigureAwait(false);
                     ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "general" } });
                 }
@@ -108,8 +109,11 @@ public sealed class PublishFindingsStage(
 
         // Summary must post AFTER findings (readers of the PR see findings first).
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before summary");
-        await source.PostGeneralCommentAsync(ctx.Pr,
-                CommentFormatter.FormatSummary(ctx.RequireResult(), ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind), ct)
+        await source.PostGeneralCommentAsync(
+                ctx.Pr,
+                CommentFormatter.FormatSummary(ctx.RequireResult(), ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind),
+                dedupeKey: null,
+                ct: ct)
             .ConfigureAwait(false);
 
         var acUnmet = (ctx.RequireResult().Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);

@@ -693,6 +693,8 @@ public class StageTests : IDisposable
         Assert.Single(source.PostedFindings);
         Assert.Equal(1000, ctx.PostedThreadIds["k2"]);
         Assert.Equal(2, source.GeneralComments.Count); // downgraded finding + summary
+        Assert.Equal("k-gen", source.GeneralCommentDedupeKeys[0]);
+        Assert.Null(source.GeneralCommentDedupeKeys[1]);
         Assert.Contains("❌", source.GeneralComments[1]);
         Assert.Single(source.Votes);
         Assert.Equal(ReviewerVote.WaitingForAuthor, source.Votes[0].Vote);

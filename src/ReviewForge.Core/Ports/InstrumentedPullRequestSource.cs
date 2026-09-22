@@ -33,8 +33,8 @@ public sealed class InstrumentedPullRequestSource(IPullRequestSource inner) : IP
     public Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct)
         => RecordAsync("post_finding_thread", () => inner.PostFindingThreadAsync(pr, finding, ct));
 
-    public Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
-        => RecordAsync("post_general_comment", () => inner.PostGeneralCommentAsync(pr, text, ct));
+    public Task PostGeneralCommentAsync(PrKey pr, string text, string? dedupeKey, CancellationToken ct)
+        => RecordAsync("post_general_comment", () => inner.PostGeneralCommentAsync(pr, text, dedupeKey, ct));
 
     public Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct)
         => RecordAsync("reply_to_thread", () => inner.ReplyToThreadAsync(pr, threadId, text, ct));

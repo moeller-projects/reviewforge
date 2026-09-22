@@ -47,7 +47,7 @@ public sealed class InstrumentedPullRequestSourceTests
         Assert.Equal(inner.User, await source.GetCurrentUserAsync(CancellationToken.None));
 
         Assert.Equal(1000, await source.PostFindingThreadAsync(Pr, finding, CancellationToken.None));
-        await source.PostGeneralCommentAsync(Pr, "comment", CancellationToken.None);
+        await source.PostGeneralCommentAsync(Pr, "comment", dedupeKey: null, ct: CancellationToken.None);
         await source.ReplyToThreadAsync(Pr, 1, "reply", CancellationToken.None);
         await source.SetThreadStatusAsync(Pr, 1, ReviewThreadStatus.Fixed, CancellationToken.None);
         await source.SetReviewerVoteAsync(Pr, "user-1", ReviewerVote.Approved, CancellationToken.None);
