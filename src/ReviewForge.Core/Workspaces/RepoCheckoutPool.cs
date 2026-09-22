@@ -123,7 +123,8 @@ public sealed class RepoCheckoutPool
         var failed = 0;
         var failureDetails = new List<string>();
         long bytes = 0;
-        var survivors = new List<(string Path, string RepoId, string Head, DateTime LastWrite, long Size)>();
+        var survivors =
+            new List<(string Path, string RepoId, string Head, DateTime LastWrite, long Size, bool DeletionFailed)>();
 
         foreach (var repoDir in _Fs.EnumerateDirectories(checkoutsRoot))
         {
@@ -139,7 +140,7 @@ public sealed class RepoCheckoutPool
                 var (path, head, lastWrite) = heads[i];
                 if (i < options.MaxCheckoutsPerRepo && lastWrite >= cutoff.UtcDateTime)
                 {
-                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path)));
+                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path), DeletionFailed: false));
                     continue;
                 }
 
@@ -147,13 +148,14 @@ public sealed class RepoCheckoutPool
                 if (evictionLease is null)
                 {
                     inUse++;
-                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path)));
+                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path), DeletionFailed: false));
                     continue;
                 }
 
+                var size = 0L;
                 try
                 {
-                    var size = DirectorySize(path);
+                    size = DirectorySize(path);
                     _Fs.DeleteDirectory(path, recursive: true);
                     _SizeCache.TryRemove(path, out _);
                     bytes += size;
@@ -165,6 +167,13 @@ public sealed class RepoCheckoutPool
                 {
                     failed++;
                     failureDetails.Add($"{path}: {ex.GetType().Name}");
+                    survivors.Add((
+                        path,
+                        repoId,
+                        head,
+                        lastWrite,
+                        size > 0 ? size : GetCachedSize(path),
+                        DeletionFailed: true));
                 }
                 finally
                 {
@@ -194,6 +203,11 @@ public sealed class RepoCheckoutPool
                 if (totalBytes <= options.MaxTotalBytes)
                 {
                     break;
+                }
+
+                if (candidate.DeletionFailed)
+                {
+                    continue; // account for it, but do not repeat a failed delete in this sweep
                 }
 
                 using var evictionLease = _Locks.TryAcquire(EncodedCheckoutKey(candidate.RepoId, candidate.Head));

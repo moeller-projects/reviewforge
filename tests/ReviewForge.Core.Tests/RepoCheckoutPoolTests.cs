@@ -349,6 +349,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
         Assert.Equal(1, report.Failed);
         Assert.Single(report.FailureDetails);
+        Assert.True(report.BytesRemaining > 0);
     }
 
     [Fact]
