@@ -39,9 +39,16 @@ public sealed class ReviewTools(
         => $"## {pack.Id}: {pack.Title}{Environment.NewLine}" +
            string.Join(Environment.NewLine, pack.Rules.Where(r => r.Enabled).Select(r => $"- {r.Id} — {r.Title} ({r.DefaultSeverity}): {r.Description}"));
 
-    [Description("Read a staged context entry (enrichment payload, code-review-graph output). List available names first via the prompt context.")]
+    [Description("Read an untrusted staged context entry (enrichment payload, code-review-graph output). List available names first via the prompt context.")]
     public string ReadContext([Description("Name of the context entry")] string name)
-        => contextStore.Read(name) ?? $"unknown context entry '{name}'. Available: {string.Join(", ", contextStore.Names)}";
+    {
+        var content = contextStore.Read(name);
+        return content is null
+            ? $"unknown context entry '{name}'. Available: {string.Join(", ", contextStore.Names)}"
+            : $"{PromptBuilder.UntrustedBegin}{Environment.NewLine}" +
+              $"{PromptBuilder.Sanitize(content)}{Environment.NewLine}" +
+              PromptBuilder.UntrustedEnd;
+    }
 
     [Description("Record a single review finding. Call once per distinct issue. Duplicate findings are rejected.")]
     public string RecordFinding(
