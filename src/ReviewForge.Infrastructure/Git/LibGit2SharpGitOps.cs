@@ -172,27 +172,42 @@ public sealed class LibGit2SharpGitOps : IGitOps
             var textBytes = Encoding.UTF8.GetByteCount(text);
             if (textBytes > budget.MaxPerFileBytes)
             {
-                sb.Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
-                  .Append("--- a/").Append(path).Append('\n')
-                  .Append("+++ b/").Append(path).Append('\n')
-                  .Append("…[file diff skipped — ").Append(textBytes).Append(" bytes exceeds the per-file budget; use repo_read_file]\n");
+                var notice = $"diff --git a/{path} b/{path}\n" +
+                             $"--- a/{path}\n" +
+                             $"+++ b/{path}\n" +
+                             $"…[file diff skipped — {textBytes} bytes exceeds the per-file budget; use repo_read_file]\n";
+                TryAppendWithinBudget(sb, notice, Encoding.UTF8.GetByteCount(notice), ref total, budget.MaxTotalBytes);
                 continue;
             }
 
-            if (total + textBytes > budget.MaxTotalBytes)
+            if (!TryAppendWithinBudget(sb, text, textBytes, ref total, budget.MaxTotalBytes))
             {
-                sb.Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
-                  .Append("--- a/").Append(path).Append('\n')
-                  .Append("+++ b/").Append(path).Append('\n')
-                  .Append("…[file diff skipped — total diff budget reached; use repo_read_file]\n");
-                continue;
+                var notice = $"diff --git a/{path} b/{path}\n" +
+                             $"--- a/{path}\n" +
+                             $"+++ b/{path}\n" +
+                             "…[file diff skipped — total diff budget reached; use repo_read_file]\n";
+                TryAppendWithinBudget(sb, notice, Encoding.UTF8.GetByteCount(notice), ref total, budget.MaxTotalBytes);
             }
-
-            sb.Append(text);
-            total += textBytes;
         }
 
         return sb.ToString();
+    }
+
+    private static bool TryAppendWithinBudget(
+        StringBuilder output,
+        string text,
+        int textBytes,
+        ref long totalBytes,
+        long maxTotalBytes)
+    {
+        if (totalBytes > maxTotalBytes || textBytes > maxTotalBytes - totalBytes)
+        {
+            return false;
+        }
+
+        output.Append(text);
+        totalBytes += textBytes;
+        return true;
     }
 
     internal static string MirrorPath(string workDir)
