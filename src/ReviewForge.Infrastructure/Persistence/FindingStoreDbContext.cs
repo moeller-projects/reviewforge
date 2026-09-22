@@ -18,6 +18,8 @@ public sealed class RunEntity
     /// gate compares against this instead of the local-clock CompletedAt (P2-24).</summary>
     public DateTimeOffset? LastObservedCommentAt { get; set; }
 
+    /// <summary>False rows exist once failed runs are persisted (P1-4 failure backoff);
+    /// excluded from PriorRun, backoff eligibility is computed from them.</summary>
     public bool Success { get; set; }
     public List<FindingEntity> Findings { get; set; } = [];
 }
