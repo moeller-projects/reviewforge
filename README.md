@@ -68,13 +68,14 @@ when the bounded queue is full · `GET /reviews/{runId}` · `POST /reviews/disco
 ## Dev loop: Aspire vs Docker Compose
 
 **Local dev — Aspire dashboard.** `aspire run` (or `dotnet run --project src/ReviewForge.AppHost`)
-starts the service with a live dashboard for traces, metrics, and logs. Set the two secret
+starts the service with a live dashboard for traces, metrics, and logs. Set the three secret
 parameters first:
 
 ```bash
 cd src/ReviewForge.AppHost
 dotnet user-secrets set "Parameters:ado-pat" "<ado-pat>"
 dotnet user-secrets set "Parameters:openai-api-key" "<openai-key>"
+dotnet user-secrets set "Parameters:api-key" "<reviewforge-api-key>"
 ```
 
 The dashboard URL is printed on startup; `WorkDir` is `%TEMP%/reviewforge`. Aspire injects the

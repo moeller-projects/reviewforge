@@ -2,8 +2,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 // Secrets as parameters: the dashboard marks them and Aspire fails fast with a clear
 // message when unset, instead of the service failing on its first ADO/Codex call.
-// Values come from user secrets ("Parameters:ado-pat", "Parameters:openai-api-key");
-// names only here — never commit real credentials.
+// Values come from user secrets ("Parameters:ado-pat", "Parameters:openai-api-key",
+// "Parameters:api-key"); names only here — never commit real credentials.
 var adoPat = builder.AddParameter("ado-pat", secret: true);
 var openAiKey = builder.AddParameter("openai-api-key", secret: true);
 var apiKey = builder.AddParameter("api-key", secret: true);
