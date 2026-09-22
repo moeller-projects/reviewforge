@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.AI;
@@ -802,6 +803,20 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         Assert.Contains("/reviews", json);
         Assert.Contains("SubmitReviewRequest", json);
         Assert.Contains("reviewforge API", json);
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var apiKeyScheme = root.GetProperty("components")
+            .GetProperty("securitySchemes")
+            .GetProperty("ApiKey");
+        Assert.Equal("apiKey", apiKeyScheme.GetProperty("type").GetString());
+        Assert.Equal("header", apiKeyScheme.GetProperty("in").GetString());
+        Assert.Equal("X-Api-Key", apiKeyScheme.GetProperty("name").GetString());
+        Assert.True(root.GetProperty("paths")
+            .GetProperty("/reviews")
+            .GetProperty("post")
+            .GetProperty("security")[0]
+            .TryGetProperty("ApiKey", out _));
     }
 
     [Fact]
