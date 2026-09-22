@@ -30,6 +30,9 @@ public sealed class ReviewQueue
     public ReviewQueue(int capacity = 100)
     {
         _Capacity = capacity;
+        // FullMode is irrelevant: the only write path is TryWrite (enqueue returns 503
+        // when full instead of blocking HTTP callers). Kept explicit to document that
+        // blocking producers are not a supported mode.
         _Channel = Channel.CreateBounded<ReviewRequest>(
             new BoundedChannelOptions(capacity)
             {

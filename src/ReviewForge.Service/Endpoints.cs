@@ -35,6 +35,7 @@ public static class Endpoints
 
         app.MapGet("/reviews/{runId:guid}", GetRunStatus)
             .WithName("GetRunStatus")
+            .WithSummary("In-memory run status — lost on host restart; 404 after restart or retention expiry")
             .Produces<RunStatus>()
             .ProducesProblem(404);
 

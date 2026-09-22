@@ -4,9 +4,9 @@ using Microsoft.Extensions.Logging;
 namespace ReviewForge.Core.Pipeline;
 
 /// <summary>
-/// Sequential stage runner. One Activity per stage; a failed stage faults the run
-/// (exit code 1 at the host boundary — no engine fallback). Graceful early exit via
-/// <see cref="ReviewContext.Terminate"/>.
+/// Sequential stage runner. One Activity per stage; a failed stage faults the run —
+/// the host worker catches, logs, and marks it Failed (<c>ReviewWorker</c>), no engine
+/// fallback. Graceful early exit via <see cref="ReviewContext.Terminate"/>.
 /// </summary>
 public sealed class ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
 {
