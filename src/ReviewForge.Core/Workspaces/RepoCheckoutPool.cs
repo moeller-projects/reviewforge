@@ -54,25 +54,48 @@ public sealed class RepoCheckoutPool
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
 
-            var repoPath = await _Git.CloneOrOpenAsync(cloneUrl, path, _Pat, ct).ConfigureAwait(false);
-            await _Git.EnsureCommitsAsync(repoPath, cloneUrl, baseSha, headSha, _Pat, ct).ConfigureAwait(false);
-            await _Git.CheckoutAsync(repoPath, headSha, ct).ConfigureAwait(false);
-            if (_Fs.DirectoryExists(repoPath))
+            // Clone path: this acquire owns the directory. If anything fails, remove the
+            // partial checkout so the next run for this head is not poisoned for days,
+            // then retry the clone exactly once (transient network failures self-heal).
+            // No retry for the reuse fast-path above: a corrupt existing checkout is a
+            // different failure and is surfaced immediately without deleting anything.
+            for (var attempt = 1; ; attempt++)
             {
-                _Fs.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
-            }
+                try
+                {
+                    var repoPath = await _Git.CloneOrOpenAsync(cloneUrl, path, _Pat, ct).ConfigureAwait(false);
+                    await _Git.EnsureCommitsAsync(repoPath, cloneUrl, baseSha, headSha, _Pat, ct).ConfigureAwait(false);
+                    await _Git.CheckoutAsync(repoPath, headSha, ct).ConfigureAwait(false);
+                    if (_Fs.DirectoryExists(repoPath))
+                    {
+                        _Fs.SetLastWriteTimeUtc(repoPath, DateTime.UtcNow);
+                    }
 
-            try
-            {
-                _SizeCache[repoPath] = DirectorySize(repoPath);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                _SizeCache.TryRemove(repoPath, out _); // measure later during eviction
-            }
+                    try
+                    {
+                        _SizeCache[repoPath] = DirectorySize(repoPath);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        _SizeCache.TryRemove(repoPath, out _); // measure later during eviction
+                    }
 
-            ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-            return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
+                    ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                    return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
+                }
+                catch (Exception)
+                {
+                    // Remove the partial dir every time it is left behind — including the
+                    // final attempt — then retry the clone exactly once.
+                    TryDeletePartialCheckout(path);
+                    if (attempt < 2)
+                    {
+                        continue;
+                    }
+
+                    throw;
+                }
+            }
         }
         catch
         {
@@ -269,6 +292,30 @@ public sealed class RepoCheckoutPool
         var readable = Sanitize(id);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id)))[..12].ToLowerInvariant();
         return $"{readable}-{hash}";
+    }
+
+    /// <summary>
+/// Best-effort removal of a checkout dir created by a failed acquire. Deletes only
+/// directories beneath the pool's checkouts root; failures never mask the original error.
+/// </summary>
+    private void TryDeletePartialCheckout(string path)
+    {
+        try
+        {
+            var checkoutsRoot = Path.GetFullPath(Path.Combine(_Root, "checkouts"));
+            var fullPath = Path.GetFullPath(path);
+            if (!fullPath.StartsWith(checkoutsRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                || !_Fs.DirectoryExists(fullPath))
+            {
+                return;
+            }
+
+            _Fs.DeleteDirectory(fullPath, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A transient native Git handle or AV lock: eviction will reclaim it later.
+        }
     }
 
     private long DirectorySize(string path)

@@ -71,6 +71,75 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     }
 
     [Fact]
+    public async Task AcquireAsync_CloneFails_DeletesPartialDirectory()
+    {
+        var git = new TestGitOps {FailCloneTimes = 2};
+        var pool = Pool(git);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+
+        Assert.False(Directory.Exists(pool.CheckoutPath("repo", "head")), "partial checkout must be removed");
+    }
+
+    [Fact]
+    public async Task AcquireAsync_CloneFailsOnce_ThenRetriesAndSucceeds()
+    {
+        var git = new TestGitOps {FailCloneTimes = 1};
+        var pool = Pool(git);
+
+        using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
+
+        Assert.True(Directory.Exists(checkout.Path));
+        Assert.Equal(2, git.Calls.Count(c => c == "clone")); // one failed + one retried
+        Assert.Equal(1, git.CloneCount); // only the successful clone counts
+    }
+
+    [Fact]
+    public async Task AcquireAsync_CloneFailsTwice_Throws_AndDirRemoved()
+    {
+        var git = new TestGitOps {FailCloneTimes = 2};
+        var pool = Pool(git);
+
+        var ex = await Assert.ThrowsAsync<IOException>(
+            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+        Assert.Equal("clone failed midline", ex.Message);
+        Assert.False(Directory.Exists(pool.CheckoutPath("repo", "head")));
+
+        // No lease leak: once the clone stops failing, the same head is acquirable.
+        git.FailCloneTimes = 0;
+        using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
+        Assert.True(Directory.Exists(checkout.Path));
+    }
+
+    [Fact]
+    public async Task AcquireAsync_EnsureCommitsFailsOnExistingCheckout_DoesNotDelete()
+    {
+        var git = new TestGitOps {HeadSha = "head", ThrowOnEnsure = true};
+        var pool = Pool(git);
+        var path = pool.CheckoutPath("repo", "head");
+        Directory.CreateDirectory(Path.Combine(path, ".git")); // a pre-existing, valid checkout
+
+        await Assert.ThrowsAsync<IOException>(
+            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+
+        Assert.True(Directory.Exists(path), "an existing checkout must never be deleted by a failed acquire");
+        Assert.DoesNotContain("clone", git.Calls);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_CleanupFailure_OriginalExceptionPropagates()
+    {
+        var git = new TestGitOps {FailCloneTimes = 2};
+        var pool = new RepoCheckoutPool(git, new ThrowingFs {ThrowOnDelete = true}, _Root);
+
+        var ex = await Assert.ThrowsAsync<IOException>(
+            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+
+        Assert.Equal("clone failed midline", ex.Message); // the clone error, not the cleanup error
+    }
+
+    [Fact]
     public async Task Different_heads_materialize_concurrently()
     {
         var git = new TestGitOps {CloneBarrier = new Barrier(2)};
@@ -466,6 +535,11 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         public Barrier? CloneBarrier { get; init; }
         public TimeSpan Delay { get; set; }
         public bool ThrowOnClone { get; set; }
+
+        /// <summary>Consecutive CloneOrOpen calls that throw after leaving a partial .git dir.</summary>
+        public int FailCloneTimes { get; set; }
+
+        public bool ThrowOnEnsure { get; set; }
         public int CheckoutCount { get; private set; }
         public int CloneCount { get; private set; }
         public int MaxConcurrentClones => Volatile.Read(ref _MaxConcurrentClones);
@@ -483,6 +557,14 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             if (ThrowOnClone)
             {
                 throw new IOException("clone failed");
+            }
+
+            if (FailCloneTimes > 0)
+            {
+                FailCloneTimes--;
+                // Simulates a mid-clone failure: a partial checkout is left on disk.
+                Directory.CreateDirectory(Path.Combine(workDir, ".git"));
+                throw new IOException("clone failed midline");
             }
 
             var active = Interlocked.Increment(ref _ActiveClones);
@@ -542,7 +624,9 @@ public sealed class RepoCheckoutPoolTests : IDisposable
                 EnsuredCommits.Add((baseSha, headSha));
             }
 
-            return Task.CompletedTask;
+            return ThrowOnEnsure
+                ? Task.FromException(new IOException("ensure failed"))
+                : Task.CompletedTask;
         }
 
         public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null) => Task.FromResult(string.Empty);
