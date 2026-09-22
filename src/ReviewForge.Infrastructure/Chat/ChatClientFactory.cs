@@ -19,9 +19,9 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     private readonly Lazy<IChatClient> _Client;
     private readonly HttpMessageHandler? _HttpHandler;
 
-    private readonly ReasoningOptions _Options;
+    private readonly ChatProviderOptions _Options;
 
-    public ChatClientFactory(ReasoningOptions options, HttpMessageHandler? httpHandler = null)
+    public ChatClientFactory(ChatProviderOptions options, HttpMessageHandler? httpHandler = null)
     {
         _Options = options;
         _HttpHandler = httpHandler;
@@ -54,7 +54,7 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     private IChatClient CreateCodexClient()
     {
         var credential = new CodexCredential(
-            _Options.CredentialPath ?? ReasoningOptions.DefaultCredentialPath(), _HttpHandler);
+            _Options.CredentialPath ?? ChatProviderOptions.DefaultCredentialPath(), _HttpHandler);
         var authHandler = new CodexAuthHandler(credential)
         {
             InnerHandler = _HttpHandler ?? new HttpClientHandler(),

@@ -7,7 +7,7 @@ namespace ReviewForge.Infrastructure.Chat;
 /// credential) or "openai" (API key from OPENAI_API_KEY). Model may carry a routing
 /// prefix ("openai-codex:gpt-5.6-luna") — stripped before addressing the model.
 /// </summary>
-public sealed class ReasoningOptions
+public sealed class ChatProviderOptions
 {
     public const string SectionName = "Reasoning";
 

@@ -48,10 +48,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(ado);
         services.AddSingleton<IPullRequestSource>(_ => new InstrumentedPullRequestSource(new AdoPullRequestSource(ado)));
 
-        var reasoning = configuration.GetSection(ReasoningOptions.SectionName).Get<ReasoningOptions>()
-                        ?? throw new InvalidOperationException($"configuration section '{ReasoningOptions.SectionName}' missing");
+        var reasoning = configuration.GetSection(ChatProviderOptions.SectionName).Get<ChatProviderOptions>()
+                        ?? throw new InvalidOperationException($"configuration section '{ChatProviderOptions.SectionName}' missing");
         services.AddSingleton(reasoning);
-        services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(sp.GetRequiredService<ReasoningOptions>()));
+        services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(sp.GetRequiredService<ChatProviderOptions>()));
         services.Configure<ReviewForgeServiceOptions>(configuration.GetSection(ReviewForgeServiceOptions.SectionName));
         services.Configure<ApiDocsOptions>(configuration.GetSection(ApiDocsOptions.SectionName));
         services.AddSingleton(sp => new GitOperationScheduler(
