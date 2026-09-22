@@ -20,9 +20,6 @@
         <PackageReference Include="OpenTelemetry.Instrumentation.Http"/>
         <PackageReference Include="OpenTelemetry.Instrumentation.Runtime"/>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi"/>
-        <PackageReference Include="Microsoft.Extensions.Http.Resilience"/>
-        <PackageReference Include="Microsoft.Extensions.ServiceDiscovery"/>
-        <PackageReference Include="Microsoft.Extensions.ServiceDiscovery.Abstractions"/>
         <PackageReference Include="Scalar.AspNetCore"/>
     </ItemGroup>
 

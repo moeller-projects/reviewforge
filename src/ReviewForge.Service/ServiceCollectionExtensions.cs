@@ -149,12 +149,9 @@ public static class ServiceCollectionExtensions
             });
         });
 
-        services.AddServiceDiscovery();
-        services.ConfigureHttpClientDefaults(http =>
-        {
-            http.AddStandardResilienceHandler();
-            http.AddServiceDiscovery();
-        });
+        // No global HttpClient resilience: the ADO read path is retried by
+        // TransientRetryPolicy (Infrastructure), which honors server Retry-After
+        // and respects cancellation; writes are never retried (P2-15).
 
         // OTLP exporters are intentionally configured ONLY from the standard environment
         // variables (OTEL_EXPORTER_OTLP_ENDPOINT / _HEADERS / _PROTOCOL, or the per-signal
