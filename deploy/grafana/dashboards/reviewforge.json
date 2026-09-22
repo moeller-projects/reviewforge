@@ -53,7 +53,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, rate(reviewforge_stage_duration_ms_bucket[5m])) by (stage)",
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(reviewforge_stage_duration_ms_bucket[5m])))",
           "legendFormat": "{{stage}}"
         }
       ]
@@ -153,7 +153,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, rate(reviewforge_ado_call_duration_ms_bucket[5m])) by (ado_operation)",
+          "expr": "histogram_quantile(0.95, sum by (le, ado_operation) (rate(reviewforge_ado_call_duration_ms_bucket[5m])))",
           "legendFormat": "{{ado_operation}} p95"
         },
         {
