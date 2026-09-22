@@ -43,7 +43,7 @@ public sealed class TransientRetryPolicy(
                                        && isTransient(ex))
             {
                 var serverDelay = retryAfterProbe?.Invoke(ex);
-                var wait = serverDelay is { } delayFromServer
+                var wait = serverDelay is { } delayFromServer && delayFromServer >= TimeSpan.Zero
                     ? Clamp(delayFromServer)
                     : Jitter(Clamp(delay));
 
@@ -58,7 +58,9 @@ public sealed class TransientRetryPolicy(
     }
 
     private TimeSpan Clamp(TimeSpan value)
-        => value > options.MaxDelay ? options.MaxDelay : value;
+        => value < TimeSpan.Zero
+            ? TimeSpan.Zero
+            : value > options.MaxDelay ? options.MaxDelay : value;
 
     private static TimeSpan Jitter(TimeSpan value)
     {

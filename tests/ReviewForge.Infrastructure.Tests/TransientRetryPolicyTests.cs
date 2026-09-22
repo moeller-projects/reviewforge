@@ -244,6 +244,36 @@ public class TransientRetryPolicyTests
     }
 
     [Fact]
+    public async Task Ignores_negative_server_retry_after()
+    {
+        var clock = new FakeTimeProvider();
+        var policy = new TransientRetryPolicy(
+            new AdoRetryOptions
+            {
+                MaxAttempts = 3,
+                BaseDelay = TimeSpan.FromMilliseconds(100),
+                MaxDelay = TimeSpan.FromSeconds(2),
+            },
+            _ => true,
+            _ => TimeSpan.FromSeconds(-1),
+            clock: clock);
+        var attempts = 0;
+
+        var result = await RunWithAdvanceAsync(
+            clock,
+            policy.ExecuteAsync(
+                _ => ++attempts == 1
+                    ? Task.FromException<int>(new HttpRequestException("t"))
+                    : Task.FromResult(42),
+                "op",
+                CancellationToken.None),
+            TimeSpan.FromMilliseconds(10));
+
+        Assert.Equal(42, result);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
     public async Task Jitter_stays_within_band_and_varies()
     {
         var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);

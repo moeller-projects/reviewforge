@@ -78,6 +78,15 @@ public class AdoTransientErrorsTests
     }
 
     [Fact]
+    public void Probe_ignores_negative_data_hint()
+    {
+        var ex = new InvalidOperationException("no message hint");
+        ex.Data["Retry-After"] = "-1";
+
+        Assert.Null(AdoTransientErrors.ProbeRetryAfter(ex));
+    }
+
+    [Fact]
     public void Probe_returns_null_without_hint()
         => Assert.Null(AdoTransientErrors.ProbeRetryAfter(new InvalidOperationException("plain")));
 

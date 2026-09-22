@@ -33,7 +33,8 @@ internal static class AdoTransientErrors
         for (var current = ex; current is not null; current = current.InnerException)
         {
             if (current.Data["Retry-After"] is string dataValue
-                && int.TryParse(dataValue, out var dataSeconds))
+                && int.TryParse(dataValue, out var dataSeconds)
+                && dataSeconds >= 0)
             {
                 return TimeSpan.FromSeconds(dataSeconds);
             }
