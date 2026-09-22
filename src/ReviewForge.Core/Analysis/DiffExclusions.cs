@@ -13,40 +13,31 @@ public static class DiffExclusions
     }
 
     private static bool Matches(string[] path, string[] pattern)
-        => MatchesAt(path, 0, pattern, 0);
-
-    private static bool MatchesAt(string[] path, int pi, string[] pattern, int gi)
     {
-        while (true)
+        // Dynamic programming bounds repeated '**' patterns to O(path × pattern)
+        // instead of recursively revisiting the same split combinations.
+        var previous = new bool[pattern.Length + 1];
+        var current = new bool[pattern.Length + 1];
+        previous[0] = true;
+        for (var gi = 1; gi <= pattern.Length; gi++)
         {
-            if (gi == pattern.Length)
-            {
-                return pi == path.Length;
-            }
-
-            var seg = pattern[gi];
-            if (seg == "**")
-            {
-                // '**' consumes zero or more path segments.
-                for (var skip = 0; pi + skip <= path.Length; skip++)
-                {
-                    if (MatchesAt(path, pi + skip, pattern, gi + 1))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-
-            if (pi == path.Length || !SegmentMatches(path[pi], seg))
-            {
-                return false;
-            }
-
-            pi++;
-            gi++;
+            previous[gi] = pattern[gi - 1] == "**" && previous[gi - 1];
         }
+
+        for (var pi = 1; pi <= path.Length; pi++)
+        {
+            for (var gi = 1; gi <= pattern.Length; gi++)
+            {
+                current[gi] = pattern[gi - 1] == "**"
+                    ? current[gi - 1] || previous[gi]
+                    : previous[gi - 1] && SegmentMatches(path[pi - 1], pattern[gi - 1]);
+            }
+
+            (previous, current) = (current, previous);
+            Array.Clear(current);
+        }
+
+        return previous[pattern.Length];
     }
 
     private static bool SegmentMatches(string text, string glob)

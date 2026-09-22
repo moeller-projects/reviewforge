@@ -297,6 +297,15 @@ public class DiffExclusionsTests
         Assert.True(DiffExclusions.IsExcluded("foobar", ["foo*"]));   // star matches more
         Assert.False(DiffExclusions.IsExcluded("barfoo", ["foo*"]));  // prefix mismatch
     }
+
+    [Fact]
+    public void Glob_repeated_double_stars_have_bounded_matching()
+    {
+        var path = string.Join('/', Enumerable.Repeat("segment", 32));
+        var pattern = string.Join('/', Enumerable.Repeat("**", 16)) + "/never";
+
+        Assert.False(DiffExclusions.IsExcluded(path, [pattern]));
+    }
 }
 
 public class AnchorResolverTests
