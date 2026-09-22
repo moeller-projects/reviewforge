@@ -87,7 +87,6 @@ public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> 
                         {
                             { ReviewForgeTelemetry.TagStage, stage.Name },
                             { ReviewForgeTelemetry.TagResult, stageResult },
-                            { ReviewForgeTelemetry.TagRepoId, ctx.Pr.RepositoryId },
                         });
                     _Logger.LogInformation("stage {Stage} done in {ElapsedMs} ms", stage.Name, sw.ElapsedMilliseconds);
                 }
