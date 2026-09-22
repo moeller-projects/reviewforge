@@ -65,9 +65,10 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
                 "1",
                 StringComparison.Ordinal))
         {
-            var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
-                              ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
-            if (string.Equals(environment, "Production", StringComparison.OrdinalIgnoreCase))
+            var aspnetEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+            var dotnetEnvironment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+            if (string.Equals(aspnetEnvironment, "Production", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(dotnetEnvironment, "Production", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
                     $"{CodexHttpDebugHandler.EnvironmentVariable}=1 is refused in Production: " +
