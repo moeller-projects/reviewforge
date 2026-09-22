@@ -1,3 +1,7 @@
+using System.ClientModel;
+using System.Net;
+using System.Text.Json;
+using Microsoft.Extensions.AI;
 using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Codex;
 using Xunit;
@@ -214,6 +218,63 @@ public class ChatClientFactoryTests
             Environment.SetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable, debug);
             Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", aspnet);
             Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", dotnet);
+        }
+    }
+
+    [Fact]
+    public async Task Codex_request_disables_storage_and_enables_streaming()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "reviewforge-chat-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var credentialPath = Path.Combine(directory, "auth.json");
+            File.WriteAllText(credentialPath, JsonSerializer.Serialize(new
+            {
+                tokens = new
+                {
+                    access_token = CodexCredentialTests.Jwt(DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds()),
+                    refresh_token = "refresh",
+                    account_id = "account",
+                },
+            }));
+            var handler = new CaptureRequestHandler();
+            using var factory = new ChatClientFactory(new ChatProviderOptions
+            {
+                Provider = "openai-codex",
+                Model = "openai-codex:gpt-5.6-luna",
+                CredentialPath = credentialPath,
+            }, handler);
+
+            var exception = await Assert.ThrowsAsync<ClientResultException>(() =>
+                factory.Create().GetResponseAsync(
+                    [new ChatMessage(ChatRole.User, "review")],
+                    new ChatOptions { ModelId = factory.ModelName }));
+
+            Assert.Equal((int)HttpStatusCode.BadRequest, exception.Status);
+            using var body = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
+            Assert.False(body.RootElement.GetProperty("store").GetBoolean());
+            Assert.True(body.RootElement.GetProperty("stream").GetBoolean());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private sealed class CaptureRequestHandler : HttpMessageHandler
+    {
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            return new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent("{}"),
+            };
         }
     }
 }
