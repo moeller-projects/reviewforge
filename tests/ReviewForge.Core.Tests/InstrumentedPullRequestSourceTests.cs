@@ -1,5 +1,7 @@
+using System.Diagnostics.Metrics;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -77,9 +79,45 @@ public sealed class InstrumentedPullRequestSourceTests
             () => source.GetOpenPullRequestsAsync(CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Failed_and_cancelled_calls_still_record_duration()
+    {
+        var measurements = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Name == "reviewforge.ado.call_duration_ms")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, state) =>
+            Interlocked.Increment(ref measurements));
+        listener.Start();
+
+        var explosive = new InstrumentedPullRequestSource(new ExplosiveSource());
+        var cancelling = new InstrumentedPullRequestSource(new CancellingSource());
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => explosive.GetPullRequestAsync(Pr, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => explosive.PostGeneralCommentAsync(
+                Pr, "comment", dedupeKey: null, ct: CancellationToken.None));
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => cancelling.GetOpenPullRequestsAsync(CancellationToken.None));
+
+        Assert.Equal(3, measurements);
+    }
+
     private sealed class ExplosiveSource : FakePullRequestSource
     {
         public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+            => throw new InvalidOperationException("boom");
+
+        public override Task PostGeneralCommentAsync(
+            PrKey pr,
+            string text,
+            string? dedupeKey,
+            CancellationToken ct)
             => throw new InvalidOperationException("boom");
     }
 

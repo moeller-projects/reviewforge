@@ -52,38 +52,36 @@ public sealed class InstrumentedPullRequestSource(IPullRequestSource inner) : IP
         {
             await call().ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             ReviewForgeTelemetry.AdoCallFailed.Add(1, new TagList { { OperationTag, operation } });
             throw;
         }
-
-        ReviewForgeTelemetry.AdoCallDurationMilliseconds.Record(sw.ElapsedMilliseconds, new TagList { { OperationTag, operation } });
+        finally
+        {
+            ReviewForgeTelemetry.AdoCallDurationMilliseconds.Record(
+                sw.ElapsedMilliseconds,
+                new TagList { { OperationTag, operation } });
+        }
     }
 
     private async Task<T> RecordAsync<T>(string operation, Func<Task<T>> call)
     {
         var sw = Stopwatch.StartNew();
-        T result;
         try
         {
-            result = await call().ConfigureAwait(false);
+            return await call().ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             ReviewForgeTelemetry.AdoCallFailed.Add(1, new TagList { { OperationTag, operation } });
             throw;
         }
-
-        ReviewForgeTelemetry.AdoCallDurationMilliseconds.Record(sw.ElapsedMilliseconds, new TagList { { OperationTag, operation } });
-        return result;
+        finally
+        {
+            ReviewForgeTelemetry.AdoCallDurationMilliseconds.Record(
+                sw.ElapsedMilliseconds,
+                new TagList { { OperationTag, operation } });
+        }
     }
 }
