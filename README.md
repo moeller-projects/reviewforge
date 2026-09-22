@@ -41,6 +41,7 @@ tests/
 
 ```bash
 export REVIEWFORGE_ADO_PAT=...            # ADO personal access token (never in config files)
+# docker compose additionally requires ADO_ORG_URL and ADO_PROJECT (no internal defaults).
 export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for the /reviews endpoints
 # provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist).
 #   auth.json holds a long-lived refresh token; keep the directory owner-only:

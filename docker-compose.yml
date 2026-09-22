@@ -20,8 +20,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-} # only needed with Reasoning__Provider=openai
 
       # Configuration overrides (double underscore maps to ':' in .NET configuration).
-      Ado__OrgUrl: ${ADO_ORG_URL:-https://dev.azure.com/aveato}
-      Ado__Project: ${ADO_PROJECT:-Laekker.Kitchen}
+      Ado__OrgUrl: ${ADO_ORG_URL:?set ADO_ORG_URL (e.g. https://dev.azure.com/your-org)}
+      Ado__Project: ${ADO_PROJECT:?set ADO_PROJECT}
       Reasoning__Provider: ${REASONING_PROVIDER:-openai-codex}
       Reasoning__Model: ${REASONING_MODEL:-openai-codex:gpt-5.6-luna}
 
