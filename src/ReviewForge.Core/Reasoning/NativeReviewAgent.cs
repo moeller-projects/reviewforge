@@ -9,8 +9,9 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
-using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Reasoning.Rules;
+
+namespace ReviewForge.Core.Reasoning;
 
 /// <summary>Tuning knobs for the agent loop.</summary>
 public sealed record AgentOptions
