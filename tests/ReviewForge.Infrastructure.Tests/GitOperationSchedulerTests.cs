@@ -106,11 +106,17 @@ public class GitOperationSchedulerTests
         }, cts.Token);
 
         cts.Cancel();
-        release.Set();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
-        Assert.False(ran);
-        await blocking;
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => queued.WaitAsync(TimeSpan.FromSeconds(1)));
+            Assert.False(ran);
+        }
+        finally
+        {
+            release.Set();
+            await blocking;
+        }
     }
 
     [Fact]

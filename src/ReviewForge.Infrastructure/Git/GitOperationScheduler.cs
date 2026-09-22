@@ -12,9 +12,21 @@ public sealed class GitOperationScheduler : IDisposable
 {
     private sealed class WorkItem(Func<object?> work, TaskCompletionSource<object?> completion, CancellationToken ct)
     {
+        private int _State;
+
         public Func<object?> Work { get; } = work;
         public TaskCompletionSource<object?> Completion { get; } = completion;
         public CancellationToken Ct { get; } = ct;
+
+        public bool TryStart() => Interlocked.CompareExchange(ref _State, 1, 0) == 0;
+
+        public void CancelIfQueued()
+        {
+            if (Interlocked.CompareExchange(ref _State, 2, 0) == 0)
+            {
+                Completion.TrySetCanceled(Ct);
+            }
+        }
     }
 
     private readonly BlockingCollection<WorkItem> _Queue = new(new ConcurrentQueue<WorkItem>());
@@ -42,27 +54,41 @@ public sealed class GitOperationScheduler : IDisposable
     {
         ObjectDisposedException.ThrowIf(_Disposed != 0, this);
         var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var item = new WorkItem(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return work();
+        }, completion, ct);
+        var cancellationRegistration = ct.CanBeCanceled
+            ? ct.UnsafeRegister(static state => ((WorkItem)state!).CancelIfQueued(), item)
+            : default;
 
         try
         {
-            _Queue.Add(new WorkItem(() =>
-            {
-                ct.ThrowIfCancellationRequested();
-                return work();
-            }, completion, ct), ct);
+            _Queue.Add(item, ct);
         }
         catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
         {
             // Cancelled before enqueue, or scheduler is completing.
-            completion.TrySetCanceled(ct.IsCancellationRequested ? ct : CancellationToken.None);
+            item.CancelIfQueued();
         }
 
-
-        return Unwrap<T>(completion);
+        return Unwrap<T>(completion, cancellationRegistration);
     }
 
-    private static async Task<T> Unwrap<T>(TaskCompletionSource<object?> completion)
-        => (T)(await completion.Task.ConfigureAwait(false))!;
+    private static async Task<T> Unwrap<T>(
+        TaskCompletionSource<object?> completion,
+        CancellationTokenRegistration cancellationRegistration)
+    {
+        try
+        {
+            return (T)(await completion.Task.ConfigureAwait(false))!;
+        }
+        finally
+        {
+            cancellationRegistration.Dispose();
+        }
+    }
 
     private void Drain()
     {
@@ -70,6 +96,10 @@ public sealed class GitOperationScheduler : IDisposable
         {
             foreach (var item in _Queue.GetConsumingEnumerable())
             {
+                if (!item.TryStart())
+                {
+                    continue;
+                }
                 try
                 {
                     item.Completion.TrySetResult(item.Work());
