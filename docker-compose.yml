@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Locally built from `build:` below — never pulled from a registry, so the
+    # mutable :latest tag here is harmless (CI pushes only sha-<commit> tags).
     image: reviewforge:latest
     container_name: reviewforge
     restart: unless-stopped
