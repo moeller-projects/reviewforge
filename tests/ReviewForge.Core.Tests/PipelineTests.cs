@@ -141,6 +141,26 @@ public class StageTests : IDisposable
         };
     }
 
+    private sealed class FaultingPullRequestSource : FakePullRequestSource
+    {
+        public TaskCompletionSource SiblingStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSibling { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+            => Task.FromException<PullRequest>(new InvalidOperationException("pull request failed"));
+
+        public override async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(
+            PrKey pr,
+            CancellationToken ct)
+        {
+            SiblingStarted.TrySetResult();
+            await ReleaseSibling.Task.WaitAsync(ct);
+            return [];
+        }
+    }
+
     [Fact]
     public void ChangedFiles_is_cached_until_manifest_reassigned()
     {
@@ -173,6 +193,26 @@ public class StageTests : IDisposable
         Assert.Single(ctx.ChangedFiles);
         Assert.Equal(source.User, ctx.CurrentUser);
         Assert.Equal(store.LastRun, ctx.PriorRun);
+    }
+
+    [Fact]
+    public async Task Fetch_observes_started_siblings_when_pull_request_fails()
+    {
+        var source = new FaultingPullRequestSource();
+        var execution = new FetchPrContextStage(source, new FakeFindingStore())
+            .ExecuteAsync(new ReviewContext(Key, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await source.SiblingStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        try
+        {
+            Assert.False(execution.IsCompleted);
+        }
+        finally
+        {
+            source.ReleaseSibling.TrySetResult();
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => execution);
     }
 
     [Fact]
