@@ -63,6 +63,53 @@ public sealed class TelemetryTests
         Assert.DoesNotContain(recordedTags, tag => tag.Key == ReviewForgeTelemetry.TagRepoId);
     }
 
+    [Fact]
+    public async Task Requested_cancellation_is_not_recorded_as_failure()
+    {
+        string? result = null;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Name == "reviewforge.stage.duration_ms")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, state) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == ReviewForgeTelemetry.TagResult)
+                {
+                    result = tag.Value?.ToString();
+                }
+            }
+        });
+        listener.Start();
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var pipeline = new ReviewPipeline([new CancellingStage()], NullLogger<ReviewPipeline>.Instance);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pipeline.RunAsync(
+            new ReviewContext(new PrKey("org", "project", "repository", 1), DateTimeOffset.UtcNow),
+            cts.Token));
+
+        Assert.Equal("cancelled", result);
+    }
+
+    private sealed class CancellingStage : IReviewStage
+    {
+        public string Name => "cancel";
+        public int Order => 10;
+        public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+
     private sealed class NoOpStage : IReviewStage
     {
         public string Name => "noop";

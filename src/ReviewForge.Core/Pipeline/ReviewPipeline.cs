@@ -70,6 +70,11 @@ public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> 
                 {
                     await stage.ExecuteAsync(ctx, ct);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    stageResult = "cancelled";
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     stageResult = "failed";
