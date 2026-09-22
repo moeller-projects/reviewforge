@@ -290,7 +290,7 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_upgrades_existing_database_without_watermark_column()
+    public async Task Constructor_upgrades_existing_database_without_watermark_column()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-legacy-" + Guid.NewGuid().ToString("N") + ".db");
         try
@@ -313,7 +313,8 @@ public class SqliteFindingStoreTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            var store = new SqliteFindingStore($"Data Source={dbPath};Pooling=False");
+            await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(
+                () => new SqliteFindingStore($"Data Source={dbPath};Pooling=False"))));
 
             using var check = new SqliteConnection($"Data Source={dbPath};Pooling=False");
             check.Open();

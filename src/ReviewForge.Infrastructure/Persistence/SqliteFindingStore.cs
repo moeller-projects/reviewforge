@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -24,26 +25,29 @@ public sealed class SqliteFindingStore : IFindingStore
         db.Database.EnsureCreated();
         db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
 
-        // EnsureCreated never alters existing tables; upgrade pre-watermark databases
-        // in place so the gate's server-time comparison works on old data files.
-        var hasWatermarkColumn = false;
-        using (var cmd = db.Database.GetDbConnection().CreateCommand())
+        // EnsureCreated never alters existing tables. An immediate SQLite transaction
+        // serializes the check-and-alter sequence across concurrently starting instances.
+        var connection = (SqliteConnection)db.Database.GetDbConnection();
+        db.Database.OpenConnection();
+        try
         {
-            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
-            db.Database.OpenConnection();
-            try
+            using var transaction = connection.BeginTransaction(deferred: false);
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
+            var hasWatermarkColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+            if (!hasWatermarkColumn)
             {
-                hasWatermarkColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+                cmd.CommandText = "ALTER TABLE Runs ADD COLUMN LastObservedCommentAt TEXT NULL";
+                cmd.ExecuteNonQuery();
             }
-            finally
-            {
-                db.Database.CloseConnection();
-            }
-        }
 
-        if (!hasWatermarkColumn)
+            transaction.Commit();
+        }
+        finally
         {
-            db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN LastObservedCommentAt TEXT NULL");
+            db.Database.CloseConnection();
         }
     }
 
