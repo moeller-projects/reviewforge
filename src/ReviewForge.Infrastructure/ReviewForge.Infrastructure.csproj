@@ -3,6 +3,10 @@
     <PropertyGroup>
         <IsPackable>false</IsPackable>
     </PropertyGroup>
+    <!-- Unix permission APIs are omitted from Windows builds; Windows uses ACLs. -->
+    <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+        <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+    </PropertyGroup>
 
     <ItemGroup>
         <InternalsVisibleTo Include="ReviewForge.Infrastructure.Tests"/>
