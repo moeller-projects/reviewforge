@@ -14,6 +14,9 @@ public sealed record SubmitReviewRequest(
 
 public sealed record SubmitReviewResponse(Guid RunId, string StatusUrl);
 
+/// <summary>409 body: another review owns the PR; the competing run id is exposed for clients.</summary>
+public sealed record ConflictResponse(string Error, Guid? RunId);
+
 /// <summary>Minimal-API surface: submit, status, discovery, health.</summary>
 public static class Endpoints
 {
@@ -24,6 +27,7 @@ public static class Endpoints
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
             .Produces<SubmitReviewResponse>(202)
+            .Produces<ConflictResponse>(409)
             .ProducesProblem(400)
             .ProducesProblem(503);
 
@@ -63,7 +67,8 @@ public static class Endpoints
         if (!claims.TryClaim(pr, runId, out var holder))
         {
             logger.LogWarning("review submit conflict for {Pr}: already in flight (run {RunId})", pr, holder);
-            return TypedResults.Conflict(new {error = "a review for this pull request is already in flight", runId = holder});
+            return TypedResults.Conflict(new ConflictResponse(
+                "a review for this pull request is already in flight", holder));
         }
 
         // Track-then-enqueue: the run is visible as Queued before the channel write, so a

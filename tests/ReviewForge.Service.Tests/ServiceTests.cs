@@ -211,12 +211,16 @@ public class ServiceTests : IAsyncLifetime
     public async Task Submit_conflicts_when_review_already_in_flight()
     {
         var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
-        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), Guid.NewGuid(), out _));
+        var holder = Guid.NewGuid();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), holder, out _));
 
         var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
             new {org = "o", project = "p", repositoryId = "r", prId = 77});
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var conflict = await response.Content.ReadFromJsonAsync<ConflictResponse>();
+        Assert.Equal("a review for this pull request is already in flight", conflict?.Error);
+        Assert.Equal(holder, conflict?.RunId);
     }
 
     [Fact]
