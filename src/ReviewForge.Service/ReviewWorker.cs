@@ -95,6 +95,16 @@ public sealed class ReviewWorker(
             {
                 return;
             }
+            catch (PrHeadChangedException ex)
+            {
+                // A force-push mid-run is a normal race, not an operational failure: no
+                // error page, no wrong-iteration writes. The sweep reviews the new head.
+                logger.LogInformation(
+                    "run {RunId} for {Pr} superseded mid-run (head moved from {Old} to {New})",
+                    request.RunId, request.Pr, ex.Expected, ex.Actual);
+                tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message);
+                await PersistFailureAsync(request, ctx, stoppingToken);
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, "run {RunId} for {Pr} failed", request.RunId, request.Pr);

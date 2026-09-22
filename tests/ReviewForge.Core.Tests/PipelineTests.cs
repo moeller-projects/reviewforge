@@ -1079,6 +1079,116 @@ public class StageTests : IDisposable
         Assert.Empty(source.Votes); // vote blocked
     }
 
+    private static PullRequest Pr(string head)
+        => new(1, "t", null, head, "base", "url", false);
+
+    /// <summary>Returns the updated head on every fetch after the first (the stage-1 fetch).</summary>
+    private sealed class HeadChangingSource(PullRequest first, PullRequest second) : FakePullRequestSource
+    {
+        private int _Fetches;
+
+        public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+            => Task.FromResult(_Fetches++ == 0 ? first : second);
+    }
+
+    private static ReviewContext HeadCtx(IPullRequestSource source, string reviewedHead)
+    {
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = Pr(reviewedHead),
+            CurrentUser = new CurrentUser("user-1", "reviewforge bot"),
+            Kind = ReviewKind.Full,
+            AcceptedFindings = [FindingOnLine(2)],
+            Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+                Findings = [FindingOnLine(2)],
+                Uncertainties = [],
+            },
+        };
+        return ctx;
+    }
+
+    [Fact]
+    public async Task Publish_head_unchanged_publishes_normally()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-a"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None); // the stage-1 fetch
+        var ctx = HeadCtx(source, "head-a");
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.PostedFindings);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, Assert.Single(source.Votes).Vote);
+    }
+
+    [Fact]
+    public async Task Publish_head_changed_throws_before_any_write()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-b"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None); // the stage-1 fetch
+        var ctx = HeadCtx(source, "head-a");
+
+        await Assert.ThrowsAsync<PrHeadChangedException>(() =>
+            new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Empty(source.PostedFindings);
+        Assert.Empty(source.GeneralComments);
+        Assert.Empty(source.Votes);
+    }
+
+    [Fact]
+    public async Task Publish_head_changed_message_exposes_both_shas()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-b"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None);
+        var ctx = HeadCtx(source, "head-a");
+
+        var ex = await Assert.ThrowsAsync<PrHeadChangedException>(() =>
+            new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Equal("head-a", ex.Expected);
+        Assert.Equal("head-b", ex.Actual);
+        Assert.Contains("head-a", ex.Message);
+        Assert.Contains("head-b", ex.Message);
+    }
+
+    [Fact]
+    public async Task Publish_head_comparison_is_case_insensitive()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("HEAD-A"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None);
+        var ctx = HeadCtx(source, "head-a");
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.PostedFindings); // same SHA in different casing must not abort
+    }
+
+    [Fact]
+    public async Task Publish_head_changed_run_is_not_persisted()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-b"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None); // the stage-1 fetch
+        var store = new FakeFindingStore();
+        var ctx = HeadCtx(source, "head-a");
+        var pipeline = new ReviewPipeline(
+            [
+                new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance),
+                new PersistRunStage(store),
+            ],
+            NullLogger<ReviewPipeline>.Instance);
+
+        await Assert.ThrowsAsync<PrHeadChangedException>(() => pipeline.RunAsync(ctx, CancellationToken.None));
+
+        Assert.Empty(store.Runs); // PersistRunStage never ran; the new head is not marked reviewed
+        Assert.Empty(source.PostedFindings);
+    }
+
     [Fact]
     public async Task Validate_rejects_symlink_escaping_checkout()
     {

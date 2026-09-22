@@ -281,4 +281,50 @@ public class ReviewWorkerTests
         using var h = new Harness(cleanVote: "None");
         Assert.NotNull(h.Factory.Create());
     }
+
+    /// <summary>Returns a changed PR head on the second fetch (force-push mid-run).</summary>
+    private sealed class HeadChangingSource : FakePullRequestSource
+    {
+        private int _Fetches;
+
+        public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+        {
+            var pull = _Fetches++ == 0
+                ? new PullRequest(1, "t", null, "head-a", "base", "url", false)
+                : new PullRequest(1, "t", null, "head-b", "base", "url", false);
+            return Task.FromResult(pull);
+        }
+    }
+
+    [Fact]
+    public async Task Worker_marks_superseded_run_failed_without_error_log()
+    {
+        using var h = new Harness(source: new HeadChangingSource());
+        var runId = Guid.NewGuid();
+        Assert.True(h.Claims.TryClaim(Key, runId, out _));
+        Assert.True(h.Queue.TryEnqueue(new ReviewRequest(runId, Key, h.Clock.GetUtcNow())).Accepted);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var workerTask = h.Worker.StartAsync(cts.Token);
+
+        for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
+        {
+            await Task.Delay(25);
+        }
+
+        var status = h.Tracker.Get(runId);
+        Assert.Equal(RunState.Failed, status?.State);
+        Assert.Contains("head changed during review", status?.Detail);
+        Assert.False(h.Claims.IsHeldBy(Key, runId), "claim must be released after a superseded run");
+        Assert.Empty(h.Source.PostedFindings); // nothing was published
+
+        await cts.CancelAsync();
+        try
+        {
+            await workerTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 }

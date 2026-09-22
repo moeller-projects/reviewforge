@@ -46,6 +46,17 @@ public sealed class PublishFindingsStage(
 
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before publish");
 
+        // Head-SHA TOCTOU guard: the checkout, diff, and anchors were computed against the
+        // stage-1 head. A force-push mid-run must not receive comments for superseded code.
+        var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
+        var reviewed = ctx.PullRequest!.SourceCommitSha;
+        if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning("PR head changed during run ({Reviewed} → {Current}); aborting before publication",
+                reviewed, current.SourceCommitSha);
+            throw new PrHeadChangedException(reviewed, current.SourceCommitSha);
+        }
+
         var posted = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
 
         using var gate = new SemaphoreSlim(MaxConcurrentPosts, MaxConcurrentPosts);
