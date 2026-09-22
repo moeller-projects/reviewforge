@@ -80,6 +80,48 @@ public class CodexCredentialTests : IDisposable
     }
 
     [Fact]
+    public async Task Refresh_persists_with_owner_only_permissions()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Unix modes are meaningless on Windows (ACL-based)
+        }
+
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));
+        var oldToken = Jwt(clock.GetUtcNow().AddSeconds(30).ToUnixTimeSeconds());
+        var newToken = Jwt(clock.GetUtcNow().AddHours(2).ToUnixTimeSeconds());
+        var path = WriteAuth(oldToken); // written with the process umask (typically 0644)
+        var handler = new StubHandler(_ => TokenResponse(newToken));
+        var credential = new CodexCredential(path, handler, clock);
+
+        Assert.Equal(newToken, await credential.GetTokenAsync(CancellationToken.None));
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(path));
+        Assert.False(File.Exists(path + ".tmp"));
+    }
+
+    [Fact]
+    public void Load_tightens_world_readable_credential()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Unix modes are meaningless on Windows (ACL-based)
+        }
+
+        var path = WriteAuth(Jwt(1_800_000_000));
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead); // 0644
+
+        var auth = CodexCredential.Load(path);
+
+        Assert.NotNull(auth);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(path));
+    }
+
+    [Fact]
     public async Task ForceRefresh_refreshes_even_valid_tokens()
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));

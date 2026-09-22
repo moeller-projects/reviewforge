@@ -42,7 +42,12 @@ tests/
 ```bash
 export REVIEWFORGE_ADO_PAT=...            # ADO personal access token (never in config files)
 export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for the /reviews endpoints
-# provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist)
+# provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist).
+#   auth.json holds a long-lived refresh token; keep the directory owner-only:
+#     chmod 700 ~/.codex && chmod 600 ~/.codex/auth.json
+#   (the service tightens the file to 0600 on every persist and load, but the
+#   directory mode is yours to set). Production: prefer a dedicated service
+#   account over a developer's personal ~/.codex.
 # provider openai:       export OPENAI_API_KEY=...
 
 dotnet run --project src/ReviewForge.Service          # serves http://localhost:5080

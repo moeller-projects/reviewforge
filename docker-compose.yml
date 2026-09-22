@@ -35,8 +35,11 @@ services:
     volumes:
       # Codex OAuth credentials. Mount the directory, not the file, and keep it
       # read-write: token rotation rewrites auth.json atomically (temp + move).
-      # The directory must be writable by the container's app user (uid 1654):
-      #   sudo chown -R 1654:1654 ~/.codex
+      # The directory must be writable by the container's app user (uid 1654),
+      # and owner-only because auth.json holds a long-lived refresh token:
+      #   sudo chown -R 1654:1654 ~/.codex && chmod 700 ~/.codex && chmod 600 ~/.codex/auth.json
+      # Production: prefer a dedicated service account's credentials over a
+      # developer's personal ~/.codex.
       - ${CODEX_AUTH_DIR:-~/.codex}:/home/app/.codex
       # Repo working dirs, per-run findings/{runId}.jsonl, and reviewforge.db.
       - reviewforge-data:/var/reviewforge
