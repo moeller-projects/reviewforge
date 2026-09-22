@@ -14,9 +14,11 @@ public sealed class PrepareRepositoryStage(
 {
     public string Name => "prepare-repository";
 
+    public int Order => 30;
+
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        var pr = ctx.PullRequest!;
+        var pr = ctx.RequirePullRequest();
         var checkout = await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
         ctx.RepoLease = checkout;
         ctx.RepoDir = checkout.Path;

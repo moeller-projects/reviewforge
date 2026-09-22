@@ -23,6 +23,8 @@ public sealed class PublishFindingsStage(
 
     public string Name => "publish-findings";
 
+    public int Order => 90;
+
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         // Mechanism B: never re-post a finding that already has a live bot thread. The ADO
@@ -49,7 +51,7 @@ public sealed class PublishFindingsStage(
         // Head-SHA TOCTOU guard: the checkout, diff, and anchors were computed against the
         // stage-1 head. A force-push mid-run must not receive comments for superseded code.
         var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
-        var reviewed = ctx.PullRequest!.SourceCommitSha;
+        var reviewed = ctx.RequirePullRequest().SourceCommitSha;
         if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogWarning("PR head changed during run ({Reviewed} → {Current}); aborting before publication",
@@ -107,10 +109,10 @@ public sealed class PublishFindingsStage(
         // Summary must post AFTER findings (readers of the PR see findings first).
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before summary");
         await source.PostGeneralCommentAsync(ctx.Pr,
-                CommentFormatter.FormatSummary(ctx.Result!, ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind), ct)
+                CommentFormatter.FormatSummary(ctx.RequireResult(), ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind), ct)
             .ConfigureAwait(false);
 
-        var acUnmet = (ctx.Result!.Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);
+        var acUnmet = (ctx.RequireResult().Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);
         var needsAttention = ctx.AcceptedFindings.Count > 0 || acUnmet || ctx.UnansweredThreads.Count > 0;
         if (needsAttention)
         {

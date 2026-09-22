@@ -17,6 +17,8 @@ public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = nul
 
     public string Name => "begin-run";
 
+    public int Order => 75;
+
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var acceptedKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
@@ -32,7 +34,7 @@ public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = nul
             .ToList();
 
         var run = new ReviewRun(
-            ctx.RunId, ctx.Pr, ctx.PullRequest!.SourceCommitSha, ctx.Kind,
+            ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Kind,
             ctx.StartedAt, CompletedAt: null, Success: false, findings);
 
         return store.SaveRunAsync(run, ct);

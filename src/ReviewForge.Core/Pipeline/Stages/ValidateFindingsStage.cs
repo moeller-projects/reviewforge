@@ -19,6 +19,8 @@ public sealed class ValidateFindingsStage(
 
     public string Name => "validate-findings";
 
+    public int Order => 70;
+
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var repoDir = ctx.RequireRepoDir();
@@ -27,7 +29,7 @@ public sealed class ValidateFindingsStage(
             .Select(RepoPath.Normalize)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var finding in ctx.Result!.Findings)
+        foreach (var finding in ctx.RequireResult().Findings)
         {
             if (finding.Anchor is null)
             {

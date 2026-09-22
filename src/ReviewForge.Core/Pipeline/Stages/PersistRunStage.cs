@@ -15,6 +15,8 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
 
     public string Name => "persist-run";
 
+    public int Order => 100;
+
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var acceptedKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
@@ -46,7 +48,7 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
         var run = new ReviewRun(
             ctx.RunId,
             ctx.Pr,
-            ctx.PullRequest!.SourceCommitSha,
+            ctx.RequirePullRequest().SourceCommitSha,
             ctx.Kind,
             ctx.StartedAt,
             _Clock.GetUtcNow(),

@@ -10,9 +10,11 @@ public sealed class ReviewGateStage(TimeProvider? clock = null, ILogger<ReviewGa
 
     public string Name => "review-gate";
 
+    public int Order => 20;
+
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        ctx.Gate = ReviewGate.Evaluate(ctx.PullRequest!, ctx.PriorRun, ctx.Threads, _Clock.GetUtcNow());
+        ctx.Gate = ReviewGate.Evaluate(ctx.RequirePullRequest(), ctx.PriorRun, ctx.Threads, _Clock.GetUtcNow());
         logger?.LogInformation("gate decision for {Pr}: ShouldReview={ShouldReview}, reason={Reason}",
             ctx.Pr, ctx.Gate.ShouldReview, ctx.Gate.Reason);
         if (!ctx.Gate.ShouldReview)

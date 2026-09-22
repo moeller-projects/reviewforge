@@ -127,6 +127,24 @@ public class CoverageGapTests : IDisposable
 
         Assert.Throws<InvalidOperationException>(() => ctx.RequireRepoDir());
     }
+
+    [Fact]
+    public void RequirePullRequest_throws_when_unset()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ctx.RequirePullRequest());
+        Assert.Contains("PullRequest", ex.Message);
+    }
+
+    [Fact]
+    public void RequireResult_throws_when_unset()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ctx.RequireResult());
+        Assert.Contains("Result", ex.Message);
+    }
 }
 
 public class RepoReadToolsGapTests : IDisposable

@@ -71,8 +71,13 @@ public class ReviewPipelineTests
         Assert.Equal("head-sha", ctx.PullRequest!.SourceCommitSha);
     }
 
-    private sealed class RecordingStage(string name, List<string> log, Action<ReviewContext>? act = null) : IReviewStage
+    private sealed class RecordingStage(
+        string name, List<string> log, Action<ReviewContext>? act = null, int? order = null) : IReviewStage
     {
+        private static int _NextOrder;
+
+        public int Order { get; } = order ?? Interlocked.Increment(ref _NextOrder);
+
         public string Name => name;
 
         public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
@@ -81,6 +86,29 @@ public class ReviewPipelineTests
             act?.Invoke(ctx);
             return Task.CompletedTask;
         }
+    }
+
+    [Fact]
+    public void Pipeline_throws_on_out_of_order_stages()
+    {
+        var log = new List<string>();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => _ = new ReviewPipeline(
+            [new RecordingStage("later", log, order: 30), new RecordingStage("earlier", log, order: 10)],
+            NullLogger<ReviewPipeline>.Instance));
+
+        Assert.Contains("stage ordering violation", ex.Message);
+        Assert.Contains("earlier", ex.Message);
+    }
+
+    [Fact]
+    public void Pipeline_throws_on_duplicate_orders()
+    {
+        var log = new List<string>();
+
+        Assert.Throws<InvalidOperationException>(() => _ = new ReviewPipeline(
+            [new RecordingStage("a", log, order: 10), new RecordingStage("b", log, order: 10)],
+            NullLogger<ReviewPipeline>.Instance));
     }
 }
 

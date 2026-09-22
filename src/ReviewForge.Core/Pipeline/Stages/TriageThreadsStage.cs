@@ -13,12 +13,14 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 {
     public string Name => "triage-threads";
 
+    public int Order => 80;
+
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before triage");
 
         var botThreads = ctx.Threads.Where(t => t.DedupeKey is not null).ToList();
-        var agentActions = ctx.Result!.Narrative.ThreadActions ?? [];
+        var agentActions = ctx.RequireResult().Narrative.ThreadActions ?? [];
 
         // A finding "still reproduces" when it was accepted this run, was posted by a prior run,
         // or was re-detected this run but dedupe-rejected. Auto-resolve is reserved for keys that

@@ -8,9 +8,25 @@ namespace ReviewForge.Core.Pipeline;
 /// the host worker catches, logs, and marks it Failed (<c>ReviewWorker</c>), no engine
 /// fallback. Graceful early exit via <see cref="ReviewContext.Terminate"/>.
 /// </summary>
-public sealed class ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
+public sealed class ReviewPipeline
 {
-    private readonly IReadOnlyList<IReviewStage> _Stages = [.. stages];
+    private readonly IReadOnlyList<IReviewStage> _Stages;
+    private readonly ILogger<ReviewPipeline> _Logger;
+
+public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
+    {
+        _Stages = [.. stages];
+        _Logger = logger;
+        for (var i = 1; i < _Stages.Count; i++)
+        {
+            if (_Stages[i].Order <= _Stages[i - 1].Order)
+            {
+                throw new InvalidOperationException(
+                    $"stage ordering violation: '{_Stages[i].Name}' (Order {_Stages[i].Order}) must come after " +
+                    $"'{_Stages[i - 1].Name}' (Order {_Stages[i - 1].Order})");
+            }
+        }
+    }
 
     public async Task<ReviewContext> RunAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -36,7 +52,7 @@ public sealed class ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<Rev
                     break;
                 }
 
-                using var stageScope = logger.BeginScope(new Dictionary<string, object>
+                using var stageScope = _Logger.BeginScope(new Dictionary<string, object>
                 {
                     ["Stage"] = stage.Name,
                 });
@@ -47,7 +63,7 @@ public sealed class ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<Rev
                 stageActivity?.SetTag(ReviewForgeTelemetry.TagPrId, ctx.Pr.PrId);
                 stageActivity?.SetTag(ReviewForgeTelemetry.TagStage, stage.Name);
 
-                logger.LogInformation("stage {Stage} starting", stage.Name);
+                _Logger.LogInformation("stage {Stage} starting", stage.Name);
                 var sw = Stopwatch.StartNew();
                 var stageResult = "completed";
                 try
@@ -73,12 +89,12 @@ public sealed class ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<Rev
                             { ReviewForgeTelemetry.TagResult, stageResult },
                             { ReviewForgeTelemetry.TagRepoId, ctx.Pr.RepositoryId },
                         });
-                    logger.LogInformation("stage {Stage} done in {ElapsedMs} ms", stage.Name, sw.ElapsedMilliseconds);
+                    _Logger.LogInformation("stage {Stage} done in {ElapsedMs} ms", stage.Name, sw.ElapsedMilliseconds);
                 }
 
                 if (headScope is null && ctx.PullRequest is not null)
                 {
-                    headScope = logger.BeginScope(new Dictionary<string, object>
+                    headScope = _Logger.BeginScope(new Dictionary<string, object>
                     {
                         ["HeadSha"] = ctx.PullRequest.SourceCommitSha,
                     });
@@ -93,7 +109,7 @@ public sealed class ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<Rev
         if (ctx.Terminated)
         {
             runActivity?.SetTag("reviewforge.terminated", ctx.TerminationReason);
-            logger.LogInformation("run terminated early: {Reason}", ctx.TerminationReason);
+            _Logger.LogInformation("run terminated early: {Reason}", ctx.TerminationReason);
         }
 
         if (ctx.PullRequest is not null)

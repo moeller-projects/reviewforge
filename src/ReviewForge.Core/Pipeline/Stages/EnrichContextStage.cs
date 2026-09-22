@@ -14,6 +14,8 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
 
     public string Name => "enrich-context";
 
+    public int Order => 50;
+
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         if (enricher is null)

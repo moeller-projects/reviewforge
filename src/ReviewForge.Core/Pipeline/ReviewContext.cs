@@ -100,6 +100,14 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
         return dir;
     }
 
+    public PullRequest RequirePullRequest()
+        => PullRequest ?? throw new InvalidOperationException(
+            $"stage ordering violation: {nameof(PullRequest)} is null but required (fetch stage must run first)");
+
+    public ReviewResult RequireResult()
+        => Result ?? throw new InvalidOperationException(
+            $"stage ordering violation: {nameof(Result)} is null but required (reasoning stage must run first)");
+
     public void Terminate(string reason)
     {
         Terminated = true;

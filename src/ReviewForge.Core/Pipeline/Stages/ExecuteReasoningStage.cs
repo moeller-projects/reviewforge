@@ -17,6 +17,8 @@ public sealed class ExecuteReasoningStage(
 
     public string Name => "execute-reasoning";
 
+    public int Order => 60;
+
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var repoDir = ctx.RequireRepoDir();
@@ -30,7 +32,7 @@ public sealed class ExecuteReasoningStage(
         var rootFiles = Directory.Exists(repoDir) ? Directory.GetFiles(repoDir, "*", SearchOption.TopDirectoryOnly) : [];
         var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
-            Pr: ctx.PullRequest!, Kind: ctx.Kind, WorkItems: ctx.WorkItems, ChangedFiles: ctx.ChangedFiles,
+            Pr: ctx.RequirePullRequest(), Kind: ctx.Kind, WorkItems: ctx.WorkItems, ChangedFiles: ctx.ChangedFiles,
             PendingReplies: ctx.PendingReplies, DiffText: ctx.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names,
             MaxDiffChars: maxDiffChars, MaxDiffCharsPerFile: maxDiffCharsPerFile));
         ctx.Result = await agent.RunAsync(
