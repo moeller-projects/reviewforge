@@ -140,6 +140,20 @@ public class ApiKeyAuthTests
         Assert.Equal(HttpStatusCode.Accepted, await PostReview(client, null, 1));
     }
 
+    [Fact]
+    public async Task Development_optout_ignores_arbitrary_keys_for_rate_partitioning()
+    {
+        using var factory = new ReviewForgeFactory()
+            .WithDevelopmentOptOut()
+            .WithSubmitLimit(2, 600)
+            .WithoutWorkers();
+        using var client = factory.Server.CreateClient();
+
+        Assert.Equal(HttpStatusCode.Accepted, await PostReview(client, "arbitrary-1", 1));
+        Assert.Equal(HttpStatusCode.Accepted, await PostReview(client, "arbitrary-2", 2));
+        Assert.Equal(HttpStatusCode.TooManyRequests, await PostReview(client, "arbitrary-3", 3));
+    }
+
     // ---- middleware unit tests (fail-closed branch is unreachable through the host,
     // which refuses to start without keys) ----
 

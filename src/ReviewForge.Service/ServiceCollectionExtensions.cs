@@ -174,9 +174,10 @@ public static class ServiceCollectionExtensions
             limiter.AddPolicy(ApiKeyOptions.SubmitPolicy, httpContext =>
             {
                 var api = httpContext.RequestServices.GetRequiredService<IOptions<ApiKeyOptions>>().Value;
-                var partition = httpContext.Request.Headers[ApiKeyOptions.HeaderName].FirstOrDefault()
-                                ?? httpContext.Connection.RemoteIpAddress?.ToString()
-                                ?? "anonymous";
+                var remotePartition = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+                var partition = api.Keys.Length == 0
+                    ? remotePartition
+                    : httpContext.Request.Headers[ApiKeyOptions.HeaderName].FirstOrDefault() ?? remotePartition;
                 return RateLimitPartition.GetFixedWindowLimiter(partition, _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = api.SubmitPermitLimit,
