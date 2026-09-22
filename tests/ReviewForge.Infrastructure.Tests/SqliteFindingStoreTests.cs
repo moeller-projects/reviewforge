@@ -36,6 +36,12 @@ public class SqliteFindingStoreTests : IDisposable
             [.. keys.Select(k => new StoredFinding(k, "rule", "high", "title", "f.cs", 1, null))]);
 
     [Fact]
+    public async Task Ping_succeeds_against_real_store()
+    {
+        await _Store.PingAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Empty_store_returns_null_and_no_keys()
     {
         Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));

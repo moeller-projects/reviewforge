@@ -21,4 +21,7 @@ public interface IFindingStore
 
     /// <summary>Newest runs for the PR regardless of outcome (failure backoff, diagnostics).</summary>
     Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct);
+
+    /// <summary>Connectivity probe for health checks; must not depend on any PR-scoped data.</summary>
+    Task PingAsync(CancellationToken ct);
 }

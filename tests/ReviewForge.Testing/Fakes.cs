@@ -251,6 +251,8 @@ public class FakeFindingStore : IFindingStore
     public virtual Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<ReviewRun>>(
             [.. RecentRuns.Where(r => r.Pr == pr).OrderByDescending(r => r.StartedAt).Take(count)]);
+
+    public virtual Task PingAsync(CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>

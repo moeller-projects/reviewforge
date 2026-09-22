@@ -71,6 +71,12 @@ public sealed class SqliteFindingStore : IFindingStore
                 run.LastObservedCommentAt);
     }
 
+    public async Task PingAsync(CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.Database.CanConnectAsync(ct);
+    }
+
     public async Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct)
     {
         await using var db = CreateContext();
