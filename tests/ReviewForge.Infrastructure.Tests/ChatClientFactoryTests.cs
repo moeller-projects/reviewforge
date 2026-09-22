@@ -1,4 +1,5 @@
 using ReviewForge.Infrastructure.Chat;
+using ReviewForge.Infrastructure.Codex;
 using Xunit;
 
 namespace ReviewForge.Infrastructure.Tests;
@@ -127,4 +128,62 @@ public class ChatClientFactoryTests
     [Fact]
     public void Default_credential_path_points_into_user_profile()
         => Assert.EndsWith(Path.Combine(".codex", "auth.json"), ReasoningOptions.DefaultCredentialPath());
+
+    [Fact]
+    public void Codex_debug_flag_in_production_throws()
+    {
+        var debug = Environment.GetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable);
+        var aspnet = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        var dotnet = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        try
+        {
+            Environment.SetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable, "1");
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Production");
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
+            var factory = new ChatClientFactory(new ReasoningOptions
+            {
+                Provider = "openai-codex",
+                Model = "openai-codex:gpt-5.6-luna",
+                CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
+            });
+
+            var ex = Assert.Throws<InvalidOperationException>(() => factory.Create());
+
+            Assert.Contains("refused in Production", ex.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable, debug);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", aspnet);
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", dotnet);
+        }
+    }
+
+    [Fact]
+    public void Codex_debug_flag_outside_production_attaches_handler()
+    {
+        var debug = Environment.GetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable);
+        var aspnet = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        var dotnet = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        try
+        {
+            Environment.SetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable, "1");
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
+            var factory = new ChatClientFactory(new ReasoningOptions
+            {
+                Provider = "openai-codex",
+                Model = "openai-codex:gpt-5.6-luna",
+                CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
+            });
+
+            Assert.NotNull(factory.Create());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable, debug);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", aspnet);
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", dotnet);
+        }
+    }
 }

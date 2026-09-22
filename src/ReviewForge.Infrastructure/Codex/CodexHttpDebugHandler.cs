@@ -3,14 +3,33 @@ using System.Net.Http.Headers;
 namespace ReviewForge.Infrastructure.Codex;
 
 /// <summary>
-/// Opt-in wire logger for diagnosing Responses API requests. Authorization headers are never logged.
-/// Enable with REVIEWFORGE_DEBUG_CODEX_HTTP=1.
+/// Opt-in wire logger for diagnosing Responses API requests. Bodies are truncated
+/// (default 4 KiB, override with <see cref="MaxBytesEnvironmentVariable"/>) and sensitive
+/// headers are redacted. Never enabled in Production: ChatClientFactory refuses to attach
+/// it there. Enable with <c>REVIEWFORGE_DEBUG_CODEX_HTTP=1</c>.
 /// </summary>
-public sealed class CodexHttpDebugHandler(TextWriter? output = null) : DelegatingHandler
+public sealed class CodexHttpDebugHandler : DelegatingHandler
 {
     public const string EnvironmentVariable = "REVIEWFORGE_DEBUG_CODEX_HTTP";
+    public const string MaxBytesEnvironmentVariable = "REVIEWFORGE_DEBUG_CODEX_HTTP_MAXBYTES";
+    public const int DefaultMaxBodyBytes = 4096;
 
-    private readonly TextWriter _Output = output ?? Console.Error;
+    private static readonly HashSet<string> RedactedHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization", "Proxy-Authorization", "chatgpt-account-id", "OpenAI-Beta", "Cookie", "Set-Cookie",
+    };
+
+    private readonly TextWriter _Output;
+    private readonly int _MaxBodyBytes;
+
+    public CodexHttpDebugHandler(TextWriter? output = null, int? maxBodyBytes = null)
+    {
+        _Output = output ?? Console.Error;
+        _MaxBodyBytes = maxBodyBytes
+                        ?? (int.TryParse(Environment.GetEnvironmentVariable(MaxBytesEnvironmentVariable), out var v) && v > 0
+                            ? v
+                            : DefaultMaxBodyBytes);
+    }
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
@@ -22,7 +41,7 @@ public sealed class CodexHttpDebugHandler(TextWriter? output = null) : Delegatin
 
         await _Output.WriteLineAsync($"[codex-http] request {request.Method} {request.RequestUri}");
         await _Output.WriteLineAsync($"[codex-http] request headers {SafeHeaders(request.Headers)}");
-        await _Output.WriteLineAsync($"[codex-http] request body {requestBody}");
+        await _Output.WriteLineAsync($"[codex-http] request body {Truncate(requestBody)}");
 
         var response = await base.SendAsync(request, cancellationToken);
         var responseContentType = response.Content?.Headers.ContentType?.ToString();
@@ -30,9 +49,9 @@ public sealed class CodexHttpDebugHandler(TextWriter? output = null) : Delegatin
             ? string.Empty
             : await response.Content.ReadAsStringAsync(cancellationToken);
 
-        await _Output.WriteLineAsync($"[codex-http] response {(int) response.StatusCode} {response.ReasonPhrase}");
+        await _Output.WriteLineAsync($"[codex-http] response {(int)response.StatusCode} {response.ReasonPhrase}");
         await _Output.WriteLineAsync($"[codex-http] response headers {SafeHeaders(response.Headers)}");
-        await _Output.WriteLineAsync($"[codex-http] response body {responseBody}");
+        await _Output.WriteLineAsync($"[codex-http] response body {Truncate(responseBody)}");
 
         response.Content = new StringContent(responseBody);
         if (responseContentType is not null)
@@ -43,8 +62,13 @@ public sealed class CodexHttpDebugHandler(TextWriter? output = null) : Delegatin
         return response;
     }
 
+    internal string Truncate(string body)
+        => body.Length <= _MaxBodyBytes
+            ? body
+            : string.Concat(body.AsSpan(0, _MaxBodyBytes), $"... [truncated {body.Length - _MaxBodyBytes} chars]");
+
     private static string SafeHeaders(HttpHeaders headers)
-        => string.Join(", ", headers
-            .Where(h => !string.Equals(h.Key, "Authorization", StringComparison.OrdinalIgnoreCase))
-            .Select(h => $"{h.Key}={string.Join(";", h.Value)}"));
+        => string.Join(", ", headers.Select(h => RedactedHeaders.Contains(h.Key)
+            ? $"{h.Key}=[redacted]"
+            : $"{h.Key}={string.Join(";", h.Value)}"));
 }

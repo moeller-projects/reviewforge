@@ -65,6 +65,18 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
                 "1",
                 StringComparison.Ordinal))
         {
+            var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                              ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+            if (string.Equals(environment, "Production", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"{CodexHttpDebugHandler.EnvironmentVariable}=1 is refused in Production: " +
+                    "the debug handler logs truncated request/response bodies containing source code.");
+            }
+
+            Console.Error.WriteLine(
+                $"[codex-http] WARNING: wire debug logging enabled ({CodexHttpDebugHandler.EnvironmentVariable}=1); " +
+                "truncated request/response bodies (may contain source code) are written to stderr.");
             transportHandler = new CodexHttpDebugHandler {InnerHandler = authHandler};
         }
 
