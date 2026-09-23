@@ -72,6 +72,22 @@
       "category": "security",
       "defaultSeverity": "high",
       "enabled": true
+    },
+    {
+      "id": "homoglyph/mixed-script-identifier",
+      "title": "Mixed-script identifier",
+      "description": "Identifier mixes scripts with visually confusable characters, which can hide a distinct symbol from reviewers. Replace it with an unambiguous identifier.",
+      "category": "security",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "homoglyph/confusable-keyword",
+      "title": "Confusable keyword",
+      "description": "Keyword-like token contains characters that look like an ASCII keyword but use another script or compatibility form. Replace it with the intended ASCII spelling.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
     }
   ]
 }

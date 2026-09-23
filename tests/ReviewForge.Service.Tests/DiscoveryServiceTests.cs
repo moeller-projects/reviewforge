@@ -118,6 +118,135 @@ public class DiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Sweep_skips_failing_head_within_backoff()
+    {
+        var candidate = Candidate(1, headSha: "head-42");
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var store = new FakeFindingStore();
+        store.RecentRuns.Add(new ReviewRun(Guid.NewGuid(), candidate.Key, "head-42", ReviewKind.Full,
+            DateTimeOffset.UtcNow.AddMinutes(-11), DateTimeOffset.UtcNow.AddMinutes(-10), false, []));
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Contains(report.Skipped, s => s.Reason.Contains("backoff"));
+    }
+
+    [Fact]
+    public async Task Sweep_enqueues_same_head_pr_with_new_human_comments()
+    {
+        var candidate = Candidate(1, headSha: "head-42");
+        var completedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "why?", completedAt.AddMinutes(1))]));
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, "head-42", completedAt, []),
+        };
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Equal(1, source.ThreadFetches);
+    }
+
+    [Fact]
+    public async Task Sweep_skips_same_head_pr_without_new_comments()
+    {
+        var candidate = Candidate(1, headSha: "head-42");
+        var completedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "why?", completedAt.AddMinutes(-1))]));
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, "head-42", completedAt, []),
+        };
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Contains(report.Skipped, s => s.Reason == "head already reviewed");
+    }
+
+    [Fact]
+    public async Task Sweep_does_not_fetch_threads_for_new_head()
+    {
+        var candidate = Candidate(1, headSha: "new-head");
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, "old-head", DateTimeOffset.UtcNow.AddMinutes(-5), []),
+        };
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Equal(0, source.ThreadFetches);
+    }
+
+    [Fact]
+    public async Task Sweep_enqueues_failing_head_after_backoff_elapsed()
+    {
+        var candidate = Candidate(1, headSha: "head-42");
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var store = new FakeFindingStore();
+        store.RecentRuns.Add(new ReviewRun(Guid.NewGuid(), candidate.Key, "head-42", ReviewKind.Full,
+            DateTimeOffset.UtcNow.AddHours(-3), DateTimeOffset.UtcNow.AddHours(-2), false, []));
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+    }
+
+    [Fact]
+    public async Task Sweep_enqueues_after_success_resets_streak()
+    {
+        var candidate = Candidate(1, headSha: "head-42");
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var store = new FakeFindingStore();
+        store.RecentRuns.Add(new ReviewRun(Guid.NewGuid(), candidate.Key, "head-42", ReviewKind.Full,
+            DateTimeOffset.UtcNow.AddMinutes(-6), DateTimeOffset.UtcNow.AddMinutes(-5), true, []));
+        store.RecentRuns.Add(new ReviewRun(Guid.NewGuid(), candidate.Key, "head-42", ReviewKind.Full,
+            DateTimeOffset.UtcNow.AddMinutes(-16), DateTimeOffset.UtcNow.AddMinutes(-15), false, []));
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+    }
+
+    [Fact]
     public async Task Enqueue_cap_reports_extra_candidates_as_skipped()
     {
         var source = new FakePullRequestSource
@@ -169,13 +298,18 @@ public class DiscoveryServiceTests
         };
         var queue = new ReviewQueue(capacity: 1);
         var claims = new InFlightClaims();
-        var service = Service(source, new FakeFindingStore(), queue, new RunTracker(), claims: claims);
+        var tracker = new RunTracker();
+        var service = Service(source, new FakeFindingStore(), queue, tracker, claims: claims);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 
+        // The candidates race for the single slot (parallel fan-out); whichever one loses
+        // the queue must be the skipped one, with its claim released and no tracker entry.
         Assert.Single(report.Enqueued);
-        Assert.Contains(report.Skipped, skipped => skipped.Pr.PrId == 2 && skipped.Reason == "queue full");
-        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 2), Guid.NewGuid(), out _));
+        var skippedEntry = Assert.Single(report.Skipped);
+        Assert.Equal("queue full", skippedEntry.Reason);
+        Assert.True(claims.TryClaim(skippedEntry.Pr, Guid.NewGuid(), out _), "the loser's claim must be released");
+        Assert.Equal(RunState.Queued, Assert.Single(tracker.Snapshot()).State);
     }
 
     [Fact]
@@ -193,6 +327,80 @@ public class DiscoveryServiceTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunSweepAsync(cts.Token));
         Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
+    }
+
+    [Fact]
+    public void NormalizeReason_maps_known_reasons_to_bounded_buckets()
+    {
+        Assert.Equal("draft", DiscoveryService.NormalizeReason("draft"));
+        Assert.Equal("target-branch-not-watched", DiscoveryService.NormalizeReason("target branch 'feature/x' not in filter"));
+        Assert.Equal("creator-not-allowlisted", DiscoveryService.NormalizeReason("creator 'mallory' not in filter"));
+        Assert.Equal("no-linked-work-items", DiscoveryService.NormalizeReason("no linked work items"));
+        Assert.Equal("head-already-reviewed", DiscoveryService.NormalizeReason("head already reviewed"));
+        Assert.Equal("head-failing-backoff", DiscoveryService.NormalizeReason("head failing; backoff until 2026-01-01T00:00:00Z"));
+        Assert.Equal("enqueue-cap-reached", DiscoveryService.NormalizeReason("enqueue cap reached"));
+        Assert.Equal("already-in-flight", DiscoveryService.NormalizeReason("review already in flight"));
+        Assert.Equal("queue-full", DiscoveryService.NormalizeReason("queue full"));
+    }
+
+    [Fact]
+    public void NormalizeReason_slugs_unknown_reasons()
+    {
+        Assert.Equal("some-unknown-reason", DiscoveryService.NormalizeReason("some unknown reason!"));
+    }
+
+    [Fact]
+    public async Task Sweep_fetches_work_items_concurrently()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = Enumerable.Range(1, 8).Select(i => Candidate(i)).ToList(),
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+            WorkItemBarrier = new Barrier(4),
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(8, report.Enqueued.Count); // barrier trips only with >=4 in flight
+    }
+
+    [Fact]
+    public async Task Enqueue_cap_is_exact_under_concurrency()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = Enumerable.Range(1, 10).Select(i => Candidate(i)).ToList(),
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxEnqueuesPerSweep = 3, MaxDegreeOfParallelism = 8 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(3, report.Enqueued.Count);
+        Assert.Equal(7, report.Skipped.Count(s => s.Reason == "enqueue cap reached"));
+    }
+
+    [Fact]
+    public async Task In_flight_claims_are_respected_concurrently()
+    {
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = Enumerable.Range(1, 6).Select(i => Candidate(i)).ToList(),
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var claims = new InFlightClaims();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 2), Guid.NewGuid(), out _));
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 8 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options, claims);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(4, report.Enqueued.Count);
+        Assert.Equal(2, report.Skipped.Count(s => s.Reason == "review already in flight"));
     }
 }
 

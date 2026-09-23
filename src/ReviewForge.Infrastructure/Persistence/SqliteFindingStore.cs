@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -23,6 +24,31 @@ public sealed class SqliteFindingStore : IFindingStore
         using var db = CreateContext();
         db.Database.EnsureCreated();
         db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
+
+        // EnsureCreated never alters existing tables. An immediate SQLite transaction
+        // serializes the check-and-alter sequence across concurrently starting instances.
+        var connection = (SqliteConnection)db.Database.GetDbConnection();
+        db.Database.OpenConnection();
+        try
+        {
+            using var transaction = connection.BeginTransaction(deferred: false);
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
+            var hasWatermarkColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+            if (!hasWatermarkColumn)
+            {
+                cmd.CommandText = "ALTER TABLE Runs ADD COLUMN LastObservedCommentAt TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+        }
+        finally
+        {
+            db.Database.CloseConnection();
+        }
     }
 
     public async Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
@@ -39,7 +65,23 @@ public sealed class SqliteFindingStore : IFindingStore
         var run = runs.MaxBy(r => r.CompletedAt);
         return run is null
             ? null
-            : new PriorRun(pr, run.HeadSha, run.CompletedAt!.Value, [.. run.Findings.Select(f => f.DedupeKey)]);
+            : new PriorRun(
+                pr,
+                run.HeadSha,
+                run.CompletedAt!.Value,
+                [.. run.Findings.Select(f => f.DedupeKey)],
+                [.. run.Findings.Select(f => new StoredFinding(
+                    f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))],
+                run.LastObservedCommentAt);
+    }
+
+    public async Task PingAsync(CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        if (!await db.Database.CanConnectAsync(ct).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("SQLite database connection failed.");
+        }
     }
 
     public async Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct)
@@ -60,36 +102,58 @@ public sealed class SqliteFindingStore : IFindingStore
     public async Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {
         await using var db = CreateContext();
-        db.Runs.Add(new RunEntity
+        var existing = await db.Runs
+            .Include(r => r.Findings)
+            .FirstOrDefaultAsync(r => r.Id == run.Id, ct);
+
+        if (existing is null)
         {
-            Id = run.Id,
-            Org = run.Pr.Org,
-            Project = run.Pr.Project,
-            RepositoryId = run.Pr.RepositoryId,
-            PrId = run.Pr.PrId,
-            HeadSha = run.HeadSha,
-            Kind = run.Kind.ToString(),
-            StartedAt = run.StartedAt,
-            CompletedAt = run.CompletedAt,
-            Success = run.Success,
-            Findings =
-            [
-                .. run.Findings.Select(f => new FindingEntity
-                {
-                    RunId = run.Id,
-                    DedupeKey = f.DedupeKey,
-                    RuleId = f.RuleId,
-                    Severity = f.Severity,
-                    Title = f.Title,
-                    FilePath = f.FilePath,
-                    Line = f.Line,
-                    ThreadId = f.ThreadId,
-                })
-            ],
-        });
+            db.Runs.Add(new RunEntity
+            {
+                Id = run.Id,
+                Org = run.Pr.Org,
+                Project = run.Pr.Project,
+                RepositoryId = run.Pr.RepositoryId,
+                PrId = run.Pr.PrId,
+                HeadSha = run.HeadSha,
+                Kind = run.Kind.ToString(),
+                StartedAt = run.StartedAt,
+                CompletedAt = run.CompletedAt,
+                LastObservedCommentAt = run.LastObservedCommentAt,
+                Success = run.Success,
+                Findings = [.. run.Findings.Select(f => ToEntity(f, run.Id))],
+            });
+        }
+        else
+        {
+            // Finalize an in-flight run: update completion, merge newly relevant finding rows.
+            // Existing rows keep their ThreadId backfills (SetThreadIdAsync) — never overwritten.
+            existing.HeadSha = run.HeadSha;
+            existing.Kind = run.Kind.ToString();
+            existing.CompletedAt = run.CompletedAt;
+            existing.LastObservedCommentAt = run.LastObservedCommentAt;
+            existing.Success = run.Success;
+            var knownKeys = existing.Findings.Select(f => f.DedupeKey).ToHashSet(StringComparer.Ordinal);
+            foreach (var finding in run.Findings.Where(f => !knownKeys.Contains(f.DedupeKey)))
+            {
+                existing.Findings.Add(ToEntity(finding, run.Id));
+            }
+        }
 
         await db.SaveChangesAsync(ct);
     }
+
+    private static FindingEntity ToEntity(StoredFinding f, Guid runId) => new()
+    {
+        RunId = runId,
+        DedupeKey = f.DedupeKey,
+        RuleId = f.RuleId,
+        Severity = f.Severity,
+        Title = f.Title,
+        FilePath = f.FilePath,
+        Line = f.Line,
+        ThreadId = f.ThreadId,
+    };
 
     public async Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct)
     {
@@ -97,6 +161,29 @@ public sealed class SqliteFindingStore : IFindingStore
         await db.Findings
             .Where(f => f.RunId == runId && f.DedupeKey == dedupeKey)
             .ExecuteUpdateAsync(s => s.SetProperty(f => f.ThreadId, threadId), ct);
+    }
+
+    public async Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var runs = await db.Runs
+            .Include(r => r.Findings)
+            .Where(r => r.Org == pr.Org && r.Project == pr.Project
+                                        && r.RepositoryId == pr.RepositoryId && r.PrId == pr.PrId)
+            .ToListAsync(ct);
+
+        // SQLite cannot ORDER BY DateTimeOffset — order in memory (few runs per PR).
+        return
+        [
+            .. runs
+                .OrderByDescending(r => r.StartedAt)
+                .Take(count)
+                .Select(r => new ReviewRun(
+                    r.Id, pr, r.HeadSha, Enum.Parse<ReviewKind>(r.Kind),
+                    r.StartedAt, r.CompletedAt, r.Success,
+                    [.. r.Findings.Select(f => new StoredFinding(f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))],
+                    r.LastObservedCommentAt))
+        ];
     }
 
     private FindingStoreDbContext CreateContext() => new(_Options);

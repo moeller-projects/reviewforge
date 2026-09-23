@@ -1,8 +1,10 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
+using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Workspaces;
 
 namespace ReviewForge.Service;
@@ -26,16 +28,44 @@ public sealed class ReviewForgeServiceOptions
 
     public int MaxContextTokens { get; init; } = 150_000;
     public int MaxIterations { get; init; } = 30;
-    public int WorkerCount { get; init; } = 1;
+    public int WorkerCount { get; init; } = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+
+    /// <summary>Dedicated threads for LibGit2Sharp work (clones/fetches/diffs).</summary>
+    public int GitMaxConcurrency { get; init; } = Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
+
+    /// <summary>
+    /// Reviewer vote set on clean runs (no findings, all acceptance criteria met, no
+    /// unanswered threads): NoResponse (default) | Approved | ApprovedWithSuggestions |
+    /// None (leave the vote untouched).
+    public string CleanRunVote { get; init; } = "NoResponse";
+
+    internal static bool IsValidCleanRunVote(string? value)
+        => value is not null
+           && (value.Equals("None", StringComparison.OrdinalIgnoreCase)
+               || value.Equals(nameof(ReviewerVote.NoResponse), StringComparison.OrdinalIgnoreCase)
+               || value.Equals(nameof(ReviewerVote.Approved), StringComparison.OrdinalIgnoreCase)
+               || value.Equals(nameof(ReviewerVote.ApprovedWithSuggestions), StringComparison.OrdinalIgnoreCase));
     public bool TargetedFetchEnabled { get; init; }
     public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }
+
+    /// <summary>Enables argument-length debug breadcrumbs in the agent loop (category
+    /// level Debug is still required). Default false.</summary>
+    public bool AgentDebugLogging { get; init; }
 
     /// <summary>Total diff budget for the review prompt (~50k tokens); oversized diffs are truncated with a marker.</summary>
     public int MaxDiffChars { get; init; } = 200_000;
 
     /// <summary>Per-file diff budget; files over it keep their header plus a bounded prefix.</summary>
     public int MaxDiffCharsPerFile { get; init; } = 40_000;
+
+    /// <summary>Extra diff exclusion globs; replace the default set when set (array replace, not merge).</summary>
+    public string[]? DiffExcludeGlobs { get; init; }
+    public long MaxDiffBytes { get; init; } = 4 * 1024 * 1024;
+    public int MaxDiffBytesPerFile { get; init; } = 256 * 1024;
+
+    /// <summary>Opt-in: exports OTel traces/metrics via OTLP. Default false (no exporter).</summary>
+    public bool OtlpEnabled { get; init; }
 }
 
 public sealed class ReviewPipelineFactory(
@@ -51,6 +81,13 @@ public sealed class ReviewPipelineFactory(
     public ReviewPipeline Create()
     {
         var opts = options.Value;
+        var cleanVote = opts.CleanRunVote.Equals("None", StringComparison.OrdinalIgnoreCase)
+            ? (ReviewerVote?)null
+            : Enum.TryParse<ReviewerVote>(opts.CleanRunVote, ignoreCase: true, out var parsedVote)
+              && parsedVote is ReviewerVote.NoResponse or ReviewerVote.Approved or ReviewerVote.ApprovedWithSuggestions
+                ? parsedVote
+                : throw new InvalidOperationException(
+                    $"ReviewForge:CleanRunVote '{opts.CleanRunVote}' is invalid; expected NoResponse | Approved | ApprovedWithSuggestions | None");
         var agent = new NativeReviewAgent(chatClientFactory, new AgentOptions
         {
             MaxContextTokens = opts.MaxContextTokens,
@@ -58,22 +95,28 @@ public sealed class ReviewPipelineFactory(
             PromptOverridePath = opts.PromptOverridePath,
             RuleSetsPath = opts.RuleSetsPath,
             Effort = opts.ReasoningEffort,
+            DebugLogging = opts.AgentDebugLogging,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
-        Directory.CreateDirectory(opts.WorkDir);
+
         var findingsDir = Path.Combine(opts.WorkDir, "findings");
-        Directory.CreateDirectory(findingsDir);
+
+        var diffBudget = new DiffBudget(
+            opts.MaxDiffBytes,
+            opts.MaxDiffBytesPerFile,
+            opts.DiffExcludeGlobs ?? DiffBudget.Default.ExcludeGlobs);
 
         IReviewStage[] stages =
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
-            new PrepareRepositoryStage(checkoutPool),
+            new PrepareRepositoryStage(checkoutPool, loggerFactory.CreateLogger<PrepareRepositoryStage>(), diffBudget),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
+            new BeginRunStage(store, clock),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
-            new PublishFindingsStage(source, loggerFactory.CreateLogger<PublishFindingsStage>()),
+            new PublishFindingsStage(source, store, loggerFactory.CreateLogger<PublishFindingsStage>(), cleanVote),
             new PersistRunStage(store, clock),
         ];
 

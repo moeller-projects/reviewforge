@@ -9,43 +9,64 @@ public class FakePullRequestSource : IPullRequestSource
 {
     private readonly object _Gate = new();
     private int _NextThreadId = 1000;
+    private int _openPullRequestsFetches;
+    private int _workItemFetches;
+    private int _threadFetches;
     public List<PullRequestCandidate> OpenPullRequests { get; set; } = [];
-    public int OpenPullRequestsFetches { get; private set; }
-    public int WorkItemFetches { get; private set; }
+    public int OpenPullRequestsFetches => _openPullRequestsFetches;
+    public int WorkItemFetches => _workItemFetches;
     public PullRequest Pr { get; set; } = new(1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false);
     public Dictionary<PrKey, PullRequest> PullRequestsByKey { get; } = [];
     public List<WorkItem> WorkItems { get; set; } = [];
     public List<ChangedFile> ChangedFiles { get; set; } = [];
     public List<ReviewThread> Threads { get; set; } = [];
     public CurrentUser User { get; set; } = new("user-1", "reviewforge bot");
-    public int ThreadFetches { get; private set; }
+    public int ThreadFetches => _threadFetches;
+
+    /// <summary>Optional barrier armed to prove concurrency in discovery tests; trips when
+    /// <paramref name="WorkItems"/> is awaited by that many concurrent callers.</summary>
+    public Barrier? WorkItemBarrier { get; set; }
 
     public List<(RichFinding Finding, int ThreadId)> PostedFindings { get; } = [];
     public List<string> GeneralComments { get; } = [];
+    public List<string?> GeneralCommentDedupeKeys { get; } = [];
     public List<(int ThreadId, string Text)> Replies { get; } = [];
     public List<(int ThreadId, ReviewThreadStatus Status)> StatusChanges { get; } = [];
-    public List<(string ReviewerId, int Vote)> Votes { get; } = [];
+    public List<(string ReviewerId, ReviewerVote Vote)> Votes { get; } = [];
+
+    /// <summary>When set, PostFindingThreadAsync throws for a finding with this dedupe key
+    /// (deterministic partial-failure tests).</summary>
+    public string? ThrowOnPostKey { get; set; }
+
+    /// <summary>When set, the Nth PostFindingThreadAsync call throws (order-agnostic partial failure).</summary>
+    public int? ThrowOnNthPost { get; set; }
+    private int _PostCount;
 
     public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
         => Task.FromResult(PullRequestsByKey.TryGetValue(pr, out var pullRequest) ? pullRequest : Pr);
 
     public virtual Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
-        OpenPullRequestsFetches++;
+        Interlocked.Increment(ref _openPullRequestsFetches);
         return Task.FromResult<IReadOnlyList<PullRequestCandidate>>(OpenPullRequests);
     }
 
-    public virtual Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
+    public virtual async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
     {
-        WorkItemFetches++;
-        return Task.FromResult<IReadOnlyList<WorkItem>>(WorkItems);
+        Interlocked.Increment(ref _workItemFetches);
+        if (WorkItemBarrier is not null && !WorkItemBarrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+        {
+            throw new TimeoutException("work-item fetches did not overlap");
+        }
+
+        return WorkItems;
     }
 
     public virtual Task<IReadOnlyList<ChangedFile>> GetChangedFilesAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<ChangedFile>>(ChangedFiles);
 
     public virtual Task<IReadOnlyList<ReviewThread>> GetThreadsAsync(PrKey pr, CancellationToken ct)
     {
-        ThreadFetches++;
+        Interlocked.Increment(ref _threadFetches);
         return Task.FromResult<IReadOnlyList<ReviewThread>>(Threads);
     }
 
@@ -55,17 +76,32 @@ public class FakePullRequestSource : IPullRequestSource
     {
         lock (_Gate)
         {
+            if (ThrowOnNthPost is { } nth && ++_PostCount == nth)
+            {
+                throw new InvalidOperationException($"post #{nth} failed");
+            }
+
+            if (ThrowOnPostKey is not null && finding.DedupeKey == ThrowOnPostKey)
+            {
+                throw new InvalidOperationException($"post of {finding.DedupeKey} failed");
+            }
+
             var id = _NextThreadId++;
             PostedFindings.Add((finding, id));
             return Task.FromResult(id);
         }
     }
 
-    public virtual Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
+    public virtual Task PostGeneralCommentAsync(
+        PrKey pr,
+        string text,
+        string? dedupeKey,
+        CancellationToken ct)
     {
         lock (_Gate)
         {
             GeneralComments.Add(text);
+            GeneralCommentDedupeKeys.Add(dedupeKey);
         }
 
         return Task.CompletedTask;
@@ -91,7 +127,7 @@ public class FakePullRequestSource : IPullRequestSource
         return Task.CompletedTask;
     }
 
-    public virtual Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
+    public virtual Task SetReviewerVoteAsync(PrKey pr, string reviewerId, ReviewerVote vote, CancellationToken ct)
     {
         lock (_Gate)
         {
@@ -156,10 +192,14 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
         }
     }
 
-    public override async Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct)
+    public override async Task PostGeneralCommentAsync(
+        PrKey pr,
+        string text,
+        string? dedupeKey,
+        CancellationToken ct)
     {
         await DelayAsync(ct);
-        await base.PostGeneralCommentAsync(pr, text, ct);
+        await base.PostGeneralCommentAsync(pr, text, dedupeKey, ct);
         lock (_LogGate)
         {
             WriteLog.Add($"comment {_CommentCount++}");
@@ -178,7 +218,7 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
         await base.SetThreadStatusAsync(pr, threadId, status, ct);
     }
 
-    public override async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct)
+    public override async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, ReviewerVote vote, CancellationToken ct)
     {
         await DelayAsync(ct);
         await base.SetReviewerVoteAsync(pr, reviewerId, vote, ct);
@@ -190,13 +230,15 @@ public class FakeFindingStore : IFindingStore
 {
     public List<ReviewRun> Runs { get; } = [];
     public PriorRun? LastRun { get; set; }
-    public int LastRunFetches { get; private set; }
+    private int _lastRunFetches;
+    public int LastRunFetches => _lastRunFetches;
     public List<string> KnownKeys { get; set; } = [];
     public List<(Guid RunId, string Key, int ThreadId)> ThreadIdBackfills { get; } = [];
+    public List<ReviewRun> RecentRuns { get; } = [];
 
     public virtual Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
     {
-        LastRunFetches++;
+        Interlocked.Increment(ref _lastRunFetches);
         return Task.FromResult(LastRun);
     }
 
@@ -204,7 +246,10 @@ public class FakeFindingStore : IFindingStore
 
     public virtual Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {
+        Runs.RemoveAll(r => r.Id == run.Id);
         Runs.Add(run);
+        RecentRuns.RemoveAll(r => r.Id == run.Id);
+        RecentRuns.Add(run);
         return Task.CompletedTask;
     }
 
@@ -213,6 +258,12 @@ public class FakeFindingStore : IFindingStore
         ThreadIdBackfills.Add((runId, dedupeKey, threadId));
         return Task.CompletedTask;
     }
+
+    public virtual Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ReviewRun>>(
+            [.. RecentRuns.Where(r => r.Pr == pr).OrderByDescending(r => r.StartedAt).Take(count)]);
+
+    public virtual Task PingAsync(CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>
@@ -228,7 +279,7 @@ public class FakeGitOps : IGitOps
     public TimeSpan CloneDelay { get; set; }
     public int MaxConcurrentClones => _MaxConcurrentClones;
 
-    public virtual string CloneOrOpen(string cloneUrl, string workDir, string? pat)
+    public virtual async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
     {
         Directory.CreateDirectory(workDir);
         var active = Interlocked.Increment(ref _ActiveClones);
@@ -243,32 +294,36 @@ public class FakeGitOps : IGitOps
 
         if (CloneDelay > TimeSpan.Zero)
         {
-            Thread.Sleep(CloneDelay);
+            await Task.Delay(CloneDelay, ct).ConfigureAwait(false);
         }
 
         Interlocked.Decrement(ref _ActiveClones);
         return workDir;
     }
 
-    public virtual void Checkout(string repoPath, string commitSha)
+    public virtual Task CheckoutAsync(string repoPath, string commitSha, CancellationToken ct)
     {
         lock (_Gate)
         {
             Checkouts.Add(commitSha);
         }
+
+        return Task.CompletedTask;
     }
 
-    public virtual string? GetHeadSha(string repoPath) => null;
+    public virtual Task<string?> GetHeadShaAsync(string repoPath, CancellationToken ct) => Task.FromResult<string?>(null);
 
-    public virtual void EnsureCommits(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat)
+    public virtual Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
     {
         lock (_Gate)
         {
             EnsuredCommits.Add((baseSha, headSha));
         }
+
+        return Task.CompletedTask;
     }
 
-    public virtual string GetDiff(string repoPath, string baseSha, string headSha) => Diff;
+    public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null) => Task.FromResult(Diff);
 }
 
 /// <summary>Fake enricher: fixed payload, null, or throwing.</summary>

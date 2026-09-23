@@ -1,6 +1,8 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Queue;
+using ReviewForge.Service.Security;
 
 namespace ReviewForge.Service;
 
@@ -12,25 +14,32 @@ public sealed record SubmitReviewRequest(
 
 public sealed record SubmitReviewResponse(Guid RunId, string StatusUrl);
 
+/// <summary>409 body: another review owns the PR; the competing run id is exposed for clients.</summary>
+public sealed record ConflictResponse(string Error, Guid? RunId);
+
 /// <summary>Minimal-API surface: submit, status, discovery, health.</summary>
 public static class Endpoints
 {
     public static WebApplication MapReviewForgeEndpoints(this WebApplication app)
     {
         app.MapPost("/reviews", SubmitReview)
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
             .Produces<SubmitReviewResponse>(202)
+            .Produces<ConflictResponse>(409)
             .ProducesProblem(400)
             .ProducesProblem(503);
 
         app.MapPost("/reviews/discover", DiscoverPullRequests)
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("DiscoverPullRequests")
             .WithTags("Reviews")
             .Produces<DiscoveryReport>(200);
 
         app.MapGet("/reviews/{runId:guid}", GetRunStatus)
             .WithName("GetRunStatus")
+            .WithSummary("In-memory run status — lost on host restart; 404 after restart or retention expiry")
             .Produces<RunStatus>()
             .ProducesProblem(404);
 
@@ -43,8 +52,10 @@ public static class Endpoints
         ReviewQueue queue,
         RunTracker tracker,
         InFlightClaims claims,
-        TimeProvider clock)
+        TimeProvider clock,
+        ILoggerFactory loggerFactory)
     {
+        var logger = loggerFactory.CreateLogger("ReviewForge.Service.Endpoints");
         var errors = Validate(request);
         if (errors.Count > 0)
         {
@@ -55,20 +66,28 @@ public static class Endpoints
         var runId = Guid.NewGuid();
         if (!claims.TryClaim(pr, runId, out var holder))
         {
-            return TypedResults.Conflict(new {error = "a review for this pull request is already in flight", runId = holder});
+            logger.LogWarning("review submit conflict for {Pr}: already in flight (run {RunId})", pr, holder);
+            return TypedResults.Conflict(new ConflictResponse(
+                "a review for this pull request is already in flight", holder));
         }
 
+        // Track-then-enqueue: the run is visible as Queued before the channel write, so a
+        // fast worker can never overwrite a fresh RunTracker write with a stale one
+        // (P2-25). Roll back the tracker entry if the queue rejects.
+        tracker.Set(runId, pr, RunState.Queued);
         var result = queue.TryEnqueue(new ReviewRequest(runId, pr, clock.GetUtcNow()));
         if (!result.Accepted)
         {
+            tracker.Remove(runId);
             claims.Release(pr, runId);
+            logger.LogWarning("review submit rejected for {Pr}: queue full (depth {Depth})", pr, result.QueueDepth);
             return TypedResults.Problem(
                 title: "Review queue full",
                 detail: $"Queue depth {result.QueueDepth} of {queue.Capacity}. Retry shortly.",
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        tracker.Set(runId, pr, RunState.Queued);
+        logger.LogInformation("review submitted for {Pr}, run {RunId}", pr, runId);
 
         return TypedResults.Accepted($"/reviews/{runId}", new SubmitReviewResponse(runId, $"/reviews/{runId}"));
     }

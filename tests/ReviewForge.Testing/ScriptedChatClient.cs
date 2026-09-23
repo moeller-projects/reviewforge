@@ -45,6 +45,19 @@ public sealed class ScriptedChatClient : IChatClient
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
+    /// <summary>Re-arms the script for a subsequent run (clears the queue and enqueues the new script).</summary>
+    public void Reset(params ChatResponse[] script)
+    {
+        lock (_Gate)
+        {
+            _Script.Clear();
+            foreach (var response in script)
+            {
+                _Script.Enqueue(response);
+            }
+        }
+    }
+
     public void Dispose()
     {
     }

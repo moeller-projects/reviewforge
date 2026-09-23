@@ -108,4 +108,46 @@ public class QueueTests
         Assert.NotNull(tracker.Get(queued));
         Assert.NotNull(tracker.Get(running));
     }
+
+    [Fact]
+    public void Tracker_does_not_overwrite_terminal_state_with_stale_queued()
+    {
+        var tracker = new RunTracker();
+        var id = Guid.NewGuid();
+        tracker.Set(id, Key, RunState.Completed);
+
+        // A late Queued write from the enqueuing thread racing a fast worker must not resurrect it.
+        tracker.Set(id, Key, RunState.Queued);
+        tracker.Set(id, Key, RunState.Running);
+
+        Assert.Equal(RunState.Completed, tracker.Get(id)!.State);
+    }
+
+    [Fact]
+    public void Tracker_allows_terminal_refinement_last_terminal_wins()
+    {
+        var tracker = new RunTracker();
+        var id = Guid.NewGuid();
+        tracker.Set(id, Key, RunState.Completed);
+
+        // Terminal → terminal transitions are allowed: a later failure supersedes a
+        // premature completion (e.g. a persist failure surfaced post-hoc).
+        tracker.Set(id, Key, RunState.Failed, "late failure");
+
+        Assert.Equal(RunState.Failed, tracker.Get(id)!.State);
+        Assert.Equal("late failure", tracker.Get(id)!.Detail);
+    }
+
+    [Fact]
+    public void Tracker_remove_deletes_entry_and_missing_is_noop()
+    {
+        var tracker = new RunTracker();
+        var id = Guid.NewGuid();
+        tracker.Set(id, Key, RunState.Queued);
+
+        tracker.Remove(id);
+
+        Assert.Null(tracker.Get(id));
+        tracker.Remove(id); // idempotent
+    }
 }

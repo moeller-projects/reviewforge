@@ -36,10 +36,17 @@ prompts/native-review-system.md   human-editable copy; the runtime default is th
 1. **Ports and adapters.** `ReviewForge.Core` must stay free of IO adapters and vendor
    SDKs. New PR host → implement `IPullRequestSource`. New reasoning provider → implement
    `IChatClientFactory`. Enrichment → `IContextEnricher` (fail-safe contract). The
-   pipeline must not change for a new adapter.
+   pipeline must not change for a new adapter. Exception, deliberate:
+   `Analysis/PathSafety.cs` performs symlink resolution (Directory/File.Exists, LinkTarget)
+   as the agent sandbox's containment primitive. It is isolated behind PathSafety so it
+   can be swapped for a port if Core is ever hosted out-of-process. All other Core IO goes
+   through `IWorkspaceFs` or is stage-local run-artifact IO documented in <remarks> (see
+   the `IWorkspaceFs` scope note).
 2. **No engine fallback.** A failed stage fails the run; the failure is visible in run
    status. Never swallow an exception, never add a silent fallback engine or provider.
 3. **Secrets from the environment only.** ADO PAT: `REVIEWFORGE_ADO_PAT`. OpenAI key:
+   `OPENAI_API_KEY`. Codex OAuth: `~/.codex/auth.json`. Never commit, log, or serialize
+   secret values.
 4. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
    draft skip must not mark a head as reviewed.
 5. **Coverage gate.** Every test project enforces ≥97% line coverage (coverlet

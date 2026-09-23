@@ -1,6 +1,7 @@
-* text=auto
+# Default: normalize all text files to LF in the repo
+* text=auto eol=lf
 
-# --- Source / web files: keep LF in repo for cross-platform tools ---
+# --- Source / web files: LF ---
 *.js     text eol=lf
 *.jsx    text eol=lf
 *.ts     text eol=lf
@@ -18,21 +19,22 @@
 *.svg    text eol=lf
 *.sh     text eol=lf
 
-# --- Windows-only scripts: force CRLF ---
+# --- .NET / Visual Studio files: LF ---
+*.cs      text eol=lf
+*.csproj  text eol=lf
+*.vbproj  text eol=lf
+*.vcxproj text eol=lf
+*.props   text eol=lf
+*.targets text eol=lf
+
+# --- Windows-only files: CRLF ---
+# (kept CRLF for compatibility with older tooling / Windows PowerShell 5.1)
+*.sln    text eol=crlf
 *.bat    text eol=crlf
 *.cmd    text eol=crlf
 *.ps1    text eol=crlf
 *.psm1   text eol=crlf
 *.psd1   text eol=crlf
-
-# --- Visual Studio / .NET files ---
-*.sln     text eol=crlf
-*.csproj  text eol=crlf
-*.vbproj  text eol=crlf
-*.vcxproj text eol=crlf
-*.props   text eol=crlf
-*.targets text eol=crlf
-*.cs      text eol=crlf
 
 # --- Binary files: never normalize or diff as text ---
 *.png    binary

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
@@ -19,8 +20,22 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public PullRequest? PullRequest { get; set; }
     public IReadOnlyList<WorkItem> WorkItems { get; set; } = [];
     public IReadOnlyList<ReviewThread> Threads { get; set; } = [];
-    public IReadOnlyList<ChangedFile> ChangedFileManifest { get; set; } = [];
-    public IReadOnlyList<string> ChangedFiles => ChangedFileManifest.Select(file => file.Path).ToArray();
+    private IReadOnlyList<ChangedFile> _changedFileManifest = [];
+    private IReadOnlyList<string>? _changedFiles;
+
+    public IReadOnlyList<ChangedFile> ChangedFileManifest
+    {
+        get => _changedFileManifest;
+        set
+        {
+            _changedFileManifest = value;
+            _changedFiles = null; // invalidate the projection cache
+        }
+    }
+
+    /// <summary>Lazy projection of <see cref="ChangedFileManifest"/>; computed once per assignment.</summary>
+    public IReadOnlyList<string> ChangedFiles
+        => _changedFiles ??= ChangedFileManifest.Select(file => file.Path).ToArray();
     public CurrentUser? CurrentUser { get; set; }
     public PriorRun? PriorRun { get; set; }
 
@@ -34,6 +49,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public string? RepoDir { get; set; }
     public string DiffText { get; set; } = string.Empty;
     public DiffIndex? Diff { get; set; }
+
+    /// <summary>Manifest ∩ diff files that carry reviewable text (set by stage 3).</summary>
+    public IReadOnlyCollection<string>? ReviewableFiles { get; set; }
 
     // Stage 4 — classify
     public ReviewKind Kind { get; set; } = ReviewKind.Full;
@@ -62,6 +80,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     /// <summary>Optional host-owned guard checked immediately before external publication.</summary>
     public Func<bool>? PublishGuard { get; set; }
 
+    /// <summary>Trace context of the discovery enqueue that created this run (span link source).</summary>
+    public ActivityContext? EnqueueContext { get; set; }
+
     public void Dispose()
     {
         RepoLease?.Dispose();
@@ -78,6 +99,14 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
         return dir;
     }
+
+    public PullRequest RequirePullRequest()
+        => PullRequest ?? throw new InvalidOperationException(
+            $"stage ordering violation: {nameof(PullRequest)} is null but required (fetch stage must run first)");
+
+    public ReviewResult RequireResult()
+        => Result ?? throw new InvalidOperationException(
+            $"stage ordering violation: {nameof(Result)} is null but required (reasoning stage must run first)");
 
     public void Terminate(string reason)
     {

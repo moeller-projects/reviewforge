@@ -39,6 +39,11 @@ internal static class Program
             Required = true
         };
 
+        var apiKey = new Option<string?>("--api-key")
+        {
+            Description = "API key for the reviewforge service (defaults to REVIEWFORGE_API_KEY)"
+        };
+
         var root = new RootCommand("reviewforge — automated PR review client");
 
         var submit = new Command("submit", "Enqueue a review run")
@@ -47,7 +52,8 @@ internal static class Program
             org,
             project,
             repo,
-            pr
+            pr,
+            apiKey
         };
 
         submit.SetAction(async (parseResult, cancellationToken) =>
@@ -58,11 +64,16 @@ internal static class Program
             var projectName = parseResult.GetValue(project);
             var repository = parseResult.GetValue(repo);
             var pullRequestId = parseResult.GetValue(pr);
+            var key = parseResult.GetValue(apiKey) ?? Environment.GetEnvironmentVariable("REVIEWFORGE_API_KEY");
 
             using var http = new HttpClient
             {
                 BaseAddress = new Uri(url)
             };
+            if (!string.IsNullOrEmpty(key))
+            {
+                http.DefaultRequestHeaders.Add("X-Api-Key", key);
+            }
 
             var response = await http.PostAsJsonAsync(
                 "/reviews",
@@ -85,7 +96,8 @@ internal static class Program
         var status = new Command("status", "Get run status")
         {
             serviceUrl,
-            runId
+            runId,
+            apiKey
         };
 
         status.SetAction(async (parseResult, cancellationToken) =>
@@ -93,11 +105,16 @@ internal static class Program
             var url = parseResult.GetValue(serviceUrl)
                       ?? throw new InvalidOperationException("--service-url must have a value");
             var reviewRunId = parseResult.GetValue(runId);
+            var key = parseResult.GetValue(apiKey) ?? Environment.GetEnvironmentVariable("REVIEWFORGE_API_KEY");
 
             using var http = new HttpClient
             {
                 BaseAddress = new Uri(url)
             };
+            if (!string.IsNullOrEmpty(key))
+            {
+                http.DefaultRequestHeaders.Add("X-Api-Key", key);
+            }
 
             using var response = await http.GetAsync(
                 $"/reviews/{reviewRunId}",

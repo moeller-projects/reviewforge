@@ -77,6 +77,36 @@ public class RepoReadToolsTests : IDisposable
         Assert.Contains("denied", Tools().ReadFile("cert.pem"));
     }
 
+    [Theory]
+    [InlineData("id_rsa")]
+    [InlineData("id_ed25519")]
+    [InlineData("certs/app.pfx")]
+    [InlineData("signing/key.p12")]
+    [InlineData("strongname.snk")]
+    [InlineData(".kube/config")]
+    [InlineData("cluster.kubeconfig")]
+    [InlineData(".aws/credentials")]
+    [InlineData(".npmrc")]
+    [InlineData("appsettings.Production.json")]
+    public void ReadFile_denies_private_keys(string path)
+    {
+        Assert.StartsWith("access denied", Tools().ReadFile(path));
+    }
+
+    [Fact]
+    public void ReadFile_allows_base_appsettings()
+    {
+        File.WriteAllText(Path.Combine(_Root, "appsettings.json"), "{\"x\": 1}");
+        Assert.DoesNotContain("denied", Tools().ReadFile("appsettings.json"));
+    }
+
+    [Fact]
+    public void Grep_skips_denied_files()
+    {
+        File.WriteAllText(Path.Combine(_Root, "appsettings.Production.json"), "SECRETVALUE=xyz");
+        Assert.Equal("no matches", Tools().Grep("SECRETVALUE"));
+    }
+
     [Fact]
     public void Escape_outside_root_is_denied()
     {
@@ -167,5 +197,128 @@ public class RepoReadToolsTests : IDisposable
     {
         var tools = new RepoReadTools(_Root, denyPatterns: [@"A\.cs$"]);
         Assert.Contains("denied", tools.ReadFile("src/A.cs"));
+    }
+
+    [Fact]
+    public void Grep_skips_excluded_directories()
+    {
+        Directory.CreateDirectory(Path.Combine(_Root, "bin"));
+        Directory.CreateDirectory(Path.Combine(_Root, "node_modules", "pkg"));
+        Directory.CreateDirectory(Path.Combine(_Root, "obj"));
+        File.WriteAllText(Path.Combine(_Root, "src", "app.cs"), "NEEDLE in src");
+        File.WriteAllText(Path.Combine(_Root, "bin", "app.cs"), "NEEDLE in bin");
+        File.WriteAllText(Path.Combine(_Root, "node_modules", "pkg", "index.js"), "NEEDLE in node_modules");
+        File.WriteAllText(Path.Combine(_Root, "obj", "x.cs"), "NEEDLE in obj");
+
+        var result = Tools().Grep("NEEDLE");
+
+        Assert.Contains("src/app.cs", result);
+        Assert.DoesNotContain("bin/", result);
+        Assert.DoesNotContain("node_modules", result);
+        Assert.DoesNotContain("obj/", result);
+    }
+
+    [Fact]
+    public void Grep_exclude_dirs_are_overridable()
+    {
+        Directory.CreateDirectory(Path.Combine(_Root, "bin"));
+        Directory.CreateDirectory(Path.Combine(_Root, "gen"));
+        File.WriteAllText(Path.Combine(_Root, "bin", "x.cs"), "NEEDLE in bin");
+        File.WriteAllText(Path.Combine(_Root, "gen", "y.cs"), "NEEDLE in gen");
+
+        var tools = new RepoReadTools(_Root, excludeDirs: ["gen"]);
+        var result = tools.Grep("NEEDLE");
+
+        Assert.Contains("bin/x.cs", result); // no longer excluded
+        Assert.DoesNotContain("gen/", result);
+    }
+
+    [Fact]
+    public void Grep_skips_files_over_size_cap()
+    {
+        var big = Path.Combine(_Root, "src", "big.cs");
+        using (var fs = new FileStream(big, FileMode.Create))
+        {
+            fs.SetLength(2 * 1024 * 1024); // 2 MiB sparse file
+        }
+
+        File.WriteAllText(big, new string('a', 1024 * 1024) + "NEEDLE" + new string('b', 1024 * 1024));
+
+        Assert.Equal("no matches", Tools().Grep("NEEDLE"));
+    }
+
+    [Fact]
+    public void ReadFile_slice_matches_previous_contract()
+    {
+        var big = Path.Combine(_Root, "big.txt");
+        File.WriteAllLines(big, Enumerable.Range(1, 5000).Select(i => $"line {i}"));
+
+        var content = Tools().ReadFile("big.txt", startLine: 2500, maxLines: 100);
+
+        Assert.Contains("2500: line 2500", content);
+        Assert.Contains("2599: line 2599", content);
+        Assert.DoesNotContain("2600: line 2600", content);
+        Assert.Contains("2401 more lines", content);
+    }
+
+    [Fact]
+    public void Grep_does_not_follow_symlinked_directory_outside_root()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "reviewforge-grepdir-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "leak.txt"), "NEEDLE secret");
+        try
+        {
+            var link = Path.Combine(_Root, "linked");
+            try
+            {
+                Directory.CreateSymbolicLink(link, outside);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            Assert.Equal("no matches", Tools().Grep("NEEDLE"));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Grep_refuses_symlink_file_pointing_outside_root()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "reviewforge-grepfile-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        var secret = Path.Combine(outside, "secret.txt");
+        File.WriteAllText(secret, "NEEDLE secret");
+        try
+        {
+            var link = Path.Combine(_Root, "src", "link.txt");
+            try
+            {
+                File.CreateSymbolicLink(link, secret);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            Assert.Equal("no matches", Tools().Grep("NEEDLE"));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
     }
 }

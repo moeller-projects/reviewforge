@@ -1,13 +1,17 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
-using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Reasoning.Rules;
+
+namespace ReviewForge.Core.Reasoning;
 
 /// <summary>Tuning knobs for the agent loop.</summary>
 public sealed record AgentOptions
@@ -18,7 +22,10 @@ public sealed record AgentOptions
     public string? PromptOverridePath { get; init; }
     public string? RuleSetsPath { get; init; }
     public IEnumerable<string>? DenyPatterns { get; init; }
+    /// <summary>Directory names Grep never descends into; null = defaults (bin, obj, node_modules, .git, .vs, packages).</summary>
+    public IEnumerable<string>? GrepExcludeDirs { get; init; }
     public ReasoningEffort? Effort { get; init; }
+    public bool DebugLogging { get; init; }
 }
 
 /// <summary>Builds and runs the native review agent with read and review tools.</summary>
@@ -45,13 +52,13 @@ public sealed class NativeReviewAgent(
         IReadOnlySet<string>? changedFiles,
         DiffIndex? diff)
     {
-        var repoTools = new RepoReadTools(repoDir, _Options.DenyPatterns, _Options.ReadMaxLines);
+        var repoTools = new RepoReadTools(repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs);
         var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff);
         IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
         IChatClient invoking = new ChatClientBuilder(guarded)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = _Options.MaxIterations)
             .Build();
-        IChatClient tracked = new UsageTrackingChatClient(invoking, usage ?? new TokenUsage());
+        IChatClient tracked = new UsageTrackingChatClient(invoking, usage ?? new TokenUsage(), _Logger, _Options.DebugLogging);
         return tracked.AsAIAgent(new ChatClientAgentOptions
         {
             Name = "reviewforge-native",
@@ -98,6 +105,13 @@ public sealed class NativeReviewAgent(
         var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff);
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
+        var modelTag = new TagList { { "model", chatClientFactory.ModelName } };
+        ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
+        if (!collector.Done)
+        {
+            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
+        }
+
         return collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", ruleBook?.VersionHash);
     }
 
@@ -106,9 +120,11 @@ public sealed class NativeReviewAgent(
         public long InputTokens { get; private set; }
         public long OutputTokens { get; private set; }
         public long TotalTokens { get; private set; }
+        public int Turns { get; private set; }
 
         public void Add(UsageDetails? details)
         {
+            Turns++;
             if (details is null) return;
             InputTokens += details.InputTokenCount ?? 0;
             OutputTokens += details.OutputTokenCount ?? 0;
@@ -116,15 +132,47 @@ public sealed class NativeReviewAgent(
         }
     }
 
-    private sealed class UsageTrackingChatClient(IChatClient inner, TokenUsage usage) : DelegatingChatClient(inner)
+    private sealed class UsageTrackingChatClient(
+        IChatClient inner,
+        TokenUsage usage,
+        ILogger? logger = null,
+        bool debugArgs = false) : DelegatingChatClient(inner)
     {
         public override async Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            var sw = Stopwatch.StartNew();
             var response = await base.GetResponseAsync(messages, options, cancellationToken);
             usage.Add(response.Usage);
+            var model = options?.ModelId ?? "default";
+            ReviewForgeTelemetry.LlmRequests.Add(1, new TagList { { "model", model } });
+            var inputTokens = response.Usage?.InputTokenCount ?? 0;
+            var outputTokens = response.Usage?.OutputTokenCount ?? 0;
+            if (inputTokens > 0)
+            {
+                ReviewForgeTelemetry.LlmTokens.Add(inputTokens, new TagList { { "token_type", "input" }, { "model", model } });
+            }
+
+            if (outputTokens > 0)
+            {
+                ReviewForgeTelemetry.LlmTokens.Add(outputTokens, new TagList { { "token_type", "output" }, { "model", model } });
+            }
+
+            logger?.LogDebug(
+                "llm call: iteration tokens in={InputTokens} out={OutputTokens} elapsed={ElapsedMs}ms toolCalls={ToolCallCount}",
+                response.Usage?.InputTokenCount ?? 0, response.Usage?.OutputTokenCount ?? 0,
+                sw.ElapsedMilliseconds, response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>().Count());
+            if (debugArgs)
+            {
+                foreach (var call in response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>())
+                {
+                    logger?.LogDebug("tool call {Tool} argsLength={ArgsLength}", call.Name,
+                        call.Arguments is null ? 0 : JsonSerializer.Serialize(call.Arguments).Length);
+                }
+            }
+
             return response;
         }
 
@@ -135,6 +183,14 @@ public sealed class NativeReviewAgent(
         {
             await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
             {
+                // Usage arrives as a UsageContent on the terminal streaming update; the
+                // Codex provider is always streaming under the hood, so skipping this
+                // would silently under-count tokens versus the GetResponseAsync path.
+                foreach (var usageContent in update.Contents.OfType<UsageContent>())
+                {
+                    usage.Add(usageContent.Details);
+                }
+
                 yield return update;
             }
         }

@@ -36,6 +36,12 @@ public class SqliteFindingStoreTests : IDisposable
             [.. keys.Select(k => new StoredFinding(k, "rule", "high", "title", "f.cs", 1, null))]);
 
     [Fact]
+    public async Task Ping_succeeds_against_real_store()
+    {
+        await _Store.PingAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Empty_store_returns_null_and_no_keys()
     {
         Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
@@ -94,6 +100,130 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetLastCompletedRun_returns_finding_rows()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42)]);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+
+        Assert.NotNull(last);
+        Assert.Equal(["k1"], last.FindingKeys);
+        var finding = Assert.Single(last.Findings!);
+        Assert.Equal("k1", finding.DedupeKey);
+        Assert.Equal("rule", finding.RuleId);
+        Assert.Equal("high", finding.Severity);
+        Assert.Equal("title", finding.Title);
+        Assert.Equal("f.cs", finding.FilePath);
+        Assert.Equal(1, finding.Line);
+        Assert.Equal(42, finding.ThreadId);
+    }
+
+    [Fact]
+    public async Task BeginRun_shell_is_invisible_to_GetLastCompletedRun()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var shellId = Guid.NewGuid();
+
+        await _Store.SaveRunAsync(new ReviewRun(shellId, Key, "head", ReviewKind.Full, t0, null, false,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)]), CancellationToken.None);
+
+        Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
+
+        // Backfill the thread id while the run is still in-flight.
+        await _Store.SetThreadIdAsync(shellId, "k1", 42, CancellationToken.None);
+
+        await _Store.SaveRunAsync(new ReviewRun(shellId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)]), CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.NotNull(last);
+        Assert.Equal("head", last.HeadSha);
+        Assert.Equal(["k1"], last.FindingKeys);
+        Assert.Equal(42, Assert.Single(last.Findings!).ThreadId); // backfill preserved through finalize
+    }
+
+    [Fact]
+    public async Task SaveRun_finalize_merges_without_losing_thread_ids()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var runId = Guid.NewGuid();
+
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, null, false,
+            [
+                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+            ]), CancellationToken.None);
+
+        await _Store.SetThreadIdAsync(runId, "k1", 1000, CancellationToken.None);
+
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
+            [
+                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+            ]), CancellationToken.None);
+
+        await using (var db = new FindingStoreDbContext(
+                         new DbContextOptionsBuilder<FindingStoreDbContext>()
+                             .UseSqlite(_ConnectionString).Options))
+        {
+            var runs = await db.Runs.Include(r => r.Findings).ToListAsync();
+            var run = Assert.Single(runs);
+            Assert.True(run.Success);
+            Assert.NotNull(run.CompletedAt);
+            Assert.Equal(2, run.Findings.Count);
+            Assert.Equal(1000, run.Findings.Single(f => f.DedupeKey == "k1").ThreadId);
+            Assert.Null(run.Findings.Single(f => f.DedupeKey == "k2").ThreadId);
+        }
+    }
+
+    [Fact]
+    public async Task SaveRun_finalize_merges_new_findings()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var runId = Guid.NewGuid();
+
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, null, false,
+            [new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null)]), CancellationToken.None);
+
+        // Finalize introduces a finding the shell did not have; it must be merged.
+        await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
+            [
+                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+            ]), CancellationToken.None);
+
+        await using (var db = new FindingStoreDbContext(
+                         new DbContextOptionsBuilder<FindingStoreDbContext>()
+                             .UseSqlite(_ConnectionString).Options))
+        {
+            var run = Assert.Single(await db.Runs.Include(r => r.Findings).ToListAsync());
+            Assert.Equal(2, run.Findings.Count);
+            Assert.Contains(run.Findings, f => f.DedupeKey == "k1");
+            Assert.Contains(run.Findings, f => f.DedupeKey == "k2");
+        }
+    }
+
+    [Fact]
+    public async Task GetRecentRuns_returns_newest_first_across_outcomes()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h1", ReviewKind.Full, t0, t0.AddMinutes(5), false, []), CancellationToken.None);
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h2", ReviewKind.Full, t0.AddMinutes(10), t0.AddMinutes(15), true, []), CancellationToken.None);
+
+        var runs = await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None);
+
+        Assert.Equal(2, runs.Count);
+        Assert.True(runs[0].Success);
+        Assert.Equal("h2", runs[0].HeadSha);
+        Assert.False(runs[1].Success);
+        Assert.Equal("h1", runs[1].HeadSha);
+    }
+
+    [Fact]
     public async Task Known_keys_are_distinct_across_runs_and_scoped_to_pr()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
@@ -141,5 +271,81 @@ public class SqliteFindingStoreTests : IDisposable
         var verify = new SqliteFindingStore(_ConnectionString);
         var last = await verify.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.Equal(["k1"], last!.FindingKeys);
+    }
+
+    [Fact]
+    public async Task Save_and_read_round_trips_last_observed_comment_at()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var watermark = t0.AddMinutes(3);
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)],
+            LastObservedCommentAt: watermark);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.Equal(watermark, last!.LastObservedCommentAt);
+        Assert.Equal(["k1"], last.FindingKeys);
+    }
+
+    [Fact]
+    public async Task Constructor_upgrades_existing_database_without_watermark_column()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-legacy-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            // A database created by an older binary: Runs without LastObservedCommentAt.
+            using (var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE Runs (
+                        Id TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                        RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, HeadSha TEXT NOT NULL,
+                        Kind TEXT NOT NULL, StartedAt TEXT NOT NULL, CompletedAt TEXT NULL, Success INTEGER NOT NULL);
+                    CREATE TABLE Findings (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT, RunId TEXT NOT NULL, DedupeKey TEXT NOT NULL,
+                        RuleId TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
+                        FilePath TEXT NULL, Line INTEGER NULL, ThreadId INTEGER NULL);
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(
+                () => new SqliteFindingStore($"Data Source={dbPath};Pooling=False"))));
+
+            using var check = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            check.Open();
+            using var pragma = check.CreateCommand();
+            pragma.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
+            Assert.Equal(1L, Convert.ToInt64(pragma.ExecuteScalar()));
+        }
+        finally
+        {
+            foreach (var suffix in new[] {"", "-wal", "-shm"})
+            {
+                if (File.Exists(dbPath + suffix))
+                {
+                    File.Delete(dbPath + suffix);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Legacy_row_without_watermark_returns_null_watermark()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        await _Store.SaveRunAsync(new ReviewRun(
+            Guid.NewGuid(), Key, "head", ReviewKind.Full, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, null)],
+            LastObservedCommentAt: null), CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+
+        Assert.NotNull(last);
+        Assert.Null(last.LastObservedCommentAt);
     }
 }

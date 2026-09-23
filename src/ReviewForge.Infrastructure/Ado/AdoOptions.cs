@@ -16,4 +16,7 @@ public sealed class AdoOptions
 
     /// <summary>Resolved from <see cref="PatEnvironmentVariable"/>; never logged, never serialized.</summary>
     public string? Pat { get; set; }
+
+    /// <summary>Transient-failure retry tuning for idempotent ADO reads.</summary>
+    public AdoRetryOptions Retry { get; init; } = new();
 }

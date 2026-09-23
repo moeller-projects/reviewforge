@@ -9,4 +9,13 @@
         <UserSecretsId>5dfceffa-8ffd-439e-8eae-0b778e8b63c5</UserSecretsId>
     </PropertyGroup>
 
+    <ItemGroup>
+        <!-- Enables the generated Projects.ReviewForge_Service type for typed AddProject. -->
+        <ProjectReference Include="../ReviewForge.Service/ReviewForge.Service.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Aspire.Hosting.AppHost"/>
+    </ItemGroup>
+
 </Project>

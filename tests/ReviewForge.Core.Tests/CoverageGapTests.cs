@@ -10,8 +10,19 @@ using Xunit;
 namespace ReviewForge.Core.Tests;
 
 /// <summary>Tests pinned to specific pipeline behaviors that the happy-path suite does not reach.</summary>
-public class CoverageGapTests
+public class CoverageGapTests : IDisposable
 {
+    // The pool constructor creates checkouts/ + mirror/; keep it out of the shared temp root.
+    private readonly string _PoolRoot = Path.Combine(Path.GetTempPath(), "reviewforge-coverage-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_PoolRoot))
+        {
+            Directory.Delete(_PoolRoot, recursive: true);
+        }
+    }
+
     [Fact]
     public void All_stages_have_stable_names()
     {
@@ -23,20 +34,21 @@ public class CoverageGapTests
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(),
-            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath())),
+            new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), _PoolRoot), NullLogger<PrepareRepositoryStage>.Instance),
             new ClassifyRunStage(source),
             new EnrichContextStage(null, NullLogger<EnrichContextStage>.Instance),
             new ExecuteReasoningStage(agent),
             new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance),
+            new BeginRunStage(store),
             new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance),
-            new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance),
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance),
             new PersistRunStage(store),
         ];
 
         Assert.Equal(
             [
                 "fetch-pr-context", "review-gate", "prepare-repository", "classify-run", "enrich-context",
-                "execute-reasoning", "validate-findings", "triage-threads", "publish-findings", "persist-run"
+                "execute-reasoning", "validate-findings", "begin-run", "triage-threads", "publish-findings", "persist-run"
             ],
             stages.Select(s => s.Name));
     }
@@ -50,6 +62,7 @@ public class CoverageGapTests
 
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
         {
+            PullRequest = source.Pr,
             Threads = source.Threads,
             Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
             AcceptedFindings = [],
@@ -115,6 +128,24 @@ public class CoverageGapTests
 
         Assert.Throws<InvalidOperationException>(() => ctx.RequireRepoDir());
     }
+
+    [Fact]
+    public void RequirePullRequest_throws_when_unset()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ctx.RequirePullRequest());
+        Assert.Contains("PullRequest", ex.Message);
+    }
+
+    [Fact]
+    public void RequireResult_throws_when_unset()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ctx.RequireResult());
+        Assert.Contains("Result", ex.Message);
+    }
 }
 
 public class RepoReadToolsGapTests : IDisposable
@@ -155,6 +186,6 @@ public class RepoReadToolsGapTests : IDisposable
 
     private sealed class FailingIoTools(string root) : RepoReadTools(root)
     {
-        protected override string[] ReadAllLines(string path) => throw new IOException("io failed");
+        protected override IEnumerable<string> ReadLinesSafe(string file) => throw new IOException("io failed");
     }
 }

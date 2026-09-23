@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning.Rules;
@@ -12,7 +13,8 @@ public sealed class ReviewTools(
     ContextStore contextStore,
     RuleBook? ruleBook = null,
     IReadOnlySet<string>? changedFiles = null,
-    DiffIndex? diff = null)
+    DiffIndex? diff = null,
+    ILogger<ReviewTools>? logger = null)
 {
     private readonly IReadOnlySet<string>? _ChangedFiles = changedFiles;
     private readonly DiffIndex? _Diff = diff;
@@ -37,9 +39,16 @@ public sealed class ReviewTools(
         => $"## {pack.Id}: {pack.Title}{Environment.NewLine}" +
            string.Join(Environment.NewLine, pack.Rules.Where(r => r.Enabled).Select(r => $"- {r.Id} — {r.Title} ({r.DefaultSeverity}): {r.Description}"));
 
-    [Description("Read a staged context entry (enrichment payload, code-review-graph output). List available names first via the prompt context.")]
+    [Description("Read an untrusted staged context entry (enrichment payload, code-review-graph output). List available names first via the prompt context.")]
     public string ReadContext([Description("Name of the context entry")] string name)
-        => contextStore.Read(name) ?? $"unknown context entry '{name}'. Available: {string.Join(", ", contextStore.Names)}";
+    {
+        var content = contextStore.Read(name);
+        return content is null
+            ? $"unknown context entry '{name}'. Available: {string.Join(", ", contextStore.Names)}"
+            : $"{PromptBuilder.UntrustedBegin}{Environment.NewLine}" +
+              $"{PromptBuilder.Sanitize(content)}{Environment.NewLine}" +
+              PromptBuilder.UntrustedEnd;
+    }
 
     [Description("Record a single review finding. Call once per distinct issue. Duplicate findings are rejected.")]
     public string RecordFinding(
@@ -81,7 +90,7 @@ public sealed class ReviewTools(
             if (finding.Anchor is not { } anchor)
                 return "finding rejected: a changed file and line are required for this pull-request review";
 
-            var path = Normalize(anchor.FilePath);
+            var path = RepoPath.Normalize(anchor.FilePath);
             if (!_ChangedFiles.Contains(path))
                 return $"finding rejected: '{anchor.FilePath}' is outside the current pull-request diff";
             if (_Diff is not null && !_Diff.Contains(path, anchor.StartLine))
@@ -95,9 +104,18 @@ public sealed class ReviewTools(
         }
 
         var key = DedupeKey.Compute(finding.RuleId, finding.Anchor?.FilePath ?? "-", finding.Snippet);
-        if (collector.IsKnown(key)) return $"already recorded (dedupe key {key}) — skipped";
+        if (collector.IsKnown(key))
+        {
+            if (collector.WasKnownAtStart(key))
+            {
+                collector.MarkRedetected(key);
+            }
+            logger?.LogDebug("finding deduped: key {DedupeKey} already known", key);
+            return $"already recorded (dedupe key {key}) — skipped";
+        }
         finding.DedupeKey = key;
         collector.AddFinding(finding);
+        logger?.LogDebug("finding recorded: key {DedupeKey}, rule {RuleId}, severity {Severity}", key, finding.RuleId, finding.Severity);
         return $"recorded finding {key}";
     }
 
@@ -147,6 +165,4 @@ public sealed class ReviewTools(
         return errors;
     }
 
-    private static string Normalize(string path)
-        => path.Replace('\\', '/').TrimStart('/');
-}
+    }

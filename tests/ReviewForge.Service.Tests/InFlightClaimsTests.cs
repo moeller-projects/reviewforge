@@ -123,18 +123,34 @@ public class InFlightClaimsTests
         var runId = Guid.NewGuid();
         Assert.True(claims.TryClaim(Key, runId, out _));
 
-        // The claim has already aged past its TTL by the time the heartbeat starts.
-        clock.Advance(TimeSpan.FromMinutes(2));
-
         using var cts = new CancellationTokenSource();
-        var heartbeat = new ClaimHeartbeat(claims, Key, runId, TimeSpan.FromMilliseconds(20))
+        var heartbeat = new ClaimHeartbeat(claims, Key, runId, TimeSpan.FromSeconds(20), clock)
             .RunUntilCancelled(cts.Token);
 
-        await Task.Delay(80); // allow at least one real tick to renew against the advanced clock
+        await Task.Yield();
+        for (var i = 0; i < 5; i++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(20));
+            await Task.Yield();
+        }
 
         Assert.True(claims.IsHeldBy(Key, runId));
 
         cts.Cancel();
         await heartbeat;
+    }
+
+    [Fact]
+    public void ActiveCount_reflects_live_claims()
+    {
+        var claims = new InFlightClaims();
+        Assert.Equal(0, claims.ActiveCount);
+
+        var runId = Guid.NewGuid();
+        Assert.True(claims.TryClaim(Key, runId, out _));
+        Assert.Equal(1, claims.ActiveCount);
+
+        claims.Release(Key, runId);
+        Assert.Equal(0, claims.ActiveCount);
     }
 }

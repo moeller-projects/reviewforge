@@ -19,9 +19,9 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     private readonly Lazy<IChatClient> _Client;
     private readonly HttpMessageHandler? _HttpHandler;
 
-    private readonly ReasoningOptions _Options;
+    private readonly ChatProviderOptions _Options;
 
-    public ChatClientFactory(ReasoningOptions options, HttpMessageHandler? httpHandler = null)
+    public ChatClientFactory(ChatProviderOptions options, HttpMessageHandler? httpHandler = null)
     {
         _Options = options;
         _HttpHandler = httpHandler;
@@ -54,7 +54,7 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     private IChatClient CreateCodexClient()
     {
         var credential = new CodexCredential(
-            _Options.CredentialPath ?? ReasoningOptions.DefaultCredentialPath(), _HttpHandler);
+            _Options.CredentialPath ?? ChatProviderOptions.DefaultCredentialPath(), _HttpHandler);
         var authHandler = new CodexAuthHandler(credential)
         {
             InnerHandler = _HttpHandler ?? new HttpClientHandler(),
@@ -65,6 +65,19 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
                 "1",
                 StringComparison.Ordinal))
         {
+            var aspnetEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+            var dotnetEnvironment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+            if (string.Equals(aspnetEnvironment, "Production", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(dotnetEnvironment, "Production", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"{CodexHttpDebugHandler.EnvironmentVariable}=1 is refused in Production: " +
+                    "the debug handler logs truncated request/response bodies containing source code.");
+            }
+
+            Console.Error.WriteLine(
+                $"[codex-http] WARNING: wire debug logging enabled ({CodexHttpDebugHandler.EnvironmentVariable}=1); " +
+                "truncated request/response bodies (may contain source code) are written to stderr.");
             transportHandler = new CodexHttpDebugHandler {InnerHandler = authHandler};
         }
 

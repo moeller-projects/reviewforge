@@ -3,6 +3,8 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Ports;
+using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
@@ -51,8 +53,31 @@ public class ReviewPipelineTests
             pipeline.RunAsync(new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow), CancellationToken.None));
     }
 
-    private sealed class RecordingStage(string name, List<string> log, Action<ReviewContext>? act = null) : IReviewStage
+    [Fact]
+    public async Task Head_scope_opens_after_stage_sets_pull_request()
     {
+        var log = new List<string>();
+        var pipeline = new ReviewPipeline(
+            [
+                new RecordingStage("fetch", log, ctx => ctx.PullRequest = new PullRequest(1, "t", null, "head-sha", "base", "url", false)),
+                new RecordingStage("after", log),
+            ],
+            NullLogger<ReviewPipeline>.Instance);
+
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+        await pipeline.RunAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["fetch", "after"], log);
+        Assert.Equal("head-sha", ctx.PullRequest!.SourceCommitSha);
+    }
+
+    private sealed class RecordingStage(
+        string name, List<string> log, Action<ReviewContext>? act = null, int? order = null) : IReviewStage
+    {
+        private static int _NextOrder;
+
+        public int Order { get; } = order ?? Interlocked.Increment(ref _NextOrder);
+
         public string Name => name;
 
         public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
@@ -61,6 +86,29 @@ public class ReviewPipelineTests
             act?.Invoke(ctx);
             return Task.CompletedTask;
         }
+    }
+
+    [Fact]
+    public void Pipeline_throws_on_out_of_order_stages()
+    {
+        var log = new List<string>();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => _ = new ReviewPipeline(
+            [new RecordingStage("later", log, order: 30), new RecordingStage("earlier", log, order: 10)],
+            NullLogger<ReviewPipeline>.Instance));
+
+        Assert.Contains("stage ordering violation", ex.Message);
+        Assert.Contains("earlier", ex.Message);
+    }
+
+    [Fact]
+    public void Pipeline_throws_on_duplicate_orders()
+    {
+        var log = new List<string>();
+
+        Assert.Throws<InvalidOperationException>(() => _ = new ReviewPipeline(
+            [new RecordingStage("a", log, order: 10), new RecordingStage("b", log, order: 10)],
+            NullLogger<ReviewPipeline>.Instance));
     }
 }
 
@@ -93,6 +141,42 @@ public class StageTests : IDisposable
         };
     }
 
+    private sealed class FaultingPullRequestSource : FakePullRequestSource
+    {
+        public TaskCompletionSource SiblingStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSibling { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+            => Task.FromException<PullRequest>(new InvalidOperationException("pull request failed"));
+
+        public override async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(
+            PrKey pr,
+            CancellationToken ct)
+        {
+            SiblingStarted.TrySetResult();
+            await ReleaseSibling.Task.WaitAsync(ct);
+            return [];
+        }
+    }
+
+    [Fact]
+    public void ChangedFiles_is_cached_until_manifest_reassigned()
+    {
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow);
+        ctx.ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)];
+
+        var first = ctx.ChangedFiles;
+        var second = ctx.ChangedFiles;
+        Assert.Same(first, second); // cached projection
+
+        ctx.ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Edit)];
+        var third = ctx.ChangedFiles;
+        Assert.NotSame(first, third);
+        Assert.Equal(["b.cs"], third);
+    }
+
     [Fact]
     public async Task Fetch_populates_context()
     {
@@ -109,6 +193,26 @@ public class StageTests : IDisposable
         Assert.Single(ctx.ChangedFiles);
         Assert.Equal(source.User, ctx.CurrentUser);
         Assert.Equal(store.LastRun, ctx.PriorRun);
+    }
+
+    [Fact]
+    public async Task Fetch_observes_started_siblings_when_pull_request_fails()
+    {
+        var source = new FaultingPullRequestSource();
+        var execution = new FetchPrContextStage(source, new FakeFindingStore())
+            .ExecuteAsync(new ReviewContext(Key, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await source.SiblingStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        try
+        {
+            Assert.False(execution.IsCompleted);
+        }
+        finally
+        {
+            source.ReleaseSibling.TrySetResult();
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => execution);
     }
 
     [Fact]
@@ -134,12 +238,34 @@ public class StageTests : IDisposable
         };
         var ctx = Ctx();
 
-        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat")).ExecuteAsync(ctx, CancellationToken.None);
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"), NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["head-sha"], git.Checkouts);
         Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
         Assert.True(ctx.Diff!.Contains("src/A.cs", 2));
         Assert.False(ctx.Diff.Contains("src/A.cs", 1));
+    }
+
+    [Fact]
+    public async Task Prepare_scope_check_ignores_excluded_files()
+    {
+        var source = new FakePullRequestSource();
+        source.ChangedFiles.Add(new ChangedFile("src/A.cs", ChangedFileType.Edit));
+        source.ChangedFiles.Add(new ChangedFile("package-lock.json", ChangedFileType.Edit));
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n", // no package-lock.json (excluded at the git layer)
+        };
+        var ctx = Ctx(source);
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance,
+            DiffBudget.Default).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains("src/A.cs", ctx.ReviewableFiles!);
+        Assert.DoesNotContain("package-lock.json", ctx.ReviewableFiles!);
     }
 
     [Fact]
@@ -195,6 +321,30 @@ public class StageTests : IDisposable
         Assert.True(ctx.Collector.IsKnown("known-key"));
         var prompt = script.Received[0].Last().Text;
         Assert.Contains("full code review", prompt);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_assigns_and_deduplicates_automatic_homoglyph_findings()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -0,0 +1,1 @@
+            +var fileNаme = value;
+            """;
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var finding = Assert.Single(ctx.Collector.Findings);
+        Assert.NotNull(finding.DedupeKey);
+        Assert.Equal(
+            DedupeKey.Compute(finding.RuleId, finding.Anchor!.FilePath, finding.Snippet),
+            finding.DedupeKey);
     }
 
     [Fact]
@@ -263,6 +413,52 @@ public class StageTests : IDisposable
         Assert.Equal(2, reanchored.Anchor!.StartLine);
         Assert.DoesNotContain(outsideDiff, ctx.AcceptedFindings);
         Assert.DoesNotContain(gone, ctx.AcceptedFindings);
+    }
+
+    [Fact]
+    public async Task Validate_weak_snippet_downgrades_but_keeps_finding()
+    {
+        var finding = FindingOnLine(2, "}");
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        var accepted = Assert.Single(ctx.AcceptedFindings);
+        Assert.True(accepted.AnchorDowngraded);
+        Assert.Equal(2, accepted.Anchor!.StartLine);
+    }
+
+    [Fact]
+    public async Task Validate_weak_snippet_outside_diff_still_rejected()
+    {
+        var finding = FindingOnLine(3, "}");
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AcceptedFindings);
+    }
+
+    [Fact]
+    public async Task Validate_rejects_findings_for_truncated_files()
+    {
+        var finding = FindingOnLine(1);
+        finding.Anchor = new FindingAnchor("src/Large.cs", 1, 1);
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse(
+            "diff --git a/src/Large.cs b/src/Large.cs\n" +
+            "--- a/src/Large.cs\n+++ b/src/Large.cs\n" +
+            "…[file diff skipped — 300 bytes exceeds the per-file budget; use repo_read_file]\n");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AcceptedFindings);
     }
 
     [Fact]
@@ -365,7 +561,83 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir)).ExecuteAsync(ctx, CancellationToken.None));
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Prepare_accepts_manifest_with_binary_file()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git a/a.cs b/a.cs\n--- a/a.cs\n+++ b/a.cs\n@@ -0,0 +1,1 @@\n+changed\n" +
+                   "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
+    }
+
+    [Fact]
+    public async Task Prepare_accepts_content_free_rename()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git a/a.cs b/b.cs\nsimilarity index 100%\nrename from a.cs\nrename to b.cs\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Rename)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.ReviewableFiles!);
+    }
+
+    [Fact]
+    public async Task Prepare_still_throws_when_diff_has_unaccounted_text_file()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git a/a.cs b/a.cs\n--- a/a.cs\n+++ b/a.cs\n@@ -0,0 +1,1 @@\n+x\n" +
+                   "diff --git a/c.cs b/c.cs\n--- a/c.cs\n+++ b/c.cs\n@@ -0,0 +1,1 @@\n+y\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)],
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Prepare_warns_and_excludes_manifest_orphan()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "+++ b/a.cs\n@@ -0,0 +1,1 @@\n+x\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("ghost.cs", ChangedFileType.Edit)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
     }
 
     [Fact]
@@ -389,10 +661,49 @@ public class StageTests : IDisposable
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Contains(source.Replies, r => r.ThreadId == 1 && r.Text == "fixed");
+        Assert.Contains(source.Replies, r => r.ThreadId == 1 && r.Text == CommentFormatter.WithBotPreamble("fixed"));
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 1 && s.Status == ReviewThreadStatus.Fixed);
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 2 && s.Status == ReviewThreadStatus.Fixed); // stale auto-resolved
         Assert.Empty(ctx.UnansweredThreads);
+    }
+
+    [Fact]
+    public async Task Triage_resolves_thread_when_key_only_exists_in_prior_run()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(2, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k"]);
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains(source.StatusChanges, s => s.ThreadId == 2 && s.Status == ReviewThreadStatus.Fixed);
+        Assert.Contains(source.Replies, r => r.ThreadId == 2 && r.Text == CommentFormatter.WithBotPreamble(
+            "Resolved: this finding no longer reproduces in the latest iteration."));
+    }
+
+    [Fact]
+    public async Task Triage_keeps_thread_when_finding_redetected()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(2, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.Collector.MarkRedetected("k");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.StatusChanges);
+        Assert.Empty(source.Replies);
     }
 
     [Fact]
@@ -419,14 +730,16 @@ public class StageTests : IDisposable
             Uncertainties = [new ReviewUncertainty("t", "q", null)],
         };
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Single(source.PostedFindings);
         Assert.Equal(1000, ctx.PostedThreadIds["k2"]);
         Assert.Equal(2, source.GeneralComments.Count); // downgraded finding + summary
+        Assert.Equal("k-gen", source.GeneralCommentDedupeKeys[0]);
+        Assert.Null(source.GeneralCommentDedupeKeys[1]);
         Assert.Contains("❌", source.GeneralComments[1]);
         Assert.Single(source.Votes);
-        Assert.Equal(-5, source.Votes[0].Vote);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, source.Votes[0].Vote);
         Assert.Equal("user-1", source.Votes[0].ReviewerId);
     }
 
@@ -443,22 +756,88 @@ public class StageTests : IDisposable
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PublishFindingsStage(new FakePullRequestSource(), NullLogger<PublishFindingsStage>.Instance)
+            new PublishFindingsStage(new FakePullRequestSource(), new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
                 .ExecuteAsync(ctx, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Publish_clean_run_sets_no_vote()
+    public async Task Publish_sets_waiting_for_author_vote_via_domain_enum()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [FindingOnLine(2)];
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+            Findings = ctx.AcceptedFindings,
+            Uncertainties = [],
+        };
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.Votes);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, source.Votes[0].Vote);
+    }
+
+    [Fact]
+    public async Task Publish_resets_vote_on_clean_run()
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
         ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
         ctx.AcceptedFindings = [];
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        var vote = Assert.Single(source.Votes);
+        Assert.Equal(ReviewerVote.NoResponse, vote.Vote);
+        Assert.Equal("user-1", vote.ReviewerId);
+        Assert.Single(source.GeneralComments); // summary only
+    }
+
+    [Fact]
+    public async Task Publish_clean_vote_configurable_to_approved()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, ReviewerVote.Approved)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(ReviewerVote.Approved, Assert.Single(source.Votes).Vote);
+    }
+
+    [Fact]
+    public async Task Publish_clean_vote_none_leaves_vote_untouched()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
+        ctx.AcceptedFindings = [];
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, cleanVote: null)
+            .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(source.Votes);
-        Assert.Single(source.GeneralComments); // summary only
+    }
+
+    [Fact]
+    public async Task Publish_still_sets_waiting_for_author_when_findings_exist()
+    {
+        var source = new FakePullRequestSource();
+        var finding = FindingOnLine(2);
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, ReviewerVote.Approved)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(ReviewerVote.WaitingForAuthor, Assert.Single(source.Votes).Vote);
     }
 
     [Fact]
@@ -476,7 +855,7 @@ public class StageTests : IDisposable
             Uncertainties = [],
         };
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.InRange(source.MaxConcurrentFindingPosts, 2, PublishFindingsStage.MaxConcurrentPosts);
         Assert.Equal(8, source.PostedFindings.Count);
@@ -497,7 +876,7 @@ public class StageTests : IDisposable
             Uncertainties = [],
         };
 
-        await new PublishFindingsStage(source, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(9, source.WriteLog.Count); // 8 findings, then the summary
         Assert.All(source.WriteLog.Take(8), entry => Assert.StartsWith("finding ", entry));
@@ -521,6 +900,511 @@ public class StageTests : IDisposable
         Assert.Equal("head-sha", run.HeadSha);
         Assert.True(run.Success);
         Assert.Equal(1000, run.Findings[0].ThreadId);
+    }
+
+    [Fact]
+    public async Task Persist_carries_forward_prior_findings()
+    {
+        var store = new FakeFindingStore();
+        var accepted = FindingOnLine(3);
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [accepted];
+        ctx.PostedThreadIds = new Dictionary<string, int> {["k3"] = 1000};
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        var run = Assert.Single(store.Runs);
+        Assert.Equal(2, run.Findings.Count);
+        var carried = Assert.Single(run.Findings, f => f.DedupeKey == "k2");
+        Assert.Equal(42, carried.ThreadId);
+        var acceptedRow = Assert.Single(run.Findings, f => f.DedupeKey == "k3");
+        Assert.Equal(1000, acceptedRow.ThreadId);
+    }
+
+    [Fact]
+    public async Task Persist_does_not_duplicate_key_accepted_again()
+    {
+        var store = new FakeFindingStore();
+        var accepted = FindingOnLine(2);
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [accepted];
+        ctx.PostedThreadIds = new Dictionary<string, int> {["k2"] = 1000};
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        var run = Assert.Single(store.Runs);
+        var finding = Assert.Single(run.Findings); // prior "k2" not carried; accepted "k2" wins
+        Assert.Equal("k2", finding.DedupeKey);
+        Assert.Equal(1000, finding.ThreadId);
+    }
+
+    [Fact]
+    public async Task BeginRun_persists_inflight_shell_with_all_known_keys()
+    {
+        var store = new FakeFindingStore();
+        var accepted = FindingOnLine(3); // k3
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [accepted];
+        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+
+        await new BeginRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        var run = Assert.Single(store.Runs);
+        Assert.False(run.Success);
+        Assert.Null(run.CompletedAt);
+        Assert.Equal(2, run.Findings.Count);
+        Assert.Contains(run.Findings, f => f.DedupeKey == "k3" && f.ThreadId == null);
+        Assert.Contains(run.Findings, f => f.DedupeKey == "k2" && f.ThreadId == 42);
+    }
+
+    [Fact]
+    public async Task Publish_backfills_thread_id_per_finding_as_posted()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var f1 = FindingOnLine(2); // k2
+        var f2 = FindingOnLine(3); // k3
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [f1, f2];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []};
+
+        await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(2, store.ThreadIdBackfills.Count);
+        Assert.Contains(store.ThreadIdBackfills, b => b.Key == "k2");
+        Assert.Contains(store.ThreadIdBackfills, b => b.Key == "k3");
+    }
+
+    [Fact]
+    public async Task Publish_skips_finding_with_existing_live_thread()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var finding = FindingOnLine(2); // k2
+        source.Threads.Add(new ReviewThread(1000, "k2", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Publish_posts_when_matching_thread_is_fixed()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var finding = FindingOnLine(2); // k2
+        source.Threads.Add(new ReviewThread(1000, "k2", ReviewThreadStatus.Fixed,
+            [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Publish_partial_failure_keeps_successful_backfills()
+    {
+        var source = new FakePullRequestSource {ThrowOnPostKey = "k3"};
+        var store = new FakeFindingStore();
+        var f1 = FindingOnLine(2); // k2 posts
+        var f2 = FindingOnLine(3); // k3 throws
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [f1, f2];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []};
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Contains(store.ThreadIdBackfills, b => b.Key == "k2"); // successful post backfilled before the fault
+        Assert.DoesNotContain(store.ThreadIdBackfills, b => b.Key == "k3");
+    }
+
+    [Fact]
+    public async Task Persist_run_persists_max_observed_comment_timestamp()
+    {
+        var store = new FakeFindingStore();
+        var t1 = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var t2 = DateTimeOffset.UtcNow;
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.Threads =
+        [
+            new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+                [new ThreadComment("b", "bot", true, "note", t1)]),
+            new ReviewThread(2, null, ReviewThreadStatus.Active,
+                [new ThreadComment("u", "human", false, "reply", t2)]),
+        ];
+        ctx.AcceptedFindings = [];
+        ctx.PostedThreadIds = new Dictionary<string, int>();
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(t2, Assert.Single(store.Runs).LastObservedCommentAt);
+    }
+
+    [Fact]
+    public async Task Persist_run_without_threads_persists_null_watermark()
+    {
+        var store = new FakeFindingStore();
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.Full;
+        ctx.Threads = [];
+        ctx.AcceptedFindings = [];
+        ctx.PostedThreadIds = new Dictionary<string, int>();
+
+        await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Null(Assert.Single(store.Runs).LastObservedCommentAt);
+    }
+
+    [Fact]
+    public async Task Triage_throws_when_claim_lost_before_writes()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "reply", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.PublishGuard = () => false;
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Answer, "answer")]},
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Empty(source.Replies);
+        Assert.Empty(source.StatusChanges);
+    }
+
+    [Fact]
+    public async Task Triage_stops_mid_batch_when_claim_lost()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "reply", t0)]));
+        source.Threads.Add(new ReviewThread(2, "k2", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "reply", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative
+            {
+                ThreadActions =
+                [
+                    new ThreadAction(1, ThreadActionKind.Answer, "answer 1"),
+                    new ThreadAction(2, ThreadActionKind.Answer, "answer 2"),
+                ],
+            },
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        var guardCalls = 0;
+        ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-triage + one op pass
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(source.Replies); // exactly one reply before the claim was lost
+    }
+
+    [Fact]
+    public async Task Triage_retry_does_not_duplicate_reply()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+        [
+            new ThreadComment("b", "bot", true, "finding", t0),
+            new ThreadComment("u", "human", false, "why?", t0.AddMinutes(1)),
+            new ThreadComment("b", "bot", true, CommentFormatter.WithBotPreamble("answer"), t0.AddMinutes(2)),
+        ]));
+
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Resolve, "answer")]},
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies); // reply already posted by a previous attempt
+        Assert.Contains(source.StatusChanges, s => s.ThreadId == 1 && s.Status == ReviewThreadStatus.Fixed);
+    }
+
+    [Fact]
+    public async Task Triage_skips_reply_when_competitor_posted_after_fetch()
+    {
+        var source = new CompetitorRepliedSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "why?", t0)]));
+
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult
+        {
+            Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Resolve, "answer")]},
+            Findings = [],
+            Uncertainties = [],
+        };
+        ctx.AcceptedFindings = [];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies); // competitor's reply detected on re-fetch
+        Assert.Contains(source.StatusChanges, s => s.ThreadId == 1 && s.Status == ReviewThreadStatus.Fixed);
+    }
+
+    [Fact]
+    public async Task Publish_stops_mid_fanout_when_claim_lost()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var findings = Enumerable.Range(0, 3).Select(i => FindingOnLine(2 + i)).ToArray();
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = findings;
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = findings, Uncertainties = []};
+
+        var guardCalls = 0;
+        ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-publish + one post pass
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(source.PostedFindings); // exactly one post before the claim was lost
+        Assert.Empty(source.GeneralComments); // summary never reached
+        Assert.Empty(source.Votes); // vote never reached
+    }
+
+    [Fact]
+    public async Task Publish_guard_false_before_summary_blocks_summary_and_vote()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var finding = FindingOnLine(2);
+        var ctx = Ctx(source);
+        ctx.Kind = ReviewKind.Full;
+        ctx.AcceptedFindings = [finding];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        var guardCalls = 0;
+        ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-publish + post pass, summary fails
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(source.PostedFindings); // finding posted
+        Assert.Empty(source.GeneralComments); // summary blocked
+        Assert.Empty(source.Votes); // vote blocked
+    }
+
+    private static PullRequest Pr(string head)
+        => new(1, "t", null, head, "base", "url", false);
+
+    /// <summary>Returns the updated head on every fetch after the first (the stage-1 fetch).</summary>
+    private sealed class HeadChangingSource(PullRequest first, PullRequest second) : FakePullRequestSource
+    {
+        private int _Fetches;
+
+        public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+            => Task.FromResult(_Fetches++ == 0 ? first : second);
+    }
+
+    private static ReviewContext HeadCtx(IPullRequestSource source, string reviewedHead)
+    {
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = Pr(reviewedHead),
+            CurrentUser = new CurrentUser("user-1", "reviewforge bot"),
+            Kind = ReviewKind.Full,
+            AcceptedFindings = [FindingOnLine(2)],
+            Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+                Findings = [FindingOnLine(2)],
+                Uncertainties = [],
+            },
+        };
+        return ctx;
+    }
+
+    [Fact]
+    public async Task Publish_head_unchanged_publishes_normally()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-a"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None); // the stage-1 fetch
+        var ctx = HeadCtx(source, "head-a");
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.PostedFindings);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, Assert.Single(source.Votes).Vote);
+    }
+
+    [Fact]
+    public async Task Publish_head_changed_throws_before_any_write()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-b"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None); // the stage-1 fetch
+        var ctx = HeadCtx(source, "head-a");
+
+        await Assert.ThrowsAsync<PrHeadChangedException>(() =>
+            new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Empty(source.PostedFindings);
+        Assert.Empty(source.GeneralComments);
+        Assert.Empty(source.Votes);
+    }
+
+    [Fact]
+    public async Task Publish_head_changed_message_exposes_both_shas()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-b"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None);
+        var ctx = HeadCtx(source, "head-a");
+
+        var ex = await Assert.ThrowsAsync<PrHeadChangedException>(() =>
+            new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Equal("head-a", ex.Expected);
+        Assert.Equal("head-b", ex.Actual);
+        Assert.Contains("head-a", ex.Message);
+        Assert.Contains("head-b", ex.Message);
+    }
+
+    [Fact]
+    public async Task Publish_head_comparison_is_case_insensitive()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("HEAD-A"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None);
+        var ctx = HeadCtx(source, "head-a");
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(source.PostedFindings); // same SHA in different casing must not abort
+    }
+
+    [Fact]
+    public async Task Publish_head_changed_run_is_not_persisted()
+    {
+        var source = new HeadChangingSource(Pr("head-a"), Pr("head-b"));
+        await source.GetPullRequestAsync(Key, CancellationToken.None); // the stage-1 fetch
+        var store = new FakeFindingStore();
+        var ctx = HeadCtx(source, "head-a");
+        var pipeline = new ReviewPipeline(
+            [
+                new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance),
+                new PersistRunStage(store),
+            ],
+            NullLogger<ReviewPipeline>.Instance);
+
+        await Assert.ThrowsAsync<PrHeadChangedException>(() => pipeline.RunAsync(ctx, CancellationToken.None));
+
+        Assert.Empty(store.Runs); // PersistRunStage never ran; the new head is not marked reviewed
+        Assert.Empty(source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Validate_rejects_symlink_escaping_checkout()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "rf-outside-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(outside, "MARKER-UNIQUE-SECRET");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_RepoDir, "linked"));
+            try
+            {
+                File.CreateSymbolicLink(Path.Combine(_RepoDir, "linked", "secret.txt"), outside);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                return; // Windows symlinks require Developer Mode or SeCreateSymbolicLinkPrivilege.
+            }
+
+            var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("linked/secret.txt", 1, 1), Snippet = "MARKER-UNIQUE-SECRET"};
+            var ctx = Ctx();
+            ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+            await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.Empty(ctx.AcceptedFindings);
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
+    public async Task Validate_accepts_symlink_staying_inside_checkout()
+    {
+        Directory.CreateDirectory(Path.Combine(_RepoDir, "real"));
+        File.WriteAllText(Path.Combine(_RepoDir, "real", "b.txt"), "MARKER-INSIDE");
+        Directory.CreateDirectory(Path.Combine(_RepoDir, "a"));
+        try
+        {
+            File.CreateSymbolicLink(Path.Combine(_RepoDir, "a", "b.txt"), Path.Combine(_RepoDir, "real", "b.txt"));
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return; // Windows symlinks require Developer Mode or SeCreateSymbolicLinkPrivilege.
+        }
+
+        var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("a/b.txt", 1, 1), Snippet = "MARKER-INSIDE"};
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse("+++ b/a/b.txt\n@@ -0,0 +1,1 @@\n+MARKER-INSIDE\n");
+        ctx.ChangedFileManifest = [new ChangedFile("a/b.txt", ChangedFileType.Edit)];
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(ctx.AcceptedFindings);
+    }
+
+    private sealed class CompetitorRepliedSource : FakePullRequestSource
+    {
+        public override Task<IReadOnlyList<ReviewThread>> GetThreadsAsync(PrKey pr, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<ReviewThread>>(Threads
+                .Select(t => new ReviewThread(t.Id, t.DedupeKey, t.Status,
+                    [.. t.Comments, new ThreadComment("b", "bot", true, CommentFormatter.WithBotPreamble("answer"), DateTimeOffset.UtcNow)]))
+                .ToArray());
     }
 }
 
@@ -607,5 +1491,28 @@ public class CommentFormatterTests
         Assert.Contains("full review", text);
         Assert.Contains("**Findings:** **0**", text);
         Assert.DoesNotContain("Acceptance criteria", text);
+    }
+
+    [Fact]
+    public void FormatFinding_starts_with_bot_preamble()
+    {
+        var finding = new RichFinding {RuleId = "r", Title = "t", Severity = "info", Category = "docs", Description = "d"};
+        Assert.StartsWith(CommentFormatter.BotPreamble, CommentFormatter.FormatFinding(finding));
+    }
+
+    [Fact]
+    public void FormatSummary_starts_with_bot_preamble()
+    {
+        var result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
+        Assert.StartsWith(CommentFormatter.BotPreamble, CommentFormatter.FormatSummary(result, [], [], ReviewKind.Full));
+    }
+
+    [Fact]
+    public void WithBotPreamble_prepends_once_and_trims()
+    {
+        var text = CommentFormatter.WithBotPreamble("  hello  ");
+        Assert.StartsWith(CommentFormatter.BotPreamble, text);
+        Assert.EndsWith("hello", text);
+        Assert.Equal(1, text.Split(CommentFormatter.BotPreamble).Length - 1);
     }
 }

@@ -17,13 +17,15 @@ public static class DedupeKey
     {
         var input = string.Join('|',
             ruleId.Trim().ToLowerInvariant(),
-            filePath.Replace('\\', '/').TrimStart('/').ToLowerInvariant(),
+            RepoPath.NormalizeKey(filePath),
             NormalizeSnippet(snippet));
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input)))[..16].ToLowerInvariant();
     }
 
-    /// <summary>Whitespace- and casing-insensitive snippet identity.</summary>
+    /// <summary>Preprocessed, whitespace- and casing-insensitive snippet identity.</summary>
     public static string NormalizeSnippet(string? snippet)
-        => snippet is null ? "-" : Whitespace.Replace(snippet.Trim(), " ").ToLowerInvariant();
+        => snippet is null
+            ? "-"
+            : Whitespace.Replace(PipelineText.Preprocess(snippet).Trim(), " ").ToLowerInvariant();
 }

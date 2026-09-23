@@ -1,15 +1,18 @@
 # syntax=docker/dockerfile:1
 
+# Pinned by digest (resolved 2026-09-22); Dependabot's docker ecosystem proposes bumps.
 ARG DOTNET_VERSION=10.0
+ARG SDK_DIGEST=sha256:3cc3bbbbf93d82104892f42aa9106b6be4d120346dea0649643a97c801525256
+ARG ASPNET_DIGEST=sha256:f62a272ac1b46e83f56b8ed0416572f31cd1128e2c4a5e63eb34d348e4a36095
 
 # ---------- restore: project files only → dependency layer stays cached across code changes ----------
-FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-alpine AS restore
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-alpine@${SDK_DIGEST} AS restore
 WORKDIR /src
-COPY Directory.Build.props ./
-COPY src/ReviewForge.Core/ReviewForge.Core.csproj src/ReviewForge.Core/
-COPY src/ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj src/ReviewForge.Infrastructure/
-COPY src/ReviewForge.Service/ReviewForge.Service.csproj src/ReviewForge.Service/
-RUN dotnet restore src/ReviewForge.Service/ReviewForge.Service.csproj
+COPY Directory.Build.props Directory.Packages.props ./
+COPY src/ReviewForge.Core/ReviewForge.Core.csproj src/ReviewForge.Core/packages.lock.json src/ReviewForge.Core/
+COPY src/ReviewForge.Infrastructure/ReviewForge.Infrastructure.csproj src/ReviewForge.Infrastructure/packages.lock.json src/ReviewForge.Infrastructure/
+COPY src/ReviewForge.Service/ReviewForge.Service.csproj src/ReviewForge.Service/packages.lock.json src/ReviewForge.Service/
+RUN dotnet restore src/ReviewForge.Service/ReviewForge.Service.csproj --locked-mode
 
 # ---------- publish: only the service closure; tests never enter the image ----------
 FROM restore AS publish
@@ -21,7 +24,7 @@ RUN dotnet publish src/ReviewForge.Service/ReviewForge.Service.csproj \
       /p:UseAppHost=false
 
 # ---------- runtime: alpine (musl), non-root, healthcheck, read-only-rootfs ready ----------
-FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}-alpine AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}-alpine@${ASPNET_DIGEST} AS runtime
 
 LABEL org.opencontainers.image.title="reviewforge" \
       org.opencontainers.image.description="Automated PR review as a service: ADO context, agent reasoning, findings, triage, vote" \

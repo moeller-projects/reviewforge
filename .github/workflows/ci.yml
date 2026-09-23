@@ -5,8 +5,15 @@ on:
     branches: [ main ]
   pull_request:
 
+# Least privilege: checkout needs contents:read; nothing else by default.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
+    permissions:
+      contents: read
+      checks: write # dorny/test-reporter publishes check runs
     strategy:
       fail-fast: false
       matrix:
@@ -23,7 +30,7 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Restore
-        run: dotnet restore ReviewForge.slnx
+        run: dotnet restore ReviewForge.slnx --locked-mode
 
       # -warnaserror: any compiler/analyzer warning fails the build.
       - name: Build

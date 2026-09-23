@@ -11,6 +11,8 @@ public sealed class ClassifyRunStage(IPullRequestSource source) : IReviewStage
 {
     public string Name => "classify-run";
 
+    public int Order => 40;
+
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         ctx.Threads = await source.GetThreadsAsync(ctx.Pr, ct);

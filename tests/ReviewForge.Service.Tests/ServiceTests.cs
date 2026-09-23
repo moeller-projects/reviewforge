@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.AI;
@@ -12,7 +15,9 @@ using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Service.Queue;
+using ReviewForge.Service.Security;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -27,6 +32,7 @@ public sealed class ReviewForgeServiceCollectionDefinition
 public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
 {
     private bool _WithoutWorkers;
+    private List<string>? _LogSink;
 
     public ReviewForgeFactory()
     {
@@ -38,6 +44,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("ReviewForge__WorkDir", WorkDir);
         Environment.SetEnvironmentVariable("ReviewForge__WorkerCount", "2");
         Environment.SetEnvironmentVariable("ReviewForge__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
+        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, "test-key-1,test-key-2");
     }
 
     public FakePullRequestSource Source { get; } = new();
@@ -55,10 +62,51 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         return this;
     }
 
+    /// <summary>Clears configured API keys so the host boots without any — fail-closed or opt-out paths.</summary>
+    public ReviewForgeFactory WithoutApiKeys()
+    {
+        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, null);
+        return this;
+    }
+
+    /// <summary>Captures formatted log messages into the supplied sink (for startup-log assertions).</summary>
+    public ReviewForgeFactory WithLogCollector(List<string> sink)
+    {
+        _LogSink = sink;
+        return this;
+    }
+
+    /// <summary>No keys + the explicit development opt-out, so /reviews stays reachable.</summary>
+    public ReviewForgeFactory WithDevelopmentOptOut()
+    {
+        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, null);
+        Environment.SetEnvironmentVariable("Api__AllowUnauthenticatedForDevelopment", "true");
+        return this;
+    }
+
+    /// <summary>Overrides the fixed-window submit limit for rate-limit tests.</summary>
+    public ReviewForgeFactory WithSubmitLimit(int permitLimit, int windowSeconds)
+    {
+        Environment.SetEnvironmentVariable("Api__SubmitPermitLimit", permitLimit.ToString());
+        Environment.SetEnvironmentVariable("Api__SubmitWindowSeconds", windowSeconds.ToString());
+        return this;
+    }
+
+    protected override void ConfigureClient(HttpClient client)
+    {
+        base.ConfigureClient(client);
+        client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "test-key-1");
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         Directory.CreateDirectory(WorkDir);
         Git.RepoDir = WorkDir;
+
+        if (_LogSink is not null)
+        {
+            builder.ConfigureLogging(logging => logging.AddProvider(new CollectingLoggerProvider(_LogSink)));
+        }
 
         builder.ConfigureServices(services =>
         {
@@ -91,7 +139,13 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            foreach (var key in new[] {"Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model", "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString"})
+            foreach (var key in new[]
+            {
+                "Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model",
+                "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString",
+                ApiKeyOptions.KeysEnvironmentVariable, "Api__AllowUnauthenticatedForDevelopment",
+                "Api__SubmitPermitLimit", "Api__SubmitWindowSeconds",
+            })
             {
                 Environment.SetEnvironmentVariable(key, null);
             }
@@ -159,12 +213,16 @@ public class ServiceTests : IAsyncLifetime
     public async Task Submit_conflicts_when_review_already_in_flight()
     {
         var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
-        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), Guid.NewGuid(), out _));
+        var holder = Guid.NewGuid();
+        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), holder, out _));
 
         var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
             new {org = "o", project = "p", repositoryId = "r", prId = 77});
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var conflict = await response.Content.ReadFromJsonAsync<ConflictResponse>();
+        Assert.Equal("a review for this pull request is already in flight", conflict?.Error);
+        Assert.Equal(holder, conflict?.RunId);
     }
 
     [Fact]
@@ -265,7 +323,7 @@ public class ServiceTests : IAsyncLifetime
             options,
             LoggerFactory.Create(b => { }));
         var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
-            LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
+            _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = worker.StartAsync(cts.Token);
@@ -303,11 +361,161 @@ public class ServiceTests : IAsyncLifetime
         }
     }
 
+    private static string CheckoutDir(string workDir, string repositoryId, string headSha)
+    {
+        static string KeyComponent(string id)
+        {
+            var readable = string.Concat(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id)))[..12].ToLowerInvariant();
+            return $"{readable}-{hash}";
+        }
+
+        return Path.Combine(workDir, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));
+    }
+
+    [Fact]
+    public async Task Second_run_on_same_pr_does_not_resolve_or_repost()
+    {
+        var pr = new PrKey("o", "p", "r", 42);
+        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n";
+
+        // Pre-seed the checkout so the finding's anchor verifies against a real file.
+        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "line three"]);
+
+        static Dictionary<string, object?> FindingArgs() => new()
+        {
+            ["ruleId"] = "general.other",
+            ["title"] = "bad code",
+            ["severity"] = "high",
+            ["category"] = "bug",
+            ["description"] = "bad code found",
+            ["snippet"] = "bad code here",
+            ["filePath"] = "src/A.cs",
+            ["startLine"] = 2,
+        };
+
+        // Run 1: record finding K then finish.
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var client = _Factory.CreateClient();
+        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body1!.RunId, RunState.Completed);
+
+        var run1 = Assert.Single(_Factory.Store.Runs);
+        var finding1 = Assert.Single(run1.Findings);
+        var key = finding1.DedupeKey;
+        var threadId = finding1.ThreadId!.Value;
+        Assert.Single(_Factory.Source.PostedFindings);
+
+        // Wait for the worker to release the claim before re-submitting the same PR.
+        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        // Simulate the live ADO thread plus a new human comment (so run 2 clears the gate as FollowUp).
+        _Factory.Source.Threads.Add(new ReviewThread(threadId, key, ReviewThreadStatus.Active,
+        [
+            new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow.AddMinutes(-2)),
+            new ThreadComment("human", "author", false, "still failing?", DateTimeOffset.UtcNow),
+        ]));
+        _Factory.Store.LastRun = new PriorRun(pr, "head-sha", DateTimeOffset.UtcNow.AddMinutes(-1), [key],
+            [new StoredFinding(key, "general.other", "high", "bad code", "src/A.cs", 2, threadId)]);
+
+        // Run 2: re-record K (dedupe-rejected) and finish.
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body2!.RunId, RunState.Completed);
+
+        Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
+        Assert.DoesNotContain(_Factory.Source.StatusChanges, s => s.Status == ReviewThreadStatus.Fixed);
+        Assert.Contains(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key); // carried forward
+    }
+
+    [Fact]
+    public async Task Rerun_after_partial_failure_posts_no_duplicates()
+    {
+        var pr = new PrKey("o", "p", "r", 42);
+        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,2 @@\n+bad code here\n+worse code here\n";
+
+        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "worse code here"]);
+
+        static Dictionary<string, object?> Finding(string snippet, int line) => new()
+        {
+            ["ruleId"] = "general.other",
+            ["title"] = "t",
+            ["severity"] = "high",
+            ["category"] = "bug",
+            ["description"] = "d",
+            ["snippet"] = snippet,
+            ["filePath"] = "src/A.cs",
+            ["startLine"] = line,
+        };
+
+        // Run 1: two findings; the second post throws mid-publish (partial failure).
+        _Factory.Source.ThrowOnNthPost = 2;
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(
+                ("RecordFinding", Finding("bad code here", 2)),
+                ("RecordFinding", Finding("worse code here", 3))),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var client = _Factory.CreateClient();
+        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body1!.RunId, RunState.Failed);
+
+        var posted = Assert.Single(_Factory.Source.PostedFindings); // exactly one landed before the fault
+        var postedKey = posted.Finding.DedupeKey!;
+        var postedThreadId = posted.ThreadId;
+
+        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        // The successfully-posted thread survives the failed run (ADO is the source of truth).
+        _Factory.Source.Threads.Add(new ReviewThread(postedThreadId, postedKey, ReviewThreadStatus.Active,
+            [new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+
+        // Run 2: same two findings; the already-posted one is suppressed, only the other posts.
+        _Factory.Source.ThrowOnNthPost = null;
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(
+                ("RecordFinding", Finding("bad code here", 2)),
+                ("RecordFinding", Finding("worse code here", 3))),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body2!.RunId, RunState.Completed);
+
+        // Exactly two distinct threads ever created — one per finding, zero duplicates.
+        Assert.Equal(2, _Factory.Source.PostedFindings.Count);
+        Assert.Equal(2, _Factory.Source.PostedFindings.Select(p => p.Finding.DedupeKey).Distinct().Count());
+    }
+
     private sealed class ExplosiveGitOps(string repoDir) : FakeGitOps
     {
-        public override string CloneOrOpen(string cloneUrl, string workDir, string? pat) => repoDir;
+        public override Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
+            => Task.FromResult(repoDir);
 
-        public override string GetDiff(string repoPath, string baseSha, string headSha)
+        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
             => throw new InvalidOperationException("git exploded");
     }
 }
@@ -463,11 +671,80 @@ public class DiWiringTests
     }
 
     [Fact]
-    public void Missing_sections_fail_fast()
+    public void Missing_sections_fail_fast_on_first_resolution()
     {
         var config = new ConfigurationBuilder().Build();
         var services = new ServiceCollection();
-        Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(config));
+        services.AddReviewForge(config);
+        using var provider = services.BuildServiceProvider();
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<AdoOptions>>().Value);
+        Assert.Contains("OrgUrl", ex.Message);
+    }
+
+    [Fact]
+    public void Invalid_clean_run_vote_fails_fast()
+    {
+        WithPat(() =>
+        {
+            var options = Options.Create(new ReviewForgeServiceOptions
+            {
+                WorkDir = Path.Combine(Path.GetTempPath(), "rf-clean-" + Guid.NewGuid().ToString("N")),
+                CleanRunVote = "Bogus",
+            });
+            var factory = new ReviewPipelineFactory(
+                new FakePullRequestSource(), new FakeFindingStore(),
+                new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath()),
+                new FakeChatClientFactory(new ScriptedChatClient()),
+                options,
+                LoggerFactory.Create(_ => { }));
+
+            Assert.Throws<InvalidOperationException>(() => factory.Create());
+        });
+    }
+
+    [Fact]
+    public void Startup_throws_when_sweep_enabled_without_creators()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                services.AddReviewForge(BuildConfig(new Dictionary<string, string?> {["Discovery:SweepInterval"] = "00:30:00"})));
+            Assert.Contains("Discovery:Creators", ex.Message);
+        });
+    }
+
+    [Fact]
+    public void Startup_allows_explicit_allow_all_creators()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig(new Dictionary<string, string?>
+            {
+                ["Discovery:SweepInterval"] = "00:30:00",
+                ["Discovery:AllowAllCreators"] = "true",
+            }));
+            using var provider = services.BuildServiceProvider();
+            Assert.NotNull(provider.GetRequiredService<DiscoveryService>());
+        });
+    }
+
+    [Fact]
+    public void Startup_allows_empty_creators_when_sweep_disabled()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig());
+            using var provider = services.BuildServiceProvider();
+            Assert.NotNull(provider.GetRequiredService<DiscoveryService>());
+        });
     }
 }
 
@@ -526,6 +803,20 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         Assert.Contains("/reviews", json);
         Assert.Contains("SubmitReviewRequest", json);
         Assert.Contains("reviewforge API", json);
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var apiKeyScheme = root.GetProperty("components")
+            .GetProperty("securitySchemes")
+            .GetProperty("ApiKey");
+        Assert.Equal("apiKey", apiKeyScheme.GetProperty("type").GetString());
+        Assert.Equal("header", apiKeyScheme.GetProperty("in").GetString());
+        Assert.Equal("X-Api-Key", apiKeyScheme.GetProperty("name").GetString());
+        Assert.True(root.GetProperty("paths")
+            .GetProperty("/reviews")
+            .GetProperty("post")
+            .GetProperty("security")[0]
+            .TryGetProperty("ApiKey", out _));
     }
 
     [Fact]
@@ -539,7 +830,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Rejects_zero_worker_count_during_registration()
+    public void Rejects_zero_worker_count_via_options_validation()
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
@@ -552,13 +843,49 @@ public class ApiDocsEnabledTests : IAsyncLifetime
                 ["ReviewForge:WorkerCount"] = "0",
             })
             .Build();
+        services.AddReviewForge(configuration);
+        using var provider = services.BuildServiceProvider();
 
-        Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(configuration));
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("WorkerCount must be at least 1", ex.Message);
     }
 }
 
 [Collection("ReviewForge service host")]
-public sealed class EndpointFailureTests
+public class OtlpEnabledTests : IAsyncLifetime
+{
+    private readonly ReviewForgeFactory _Factory = new();
+
+    // Read by AddReviewForge when the OTel SDK is realized (lazy, on host start) — set it in
+    // the constructor and clear it on dispose, since env vars are process-wide.
+    public OtlpEnabledTests()
+    {
+        Environment.SetEnvironmentVariable("ReviewForge__OtlpEnabled", "true");
+    }
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync()
+    {
+        _Factory.Dispose();
+        Environment.SetEnvironmentVariable("ReviewForge__OtlpEnabled", null);
+        return Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Host_boots_with_otlp_exporter_enabled()
+    {
+        var client = _Factory.CreateClient();
+        var response = await client.GetAsync("/health");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+}
+
+[Collection("ReviewForge service host")]
+public sealed class QueueFailureTests
 {
     [Fact]
     public async Task Queue_failure_releases_claim()
@@ -572,5 +899,136 @@ public sealed class EndpointFailureTests
         Assert.NotEqual(HttpStatusCode.Accepted, response.StatusCode);
         var claims = factory.Services.GetRequiredService<InFlightClaims>();
         Assert.True(claims.TryClaim(new PrKey("o", "p", "closed", 99), Guid.NewGuid(), out _));
+    }
+
+    [Fact]
+    public async Task SubmitReview_fast_worker_never_reports_queued_after_completion()
+    {
+        using var factory = new ReviewForgeFactory();
+        var tracker = factory.Services.GetRequiredService<RunTracker>();
+        var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = 1});
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        Assert.NotNull(body);
+
+        // Wait for the run to reach a terminal state, then keep polling briefly: the
+        // sticky-terminal invariant guarantees it can never flip back to Queued.
+        for (var i = 0; i < 400 && tracker.Get(body.RunId)?.State is not (RunState.Completed or RunState.Failed or RunState.Skipped); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.True(tracker.Get(body.RunId)?.State is RunState.Completed or RunState.Failed,
+            $"expected a terminal state, got {tracker.Get(body.RunId)?.State}");
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.NotEqual(RunState.Queued, tracker.Get(body.RunId)?.State);
+            await Task.Delay(10);
+        }
+    }
+}
+
+[Collection("ReviewForge service host")]
+public sealed class ApiDocsTests
+{
+    [Fact]
+    public void WarnIfExposed_enabled_without_auth_logs_warning()
+    {
+        var sink = new List<string>();
+        var provider = new CollectingLoggerProvider(sink);
+
+        ApiDocsRegistration.WarnIfExposed(
+            new ApiDocsOptions {Enabled = true},
+            authConfigured: false,
+            provider.CreateLogger("test"));
+
+        Assert.Contains(sink, m => m.Contains("no authentication"));
+    }
+
+    [Fact]
+    public void WarnIfExposed_enabled_with_auth_stays_silent()
+    {
+        var sink = new List<string>();
+        var provider = new CollectingLoggerProvider(sink);
+
+        ApiDocsRegistration.WarnIfExposed(
+            new ApiDocsOptions {Enabled = true},
+            authConfigured: true,
+            provider.CreateLogger("test"));
+
+        Assert.Empty(sink);
+    }
+
+    [Fact]
+    public void WarnIfExposed_disabled_stays_silent()
+    {
+        var sink = new List<string>();
+        var provider = new CollectingLoggerProvider(sink);
+
+        ApiDocsRegistration.WarnIfExposed(
+            new ApiDocsOptions {Enabled = false},
+            authConfigured: false,
+            provider.CreateLogger("test"));
+
+        Assert.Empty(sink);
+    }
+
+    [Fact]
+    public async Task DocsEndpoints_are_not_mapped_by_default()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/openapi/v1.json");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Enabled_without_api_keys_warns_at_startup()
+    {
+        var previous = Environment.GetEnvironmentVariable("ApiDocs__Enabled");
+        try
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", "true");
+            var sink = new List<string>();
+            // No keys + the development opt-out: the host boots (fail-closed otherwise)
+            // and the docs warning must fire for the effectively unauthenticated API.
+            using var factory = new ReviewForgeFactory()
+                .WithoutWorkers()
+                .WithDevelopmentOptOut()
+                .WithLogCollector(sink);
+            _ = factory.CreateClient();
+
+            Assert.Contains(sink, m => m.Contains("no authentication"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", previous);
+        }
+    }
+
+    [Fact]
+    public async Task DocsEndpoints_are_mapped_when_enabled()
+    {
+        var previous = Environment.GetEnvironmentVariable("ApiDocs__Enabled");
+        try
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", "true");
+            using var factory = new ReviewForgeFactory().WithoutWorkers();
+            var client = factory.CreateClient();
+
+            var response = await client.GetAsync("/openapi/v1.json");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains("application/json", response.Content.Headers.ContentType?.MediaType);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ApiDocs__Enabled", previous);
+        }
     }
 }

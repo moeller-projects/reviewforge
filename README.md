@@ -41,23 +41,64 @@ tests/
 
 ```bash
 export REVIEWFORGE_ADO_PAT=...            # ADO personal access token (never in config files)
-# provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist)
+# docker compose additionally requires ADO_ORG_URL and ADO_PROJECT (no internal defaults).
+export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for the /reviews endpoints
+# provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist).
+#   auth.json holds a long-lived refresh token; keep the directory owner-only:
+#     chmod 700 ~/.codex && chmod 600 ~/.codex/auth.json
+#   (the service tightens the file to 0600 on every persist and load, but the
+#   directory mode is yours to set). Production: prefer a dedicated service
+#   account over a developer's personal ~/.codex.
 # provider openai:       export OPENAI_API_KEY=...
 
 dotnet run --project src/ReviewForge.Service          # serves http://localhost:5080
 
 dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll submit \
-  --org my-org --project my-project --repo my-repo --pr 1234
-dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid>
+  --org my-org --project my-project --repo my-repo --pr 1234 --api-key ...
+dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid> --api-key ...
 ```
 
-Endpoints: `POST /reviews` → 202 `{runId, statusUrl}` or 503 when the bounded queue is full ·
-`GET /reviews/{runId}` · `GET /health` · `POST /reviews/discover` → 200 sweep report.
+Endpoints (all `/reviews*` require the `X-Api-Key` header; keys are configured via the
+`REVIEWFORGE_API_KEYS` environment variable, comma-separated for rotation):
+`POST /reviews` → 202 `{runId, statusUrl}`, 401 without a valid key, 429 over the per-key
+submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`, default 10/60s), 503
+when the bounded queue is full · `GET /reviews/{runId}` · `POST /reviews/discover` ·
+`GET /health` (unauthenticated).
+
+## Dev loop: Aspire vs Docker Compose
+
+**Local dev — Aspire dashboard.** `aspire run` (or `dotnet run --project src/ReviewForge.AppHost`)
+starts the service with a live dashboard for traces, metrics, and logs. Set the three secret
+parameters first:
+
+```bash
+cd src/ReviewForge.AppHost
+dotnet user-secrets set "Parameters:ado-pat" "<ado-pat>"
+dotnet user-secrets set "Parameters:openai-api-key" "<openai-key>"
+dotnet user-secrets set "Parameters:api-key" "<reviewforge-api-key>"
+```
+
+The dashboard URL is printed on startup; `WorkDir` is `%TEMP%/reviewforge`. Aspire injects the
+`OTEL_EXPORTER_OTLP_*` variables automatically, so no OTLP endpoint is ever hardcoded.
+
+**Production — Docker Compose.** `docker compose up -d` runs exactly as before (no telemetry
+export). To add the standalone Aspire dashboard as an opt-in sink:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://dashboard:18889 docker compose --profile observability up -d
+# UI: http://localhost:18888 (localhost-bound; front with an authenticated proxy for remote access)
+```
+
+To ship telemetry to a real backend instead, set `OTEL_EXPORTER_OTLP_ENDPOINT` (+ `_HEADERS`)
+in the host environment and skip the profile. The dashboard profile is a documented option,
+not the default: its UI is unauthenticated unless fronted, and it ingests all telemetry
+including scoped log properties.
 
 ## API docs (opt-in)
 
-Off by default (the API has no auth — the schema must not be published unless enabled). Set
-`ApiDocs:Enabled=true` to expose:
+Off by default (the API schema must not be published unless explicitly enabled). Set
+`ApiDocs:Enabled=true` to expose — startup then warns unless `Api:Keys`/`REVIEWFORGE_API_KEYS`
+are configured, because the docs describe the `/reviews*` surface:
 
 - `GET /openapi/v1.json` — OpenAPI 3.x document (title/version/description from `ApiDocs:Title`/`ApiDocs:Version`).
 - `GET /scalar/v1` — Scalar reference UI.
@@ -113,6 +154,34 @@ exported as `reviewforge.queue.depth`, and rejected enqueues as
 finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
 `MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts but
 never mirrors, and skips checkouts currently held by a review.
+
+## Observability model
+
+Signals and where they land:
+
+- **Traces** — `ActivitySource` `ReviewForge` (a `review.run` span with nested `stage.*`
+  spans; discovery-enqueued runs link back to the `discovery.sweep` span).
+- **Metrics** — `Meter` `ReviewForge`: run lifecycle (`reviewforge.reviews.*`), stage
+  latency (`reviewforge.stage.duration_ms`), queue gauges/rejections, claims, LLM tokens,
+  agent iterations / `task_done` misses, findings accepted/rejected/posted, ADO latency /
+  failures, discovery sweeps, enrichment failures, checkout evictions.
+- **Logs** — structured, with per-run scope properties `RunId`/`PrId`/`Org`/`Project`/
+  `RepositoryId`/`HeadSha`/`Stage` (OBS-2); per-run JSONL under `{WorkDir}/logs/{runId}.jsonl`.
+
+Backends:
+
+- **Dev** — the Aspire dashboard (see "Dev loop").
+- **Prod (optional)** — the compose `observability` profile runs a standalone Aspire
+  dashboard; point `OTEL_EXPORTER_OTLP_ENDPOINT` at any OTLP collector (or Seq) instead.
+- **Dashboards + alerts** — Grafana provisioning lives in `deploy/grafana/` (dashboard
+  `reviewforge.json`, alert rules `reviewforge.yaml`); alerts cover queue saturation/rejection,
+  run failure rate/latency, token spikes, `task_done` misses, enrichment failures, and claim
+  expiry.
+- **Run debugging** — Seq saved searches in `deploy/seq/searches.md` (`RunId = '...'`).
+
+Rollout gates (OBS-1→4): green `dotnet test` and inert instruments (no exporter) →
+24h staging log-volume check → traces/metrics/logs arrive in the backend → dashboards
+populate and alerts fire on a synthetic failure.
 
 ## Tests and coverage gate
 

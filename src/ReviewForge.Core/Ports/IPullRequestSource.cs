@@ -28,12 +28,15 @@ public interface IPullRequestSource
     /// <summary>Post an inline (anchored) or general finding thread; returns the new thread id.</summary>
     Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct);
 
-    Task PostGeneralCommentAsync(PrKey pr, string text, CancellationToken ct);
+    Task PostGeneralCommentAsync(PrKey pr, string text, string? dedupeKey, CancellationToken ct);
 
     Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct);
 
     Task SetThreadStatusAsync(PrKey pr, int threadId, ReviewThreadStatus status, CancellationToken ct);
 
-    /// <summary>Vote -5 = "waiting for the author".</summary>
-    Task SetReviewerVoteAsync(PrKey pr, string reviewerId, int vote, CancellationToken ct);
+    /// <summary>
+    /// Set the reviewer's vote on the PR. The vote is provider-neutral; the adapter maps
+    /// <see cref="ReviewerVote"/> to the host system's encoding.
+    /// </summary>
+    Task SetReviewerVoteAsync(PrKey pr, string reviewerId, ReviewerVote vote, CancellationToken ct);
 }

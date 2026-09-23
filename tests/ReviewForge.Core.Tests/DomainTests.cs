@@ -61,6 +61,58 @@ public class DomainTests
     }
 
     [Fact]
+    public void Gate_reviews_new_comment_after_watermark()
+    {
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), [],
+            LastObservedCommentAt: Now.AddHours(-3));
+        Assert.True(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddMinutes(-2))], Now).ShouldReview); // T + 1 min > watermark
+    }
+
+    [Fact]
+    public void Gate_skips_comment_before_watermark()
+    {
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), [],
+            LastObservedCommentAt: Now.AddHours(-2));
+        Assert.False(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddHours(-3))], Now).ShouldReview);
+    }
+
+    [Fact]
+    public void Gate_skips_when_local_clock_skewed_behind()
+    {
+        // The prior run completed 10 min before the watermark it observed (local clock
+        // behind ADO at persist time) — previously CompletedAt made this review forever.
+        // The comment sits between CompletedAt (-2h) and the watermark (-1h): it was
+        // already observed, so the run must still be skipped.
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-2), [],
+            LastObservedCommentAt: Now.AddHours(-1));
+        Assert.False(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddHours(-2).AddMinutes(30))], Now).ShouldReview);
+    }
+
+    [Fact]
+    public void Gate_reviews_when_local_clock_skewed_ahead()
+    {
+        // CompletedAt is 10 min AFTER the watermark; a comment between the two was
+        // previously swallowed as "already reviewed".
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now, [],
+            LastObservedCommentAt: Now.AddMinutes(-20));
+        Assert.True(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddMinutes(-10))], Now).ShouldReview);
+    }
+
+    [Fact]
+    public void Gate_legacy_run_without_watermark_falls_back_to_completed_at()
+    {
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), []);
+        Assert.False(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddHours(-2))], Now).ShouldReview);
+        Assert.True(ReviewGate.Evaluate(Pr(), prior,
+            [HumanThread(Now.AddMinutes(-30))], Now).ShouldReview);
+    }
+
+    [Fact]
     public void GateDecision_factories()
     {
         Assert.True(GateDecision.Review().ShouldReview);
@@ -221,5 +273,127 @@ public class ThreadTriageTests
     {
         var threads = new[] {BotThread(5, "k", ReviewThreadStatus.Active, humanLast: true)};
         Assert.Empty(ThreadTriage.Unanswered(threads, [new ThreadAction(5, ThreadActionKind.Answer, "a")]));
+    }
+
+    private static ReviewThread ThreadWithBotReply(string botReply)
+        => new(1, "k", ReviewThreadStatus.Active,
+        [
+            new ThreadComment("b", "bot", true, "finding", T0),
+            new ThreadComment("u", "human", false, "why?", T0.AddMinutes(1)),
+            new ThreadComment("b", "bot", true, botReply, T0.AddMinutes(2)),
+        ]);
+
+    [Fact]
+    public void Plan_skips_reply_when_last_comment_is_bot_with_same_text()
+    {
+        var plan = ThreadTriage.Plan(
+            [ThreadWithBotReply("because X")],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Answer, "because X")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Answer, op.Op);
+        Assert.Null(op.Comment);
+        Assert.Null(op.NewStatus);
+    }
+
+    [Fact]
+    public void Plan_keeps_status_change_when_reply_already_posted()
+    {
+        var plan = ThreadTriage.Plan(
+            [ThreadWithBotReply("fixed in latest push")],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Resolve, "fixed in latest push")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Resolve, op.Op);
+        Assert.Null(op.Comment);
+        Assert.Equal(ReviewThreadStatus.Fixed, op.NewStatus);
+    }
+
+    [Fact]
+    public void Plan_posts_reply_when_last_bot_comment_differs()
+    {
+        var plan = ThreadTriage.Plan(
+            [ThreadWithBotReply("something else")],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Answer, "because X")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Answer, op.Op);
+        Assert.Equal("because X", op.Comment);
+    }
+
+    [Fact]
+    public void Plan_posts_reply_when_last_comment_is_human()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(1, "k", ReviewThreadStatus.Active, humanLast: true)],
+            ["k"],
+            [new ThreadAction(1, ThreadActionKind.Answer, "because X")]);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Answer, op.Op);
+        Assert.Equal("because X", op.Comment);
+    }
+}
+
+public class FailureBackoffTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 9, 17, 12, 0, 0, TimeSpan.Zero);
+    private static readonly FailureBackoffPolicy Policy = new(TimeSpan.FromMinutes(30), TimeSpan.FromHours(8));
+
+    private static ReviewRun Failed(string head, DateTimeOffset at)
+        => new(Guid.NewGuid(), new PrKey("o", "p", "r", 7), head, ReviewKind.Full, at.AddMinutes(-1), at, false, []);
+
+    private static ReviewRun Succeeded(string head, DateTimeOffset at)
+        => new(Guid.NewGuid(), new PrKey("o", "p", "r", 7), head, ReviewKind.Full, at.AddMinutes(-1), at, true, []);
+
+    [Fact]
+    public void BlockedUntil_returns_null_with_no_failures()
+        => Assert.Null(FailureBackoff.BlockedUntil([], "head", Now, Policy));
+
+    [Fact]
+    public void BlockedUntil_after_success_resets_streak()
+    {
+        // Newest first: success at -5 min, failure at -30 min.
+        var runs = new[] {Succeeded("head", Now.AddMinutes(-5)), Failed("head", Now.AddMinutes(-30))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_for_different_head()
+    {
+        var runs = new[] {Failed("other-head", Now.AddMinutes(-5))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_doubles_per_consecutive_failure()
+    {
+        var t = Now.AddMinutes(-5);
+        var one = FailureBackoff.BlockedUntil([Failed("head", t)], "head", Now, Policy);
+        Assert.Equal(t + TimeSpan.FromMinutes(30), one);
+
+        var two = FailureBackoff.BlockedUntil([Failed("head", t), Failed("head", t)], "head", Now, Policy);
+        Assert.Equal(t + TimeSpan.FromHours(1), two);
+
+        var three = FailureBackoff.BlockedUntil([Failed("head", t), Failed("head", t), Failed("head", t)], "head", Now, Policy);
+        Assert.Equal(t + TimeSpan.FromHours(2), three);
+    }
+
+    [Fact]
+    public void BlockedUntil_caps_at_max()
+    {
+        var t = Now.AddMinutes(-1);
+        var runs = Enumerable.Range(0, 20).Select(_ => Failed("head", t)).ToArray();
+        Assert.Equal(t + Policy.Max, FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_returns_null_once_window_elapsed()
+    {
+        var runs = new[] {Failed("head", Now.AddHours(-9))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
     }
 }

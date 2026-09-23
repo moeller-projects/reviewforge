@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Service;
@@ -10,13 +9,11 @@ namespace ReviewForge.Service;
 /// </summary>
 public sealed class StoreHealthCheck(IFindingStore store) : IHealthCheck
 {
-    private static readonly PrKey Probe = new("__health__", "__health__", "__health__", int.MinValue);
-
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
     {
         try
         {
-            await store.GetKnownDedupeKeysAsync(Probe, ct).ConfigureAwait(false);
+            await store.PingAsync(ct).ConfigureAwait(false);
             return HealthCheckResult.Healthy("finding store reachable");
         }
         catch (Exception ex)

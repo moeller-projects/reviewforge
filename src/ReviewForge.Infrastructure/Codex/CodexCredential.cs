@@ -112,6 +112,28 @@ public sealed class CodexCredential
     internal static AuthFile Load(string path)
     {
         var json = File.ReadAllText(path);
+        // Defense in depth: credentials written by older versions or the Codex CLI may
+        // carry a lax umask mode; tighten them when they are group/other-readable. A
+        // read-only mount must not break token loading, hence the swallow on IO errors.
+#if !WINDOWS
+        if (!OperatingSystem.IsWindows())
+        {
+            try
+            {
+                var mode = File.GetUnixFileMode(path);
+                if ((mode & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                             UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) != 0)
+                {
+                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The mount boundary isolates the file; keep the token usable.
+            }
+        }
+#endif
+
         return JsonSerializer.Deserialize<AuthFile>(json)
                ?? throw new InvalidOperationException($"invalid credential file: {path}");
     }
@@ -120,6 +142,15 @@ public sealed class CodexCredential
     {
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(auth, new JsonSerializerOptions {WriteIndented = true}));
+        // The file carries a long-lived OAuth refresh token: owner-only before it
+        // becomes visible at the final path. Intentional: a filesystem that cannot
+        // apply 0600 to a credential file is a misconfiguration the operator must fix.
+#if !WINDOWS
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+#endif
         File.Move(temp, path, overwrite: true);
     }
 

@@ -7,6 +7,8 @@ public sealed class FetchPrContextStage(IPullRequestSource source, IFindingStore
 {
     public string Name => "fetch-pr-context";
 
+    public int Order => 10;
+
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var prTask = source.GetPullRequestAsync(ctx.Pr, ct);
@@ -19,6 +21,7 @@ public sealed class FetchPrContextStage(IPullRequestSource source, IFindingStore
         await Task.WhenAll(prTask, workItemsTask, filesTask, threadsTask, userTask, priorRunTask);
 
         ctx.PullRequest = await prTask;
+
         ctx.WorkItems = await workItemsTask;
         ctx.ChangedFileManifest = await filesTask;
         ctx.Threads = await threadsTask;

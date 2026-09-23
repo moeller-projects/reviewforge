@@ -27,8 +27,21 @@ public sealed class CheckoutEvictionWorker(
                 {
                     var report = pool.Evict(eviction, clock);
                     logger.LogInformation(
-                        "checkout eviction scanned {Scanned}, deleted {Deleted}, skipped {SkippedInUse}, freed {BytesFreed} bytes",
-                        report.Scanned, report.Deleted, report.SkippedInUse, report.BytesFreed);
+                        "checkout eviction scanned {Scanned}, deleted {Deleted}, skipped {SkippedInUse}, failed {Failed}, freed {BytesFreed} bytes, {BytesRemaining} bytes remain",
+                        report.Scanned, report.Deleted, report.SkippedInUse, report.Failed, report.BytesFreed, report.BytesRemaining);
+                    if (report.BytesRemaining > eviction.MaxTotalBytes && eviction.MaxTotalBytes > 0)
+                    {
+                        logger.LogWarning(
+                            "checkout disk budget exceeded: {BytesRemaining} bytes remain over budget {MaxTotalBytes} (excess checkouts in use)",
+                            report.BytesRemaining, eviction.MaxTotalBytes);
+                    }
+
+                    if (report.Failed > 0)
+                    {
+                        logger.LogWarning(
+                            "checkout eviction failed to delete {Failed} checkouts: {Details}",
+                            report.Failed, string.Join("; ", report.FailureDetails));
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {

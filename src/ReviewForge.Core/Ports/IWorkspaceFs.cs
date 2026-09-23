@@ -1,9 +1,13 @@
 namespace ReviewForge.Core.Ports;
 
 /// <summary>
-/// Filesystem primitives the checkout pool needs, isolated behind a port so the Core
-/// layer never performs filesystem I/O directly (ports/adapters rule). Implementations
-/// are thin wrappers over <c>System.IO</c>.
+/// Filesystem primitives for checkout-pool management and eviction (directory lifecycle,
+/// size accounting, timestamps). Implementations are thin wrappers over <c>System.IO</c>.
+/// Scope note: this port is deliberately NOT a general filesystem abstraction — read-only
+/// access inside a repo checkout (RepoReadTools, anchor validation, path containment) and
+/// single-writer run artifacts (findings/{runId}.jsonl) use System.IO directly in Core;
+/// those paths are either covered by injected delegates or exercised through real temp
+/// directories in tests.
 /// </summary>
 public interface IWorkspaceFs
 {

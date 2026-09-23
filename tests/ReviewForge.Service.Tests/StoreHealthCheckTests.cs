@@ -35,13 +35,17 @@ public class StoreHealthCheckTests
         public Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct) => Task.FromResult<PriorRun?>(null);
         public Task SaveRunAsync(ReviewRun run, CancellationToken ct) => Task.CompletedTask;
         public Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
+        public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class ThrowingStore : IFindingStore
     {
-        public Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => throw new InvalidOperationException("db down");
+        public Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
         public Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct) => Task.FromResult<PriorRun?>(null);
         public Task SaveRunAsync(ReviewRun run, CancellationToken ct) => Task.CompletedTask;
         public Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
+        public Task PingAsync(CancellationToken ct) => throw new InvalidOperationException("db down");
     }
 }
