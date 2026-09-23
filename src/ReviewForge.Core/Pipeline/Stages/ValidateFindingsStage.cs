@@ -38,6 +38,17 @@ public sealed class ValidateFindingsStage(
                 continue;
             }
 
+            var path = RepoPath.Normalize(finding.Anchor.FilePath);
+            if (ctx.Diff?.NonReviewableFiles.TryGetValue(path, out var nonReviewableKind) == true)
+            {
+                logger.LogInformation(
+                    "finding {Key} rejected because file {Path} is non-reviewable ({Kind})",
+                    finding.DedupeKey, path, nonReviewableKind);
+                ReviewForgeTelemetry.FindingsRejected.Add(
+                    1, new TagList { { ReviewForgeTelemetry.TagReason, $"non-reviewable-{nonReviewableKind.ToString().ToLowerInvariant()}" } });
+                continue;
+            }
+
             if (!TryReanchor(finding, repoDir))
             {
                 logger.LogDebug("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
@@ -45,7 +56,6 @@ public sealed class ValidateFindingsStage(
                 continue;
             }
 
-            var path = RepoPath.Normalize(finding.Anchor.FilePath);
             if (!changedFiles.Contains(path) ||
                 (ctx.Diff is not null && !ctx.Diff.Contains(path, finding.Anchor.StartLine)))
             {
