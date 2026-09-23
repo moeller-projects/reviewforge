@@ -19,7 +19,7 @@ public static class HomoglyphDetector
         public IReadOnlySet<string> AllowedScripts { get; init; } = new HashSet<string>(StringComparer.Ordinal)
             { "Latin" };
         public IReadOnlySet<string> AllowedAsciiKeywords { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "return", "import", "public", "static", "string", "class", "null", "filename" };
+            { "return", "import", "public", "static", "string", "class", "null" };
     }
 
     private static readonly IReadOnlyDictionary<char, char> Confusables = new Dictionary<char, char>
