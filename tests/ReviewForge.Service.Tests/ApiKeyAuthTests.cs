@@ -15,7 +15,7 @@ file sealed class TestHostEnvironment : IHostEnvironment
     public string EnvironmentName { get; set; } = Environments.Production;
     public string ApplicationName { get; set; } = "ReviewForge.Tests";
     public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
-    public IFileProvider ContentRootFileProvider { get; set; } = NullFileProvider.Instance;
+    public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
 }
 
 [Collection("ReviewForge service host")]
