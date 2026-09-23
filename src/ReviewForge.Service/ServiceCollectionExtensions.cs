@@ -162,9 +162,9 @@ public static class ServiceCollectionExtensions
                 opts.SubmitWindowSeconds = configuration.GetValue(
                     $"{ApiKeyOptions.SectionName}:SubmitWindowSeconds", opts.SubmitWindowSeconds);
                 var fromEnv = Environment.GetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable);
-                opts.Keys = string.IsNullOrWhiteSpace(fromEnv)
+                opts.SetEnvironmentKeys(string.IsNullOrWhiteSpace(fromEnv)
                     ? []
-                    : fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    : fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
             })
             .Validate(opts => opts.AllowUnauthenticatedForDevelopment ||
                               opts.Keys.Any(key => !string.IsNullOrWhiteSpace(key)),

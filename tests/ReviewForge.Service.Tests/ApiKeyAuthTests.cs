@@ -170,7 +170,7 @@ public class ApiKeyAuthTests
     [Fact]
     public async Task Middleware_fails_closed_when_no_keys_and_no_optout()
     {
-        var opts = Options.Create(new ApiKeyOptions {Keys = []});
+        var opts = Options.Create(new ApiKeyOptions());
         var middleware = new ApiKeyAuthenticationMiddleware(
             _ => throw new InvalidOperationException("next must not be called"),
             opts,
@@ -195,7 +195,7 @@ public class ApiKeyAuthTests
                 called = true;
                 return Task.CompletedTask;
             },
-            Options.Create(new ApiKeyOptions {Keys = [], AllowUnauthenticatedForDevelopment = true}),
+            Options.Create(new ApiKeyOptions {AllowUnauthenticatedForDevelopment = true}),
             new TestHostEnvironment {EnvironmentName = environmentName},
             NullLogger<ApiKeyAuthenticationMiddleware>.Instance);
 
@@ -207,7 +207,7 @@ public class ApiKeyAuthTests
     [Fact]
     public async Task Middleware_passes_non_reviews_paths_through()
     {
-        var opts = Options.Create(new ApiKeyOptions {Keys = ["k"]});
+        var opts = Options.Create(new ApiKeyOptions(["k"]));
         var called = false;
         var middleware = new ApiKeyAuthenticationMiddleware(
             _ =>
