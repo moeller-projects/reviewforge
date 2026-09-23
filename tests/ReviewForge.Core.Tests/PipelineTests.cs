@@ -420,6 +420,24 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Validate_rejects_findings_for_truncated_files()
+    {
+        var finding = FindingOnLine(1);
+        finding.Anchor = new FindingAnchor("src/Large.cs", 1, 1);
+        var ctx = Ctx();
+        ctx.Diff = DiffIndex.Parse(
+            "diff --git a/src/Large.cs b/src/Large.cs\n" +
+            "--- a/src/Large.cs\n+++ b/src/Large.cs\n" +
+            "…[file diff skipped — 300 bytes exceeds the per-file budget; use repo_read_file]\n");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+
+        await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AcceptedFindings);
+    }
+
+    [Fact]
     public async Task Validate_reads_each_file_once()
     {
         var reads = new List<string>();

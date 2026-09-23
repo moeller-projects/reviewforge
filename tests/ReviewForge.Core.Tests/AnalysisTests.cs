@@ -128,6 +128,19 @@ public class DiffIndexTests
     }
 
     [Fact]
+    public void Truncated_diff_is_explicitly_non_reviewable()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git a/src/Large.cs b/src/Large.cs\n" +
+            "--- a/src/Large.cs\n+++ b/src/Large.cs\n" +
+            "…[file diff skipped — 300 bytes exceeds the per-file budget; use repo_read_file]\n");
+
+        Assert.DoesNotContain("src/Large.cs", index.Files);
+        Assert.Equal(DiffEntryKind.Truncated, index.NonReviewableFiles["src/Large.cs"]);
+        Assert.False(index.Contains("src/Large.cs", 1));
+    }
+
+    [Fact]
     public void Parse_registers_mode_only_change()
     {
         var index = DiffIndex.Parse("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n");

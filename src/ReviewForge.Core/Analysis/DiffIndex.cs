@@ -7,7 +7,8 @@ public enum DiffEntryKind
     Text,
     Binary,
     ModeOnly,
-    RenameOnly
+    RenameOnly,
+    Truncated
 }
 
 /// <summary>
@@ -119,6 +120,19 @@ public sealed class DiffIndex
                         inHunk = false;
                         continue;
                 }
+            }
+            if (line.Contains("file diff skipped", StringComparison.Ordinal))
+            {
+                var skippedFile = sectionFile ?? currentFile;
+                if (skippedFile is not null)
+                {
+                    _ChangedLines.Remove(skippedFile);
+                    _NonReviewable[skippedFile] = DiffEntryKind.Truncated;
+                }
+
+                currentFile = null;
+                inHunk = false;
+                continue;
             }
 
             FlushRun();
