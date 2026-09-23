@@ -99,6 +99,17 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void Invalid_clean_run_vote_is_rejected_at_options_validation()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:CleanRunVote", "Bogus"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("CleanRunVote", ex.Message);
+    }
+
+    [Fact]
     public void Api_keys_in_serialized_configuration_are_ignored()
     {
         var previous = Environment.GetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable);

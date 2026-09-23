@@ -75,6 +75,8 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(ReviewForgeServiceOptions.SectionName))
             .ValidateDataAnnotations()
             .Validate(o => o.WorkerCount >= 1, "ReviewForge:WorkerCount must be at least 1")
+            .Validate(o => ReviewForgeServiceOptions.IsValidCleanRunVote(o.CleanRunVote),
+                "ReviewForge:CleanRunVote must be NoResponse, Approved, ApprovedWithSuggestions, or None")
             .ValidateOnStart();
 
         services.AddOptions<ApiDocsOptions>()

@@ -37,8 +37,14 @@ public sealed class ReviewForgeServiceOptions
     /// Reviewer vote set on clean runs (no findings, all acceptance criteria met, no
     /// unanswered threads): NoResponse (default) | Approved | ApprovedWithSuggestions |
     /// None (leave the vote untouched).
-    /// </summary>
     public string CleanRunVote { get; init; } = "NoResponse";
+
+    internal static bool IsValidCleanRunVote(string? value)
+        => value is not null
+           && (value.Equals("None", StringComparison.OrdinalIgnoreCase)
+               || value.Equals(nameof(ReviewerVote.NoResponse), StringComparison.OrdinalIgnoreCase)
+               || value.Equals(nameof(ReviewerVote.Approved), StringComparison.OrdinalIgnoreCase)
+               || value.Equals(nameof(ReviewerVote.ApprovedWithSuggestions), StringComparison.OrdinalIgnoreCase));
     public bool TargetedFetchEnabled { get; init; }
     public CheckoutEvictionOptions Checkout { get; init; } = new();
     public ReasoningEffort? ReasoningEffort { get; init; }
@@ -75,14 +81,13 @@ public sealed class ReviewPipelineFactory(
     public ReviewPipeline Create()
     {
         var opts = options.Value;
-        var cleanVote = opts.CleanRunVote switch
-        {
-            "None" => (ReviewerVote?)null,
-            var s when Enum.TryParse<ReviewerVote>(s, ignoreCase: true, out var v)
-                         && v is ReviewerVote.NoResponse or ReviewerVote.Approved or ReviewerVote.ApprovedWithSuggestions => v,
-            var s => throw new InvalidOperationException(
-                $"ReviewForge:CleanRunVote '{s}' is invalid; expected NoResponse | Approved | ApprovedWithSuggestions | None"),
-        };
+        var cleanVote = opts.CleanRunVote.Equals("None", StringComparison.OrdinalIgnoreCase)
+            ? (ReviewerVote?)null
+            : Enum.TryParse<ReviewerVote>(opts.CleanRunVote, ignoreCase: true, out var parsedVote)
+              && parsedVote is ReviewerVote.NoResponse or ReviewerVote.Approved or ReviewerVote.ApprovedWithSuggestions
+                ? parsedVote
+                : throw new InvalidOperationException(
+                    $"ReviewForge:CleanRunVote '{opts.CleanRunVote}' is invalid; expected NoResponse | Approved | ApprovedWithSuggestions | None");
         var agent = new NativeReviewAgent(chatClientFactory, new AgentOptions
         {
             MaxContextTokens = opts.MaxContextTokens,

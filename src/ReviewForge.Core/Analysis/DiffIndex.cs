@@ -126,8 +126,8 @@ public sealed class DiffIndex
                 var skippedFile = sectionFile ?? currentFile;
                 if (skippedFile is not null)
                 {
-                    _ChangedLines.Remove(skippedFile);
-                    _NonReviewable[skippedFile] = DiffEntryKind.Truncated;
+                    index._ChangedLines.Remove(skippedFile);
+                    index._NonReviewable[skippedFile] = DiffEntryKind.Truncated;
                 }
 
                 currentFile = null;
