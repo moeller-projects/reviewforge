@@ -324,6 +324,30 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteReasoning_assigns_and_deduplicates_automatic_homoglyph_findings()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -0,0 +1,1 @@
+            +var fileNаme = value;
+            """;
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var finding = Assert.Single(ctx.Collector.Findings);
+        Assert.NotNull(finding.DedupeKey);
+        Assert.Equal(
+            DedupeKey.Compute(finding.RuleId, finding.Anchor!.FilePath, finding.Snippet),
+            finding.DedupeKey);
+    }
+
+    [Fact]
     public async Task ExecuteReasoning_streams_findings_to_per_run_jsonl()
     {
         var findingsDir = Path.Combine(Path.GetTempPath(), "reviewforge-findings-" + Guid.NewGuid().ToString("N"));

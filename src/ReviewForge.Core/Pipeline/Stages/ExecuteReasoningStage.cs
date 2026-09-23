@@ -31,7 +31,22 @@ public sealed class ExecuteReasoningStage(
         ctx.Collector = new ReviewCollector(
             ctx.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.PullRequest?.SourceCommitSha);
         foreach (var finding in HomoglyphDiffAnalyzer.Analyze(ctx.DiffText))
+        {
+            var key = DedupeKey.Compute(
+                finding.RuleId,
+                finding.Anchor?.FilePath ?? "-",
+                finding.Snippet);
+            if (ctx.Collector.IsKnown(key))
+            {
+                if (ctx.Collector.WasKnownAtStart(key))
+                    ctx.Collector.MarkRedetected(key);
+
+                continue;
+            }
+
+            finding.DedupeKey = key;
             ctx.Collector.AddFinding(finding);
+        }
         var rootFiles = Directory.Exists(repoDir) ? Directory.GetFiles(repoDir, "*", SearchOption.TopDirectoryOnly) : [];
         var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
