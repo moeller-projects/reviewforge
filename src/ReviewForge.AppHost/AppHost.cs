@@ -12,7 +12,7 @@ var apiKey = builder.AddParameter("api-key", secret: true);
 var reviewforgeWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge");
 Directory.CreateDirectory(reviewforgeWorkDir);
 
-var service = builder.AddProject<Projects.ReviewForge_Service>("reviewforge")
+builder.AddProject<Projects.ReviewForge_Service>("reviewforge")
     .WithHttpEndpoint(name: "http")
     // Readiness: store-backed (/health) drives the dashboard health tile; liveness stays
     // /alive for orchestrators.
