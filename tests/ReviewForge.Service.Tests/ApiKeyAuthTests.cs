@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.FileProviders;
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Http;
@@ -8,6 +9,14 @@ using ReviewForge.Service.Security;
 using Xunit;
 
 namespace ReviewForge.Service.Tests;
+
+file sealed class TestHostEnvironment : IHostEnvironment
+{
+    public string EnvironmentName { get; set; } = Environments.Production;
+    public string ApplicationName { get; set; } = "ReviewForge.Tests";
+    public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+    public IFileProvider ContentRootFileProvider { get; set; } = NullFileProvider.Instance;
+}
 
 [Collection("ReviewForge service host")]
 public class ApiKeyAuthTests
@@ -165,8 +174,9 @@ public class ApiKeyAuthTests
         var middleware = new ApiKeyAuthenticationMiddleware(
             _ => throw new InvalidOperationException("next must not be called"),
             opts,
-            new HostingEnvironment {EnvironmentName = Environments.Production},
+            new TestHostEnvironment {EnvironmentName = Environments.Production},
             NullLogger<ApiKeyAuthenticationMiddleware>.Instance);
+        var context = new DefaultHttpContext {Request = {Path = "/reviews"}};
 
         await middleware.InvokeAsync(context);
 
@@ -186,7 +196,7 @@ public class ApiKeyAuthTests
                 return Task.CompletedTask;
             },
             Options.Create(new ApiKeyOptions {Keys = [], AllowUnauthenticatedForDevelopment = true}),
-            new HostingEnvironment {EnvironmentName = environmentName},
+            new TestHostEnvironment {EnvironmentName = environmentName},
             NullLogger<ApiKeyAuthenticationMiddleware>.Instance);
 
         await middleware.InvokeAsync(new DefaultHttpContext {Request = {Path = "/reviews"}});
@@ -206,7 +216,7 @@ public class ApiKeyAuthTests
                 return Task.CompletedTask;
             },
             opts,
-            new HostingEnvironment {EnvironmentName = Environments.Production},
+            new TestHostEnvironment {EnvironmentName = Environments.Production},
             NullLogger<ApiKeyAuthenticationMiddleware>.Instance);
         var context = new DefaultHttpContext {Request = {Path = "/health"}};
 
