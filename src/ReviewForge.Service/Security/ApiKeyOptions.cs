@@ -10,7 +10,7 @@ public sealed class ApiKeyOptions
     /// <summary>Fixed-window rate-limit policy name for the submit/discover endpoints.</summary>
     internal const string SubmitPolicy = SectionName + ":submit";
 
-    /// <summary>Configured keys. Populated from REVIEWFORGE_API_KEYS (env wins) or Api:Keys.</summary>
+    /// <summary>Runtime keys loaded only from REVIEWFORGE_API_KEYS; never bind this property from configuration.</summary>
     public string[] Keys { get; set; } = [];
 
     /// <summary>Escape hatch for local development only. Never set in deployed environments.</summary>

@@ -1,3 +1,4 @@
+using ReviewForge.Service.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -95,5 +96,25 @@ public class OptionsValidationTests
             () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
 
         Assert.Contains("MaxEnqueuesPerSweep must be at least 1", ex.Message);
+    }
+
+    [Fact]
+    public void Api_keys_in_serialized_configuration_are_ignored()
+    {
+        var previous = Environment.GetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable);
+        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, null);
+        try
+        {
+            using var provider = Build(
+                [.. ValidConfig(), ("Api:Keys:0", "config-secret")]);
+
+            var ex = Assert.Throws<OptionsValidationException>(
+                () => provider.GetRequiredService<IOptions<ApiKeyOptions>>().Value);
+            Assert.Contains(ApiKeyOptions.KeysEnvironmentVariable, ex.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, previous);
+        }
     }
 }

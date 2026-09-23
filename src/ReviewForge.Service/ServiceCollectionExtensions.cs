@@ -148,22 +148,26 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<CheckoutEvictionWorker>();
         services.AddHostedService<TelemetryGaugeRegistration>();
 
-        // API-key auth: env REVIEWFORGE_API_KEYS (',' or ';' separated) wins over Api:Keys config.
+        // API keys are intentionally not bound from configuration. Secrets may only enter
+        // through REVIEWFORGE_API_KEYS; other Api settings remain ordinary configuration.
         services.AddOptions<ApiKeyOptions>()
-            .Bind(configuration.GetSection(ApiKeyOptions.SectionName))
-            .PostConfigure(opts =>
+            .Configure(opts =>
             {
+                opts.AllowUnauthenticatedForDevelopment = configuration.GetValue<bool>(
+                    $"{ApiKeyOptions.SectionName}:AllowUnauthenticatedForDevelopment");
+                opts.SubmitPermitLimit = configuration.GetValue(
+                    $"{ApiKeyOptions.SectionName}:SubmitPermitLimit", opts.SubmitPermitLimit);
+                opts.SubmitWindowSeconds = configuration.GetValue(
+                    $"{ApiKeyOptions.SectionName}:SubmitWindowSeconds", opts.SubmitWindowSeconds);
                 var fromEnv = Environment.GetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable);
-                if (!string.IsNullOrWhiteSpace(fromEnv))
-                {
-                    opts.Keys = fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                }
-                opts.Keys = [.. opts.Keys.Where(key => !string.IsNullOrWhiteSpace(key))];
+                opts.Keys = string.IsNullOrWhiteSpace(fromEnv)
+                    ? []
+                    : fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             })
             .Validate(opts => opts.AllowUnauthenticatedForDevelopment ||
                               opts.Keys.Any(key => !string.IsNullOrWhiteSpace(key)),
-                $"No API keys configured. Set {ApiKeyOptions.KeysEnvironmentVariable} or Api:Keys, " +
-                "or set Api:AllowUnauthenticatedForDevelopment=true for local development only.")
+                $"No API keys configured. Set {ApiKeyOptions.KeysEnvironmentVariable}, " +
+                "or set Api:AllowUnauthenticatedForDevelopment=true in Development.")
             .Validate(opts => opts.SubmitPermitLimit > 0, "Api:SubmitPermitLimit must be greater than 0.")
             .Validate(opts => opts.SubmitWindowSeconds > 0, "Api:SubmitWindowSeconds must be greater than 0.")
             .ValidateOnStart();
