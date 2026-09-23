@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Hosting;
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Http;
@@ -164,12 +165,33 @@ public class ApiKeyAuthTests
         var middleware = new ApiKeyAuthenticationMiddleware(
             _ => throw new InvalidOperationException("next must not be called"),
             opts,
+            new HostingEnvironment {EnvironmentName = Environments.Production},
             NullLogger<ApiKeyAuthenticationMiddleware>.Instance);
-        var context = new DefaultHttpContext {Request = {Path = "/reviews"}};
 
         await middleware.InvokeAsync(context);
 
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(Environments.Development, true)]
+    [InlineData(Environments.Production, false)]
+    public async Task Unauthenticated_optout_requires_development_environment(string environmentName, bool shouldCallNext)
+    {
+        var called = false;
+        var middleware = new ApiKeyAuthenticationMiddleware(
+            _ =>
+            {
+                called = true;
+                return Task.CompletedTask;
+            },
+            Options.Create(new ApiKeyOptions {Keys = [], AllowUnauthenticatedForDevelopment = true}),
+            new HostingEnvironment {EnvironmentName = environmentName},
+            NullLogger<ApiKeyAuthenticationMiddleware>.Instance);
+
+        await middleware.InvokeAsync(new DefaultHttpContext {Request = {Path = "/reviews"}});
+
+        Assert.Equal(shouldCallNext, called);
     }
 
     [Fact]
@@ -184,6 +206,7 @@ public class ApiKeyAuthTests
                 return Task.CompletedTask;
             },
             opts,
+            new HostingEnvironment {EnvironmentName = Environments.Production},
             NullLogger<ApiKeyAuthenticationMiddleware>.Instance);
         var context = new DefaultHttpContext {Request = {Path = "/health"}};
 

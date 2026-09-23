@@ -10,6 +10,7 @@ namespace ReviewForge.Service.Security;
 public sealed class ApiKeyAuthenticationMiddleware(
     RequestDelegate next,
     IOptions<ApiKeyOptions> options,
+    IHostEnvironment environment,
     ILogger<ApiKeyAuthenticationMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
@@ -23,7 +24,8 @@ public sealed class ApiKeyAuthenticationMiddleware(
         var opts = options.Value;
         if (opts.Keys.Length == 0)
         {
-            if (opts.AllowUnauthenticatedForDevelopment)
+            if (opts.AllowUnauthenticatedForDevelopment
+                && environment.IsEnvironment(Environments.Development))
             {
                 await next(context);
                 return;
