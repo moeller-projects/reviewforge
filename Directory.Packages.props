@@ -16,7 +16,7 @@
         <PackageVersion Include="Microsoft.TeamFoundationServer.Client" Version="20.278.0-preview"/>
         <PackageVersion Include="LibGit2Sharp" Version="0.32.0"/>
         <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12"/>
-        <PackageVersion Include="OpenAI" Version="2.13.0"/>
+        <PackageVersion Include="OpenAI" Version="2.14.0"/>
         <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1"/>
         <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1"/>
         <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0"/>
