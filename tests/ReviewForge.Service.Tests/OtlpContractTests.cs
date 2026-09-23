@@ -70,7 +70,7 @@ public class OtlpEndpointLogTests : IAsyncLifetime
         var response = await client.GetAsync("/health");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains(_Logs, line => line.Contains("OTLP exporter endpoint: http://example:4317"));
+        Assert.Contains(_Logs, line => line.Contains("OTLP logs exporter enabled: True") && line.Contains("http://example:4317"));
     }
 }
 
@@ -101,6 +101,6 @@ public class OtlpEndpointDisabledLogTests : IAsyncLifetime
         var response = await client.GetAsync("/health");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains(_Logs, line => line.Contains("(none — export disabled)"));
+        Assert.Contains(_Logs, line => line.Contains("OTLP logs exporter enabled: False") && line.Contains("(none)"));
     }
 }
