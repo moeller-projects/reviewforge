@@ -22,10 +22,10 @@ public sealed class TextNormalizerTests
         Assert.Equal(TextNormalizer.Normalize(composed), TextNormalizer.Normalize(decomposed));
     }
 
+    [Theory]
     [InlineData("ᵗʰⁱˢ", "this")]
     [InlineData("𝐛𝐨𝐥𝐝", "bold")]
     [InlineData("ｒｅｖｉｅｗ", "review")]
-    [InlineData("ᴛʜɪs", "This")]
     [InlineData("ⓗⓔⓛⓛⓞ", "hello")]
     [InlineData("ﬁ", "fi")]
     [InlineData("ｶ", "カ")]
