@@ -247,8 +247,8 @@ public class DiffIndexTests
             "diff --git a/big.cs b/big.cs\n--- a/big.cs\n+++ b/big.cs\n" +
             "…[file diff skipped — 999999 bytes exceeds the per-file budget; use repo_read_file]\n");
 
-        Assert.Contains("big.cs", index.Files);
-        Assert.False(index.Contains("big.cs", 1));
+        Assert.DoesNotContain("big.cs", index.Files);
+        Assert.Equal(DiffEntryKind.Truncated, index.NonReviewableFiles["big.cs"]);
     }
 
     [Fact]
