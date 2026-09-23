@@ -109,6 +109,19 @@ public class OptionsValidationTests
         Assert.Contains("CleanRunVote", ex.Message);
     }
 
+    [Theory]
+    [InlineData("None")]
+    [InlineData("NoResponse")]
+    [InlineData("Approved")]
+    [InlineData("ApprovedWithSuggestions")]
+    [InlineData("approved")]
+    public void Valid_clean_run_votes_pass_options_validation(string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:CleanRunVote", value))]);
+
+        Assert.Equal(value, provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.CleanRunVote);
+    }
+
     [Fact]
     public void Api_keys_in_serialized_configuration_are_ignored()
     {
