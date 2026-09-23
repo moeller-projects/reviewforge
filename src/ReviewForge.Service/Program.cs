@@ -43,6 +43,9 @@ app.Logger.LogInformation(
     otlpTracesEnabled ? traceOtlpEndpoint ?? commonOtlpEndpoint ?? "(SDK default)" : "(none)",
     otlpMetricsEnabled,
     otlpMetricsEnabled ? metricOtlpEndpoint ?? commonOtlpEndpoint ?? "(SDK default)" : "(none)");
+app.UseRateLimiter();
+app.MapHealthChecks("/health");
+app.MapHealthChecks("/alive", new HealthCheckOptions {Predicate = _ => false});
 app.MapReviewForgeEndpoints();
 app.MapDocsEndpoints();
 app.Run();
