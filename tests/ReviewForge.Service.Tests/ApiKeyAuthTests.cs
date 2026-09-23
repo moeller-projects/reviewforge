@@ -174,8 +174,8 @@ public class ApiKeyAuthTests
     }
 
     [Theory]
-    [InlineData(Environments.Development, true)]
-    [InlineData(Environments.Production, false)]
+    [InlineData("Development", true)]
+    [InlineData("Production", false)]
     public async Task Unauthenticated_optout_requires_development_environment(string environmentName, bool shouldCallNext)
     {
         var called = false;
