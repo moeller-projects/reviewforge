@@ -48,7 +48,7 @@ public sealed class ReviewTools(
         return content is null
             ? $"unknown context entry '{name}'. Available: {string.Join(", ", contextStore.Names)}"
             : $"{PromptBuilder.UntrustedBegin}{Environment.NewLine}" +
-              $"{PromptBuilder.Sanitize(content)}{Environment.NewLine}" +
+              $"{PromptText.Clean(content)}{Environment.NewLine}" +
               PromptBuilder.UntrustedEnd;
     }
 
