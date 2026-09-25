@@ -185,19 +185,21 @@ public sealed class HomoglyphDetectorTests
 
         Assert.Equal("medium", book.Rules["homoglyph/mixed-script-identifier"].DefaultSeverity);
         Assert.Equal("high", book.Rules["homoglyph/confusable-keyword"].DefaultSeverity);
+        Assert.Equal("medium", book.Rules["homoglyph/whole-token-lookalike"].DefaultSeverity);
     }
 
     [Theory]
     // Default-options corpus: every case exercises a distinct branch of the scanner.
+    // Cases the P2-30 whole-token rule intentionally reclassifies (ΑΤΜ, ｖａｒ, аbc with
+    // both scripts allowed, single-char а at MinTokenLength=1) are asserted explicitly in
+    // Whole_token_lookalike_* tests below, not against the pre-P2-30 reference.
     [InlineData("var fileNаme = value;")]       // mixed Latin+Cyrillic
     [InlineData("return рublic;")]              // confusable keyword
     [InlineData("Müller Straße")]               // Latin-1 supplement, single script
     [InlineData("аbc")]                         // suppressed by RequireAsciiContext
     [InlineData("")]                            // empty line
     [InlineData("plain ascii only")]            // ASCII fast path
-    [InlineData("ｖａｒ x = 1;")]               // fullwidth keyword via NFKC
     [InlineData("Αlpha beta")]                  // Greek+Latin mixed
-    [InlineData("ΑΤΜ card")]                    // Greek only, skeleton not a keyword
     [InlineData("e\u0301xit = 1")]              // decomposed combining mark
     [InlineData("user_аgent id")]               // underscore token, mixed script
     [InlineData("==> ü <==")]                   // symbol soup, short token
@@ -217,17 +219,11 @@ public sealed class HomoglyphDetectorTests
         var cases = new[]
         {
             ("аbc", new HomoglyphDetector.Options { RequireAsciiContext = false }),
-            ("аbc", new HomoglyphDetector.Options
-            {
-                RequireAsciiContext = false,
-                AllowedScripts = new HashSet<string>(StringComparer.Ordinal) { "Latin", "Cyrillic" },
-            }),
             ("x ѕelect", new HomoglyphDetector.Options
             {
                 AllowedAsciiKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "select" },
             }),
             ("a а", new HomoglyphDetector.Options { MinTokenLength = 3 }),
-            ("a а", new HomoglyphDetector.Options { MinTokenLength = 1 }),
             ("return", new HomoglyphDetector.Options { AllowedAsciiKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) }),
         };
 
@@ -247,6 +243,66 @@ public sealed class HomoglyphDetectorTests
         Assert.Equal(fresh.RequireAsciiContext, HomoglyphDetector.Options.Default.RequireAsciiContext);
         Assert.Equal(fresh.AllowedScripts, HomoglyphDetector.Options.Default.AllowedScripts);
         Assert.Equal(fresh.AllowedAsciiKeywords, HomoglyphDetector.Options.Default.AllowedAsciiKeywords);
+    }
+
+    [Theory]
+    // P2-30 repro cases: identifiers written entirely in one non-Latin script of
+    // Latin-lookalikes evade the mixed-script rule — the whole-token rule catches them.
+    [InlineData("var еѵаӏ = 1;", "еѵаӏ", "evai")]   // Cyrillic e + izhitsa + palochka
+    [InlineData("var ѕсоре = 2;", "ѕсоре", "scope")] // Cyrillic spelling of "scope"
+    [InlineData("ΑΤΜ card;", "ΑΤΜ", "ATM")]          // Greek uppercase spelling of "ATM"
+    [InlineData("var ｖａｒ = 3;", "ｖａｒ", "var")]   // fullwidth spelling of "var"
+    [InlineData("١٢٣ f;", "١٢٣", "123")]             // Arabic-Indic lookalike digits
+    public void Whole_token_lookalike_flags_single_script_spoofs(string line, string token, string skeleton)
+    {
+        var findings = HomoglyphDetector.ScanLine(line, 1);
+        var finding = Assert.Single(findings);
+        Assert.Equal(token, finding.Token);
+        Assert.Equal("whole-token lookalike", finding.Reason);
+        Assert.Equal(skeleton, finding.AsciiLookalike);
+    }
+
+    [Fact]
+    public void Whole_token_rule_respects_allowed_scripts_opt_out()
+    {
+        // A caller that allows Cyrillic explicitly still gets mixed-script coverage; the
+        // whole-token rule fires because the token reads as pure ASCII.
+        var findings = HomoglyphDetector.ScanLine("аbc", 1, new HomoglyphDetector.Options
+        {
+            RequireAsciiContext = false,
+            AllowedScripts = new HashSet<string>(StringComparer.Ordinal) { "Latin", "Cyrillic" },
+        });
+        var finding = Assert.Single(findings);
+        Assert.Equal("whole-token lookalike", finding.Reason);
+    }
+
+    [Fact]
+    public void Greek_upsilon_now_completes_keyword_spoofs()
+    {
+        // υ -> u came in with the confusables expansion; "retυrn" now skeletons to the
+        // "return" keyword and fires the high-severity confusable-keyword rule.
+        var finding = Assert.Single(HomoglyphDetector.ScanLine("retυrn x;", 1));
+        Assert.Equal("confusable keyword", finding.Reason);
+        Assert.Equal("return", finding.AsciiLookalike);
+    }
+
+    [Theory]
+    [InlineData("变量名称 = 1;")]   // CJK identifier: no ASCII-confusable skeleton
+    [InlineData("προγραμμα x;")]   // Greek prose: unmapped letters keep the skeleton non-ASCII
+    [InlineData("plain ascii only")] // pure ASCII
+    [InlineData("Müller Straße")]  // Latin-1, no confusable mappings
+    public void Whole_token_rule_does_not_flag_legitimate_non_latin(string line)
+    {
+        Assert.Empty(HomoglyphDetector.ScanLine(line, 1));
+    }
+
+    [Fact]
+    public void Diff_analyzer_maps_whole_token_rule_to_a_medium_finding()
+    {
+        var diff = "+++ b/f.cs\n@@ -0,0 +1,1 @@\n+var еѵаӏ = 1;";
+        var finding = Assert.Single(HomoglyphDiffAnalyzer.Analyze(diff));
+        Assert.Equal("homoglyph/whole-token-lookalike", finding.RuleId);
+        Assert.Equal("medium", finding.Severity);
     }
 
     [Fact]

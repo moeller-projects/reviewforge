@@ -34,17 +34,48 @@ public static class HomoglyphDetector
         };
     }
 
+    // Latin-lookalike mappings pinned from Unicode 16.0.0 confusables.txt (2024-08-14),
+    // Cyrillic/Greek/Armenian blocks plus visual Arabic-Indic digits (P2-30). Only
+    // letter/digit targets — Skeleton runs over identifier tokens, never punctuation.
     private static readonly IReadOnlyDictionary<char, char> Confusables = new Dictionary<char, char>
     {
-        ['а'] = 'a', ['А'] = 'A', ['с'] = 'c', ['С'] = 'C',
-        ['е'] = 'e', ['Е'] = 'E', ['о'] = 'o', ['О'] = 'O',
-        ['р'] = 'p', ['Р'] = 'P', ['х'] = 'x', ['Х'] = 'X',
-        ['і'] = 'i', ['І'] = 'I', ['ј'] = 'j', ['Ј'] = 'J',
-        ['у'] = 'y', ['У'] = 'Y', ['ѕ'] = 's', ['Ѕ'] = 'S',
-        ['ѵ'] = 'v', ['Ѵ'] = 'V',
-        ['Α'] = 'A', ['Β'] = 'B', ['Ε'] = 'E', ['Ζ'] = 'Z', ['Η'] = 'H',
-        ['Ι'] = 'I', ['Κ'] = 'K', ['Μ'] = 'M', ['Ν'] = 'N', ['Ο'] = 'O',
-        ['Ρ'] = 'P', ['Τ'] = 'T', ['Χ'] = 'X', ['Υ'] = 'Y'
+        ['ͺ'] = 'i', ['Ϳ'] = 'J', ['Α'] = 'A', ['Β'] = 'B',
+        ['Ε'] = 'E', ['Ζ'] = 'Z', ['Η'] = 'H', ['Θ'] = 'O',
+        ['Ι'] = 'I', ['Κ'] = 'K', ['Μ'] = 'M', ['Ν'] = 'N',
+        ['Ο'] = 'O', ['Ρ'] = 'P', ['Τ'] = 'T', ['Υ'] = 'Y',
+        ['Χ'] = 'X', ['α'] = 'a', ['γ'] = 'y', ['η'] = 'n',
+        ['θ'] = 'O', ['ι'] = 'i', ['ν'] = 'v', ['ο'] = 'o',
+        ['ρ'] = 'p', ['σ'] = 'o', ['υ'] = 'u', ['ϑ'] = 'O',
+        ['ϒ'] = 'Y', ['Ϝ'] = 'F', ['Ϩ'] = '2', ['ϱ'] = 'p',
+        ['ϲ'] = 'c', ['ϳ'] = 'j', ['ϴ'] = 'O', ['Ϲ'] = 'C',
+        ['Ϻ'] = 'M', ['Ѕ'] = 'S', ['І'] = 'I', ['Ј'] = 'J',
+        ['А'] = 'A', ['Б'] = 'b', ['В'] = 'B', ['Е'] = 'E',
+        ['З'] = '3', ['К'] = 'K', ['М'] = 'M', ['Н'] = 'H',
+        ['О'] = 'O', ['Р'] = 'P', ['С'] = 'C', ['Т'] = 'T',
+        ['У'] = 'Y', ['Х'] = 'X', ['Ы'] = 'b', ['Ь'] = 'b',
+        ['Ю'] = 'l', ['а'] = 'a', ['б'] = '6', ['г'] = 'r',
+        ['е'] = 'e', ['о'] = 'o', ['р'] = 'p', ['с'] = 'c',
+        ['у'] = 'y', ['х'] = 'x', ['ѕ'] = 's', ['і'] = 'i',
+        ['ј'] = 'j', ['ћ'] = 'h', ['ѡ'] = 'w', ['Ѣ'] = 'b',
+        ['ѣ'] = 'b', ['Ѳ'] = 'O', ['ѳ'] = 'o', ['Ѵ'] = 'V',
+        ['ѵ'] = 'v', ['ѽ'] = 'w', ['Ҍ'] = 'b', ['ҍ'] = 'b',
+        ['ґ'] = 'r', ['ғ'] = 'r', ['Ҙ'] = '3', ['Қ'] = 'K',
+        ['Ҟ'] = 'K', ['Ң'] = 'H', ['Ҫ'] = 'C', ['ҫ'] = 'c',
+        ['Ҭ'] = 'T', ['Ү'] = 'Y', ['ү'] = 'y', ['Ұ'] = 'Y',
+        ['ұ'] = 'y', ['Ҳ'] = 'X', ['һ'] = 'h', ['ҽ'] = 'e',
+        ['ҿ'] = 'e', ['Ӏ'] = 'l', ['Ӈ'] = 'H', ['Ӊ'] = 'H',
+        ['Ӎ'] = 'M', ['ӏ'] = 'i', ['Ӕ'] = 'A', ['ӕ'] = 'a',
+        ['Ӡ'] = '3', ['Ө'] = 'O', ['ө'] = 'o', ['ԁ'] = 'd',
+        ['Ԍ'] = 'G', ['ԛ'] = 'q', ['Ԝ'] = 'W', ['ԝ'] = 'w',
+        ['Ս'] = 'U', ['Տ'] = 'S', ['Օ'] = 'O', ['ա'] = 'w',
+        ['գ'] = 'q', ['զ'] = 'q', ['հ'] = 'h', ['ո'] = 'n',
+        ['ռ'] = 'n', ['ս'] = 'u', ['ց'] = 'g', ['ք'] = 'f',
+        ['օ'] = 'o', ['٠'] = '0', ['١'] = '1', ['٢'] = '2',
+        ['٣'] = '3', ['٤'] = '4', ['٥'] = '5', ['٦'] = '6',
+        ['٧'] = '7', ['٨'] = '8', ['٩'] = '9', ['۰'] = '0',
+        ['۱'] = '1', ['۲'] = '2', ['۳'] = '3', ['۴'] = '4',
+        ['۵'] = '5', ['۶'] = '6', ['۷'] = '7', ['۸'] = '8',
+        ['۹'] = '9',
     };
 
     // Script bit assignments for the single-pass distinct-script mask.
@@ -107,6 +138,16 @@ public static class HomoglyphDetector
             else if (mixed)
             {
                 (findings ??= []).Add(new ConfusableToken(tokenText, lineNumber, start, "mixed-script identifier", skeleton));
+            }
+            // P2-30 — whole-token lookalike: a single non-Latin script spelling an ASCII-looking
+            // identifier evades both rules above (one script, skeleton not a whitelisted keyword).
+            // Fire when the skeleton is fully ASCII and differs from the raw token. Prose in one
+            // script keeps non-ASCII skeleton chars (unmapped letters), so Greek/Russian text
+            // stays quiet; keyword skeletons are already claimed by the confusable-keyword rule.
+            else if (!string.Equals(skeleton, tokenText, StringComparison.Ordinal)
+                     && skeleton.All(c => c <= 0x7F))
+            {
+                (findings ??= []).Add(new ConfusableToken(tokenText, lineNumber, start, "whole-token lookalike", skeleton));
             }
         }
 

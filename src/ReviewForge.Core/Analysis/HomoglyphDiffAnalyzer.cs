@@ -2,7 +2,13 @@ using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Analysis;
 
-/// <summary>Turns suspicious tokens on added diff lines into anchored security findings.</summary>
+/// <summary>
+/// Turns suspicious tokens on added diff lines into anchored security findings.
+/// Three detector rules, in priority order: confusable keyword (skeleton matches a
+/// whitelisted ASCII keyword — high), mixed-script identifier (scripts mix with a
+/// disallowed script — medium), whole-token lookalike (single non-Latin script whose
+/// skeleton is entirely ASCII but differs from the token — medium, P2-30).
+/// </summary>
 public static class HomoglyphDiffAnalyzer
 {
     public static IReadOnlyList<RichFinding> Analyze(string diff, HomoglyphDetector.Options? options = null)
@@ -48,9 +54,12 @@ public static class HomoglyphDiffAnalyzer
                             var processed = PipelineText.Preprocess(content.ToString());
                             foreach (var token in HomoglyphDetector.ScanLine(processed, newLine, opts))
                             {
-                                var ruleId = token.Reason == "confusable keyword"
-                                    ? "homoglyph/confusable-keyword"
-                                    : "homoglyph/mixed-script-identifier";
+                                var ruleId = token.Reason switch
+                                {
+                                    "confusable keyword" => "homoglyph/confusable-keyword",
+                                    "mixed-script identifier" => "homoglyph/mixed-script-identifier",
+                                    _ => "homoglyph/whole-token-lookalike",
+                                };
                                 findings.Add(new RichFinding
                                 {
                                     RuleId = ruleId,
