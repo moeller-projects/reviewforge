@@ -46,6 +46,7 @@ public class SqliteFindingStoreTests : IDisposable
     {
         Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
         Assert.Empty(await _Store.GetKnownDedupeKeysAsync(Key, CancellationToken.None));
+        Assert.Empty(await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None));
     }
 
     [Fact]
@@ -372,5 +373,111 @@ public class SqliteFindingStoreTests : IDisposable
 
         Assert.NotNull(last);
         Assert.Null(last.LastObservedCommentAt);
+    }
+
+    [Fact]
+    public async Task PruneAsync_deletes_old_runs_keeping_min_runs_and_latest_completed()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        // 8 completed runs, one per day; each carries a finding row with a thread-id backfill.
+        for (var i = 0; i < 8; i++)
+        {
+            var started = t0.AddDays(i);
+            await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, $"h{i}", ReviewKind.Full,
+                    started, started.AddMinutes(5), true,
+                    [new StoredFinding($"k{i}", "rule", "high", "title", "f.cs", 1, 42)]),
+                CancellationToken.None);
+        }
+
+        // Cutoff at day 5: days 0-4 prunable; last 3 runs (days 5-7) stay, latest completed
+        // (day 7) already inside that window.
+        var pruned = await _Store.PruneAsync(t0.AddDays(5), minRunsPerPr: 3, CancellationToken.None);
+
+        Assert.Equal(5, pruned);
+        var recent = await _Store.GetRecentRunsAsync(Key, 20, CancellationToken.None);
+        Assert.Equal(["h7", "h6", "h5"], recent.Select(r => r.HeadSha).ToArray());
+        // Finding rows of pruned runs are gone; kept rows intact (thread-id backfill preserved).
+        Assert.Equal(["k5", "k6", "k7"], (await _Store.GetKnownDedupeKeysAsync(Key, CancellationToken.None)).Order().ToArray());
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.NotNull(last);
+        Assert.Equal("h7", last!.HeadSha);
+        Assert.Equal(42, last.Findings!.Single(f => f.DedupeKey == "k7").ThreadId);
+    }
+
+    [Fact]
+    public async Task PruneAsync_never_deletes_the_latest_completed_run()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        // One old completed run, then five newer shells that never completed.
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "old-done", ReviewKind.Full,
+                t0, t0.AddMinutes(5), true, [new StoredFinding("k-old", "rule", "high", "t", "f.cs", 1, null)]),
+            CancellationToken.None);
+        for (var i = 1; i <= 5; i++)
+        {
+            await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, $"shell{i}", ReviewKind.Full,
+                    t0.AddDays(i), CompletedAt: null, Success: false, []),
+                CancellationToken.None);
+        }
+
+        // Cutoff past everything; min-keep 2 covers only the newest shells — the old
+        // completed run must survive via the latest-completed exemption.
+        var pruned = await _Store.PruneAsync(t0.AddDays(10), minRunsPerPr: 2, CancellationToken.None);
+
+        Assert.Equal(3, pruned);
+        var recent = await _Store.GetRecentRunsAsync(Key, 20, CancellationToken.None);
+        Assert.Equal(3, recent.Count);
+        Assert.Contains(recent, r => r.HeadSha == "old-done");
+        Assert.Equal(2, recent.Count(r => r.CompletedAt is null));
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.NotNull(last);
+        Assert.Equal("old-done", last!.HeadSha);
+        Assert.Equal(["k-old"], last.FindingKeys);
+    }
+
+    [Fact]
+    public async Task GetLastCompletedRunAsync_returns_true_latest_across_50_completed_runs()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero);
+        for (var i = 0; i < 50; i++)
+        {
+            var started = t0.AddMinutes(i * 10);
+            await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, $"h{i}", ReviewKind.Full,
+                    started, started.AddMinutes(5), i % 3 != 0, // failures sprinkled in
+                    [new StoredFinding($"k{i}", "rule", "high", "title", "f.cs", 1, null)]),
+                CancellationToken.None);
+        }
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.NotNull(last);
+        Assert.Equal("h49", last!.HeadSha); // newest started; per-PR runs never overlap
+        Assert.Equal(t0.AddMinutes(49 * 10).AddMinutes(5), last.CompletedAt);
+        Assert.Equal(["k49"], last.FindingKeys);
+    }
+
+    [Fact]
+    public async Task Reads_stay_bounded_and_correct_at_300_runs_with_40_findings_each()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero);
+        var findings = Enumerable.Range(0, 40)
+            .Select(i => new StoredFinding($"k{i}", "rule", "high", "title", "f.cs", i, null))
+            .ToArray();
+        for (var i = 0; i < 300; i++)
+        {
+            var started = t0.AddMinutes(i);
+            await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, $"h{i}", ReviewKind.Full,
+                    started, started.AddMinutes(1), i % 5 != 0, findings),
+                CancellationToken.None);
+        }
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.NotNull(last);
+        Assert.Equal("h299", last!.HeadSha);
+        Assert.Equal(40, last.Findings!.Count);
+
+        var recent = await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None);
+        Assert.Equal(10, recent.Count);
+        Assert.Equal("h299", recent[0].HeadSha);
+        Assert.Equal("h290", recent[9].HeadSha);
+        Assert.All(recent, r => Assert.Equal(40, r.Findings.Count));
     }
 }

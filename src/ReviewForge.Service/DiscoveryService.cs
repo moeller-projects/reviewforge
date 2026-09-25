@@ -29,11 +29,13 @@ public sealed class DiscoveryService(
     RunTracker tracker,
     InFlightClaims claims,
     DiscoveryOptions options,
+    RetentionOptions retention,
     ILogger<DiscoveryService>? logger = null,
     TimeProvider? clock = null)
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     private readonly DiscoveryRules _Rules = new(options.TargetBranches, options.Creators, options.MaxEnqueuesPerSweep);
+    private DateTimeOffset _LastPrune = DateTimeOffset.MinValue; // sweep-throttled (P2-26)
 
     public async Task<DiscoveryReport> RunSweepAsync(CancellationToken ct)
     {
@@ -188,6 +190,22 @@ public sealed class DiscoveryService(
 
         ReviewForgeTelemetry.DiscoverySweepDurationMilliseconds.Record(
             Stopwatch.GetElapsedTime(sweepStart).TotalMilliseconds);
+
+        // Retention tail (P2-26): prune the store at most once per hour, after the sweep's
+        // own work is done so prune cost never delays candidate processing.
+        var now = _Clock.GetUtcNow();
+        if (now - _LastPrune >= TimeSpan.FromHours(1))
+        {
+            _LastPrune = now;
+            var pruned = await store.PruneAsync(now.AddDays(-retention.Days), retention.MinRunsPerPr, ct);
+            if (pruned > 0)
+            {
+                logger?.LogInformation(
+                    "retention pruned {Pruned} runs older than {RetentionDays} days (kept last {MinRunsPerPr} runs per PR)",
+                    pruned, retention.Days, retention.MinRunsPerPr);
+            }
+        }
+
         return report;
     }
 

@@ -37,6 +37,7 @@ public class StoreHealthCheckTests
         public Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
         public Task<IReadOnlyList<ReviewRun>> GetStaleShellsAsync(DateTimeOffset olderThan, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
+        public Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct) => Task.FromResult(0);
         public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
@@ -48,6 +49,7 @@ public class StoreHealthCheckTests
         public Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
         public Task<IReadOnlyList<ReviewRun>> GetStaleShellsAsync(DateTimeOffset olderThan, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
+        public Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct) => Task.FromResult(0);
         public Task PingAsync(CancellationToken ct) => throw new InvalidOperationException("db down");
     }
 }

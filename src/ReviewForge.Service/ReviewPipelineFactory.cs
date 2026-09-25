@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
@@ -74,6 +75,23 @@ public sealed class ReviewForgeServiceOptions
     /// failure backoff. Default 10 minutes.
     /// </summary>
     public int StaleShellMinutes { get; init; } = 10;
+
+    /// <summary>Finding-store retention (P2-26); pruned at the discovery-sweep tail.</summary>
+    public RetentionOptions Retention { get; init; } = new();
+}
+
+/// <summary>Bounds finding-store growth: old runs are deleted at the discovery-sweep tail
+/// (at most once per hour), keeping dedupe continuity intact.</summary>
+public sealed class RetentionOptions
+{
+    /// <summary>Runs started more than this many days ago are pruned. The latest completed
+    /// run and the last <see cref="MinRunsPerPr"/> runs of a PR are always kept.</summary>
+    [Range(1, 3650)]
+    public int Days { get; init; } = 30;
+
+    /// <summary>Minimum runs kept per PR regardless of age.</summary>
+    [Range(1, 500)]
+    public int MinRunsPerPr { get; init; } = 5;
 }
 
 public sealed class ReviewPipelineFactory(

@@ -78,6 +78,8 @@ public static class ServiceCollectionExtensions
             .Validate(o => ReviewForgeServiceOptions.IsValidCleanRunVote(o.CleanRunVote),
                 "ReviewForge:CleanRunVote must be NoResponse, Approved, ApprovedWithSuggestions, or None")
             .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
+            .Validate(o => o.Retention.Days >= 1, "ReviewForge:Retention:Days must be at least 1")
+            .Validate(o => o.Retention.MinRunsPerPr >= 1, "ReviewForge:Retention:MinRunsPerPr must be at least 1")
             .ValidateOnStart();
 
         services.AddOptions<ApiDocsOptions>()
@@ -109,6 +111,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat);
         });
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Retention);
         services.AddSingleton<DiscoveryService>();
 
         var discovery = configuration.GetSection(DiscoveryOptions.SectionName).Get<DiscoveryOptions>() ?? new DiscoveryOptions();

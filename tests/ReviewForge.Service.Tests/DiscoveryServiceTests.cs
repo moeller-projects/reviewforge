@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Queue;
+using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -25,7 +26,7 @@ public class DiscoveryServiceTests
     private static DiscoveryService Service(
         FakePullRequestSource source, FakeFindingStore store, ReviewQueue queue, RunTracker tracker,
         DiscoveryOptions? options = null, InFlightClaims? claims = null)
-        => new(source, store, queue, tracker, claims ?? new InFlightClaims(), options ?? new DiscoveryOptions {TargetBranches = ["main"]});
+        => new(source, store, queue, tracker, claims ?? new InFlightClaims(), options ?? new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions());
 
     [Fact]
     public async Task Sweep_skips_draft_branch_and_creator_but_enqueues_survivor()
@@ -444,7 +445,7 @@ public class DiscoverySweepWorkerTests
     {
         var source = new FakePullRequestSource();
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = null};
-        var service = new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options);
+        var service = new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options, new RetentionOptions());
         var worker = new DiscoverySweepWorker(service, options, NullLogger<DiscoverySweepWorker>.Instance);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -466,7 +467,7 @@ public class DiscoverySweepWorkerTests
         var queue = new ReviewQueue();
         var tracker = new RunTracker();
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = TimeSpan.FromMilliseconds(50)};
-        var service = new DiscoveryService(source, store, queue, tracker, new InFlightClaims(), options);
+        var service = new DiscoveryService(source, store, queue, tracker, new InFlightClaims(), options, new RetentionOptions());
         var worker = new DiscoverySweepWorker(service, options, NullLogger<DiscoverySweepWorker>.Instance);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -497,7 +498,7 @@ public class DiscoverySweepWorkerTests
         var source = new ThrowingPullRequestSource();
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = TimeSpan.FromMilliseconds(25)};
         var worker = new DiscoverySweepWorker(
-            new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options),
+            new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options, new RetentionOptions()),
             options,
             NullLogger<DiscoverySweepWorker>.Instance);
 
@@ -511,6 +512,46 @@ public class DiscoverySweepWorkerTests
         await cts.CancelAsync();
         await worker.StopAsync(CancellationToken.None);
         Assert.True(source.Calls > 0);
+    }
+
+    [Fact]
+    public async Task Sweep_tail_prunes_store_with_retention_options()
+    {
+        var store = new FakeFindingStore();
+        var retention = new RetentionOptions {Days = 7, MinRunsPerPr = 2};
+        var now = new DateTimeOffset(2026, 9, 17, 12, 0, 0, TimeSpan.Zero);
+        var clock = new FakeTimeProvider(now);
+        var service = new DiscoveryService(
+            new FakePullRequestSource(), store, new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), new DiscoveryOptions {TargetBranches = ["main"]}, retention,
+            clock: clock);
+
+        await service.RunSweepAsync(CancellationToken.None);
+
+        var call = Assert.Single(store.PruneCalls);
+        Assert.Equal(now.AddDays(-7), call.OlderThan);
+        Assert.Equal(2, call.MinRunsPerPr);
+    }
+
+    [Fact]
+    public async Task Sweep_prune_is_throttled_to_once_per_hour()
+    {
+        var store = new FakeFindingStore();
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 12, 0, 0, TimeSpan.Zero));
+        var service = new DiscoveryService(
+            new FakePullRequestSource(), store, new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions(),
+            clock: clock);
+
+        await service.RunSweepAsync(CancellationToken.None);
+        await service.RunSweepAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromMinutes(59));
+        await service.RunSweepAsync(CancellationToken.None);
+        Assert.Single(store.PruneCalls);
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        await service.RunSweepAsync(CancellationToken.None);
+        Assert.Equal(2, store.PruneCalls.Count);
     }
 
     private sealed class ThrowingPullRequestSource : FakePullRequestSource

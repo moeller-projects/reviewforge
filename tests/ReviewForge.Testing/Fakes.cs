@@ -246,6 +246,14 @@ public class FakeFindingStore : IFindingStore
         => Task.FromResult<IReadOnlyList<ReviewRun>>(
             [.. Runs.Where(r => r.CompletedAt is null && r.StartedAt < olderThan)]);
 
+    public List<(DateTimeOffset OlderThan, int MinRunsPerPr)> PruneCalls { get; } = [];
+
+    public virtual Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct)
+    {
+        PruneCalls.Add((olderThan, minRunsPerPr));
+        return Task.FromResult(0);
+    }
+
     public virtual Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(KnownKeys);
 
     public virtual Task SaveRunAsync(ReviewRun run, CancellationToken ct)
