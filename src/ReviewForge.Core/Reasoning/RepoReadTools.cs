@@ -77,9 +77,11 @@ public class RepoReadTools
         }
 
         var sb = new StringBuilder();
+        var rootReal = PathSafety.ResolveReal(_Root, out var rootLinks);
         var entries = Directory.GetFileSystemEntries(dir)
-            .Select(e => Path.GetRelativePath(_Root, e).Replace('\\', '/'))
-            .Where(rel => !IsDenied(rel))
+            .Select(e => (abs: e, rel: Path.GetRelativePath(_Root, e).Replace('\\', '/')))
+            .Where(e => !IsDenied(e.rel) && !IsResolvedDenied(e.abs, rootReal, rootLinks))
+            .Select(e => e.rel)
             .Order(StringComparer.OrdinalIgnoreCase)
             .Take(MaxMatches)
             .ToList();
@@ -185,6 +187,7 @@ public class RepoReadTools
 
         var sb = new StringBuilder();
         var matches = 0;
+        var rootReal = PathSafety.ResolveReal(_Root, out var rootLinks);
         foreach (var file in EnumerateSearchableFiles(dir, glob ?? "*"))
         {
             var rel = Path.GetRelativePath(_Root, file).Replace('\\', '/');
@@ -195,14 +198,19 @@ public class RepoReadTools
 
             try
             {
-                // Lexical check is free; only reparse points get the real (stat'ing) check —
-                // a symlinked FILE can still point outside the root even under a contained dir.
-                if (!PathContainment.IsContained(_Root, file)
-                    || (File.GetAttributes(file).HasFlag(FileAttributes.ReparsePoint)
-                        && !PathSafety.IsContainedReal(_Root, file))
+                if (!PathContainment.IsContained(_Root, file))
+                {
+                    continue; // escaping
+                }
+
+                // A symlinked file can point at a contained-but-denied target, so the deny
+                // list is re-applied to the resolved path; symlink-traversed files are
+                // refused outright (P1-15). Resolution (stat'ing) is reserved for files
+                // about to be opened.
+                if (IsResolvedDenied(file, rootReal, rootLinks)
                     || new FileInfo(file).Length > _MaxGrepFileBytes)
                 {
-                    continue; // escaping, reparse-point escape, or oversized/generated output
+                    continue; // resolved-denied, symlinked, or oversized/generated output
                 }
 
                 var lineNo = 0;
@@ -247,15 +255,50 @@ public class RepoReadTools
         }
 
         var full = Path.GetFullPath(Path.Combine(_Root, rel));
+        var rootReal = PathSafety.ResolveReal(_Root, out var rootLinks);
+        var resolved = PathSafety.ResolveReal(full, out var links);
         // Symlink-aware: a checkout-controlled link that resolves outside the root must be
         // refused even though its lexical path stays under _Root.
-        if (rel.Length != 0 && !PathSafety.IsContainedReal(_Root, full))
+        if (rel.Length != 0 && !PathContainment.IsContained(rootReal, resolved))
         {
             error = $"access denied: path escapes repository root";
             return null;
         }
 
+        // P1-15: the deny policy binds to the content actually read, not the name it is
+        // reached by — a committed symlink to a contained-but-denied file must not
+        // launder the path past the deny list.
+        var resolvedRel = RepoPath.Normalize(Path.GetRelativePath(rootReal, resolved));
+        if (IsDenied(resolvedRel))
+        {
+            error = $"access denied: {relativePath}";
+            return null;
+        }
+
+        // Symlinks inside the checkout are not traversable: review needs file content, not
+        // link semantics (mirrors the enumeration refusal for symlinked directories).
+        if (rel.Length != 0 && links > rootLinks)
+        {
+            error = $"access denied: {relativePath}";
+            return null;
+        }
+
         return full;
+    }
+
+    /// <summary>True when the file's resolved target escapes the root, matches the deny list,
+    /// or the file is reached through a symlink inside the checkout — the deny policy binds
+    /// to the content actually read, not the name it is reached by (P1-15).</summary>
+    private bool IsResolvedDenied(string fullPath, string rootReal, int rootLinks)
+    {
+        var resolved = PathSafety.ResolveReal(fullPath, out var links);
+        if (!PathContainment.IsContained(rootReal, resolved))
+        {
+            return true;
+        }
+
+        var resolvedRel = RepoPath.Normalize(Path.GetRelativePath(rootReal, resolved));
+        return IsDenied(resolvedRel) || links > rootLinks;
     }
 
     private bool IsDenied(string relativePath)

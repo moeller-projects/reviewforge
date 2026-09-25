@@ -321,4 +321,126 @@ public class RepoReadToolsTests : IDisposable
             Directory.Delete(outside, recursive: true);
         }
     }
+
+    // P1-15: the deny policy binds to the content actually read, not the name it is
+    // reached by. A committed symlink to a contained-but-denied file must not launder
+    // the path past the deny list, and symlinked files are refused outright.
+    private static bool TryLink(string link, string target, bool directory)
+    {
+        try
+        {
+            if (directory)
+            {
+                Directory.CreateSymbolicLink(link, target);
+            }
+            else
+            {
+                File.CreateSymbolicLink(link, target);
+            }
+
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false; // sandbox without symlink privilege
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    [Theory]
+    [InlineData(".env", "SECRET=1")]
+    [InlineData("appsettings.Production.json", "{\"Password\":\"SECRET123\"}")]
+    [InlineData("cert.pem", "-----BEGIN PRIVATE KEY-----")]
+    public void ReadFile_and_Grep_deny_symlink_to_denied_target(string targetName, string content)
+    {
+        File.WriteAllText(Path.Combine(_Root, targetName), content);
+        if (!TryLink(Path.Combine(_Root, "src", "readme.txt"), Path.Combine(_Root, targetName), directory: false))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: src/readme.txt", Tools().ReadFile("src/readme.txt"));
+        Assert.Equal("no matches", Tools().Grep("SECRET"));
+    }
+
+    [Fact]
+    public void ReadFile_refuses_symlink_even_to_an_allowed_file()
+    {
+        // Intentional (P1-15): review needs file content, not link semantics — any
+        // symlink-traversed read inside the checkout is refused.
+        if (!TryLink(Path.Combine(_Root, "src", "alias.cs"), Path.Combine(_Root, "src", "A.cs"), directory: false))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: src/alias.cs", Tools().ReadFile("src/alias.cs"));
+    }
+
+    [Fact]
+    public void ReadFile_denies_deep_symlink_chain_ending_at_denied_file()
+    {
+        var denied = Path.Combine(_Root, ".env");
+        var mid = Path.Combine(_Root, "src", "mid.txt");
+        if (!TryLink(mid, denied, directory: false))
+        {
+            return;
+        }
+
+        var leaf = Path.Combine(_Root, "src", "leaf.txt");
+        if (!TryLink(leaf, mid, directory: false))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: src/leaf.txt", Tools().ReadFile("src/leaf.txt"));
+        Assert.Equal("no matches", Tools().Grep("SECRET"));
+    }
+
+    [Fact]
+    public void Grep_refuses_symlinked_directory_passed_as_path()
+    {
+        if (!TryLink(Path.Combine(_Root, "docs"), Path.Combine(_Root, "src"), directory: true))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: docs", Tools().Grep("TARGET", path: "docs"));
+    }
+
+    [Fact]
+    public void List_hides_symlinked_entries()
+    {
+        if (!TryLink(Path.Combine(_Root, "alias.txt"), Path.Combine(_Root, "src", "A.cs"), directory: false))
+        {
+            return;
+        }
+
+        if (!TryLink(Path.Combine(_Root, "linked-src"), Path.Combine(_Root, "src"), directory: true))
+        {
+            return;
+        }
+
+        var listing = Tools().List();
+        Assert.Contains("src", listing);
+        Assert.DoesNotContain("alias.txt", listing);
+        Assert.DoesNotContain("linked-src", listing);
+    }
+
+    [Fact]
+    public void Symlink_denial_uses_the_same_non_oracular_message_as_lexical_denial()
+    {
+        if (!TryLink(Path.Combine(_Root, "src", "readme.txt"), Path.Combine(_Root, ".env"), directory: false))
+        {
+            return;
+        }
+
+        var viaLink = Tools().ReadFile("src/readme.txt");
+        Assert.Equal("access denied: src/readme.txt", viaLink);
+        Assert.Equal(Tools().ReadFile(".env"), "access denied: .env"); // identical template
+        Assert.DoesNotContain("symlink", viaLink, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("escape", viaLink, StringComparison.OrdinalIgnoreCase);
+    }
 }
