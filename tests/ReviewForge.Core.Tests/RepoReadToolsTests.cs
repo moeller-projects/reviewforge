@@ -443,4 +443,84 @@ public class RepoReadToolsTests : IDisposable
         Assert.DoesNotContain("symlink", viaLink, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("escape", viaLink, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void Grep_aborts_on_aggregate_line_budget_and_marks_truncation()
+    {
+        File.WriteAllText(Path.Combine(_Root, "big.log"), string.Join("\n", Enumerable.Repeat("filler line", 50)));
+        var result = new RepoReadTools(_Root, grepMaxLines: 10).Grep("filler");
+        Assert.Contains("…[truncated: budget-lines]", result);
+    }
+
+    [Fact]
+    public void Grep_aborts_on_aggregate_time_budget_and_marks_truncation()
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            File.WriteAllText(Path.Combine(_Root, $"f{i:D3}.txt"), string.Join("\n", Enumerable.Repeat("needle line", 20)));
+        }
+
+        var result = new RepoReadTools(_Root, grepMaxMs: 1).Grep("needle");
+        Assert.Contains("…[truncated: budget-time]", result);
+    }
+
+    [Fact]
+    public void Grep_honours_cancellation_mid_scan()
+    {
+        File.WriteAllText(Path.Combine(_Root, "big.log"), string.Join("\n", Enumerable.Repeat("filler", 200)));
+        using var cts = new CancellationTokenSource();
+        var tools = new CancellingTools(_Root, cts);
+        Assert.ThrowsAny<OperationCanceledException>(() => tools.Grep("filler", cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public async Task Meai_binds_cancellation_token_into_grep()
+    {
+        var function = Microsoft.Extensions.AI.AIFunctionFactory.Create(new RepoReadTools(_Root).Grep);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await function.InvokeAsync(
+                new Microsoft.Extensions.AI.AIFunctionArguments(
+                    new Dictionary<string, object?> { ["pattern"] = "one" }),
+                cts.Token));
+    }
+
+    [Fact]
+    public void Grep_falls_back_for_lookaround_patterns_and_marks_result()
+    {
+        var result = Tools().Grep("two(?= TARGET)");
+        Assert.Contains("src/A.cs:2: two TARGET", result);
+        Assert.Contains("…[pattern-fallback]", result);
+    }
+
+    [Fact]
+    public void Grep_handles_catastrophic_pattern_within_budget()
+    {
+        File.WriteAllText(Path.Combine(_Root, "bomb.txt"), new string('a', 10_000) + "b!");
+        var result = new RepoReadTools(_Root, grepMaxMs: 5_000).Grep("(a+)+$");
+        Assert.Equal("no matches", result);
+    }
+
+    [Fact]
+    public void Grep_budget_defaults_reject_non_positive_values()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RepoReadTools(_Root, grepMaxMs: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RepoReadTools(_Root, grepMaxLines: -1));
+    }
+
+    /// <summary>Cancels the token from inside the first read so the scan must observe it (P2-28).</summary>
+    private sealed class CancellingTools : RepoReadTools
+    {
+        private readonly CancellationTokenSource _Cts;
+
+        public CancellingTools(string root, CancellationTokenSource cts) : base(root) => _Cts = cts;
+
+        protected override IEnumerable<string> ReadLinesSafe(string file)
+        {
+            _Cts.Cancel();
+            yield return "filler";
+            yield return "filler";
+        }
+    }
 }

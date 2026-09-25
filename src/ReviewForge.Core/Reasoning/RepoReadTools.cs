@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using ReviewForge.Core.Analysis;
@@ -18,6 +19,13 @@ public class RepoReadTools
 
     /// <summary>Per-file size cap for Grep; larger files are skipped (generated/minified output).</summary>
     public const long DefaultMaxGrepFileBytes = 1_048_576;
+
+    /// <summary>Aggregate wall-clock budget (ms) for one Grep call; the scan aborts with a
+    /// truncation marker when exceeded (P2-28).</summary>
+    public const int DefaultGrepMaxMs = 10_000;
+
+    /// <summary>Aggregate line budget for one Grep call (P2-28).</summary>
+    public const int DefaultGrepMaxLines = 200_000;
 
     private static readonly string[] DefaultDenyPatterns =
     [
@@ -41,6 +49,8 @@ public class RepoReadTools
     private readonly HashSet<string> _ExcludeDirs;
     private readonly long _MaxGrepFileBytes;
     private readonly int _MaxLines;
+    private readonly int _GrepMaxMs;
+    private readonly int _GrepMaxLines;
 
     private readonly string _Root;
 
@@ -49,12 +59,26 @@ public class RepoReadTools
         IEnumerable<string>? denyPatterns = null,
         int maxLines = DefaultMaxLines,
         IEnumerable<string>? excludeDirs = null,
-        long maxGrepFileBytes = DefaultMaxGrepFileBytes)
+        long maxGrepFileBytes = DefaultMaxGrepFileBytes,
+        int grepMaxMs = DefaultGrepMaxMs,
+        int grepMaxLines = DefaultGrepMaxLines)
     {
+        if (grepMaxMs <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(grepMaxMs), grepMaxMs, "Grep time budget must be positive.");
+        }
+
+        if (grepMaxLines <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(grepMaxLines), grepMaxLines, "Grep line budget must be positive.");
+        }
+
         _Root = Path.GetFullPath(rootDir);
         _MaxLines = maxLines;
         _ExcludeDirs = new HashSet<string>(excludeDirs ?? DefaultExcludeDirs, StringComparer.OrdinalIgnoreCase);
         _MaxGrepFileBytes = maxGrepFileBytes;
+        _GrepMaxMs = grepMaxMs;
+        _GrepMaxLines = grepMaxLines;
         _Deny =
         [
             .. (denyPatterns ?? DefaultDenyPatterns)
@@ -154,19 +178,28 @@ public class RepoReadTools
         return sb.ToString();
     }
 
-    [Description("Search file contents for a regex pattern. Returns matching lines with file and line number.")]
+    [Description("Search file contents for a regex pattern. Returns matching lines with file and line number. "
+        + "Stops with a \"…[truncated: budget-time]\" or \"…[truncated: budget-lines]\" marker when the aggregate "
+        + "time/line budget is reached — narrow the pattern or path and retry. \"…[pattern-fallback]\" means the "
+        + "pattern needed lookarounds/backreferences, so it runs with a per-line timeout instead of the "
+        + "linear-time engine.")]
     public string Grep(
         [Description("Regex pattern")] string pattern,
-        [Description("Subdirectory to search; empty for whole repo")]
-        string? path = null,
-        [Description("Optional file glob, e.g. *.cs")]
-        string? glob = null)
+        [Description("Subdirectory to search; empty for whole repo")] string? path = null,
+        [Description("Optional file glob, e.g. *.cs")] string? glob = null,
+        CancellationToken cancellationToken = default)
     {
         Regex matcher;
+        var patternFallback = false;
         try
         {
-            // One-shot pattern: interpretation startup is far cheaper than RegexOptions.Compiled
-            // codegen; the 2s timeout still guards against catastrophic backtracking.
+            // Linear-time engine: a model-supplied catastrophic pattern cannot backtrack
+            // (P2-28). Constructs it rejects (lookarounds, backreferences) fall back below.
+            matcher = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.NonBacktracking);
+        }
+        catch (NotSupportedException)
+        {
+            patternFallback = true;
             matcher = new Regex(pattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2));
         }
         catch (ArgumentException ex)
@@ -187,10 +220,15 @@ public class RepoReadTools
 
         var sb = new StringBuilder();
         var matches = 0;
+        var totalLines = 0;
+        string? budget = null;
         var rootReal = PathSafety.ResolveReal(_Root, out var rootLinks);
+        var stopwatch = Stopwatch.StartNew();
         foreach (var file in EnumerateSearchableFiles(dir, glob ?? "*"))
         {
-            var rel = Path.GetRelativePath(_Root, file).Replace('\\', '/');
+            cancellationToken.ThrowIfCancellationRequested();
+            var full = file.FullName;
+            var rel = Path.GetRelativePath(_Root, full).Replace('\\', '/');
             if (IsDenied(rel))
             {
                 continue;
@@ -198,7 +236,7 @@ public class RepoReadTools
 
             try
             {
-                if (!PathContainment.IsContained(_Root, file))
+                if (!PathContainment.IsContained(_Root, full))
                 {
                     continue; // escaping
                 }
@@ -206,17 +244,24 @@ public class RepoReadTools
                 // A symlinked file can point at a contained-but-denied target, so the deny
                 // list is re-applied to the resolved path; symlink-traversed files are
                 // refused outright (P1-15). Resolution (stat'ing) is reserved for files
-                // about to be opened.
-                if (IsResolvedDenied(file, rootReal, rootLinks)
-                    || new FileInfo(file).Length > _MaxGrepFileBytes)
+                // about to be opened; the length comes from the enumeration's FileInfo.
+                if (IsResolvedDenied(full, rootReal, rootLinks) || file.Length > _MaxGrepFileBytes)
                 {
                     continue; // resolved-denied, symlinked, or oversized/generated output
                 }
 
                 var lineNo = 0;
-                foreach (var line in ReadLinesSafe(file))
+                foreach (var line in ReadLinesSafe(full))
                 {
                     lineNo++;
+                    totalLines++;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (totalLines >= _GrepMaxLines || stopwatch.ElapsedMilliseconds >= _GrepMaxMs)
+                    {
+                        budget = totalLines >= _GrepMaxLines ? "budget-lines" : "budget-time";
+                        break;
+                    }
+
                     if (line.Contains('\0'))
                     {
                         break; // binary
@@ -228,7 +273,7 @@ public class RepoReadTools
                         if (++matches >= MaxMatches)
                         {
                             sb.AppendLine("…[match cap reached]");
-                            return sb.ToString();
+                            return AppendTrailers(sb, patternFallback);
                         }
                     }
                 }
@@ -237,9 +282,34 @@ public class RepoReadTools
             {
                 // File vanished or became unreadable mid-scan — skip it.
             }
+
+            if (budget is not null)
+            {
+                break;
+            }
         }
 
-        return matches == 0 ? "no matches" : sb.ToString();
+        if (matches == 0 && budget is null)
+        {
+            return "no matches";
+        }
+
+        if (budget is not null)
+        {
+            sb.AppendLine($"…[truncated: {budget}]");
+        }
+
+        return AppendTrailers(sb, patternFallback);
+    }
+
+    private static string AppendTrailers(StringBuilder sb, bool patternFallback)
+    {
+        if (patternFallback)
+        {
+            sb.AppendLine("…[pattern-fallback]");
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>Resolves a repo-relative path to an absolute path inside the root; null + error when denied or escaping.</summary>
@@ -314,8 +384,10 @@ public class RepoReadTools
         }
     }
 
-    /// <summary>Recursive enumeration that never descends into excluded directory names.</summary>
-    private IEnumerable<string> EnumerateSearchableFiles(string startDir, string glob)
+    /// <summary>Recursive enumeration that never descends into excluded directory names.
+    /// Yields FileInfo so the per-file size check reuses the enumeration's stat instead of
+    /// re-statting (P2-28).</summary>
+    private IEnumerable<FileInfo> EnumerateSearchableFiles(string startDir, string glob)
     {
         var pending = new Stack<string>();
         pending.Push(startDir);
@@ -323,11 +395,11 @@ public class RepoReadTools
         {
             var current = pending.Pop();
             string[] subdirs;
-            string[] files;
+            FileInfo[] files;
             try
             {
                 subdirs = Directory.GetDirectories(current);
-                files = Directory.GetFiles(current, glob);
+                files = new DirectoryInfo(current).GetFiles(glob);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

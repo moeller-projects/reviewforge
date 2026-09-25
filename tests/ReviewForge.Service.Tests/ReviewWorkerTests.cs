@@ -51,6 +51,7 @@ public class ReviewWorkerTests
                     ScriptedChatClient.FunctionCalls(
                         ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
             Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock);
         }
@@ -342,6 +343,7 @@ public class ReviewWorkerTests
                         ScriptedChatClient.FunctionCalls(
                             ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 
             factory.Create();

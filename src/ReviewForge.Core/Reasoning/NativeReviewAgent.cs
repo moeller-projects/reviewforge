@@ -24,6 +24,12 @@ public sealed record AgentOptions
     public IEnumerable<string>? DenyPatterns { get; init; }
     /// <summary>Directory names Grep never descends into; null = defaults (bin, obj, node_modules, .git, .vs, packages).</summary>
     public IEnumerable<string>? GrepExcludeDirs { get; init; }
+
+    /// <summary>Aggregate wall-clock budget (ms) for one Grep tool call (P2-28).</summary>
+    public int GrepMaxMs { get; init; } = RepoReadTools.DefaultGrepMaxMs;
+
+    /// <summary>Aggregate line budget for one Grep tool call (P2-28).</summary>
+    public int GrepMaxLines { get; init; } = RepoReadTools.DefaultGrepMaxLines;
     public ReasoningEffort? Effort { get; init; }
     public bool DebugLogging { get; init; }
 }
@@ -53,7 +59,9 @@ public sealed class NativeReviewAgent(
         DiffIndex? diff,
         IReadOnlySet<string>? resolvedKeys)
     {
-        var repoTools = new RepoReadTools(repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs);
+        var repoTools = new RepoReadTools(
+            repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
+            grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines);
         var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff, resolvedKeys: resolvedKeys);
         IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
         IChatClient invoking = new ChatClientBuilder(guarded)

@@ -130,6 +130,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
                 sp.GetRequiredService<RepoCheckoutPool>(),
                 new FakeChatClientFactory(Chat),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
+                sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>()));
         });
     }
@@ -321,6 +322,7 @@ public class ServiceTests : IAsyncLifetime
             new RepoCheckoutPool(failingGit, new FakeWorkspaceFs(), standaloneWorkDir),
             new FakeChatClientFactory(_Factory.Chat),
             options,
+                Options.Create(new RepoReadToolsOptions()),
             LoggerFactory.Create(b => { }));
         var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
             _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
@@ -774,6 +776,7 @@ public class DiWiringTests
                 new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath()),
                 new FakeChatClientFactory(new ScriptedChatClient()),
                 options,
+                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 
             Assert.Throws<InvalidOperationException>(() => factory.Create());

@@ -80,6 +80,22 @@ public sealed class ReviewForgeServiceOptions
     public RetentionOptions Retention { get; init; } = new();
 }
 
+/// <summary>Agent repo-scan budgets (P2-28): one Grep tool call aborts with a truncation
+/// marker when either aggregate budget is reached. Bound from the "RepoReadTools" config
+/// section (e.g. <c>RepoReadTools:GrepMaxMs</c>, <c>RepoReadTools__GrepMaxLines</c>).</summary>
+public sealed class RepoReadToolsOptions
+{
+    public const string SectionName = "RepoReadTools";
+
+    /// <summary>Aggregate wall-clock budget (ms) for one Grep call; default 10 s.</summary>
+    [Range(1, 600_000)]
+    public int GrepMaxMs { get; init; } = RepoReadTools.DefaultGrepMaxMs;
+
+    /// <summary>Aggregate line budget for one Grep call; default 200k lines.</summary>
+    [Range(1, 10_000_000)]
+    public int GrepMaxLines { get; init; } = RepoReadTools.DefaultGrepMaxLines;
+}
+
 /// <summary>Bounds finding-store growth: old runs are deleted at the discovery-sweep tail
 /// (at most once per hour), keeping dedupe continuity intact.</summary>
 public sealed class RetentionOptions
@@ -100,6 +116,7 @@ public sealed class ReviewPipelineFactory(
     RepoCheckoutPool checkoutPool,
     IChatClientFactory chatClientFactory,
     IOptions<ReviewForgeServiceOptions> options,
+    IOptions<RepoReadToolsOptions> repoReadToolsOptions,
     ILoggerFactory loggerFactory,
     IContextEnricher? enricher = null,
     TimeProvider? clock = null)
@@ -107,6 +124,7 @@ public sealed class ReviewPipelineFactory(
     public ReviewPipeline Create()
     {
         var opts = options.Value;
+        var repoReadToolsOpts = repoReadToolsOptions.Value;
         var cleanVote = opts.CleanRunVote.Equals("None", StringComparison.OrdinalIgnoreCase)
             ? (ReviewerVote?)null
             : Enum.TryParse<ReviewerVote>(opts.CleanRunVote, ignoreCase: true, out var parsedVote)
@@ -122,6 +140,8 @@ public sealed class ReviewPipelineFactory(
             RuleSetsPath = opts.RuleSetsPath,
             Effort = opts.ReasoningEffort,
             DebugLogging = opts.AgentDebugLogging,
+            GrepMaxMs = repoReadToolsOpts.GrepMaxMs,
+            GrepMaxLines = repoReadToolsOpts.GrepMaxLines,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
 
         var findingsDir = Path.Combine(opts.WorkDir, "findings");
