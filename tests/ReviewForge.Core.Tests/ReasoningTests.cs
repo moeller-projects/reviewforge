@@ -218,6 +218,59 @@ public class ReviewToolsTests
     }
 
     [Fact]
+    public void RecordFinding_accepts_regression_of_resolved_prior_key()
+    {
+        var key = DedupeKey.Compute("r", "f.cs", "s");
+        var collector = new ReviewCollector([key]);
+        var tools = new ReviewTools(
+            collector, new ContextStore(), resolvedKeys: new HashSet<string>([key], StringComparer.Ordinal));
+
+        var result = tools.RecordFinding(
+            "r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 99);
+
+        Assert.StartsWith("recorded finding", result);
+        Assert.Contains("regression", result);
+        var finding = Assert.Single(collector.Findings);
+        Assert.True(finding.IsRegression);
+        Assert.Equal(key, finding.DedupeKey);
+        Assert.Contains(key, collector.RegressedKeys);
+        Assert.Empty(collector.RedetectedKeys);
+    }
+
+    [Fact]
+    public void RecordFinding_keeps_redetected_when_prior_thread_still_active()
+    {
+        var key = DedupeKey.Compute("r", "f.cs", "s");
+        var collector = new ReviewCollector([key]);
+        var tools = new ReviewTools(
+            collector, new ContextStore(), resolvedKeys: new HashSet<string>(StringComparer.Ordinal));
+
+        var result = tools.RecordFinding(
+            "r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 99);
+
+        Assert.Contains("already recorded", result);
+        Assert.Empty(collector.Findings);
+        Assert.Contains(key, collector.RedetectedKeys);
+        Assert.Empty(collector.RegressedKeys);
+    }
+
+    [Fact]
+    public void RecordFinding_regression_accepts_exactly_once()
+    {
+        var key = DedupeKey.Compute("r", "f.cs", "s");
+        var collector = new ReviewCollector([key]);
+        var tools = new ReviewTools(
+            collector, new ContextStore(), resolvedKeys: new HashSet<string>([key], StringComparer.Ordinal));
+
+        var first = tools.RecordFinding("r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 99);
+        var second = tools.RecordFinding("r", "t", "low", "style", "d", snippet: "s", filePath: "f.cs", startLine: 99);
+
+        Assert.StartsWith("recorded finding", first);
+        Assert.Contains("already recorded", second);
+        Assert.Single(collector.Findings);
+    }
+
+    [Fact]
     public void ReviewTools_dedupe_reject_logs_breadcrumb()
     {
         var logger = new CapturingLogger<ReviewTools>();

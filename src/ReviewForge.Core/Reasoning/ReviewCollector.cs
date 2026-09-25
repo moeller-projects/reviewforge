@@ -18,6 +18,7 @@ public sealed class ReviewCollector
     private readonly HashSet<string> _KnownKeys;
     private readonly HashSet<string> _PriorKnownKeys;
     private readonly HashSet<string> _RedetectedKeys = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _RegressedKeys = new(StringComparer.Ordinal);
     private readonly List<ReviewUncertainty> _Uncertainties = [];
     private readonly Guid? _RunId;
     private readonly string? _HeadSha;
@@ -101,6 +102,29 @@ public sealed class ReviewCollector
         lock (_Gate)
         {
             _RedetectedKeys.Add(dedupeKey);
+        }
+    }
+
+    /// <summary>Keys accepted this run as verbatim regressions of previously resolved
+    /// findings — their Fixed/Closed threads are reopened by triage (P1-11).</summary>
+    public IReadOnlyCollection<string> RegressedKeys
+    {
+        get
+        {
+            lock (_Gate)
+            {
+                return [.. _RegressedKeys];
+            }
+        }
+    }
+
+    /// <summary>Records that a known key regressed verbatim against a resolved thread and
+    /// was accepted through the normal finding path.</summary>
+    public void MarkRegressed(string dedupeKey)
+    {
+        lock (_Gate)
+        {
+            _RegressedKeys.Add(dedupeKey);
         }
     }
 

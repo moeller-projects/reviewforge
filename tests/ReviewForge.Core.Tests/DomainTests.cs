@@ -269,6 +269,89 @@ public class ThreadTriageTests
     }
 
     [Fact]
+    public void Fixed_thread_with_regressed_key_is_reopened_with_sha_note()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Fixed, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal(ReviewThreadStatus.Active, op.NewStatus);
+        Assert.Contains("Regressed in abc123d", op.Comment);
+    }
+
+    [Fact]
+    public void Closed_thread_with_regressed_key_is_reopened()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Closed, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal(ReviewThreadStatus.Active, op.NewStatus);
+    }
+
+    [Fact]
+    public void Fixed_thread_with_regressed_key_and_no_sha_reopens_without_sha_note()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Fixed, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            null);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal("Regressed: this previously resolved finding reproduces in the latest iteration.", op.Comment);
+    }
+
+    [Fact]
+    public void Fixed_thread_with_regressed_key_and_pending_human_reply_is_reopened()
+    {
+        // The gate often needs a new human comment to admit a follow-up run; the regression
+        // reopen still fires (and implicitly answers the human) instead of a manual flag.
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Fixed, humanLast: true)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal(ReviewThreadStatus.Active, op.NewStatus);
+        Assert.Contains("Regressed in abc123d", op.Comment);
+    }
+
+    [Fact]
+    public void Active_thread_with_redetected_key_is_not_reopened()
+    {
+        // Redetected (thread still live) ≠ regressed: the auto-resolve heuristic owns
+        // Active threads; reopening is only for Fixed/Closed ones (P1-11).
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Active, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+        Assert.Empty(plan);
+    }
+
+    [Fact]
     public void Unanswered_empty_when_agent_acted()
     {
         var threads = new[] {BotThread(5, "k", ReviewThreadStatus.Active, humanLast: true)};

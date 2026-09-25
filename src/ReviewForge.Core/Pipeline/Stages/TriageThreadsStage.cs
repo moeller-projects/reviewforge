@@ -34,7 +34,13 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
             throw new PrHeadChangedException(reviewed, current.SourceCommitSha);
         }
 
-        ctx.TriagePlan = ThreadTriage.Plan(botThreads, currentKeys, agentActions, CommentFormatter.WithBotPreamble);
+        ctx.TriagePlan = ThreadTriage.Plan(
+            botThreads,
+            currentKeys,
+            agentActions,
+            CommentFormatter.WithBotPreamble,
+            ctx.Collector.RegressedKeys.ToHashSet(StringComparer.Ordinal),
+            ctx.RequirePullRequest().SourceCommitSha);
         ctx.UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions);
         var opCount = ctx.TriagePlan.Count(o => o.Op != TriageOp.None);
         logger.LogInformation("triage plan: {BotThreads} bot threads, {Actions} agent actions, {Ops} ops, {Unanswered} unanswered", botThreads.Count, agentActions.Length, opCount, ctx.UnansweredThreads.Count);

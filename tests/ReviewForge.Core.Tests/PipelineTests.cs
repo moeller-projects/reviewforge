@@ -348,6 +348,62 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteReasoning_accepts_homoglyph_regression_of_resolved_thread()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        const string diff = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -0,0 +1,1 @@
+            +var fileNаme = value;
+            """;
+
+        // Run 1: establishes the finding and its dedupe key.
+        var first = Ctx();
+        first.DiffText = diff;
+        await new ExecuteReasoningStage(agent).ExecuteAsync(first, CancellationToken.None);
+        var key = Assert.Single(first.Collector.Findings).DedupeKey!;
+
+        // Run 2: same diff; prior run knows the key; the live thread is Fixed → the
+        // verbatim re-detection resurfaces as a regression instead of staying deduped.
+        var regressed = Ctx();
+        regressed.DiffText = diff;
+        regressed.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [key]);
+        regressed.Threads =
+        [
+            new ReviewThread(7, key, ReviewThreadStatus.Fixed,
+                [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]),
+        ];
+
+        await new ExecuteReasoningStage(agent).ExecuteAsync(regressed, CancellationToken.None);
+
+        var finding = Assert.Single(regressed.Collector.Findings);
+        Assert.True(finding.IsRegression);
+        Assert.Contains(key, regressed.Collector.RegressedKeys);
+        Assert.Empty(regressed.Collector.RedetectedKeys);
+        Assert.Contains(key, regressed.ResolvedKeys);
+
+        // Run 3: same diff but the thread is still Active → plain redetection, silent.
+        var active = Ctx();
+        active.DiffText = diff;
+        active.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [key]);
+        active.Threads =
+        [
+            new ReviewThread(7, key, ReviewThreadStatus.Active,
+                [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]),
+        ];
+
+        await new ExecuteReasoningStage(agent).ExecuteAsync(active, CancellationToken.None);
+
+        Assert.Empty(active.Collector.Findings);
+        Assert.Contains(key, active.Collector.RedetectedKeys);
+        Assert.Empty(active.Collector.RegressedKeys);
+    }
+
+    [Fact]
     public async Task ExecuteReasoning_streams_findings_to_per_run_jsonl()
     {
         var findingsDir = Path.Combine(Path.GetTempPath(), "reviewforge-findings-" + Guid.NewGuid().ToString("N"));
@@ -704,6 +760,58 @@ public class StageTests : IDisposable
 
         Assert.Empty(source.StatusChanges);
         Assert.Empty(source.Replies);
+    }
+
+    [Fact]
+    public async Task Triage_reopens_fixed_thread_when_finding_regressed()
+    {
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(7, "k", ReviewThreadStatus.Fixed,
+            [new ThreadComment("b", "bot", true, "finding", t0)]));
+
+        var regressed = FindingOnLine(2);
+        regressed.DedupeKey = "k";
+        regressed.IsRegression = true;
+
+        var ctx = Ctx(source);
+        ctx.Collector.MarkRegressed("k");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [regressed], Uncertainties = []};
+        ctx.AcceptedFindings = [regressed];
+
+        await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        var op = Assert.Single(ctx.TriagePlan.Where(o => o.Op != TriageOp.None));
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Contains(source.Replies, r => r.ThreadId == 7 && r.Text.Contains("Regressed in head-sh"));
+        Assert.Contains(source.StatusChanges, s => s.ThreadId == 7 && s.Status == ReviewThreadStatus.Active);
+    }
+
+    [Fact]
+    public async Task Publish_suppresses_reposted_regression_and_stamps_reopened_thread_id()
+    {
+        // F1 surfacing (P1-11): the regressed finding is NOT re-posted as a new thread —
+        // triage reopens thread 7 instead — and the reopened thread id is re-stamped for
+        // persistence so the key → thread mapping survives.
+        var source = new FakePullRequestSource();
+        var t0 = DateTimeOffset.UtcNow;
+        source.Threads.Add(new ReviewThread(7, "k", ReviewThreadStatus.Fixed,
+            [new ThreadComment("b", "bot", true, "finding", t0)]));
+
+        var regressed = FindingOnLine(2);
+        regressed.DedupeKey = "k";
+        regressed.IsRegression = true;
+
+        var ctx = Ctx(source);
+        ctx.Collector.MarkRegressed("k");
+        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [regressed], Uncertainties = []};
+        ctx.AcceptedFindings = [regressed];
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.DoesNotContain(source.PostedFindings, p => p.Finding.DedupeKey == "k");
+        Assert.Equal(7, ctx.PostedThreadIds["k"]);
     }
 
     [Fact]
@@ -1426,6 +1534,20 @@ public class CommentFormatterTests
         Assert.Contains("fix it", text);
         Assert.Contains("Location could not be verified", text);
         Assert.Contains("f.cs:3", text);
+    }
+
+    [Fact]
+    public void FormatFinding_marks_regressions_with_prefix()
+    {
+        var finding = new RichFinding
+        {
+            RuleId = "r", Title = "t", Severity = "high", Category = "bug", Description = "d",
+            IsRegression = true,
+        };
+
+        var text = CommentFormatter.FormatFinding(finding);
+
+        Assert.Contains("### 🔴 ⚠️ regressed: t", text);
     }
 
     [Fact]
