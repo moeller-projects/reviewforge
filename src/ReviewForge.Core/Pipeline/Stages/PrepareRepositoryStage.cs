@@ -39,19 +39,24 @@ public sealed class PrepareRepositoryStage(
 
             if (diffBudget is not null && DiffExclusions.IsExcluded(path, diffBudget.ExcludeGlobs))
             {
-                continue; // machine-generated content — never reviewable, never in the diff
+                // Machine-generated content — never reviewable, never in the diff. The only
+                // legitimate way a manifest file has no diff entry.
+                logger.LogDebug("excluding budget-excluded file {Path} from review scope", path);
+                continue;
             }
 
             reviewable.Add(path);
         }
 
         var diffFiles = ctx.Diff.Files.Select(RepoPath.Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var missingFromDiff = reviewable.Where(f => !diffFiles.Contains(f)).ToArray();
-        foreach (var orphan in missingFromDiff)
+        var missingFromDiff = reviewable.Where(f => !diffFiles.Contains(f)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (missingFromDiff.Length > 0)
         {
-            // Diff is authoritative: review what git actually shows, never poison the PR.
-            logger.LogWarning("provider manifest file {Path} has no diff entry; excluding from scope", orphan);
-            reviewable.Remove(orphan);
+            // Fail closed (P1-14): a manifest file with no diff entry means quoting/parsing
+            // dropped it — reviewing a silently shrunk scope is worse than failing the run.
+            throw new InvalidOperationException(
+                $"provider changed-file manifest has no diff entry for: {string.Join(", ", missingFromDiff)}. " +
+                "Refusing to shrink review scope silently.");
         }
 
         if (!reviewable.SetEquals(diffFiles))

@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ReviewForge.Service.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -130,6 +131,7 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
                 sp.GetRequiredService<RepoCheckoutPool>(),
                 new FakeChatClientFactory(Chat),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
+                sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>()));
         });
     }
@@ -321,9 +323,10 @@ public class ServiceTests : IAsyncLifetime
             new RepoCheckoutPool(failingGit, new FakeWorkspaceFs(), standaloneWorkDir),
             new FakeChatClientFactory(_Factory.Chat),
             options,
+                Options.Create(new RepoReadToolsOptions()),
             LoggerFactory.Create(b => { }));
         var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
-            _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
+            _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>(), new NoopRunLogLifecycle());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = worker.StartAsync(cts.Token);
@@ -441,6 +444,82 @@ public class ServiceTests : IAsyncLifetime
         Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
         Assert.DoesNotContain(_Factory.Source.StatusChanges, s => s.Status == ReviewThreadStatus.Fixed);
         Assert.Contains(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key); // carried forward
+    }
+
+    [Fact]
+    public async Task Regressed_resolved_finding_reopens_thread_instead_of_reposting()
+    {
+        // F1 scenario (P1-11): run 1 posts finding K → thread auto-resolved (Fixed) →
+        // run 2 re-detects K verbatim → thread 7 reopens with a regression note, exactly
+        // one visible ADO action, no duplicate thread, store row keeps thread id 7.
+        var pr = new PrKey("o", "p", "r", 42);
+        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n";
+
+        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "line three"]);
+
+        static Dictionary<string, object?> FindingArgs() => new()
+        {
+            ["ruleId"] = "general.other",
+            ["title"] = "bad code",
+            ["severity"] = "high",
+            ["category"] = "bug",
+            ["description"] = "bad code found",
+            ["snippet"] = "bad code here",
+            ["filePath"] = "src/A.cs",
+            ["startLine"] = 2,
+        };
+
+        // Run 1: record finding K then finish.
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var client = _Factory.CreateClient();
+        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body1!.RunId, RunState.Completed);
+
+        var run1 = Assert.Single(_Factory.Store.Runs);
+        var key = run1.Findings[0].DedupeKey;
+        var threadId = run1.Findings[0].ThreadId!.Value;
+        Assert.Single(_Factory.Source.PostedFindings);
+
+        // Wait for the worker to release the claim before re-submitting the same PR.
+        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        // Simulate: the finding was auto-resolved (thread Fixed) and a human comment
+        // keeps the gate happy for the follow-up run.
+        _Factory.Source.Threads.Add(new ReviewThread(threadId, key, ReviewThreadStatus.Fixed,
+        [
+            new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow.AddMinutes(-3)),
+            new ThreadComment("bot", "bot", true, "Resolved: this finding no longer reproduces in the latest iteration.",
+                DateTimeOffset.UtcNow.AddMinutes(-2)),
+            new ThreadComment("human", "author", false, "why is this fixed?", DateTimeOffset.UtcNow),
+        ]));
+        _Factory.Store.LastRun = new PriorRun(pr, "head-sha", DateTimeOffset.UtcNow.AddMinutes(-1), [key],
+            [new StoredFinding(key, "general.other", "high", "bad code", "src/A.cs", 2, threadId)]);
+
+        // Run 2: agent re-detects K verbatim → accepted as regression → reopened.
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body2!.RunId, RunState.Completed);
+
+        Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
+        Assert.Contains(_Factory.Source.StatusChanges, s => s.ThreadId == threadId && s.Status == ReviewThreadStatus.Active);
+        Assert.Contains(_Factory.Source.Replies, r => r.ThreadId == threadId && r.Text.Contains("Regressed in"));
+        var row = Assert.Single(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key);
+        Assert.Equal(threadId, row.ThreadId); // reopened thread id re-stamped
     }
 
     [Fact]
@@ -698,6 +777,7 @@ public class DiWiringTests
                 new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath()),
                 new FakeChatClientFactory(new ScriptedChatClient()),
                 options,
+                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 
             Assert.Throws<InvalidOperationException>(() => factory.Create());

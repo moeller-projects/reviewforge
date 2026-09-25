@@ -19,7 +19,7 @@ public static class CommentFormatter
         var sb = new StringBuilder();
         sb.AppendLine(BotPreamble);
         sb.AppendLine();
-        sb.AppendLine($"### {SeverityIcon(finding.Severity)} {finding.Title}");
+        sb.AppendLine($"### {SeverityIcon(finding.Severity)}{(finding.IsRegression ? " ⚠️ regressed:" : "")} {finding.Title}");
         sb.AppendLine();
         sb.AppendLine($"**Severity:** `{finding.Severity}` · **Rule:** `{finding.RuleId}` · **Category:** `{finding.Category}`");
         sb.AppendLine();
