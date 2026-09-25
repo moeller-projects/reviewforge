@@ -186,4 +186,187 @@ public sealed class HomoglyphDetectorTests
         Assert.Equal("medium", book.Rules["homoglyph/mixed-script-identifier"].DefaultSeverity);
         Assert.Equal("high", book.Rules["homoglyph/confusable-keyword"].DefaultSeverity);
     }
+
+    [Theory]
+    // Default-options corpus: every case exercises a distinct branch of the scanner.
+    [InlineData("var fileNаme = value;")]       // mixed Latin+Cyrillic
+    [InlineData("return рublic;")]              // confusable keyword
+    [InlineData("Müller Straße")]               // Latin-1 supplement, single script
+    [InlineData("аbc")]                         // suppressed by RequireAsciiContext
+    [InlineData("")]                            // empty line
+    [InlineData("plain ascii only")]            // ASCII fast path
+    [InlineData("ｖａｒ x = 1;")]               // fullwidth keyword via NFKC
+    [InlineData("Αlpha beta")]                  // Greek+Latin mixed
+    [InlineData("ΑΤΜ card")]                    // Greek only, skeleton not a keyword
+    [InlineData("e\u0301xit = 1")]              // decomposed combining mark
+    [InlineData("user_аgent id")]               // underscore token, mixed script
+    [InlineData("==> ü <==")]                   // symbol soup, short token
+    [InlineData("türkçe variable ok")]          // Latin single script
+    [InlineData("🎉party time x")]              // emoji surrogate pair is not a letter
+    [InlineData("x = 1; // аbс")]               // comment token, context present
+    public void ScanLine_matches_reference_implementation(string input)
+    {
+        var expected = ReferenceScanner.ScanLine(input, 7);
+        var actual = HomoglyphDetector.ScanLine(input, 7);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ScanLine_matches_reference_implementation_with_custom_options()
+    {
+        var cases = new[]
+        {
+            ("аbc", new HomoglyphDetector.Options { RequireAsciiContext = false }),
+            ("аbc", new HomoglyphDetector.Options
+            {
+                RequireAsciiContext = false,
+                AllowedScripts = new HashSet<string>(StringComparer.Ordinal) { "Latin", "Cyrillic" },
+            }),
+            ("x ѕelect", new HomoglyphDetector.Options
+            {
+                AllowedAsciiKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "select" },
+            }),
+            ("a а", new HomoglyphDetector.Options { MinTokenLength = 3 }),
+            ("a а", new HomoglyphDetector.Options { MinTokenLength = 1 }),
+            ("return", new HomoglyphDetector.Options { AllowedAsciiKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase) }),
+        };
+
+        foreach (var (input, options) in cases)
+        {
+            var expected = ReferenceScanner.ScanLine(input, 3, options);
+            var actual = HomoglyphDetector.ScanLine(input, 3, options);
+            Assert.Equal(expected, actual);
+        }
+    }
+
+    [Fact]
+    public void Options_default_matches_fresh_default_options()
+    {
+        var fresh = new HomoglyphDetector.Options();
+        Assert.Equal(fresh.MinTokenLength, HomoglyphDetector.Options.Default.MinTokenLength);
+        Assert.Equal(fresh.RequireAsciiContext, HomoglyphDetector.Options.Default.RequireAsciiContext);
+        Assert.Equal(fresh.AllowedScripts, HomoglyphDetector.Options.Default.AllowedScripts);
+        Assert.Equal(fresh.AllowedAsciiKeywords, HomoglyphDetector.Options.Default.AllowedAsciiKeywords);
+    }
+
+    [Fact]
+    public void Analyze_stays_under_allocation_budget_for_large_diffs()
+    {
+        var builder = new System.Text.StringBuilder();
+        builder.Append("+++ b/f.cs\n@@ -0,0 +1,10001 @@\n");
+        for (var i = 0; i < 10_000; i++)
+        {
+            builder.Append("+var count").Append(i).Append(" = ComputeValue(x); // plain ascii line here\n");
+        }
+
+        builder.Append("+var fileNаme = value;\n");
+        var diff = builder.ToString();
+
+        HomoglyphDiffAnalyzer.Analyze(diff); // warmup (JIT) outside the measurement window
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var findings = HomoglyphDiffAnalyzer.Analyze(diff);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Single(findings);
+        Assert.True(allocated < 2_000_000, $"allocated {allocated:N0} bytes for a 10k-line scan");
+    }
+
+    /// <summary>Pre-P2-27 scanner kept verbatim as the parity oracle for the de-allocated
+    /// implementation (P2-27 §5: same inputs through old vs new path).</summary>
+    private static class ReferenceScanner
+    {
+        private static readonly IReadOnlyDictionary<char, char> Confusables = new Dictionary<char, char>
+        {
+            ['а'] = 'a', ['А'] = 'A', ['с'] = 'c', ['С'] = 'C',
+            ['е'] = 'e', ['Е'] = 'E', ['о'] = 'o', ['О'] = 'O',
+            ['р'] = 'p', ['Р'] = 'P', ['х'] = 'x', ['Х'] = 'X',
+            ['і'] = 'i', ['І'] = 'I', ['ј'] = 'j', ['Ј'] = 'J',
+            ['у'] = 'y', ['У'] = 'Y', ['ѕ'] = 's', ['Ѕ'] = 'S',
+            ['ѵ'] = 'v', ['Ѵ'] = 'V',
+            ['Α'] = 'A', ['Β'] = 'B', ['Ε'] = 'E', ['Ζ'] = 'Z', ['Η'] = 'H',
+            ['Ι'] = 'I', ['Κ'] = 'K', ['Μ'] = 'M', ['Ν'] = 'N', ['Ο'] = 'O',
+            ['Ρ'] = 'P', ['Τ'] = 'T', ['Χ'] = 'X', ['Υ'] = 'Y'
+        };
+
+        public static IReadOnlyList<HomoglyphDetector.ConfusableToken> ScanLine(
+            string line, int lineNumber, HomoglyphDetector.Options? options = null)
+        {
+            options ??= new HomoglyphDetector.Options();
+            var tokens = Tokenize(line);
+            var hasAsciiContext = tokens.Any(item => item.Token.All(c => c <= 0x7F));
+            if (options.RequireAsciiContext && !hasAsciiContext)
+            {
+                return [];
+            }
+
+            var findings = new List<HomoglyphDetector.ConfusableToken>();
+            foreach (var (token, start) in tokens)
+            {
+                if (token.Length < options.MinTokenLength || token.All(c => c <= 0x7F))
+                {
+                    continue;
+                }
+
+                var scripts = token.Where(char.IsLetter).Select(ScriptOf).Distinct(StringComparer.Ordinal).ToArray();
+                var mixed = scripts.Length > 1 && scripts.Any(script => !options.AllowedScripts.Contains(script));
+                var skeleton = Skeleton(token);
+                var hasKnownSkeleton = !string.Equals(skeleton, token, StringComparison.Ordinal)
+                    && options.AllowedAsciiKeywords.Contains(skeleton);
+
+                if (hasKnownSkeleton)
+                {
+                    findings.Add(new HomoglyphDetector.ConfusableToken(token, lineNumber, start, "confusable keyword", skeleton));
+                }
+                else if (mixed)
+                {
+                    findings.Add(new HomoglyphDetector.ConfusableToken(token, lineNumber, start, "mixed-script identifier", skeleton));
+                }
+            }
+
+            return findings;
+        }
+
+        private static List<(string Token, int Start)> Tokenize(string line)
+        {
+            var tokens = new List<(string, int)>();
+            var start = -1;
+            for (var i = 0; i <= line.Length; i++)
+            {
+                var isToken = i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_');
+                if (isToken && start < 0)
+                {
+                    start = i;
+                }
+                else if (!isToken && start >= 0)
+                {
+                    tokens.Add((line[start..i], start));
+                    start = -1;
+                }
+            }
+
+            return tokens;
+        }
+
+        private static string Skeleton(string token)
+        {
+            var builder = new System.Text.StringBuilder(token.Length);
+            foreach (var c in token.Normalize(System.Text.NormalizationForm.FormKC))
+            {
+                builder.Append(Confusables.TryGetValue(c, out var mapped) ? mapped : c);
+            }
+
+            return builder.ToString();
+        }
+
+        private static string ScriptOf(char c)
+            => c switch
+            {
+                >= '\u0370' and <= '\u03FF' => "Greek",
+                >= '\u0400' and <= '\u052F' => "Cyrillic",
+                >= '\u0530' and <= '\u058F' => "Armenian",
+                >= '\uFF00' and <= '\uFFEF' => "Fullwidth",
+                _ when c <= 0x024F => "Latin",
+                _ => "Other"
+            };
+    }
 }

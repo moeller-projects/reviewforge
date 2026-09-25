@@ -439,7 +439,7 @@ public class RepoReadToolsTests : IDisposable
 
         var viaLink = Tools().ReadFile("src/readme.txt");
         Assert.Equal("access denied: src/readme.txt", viaLink);
-        Assert.Equal(Tools().ReadFile(".env"), "access denied: .env"); // identical template
+        Assert.Equal("access denied: .env", Tools().ReadFile(".env")); // identical template
         Assert.DoesNotContain("symlink", viaLink, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("escape", viaLink, StringComparison.OrdinalIgnoreCase);
     }

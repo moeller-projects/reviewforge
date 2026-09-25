@@ -820,7 +820,7 @@ public class StageTests : IDisposable
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        var op = Assert.Single(ctx.TriagePlan.Where(o => o.Op != TriageOp.None));
+        var op = Assert.Single(ctx.TriagePlan, o => o.Op != TriageOp.None);
         Assert.Equal(TriageOp.Reopen, op.Op);
         Assert.Contains(source.Replies, r => r.ThreadId == 7 && r.Text.Contains("Regressed in head-sh"));
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 7 && s.Status == ReviewThreadStatus.Active);

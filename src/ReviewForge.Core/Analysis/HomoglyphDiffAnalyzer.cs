@@ -9,11 +9,14 @@ public static class HomoglyphDiffAnalyzer
     {
         ArgumentNullException.ThrowIfNull(diff);
         var findings = new List<RichFinding>();
+        var opts = options ?? HomoglyphDetector.Options.Default;
         string? file = null;
         var newLine = 0;
         var inHunk = false;
 
-        foreach (var raw in diff.Split('\n'))
+        // EnumerateLines avoids the Split('\n') array + per-line string (P2-27); content lines
+        // are materialized only when they need Preprocess/ScanLine.
+        foreach (var raw in diff.AsSpan().EnumerateLines())
         {
             var line = raw.TrimEnd('\r');
 
@@ -37,23 +40,29 @@ public static class HomoglyphDiffAnalyzer
                 {
                     if (marker == '+')
                     {
-                        var content = PipelineText.Preprocess(line[1..]);
-                        foreach (var token in HomoglyphDetector.ScanLine(content, newLine, options))
+                        var content = line[1..];
+                        // Pure-ASCII added lines can never flag, and Preprocess (NFKC +
+                        // sanitizer) cannot create non-ASCII from ASCII — skip both.
+                        if (content.IndexOfAnyExceptInRange((char)0x00, (char)0x7F) >= 0)
                         {
-                            var ruleId = token.Reason == "confusable keyword"
-                                ? "homoglyph/confusable-keyword"
-                                : "homoglyph/mixed-script-identifier";
-                            findings.Add(new RichFinding
+                            var processed = PipelineText.Preprocess(content.ToString());
+                            foreach (var token in HomoglyphDetector.ScanLine(processed, newLine, opts))
                             {
-                                RuleId = ruleId,
-                                Title = token.Reason,
-                                Severity = token.Reason == "confusable keyword" ? "high" : "medium",
-                                Category = "security",
-                                Description = $"Token '{token.Token}' uses characters that can be confused with '{token.AsciiLookalike}'.",
-                                Snippet = line[1..],
-                                Suggestion = token.AsciiLookalike is null ? null : $"Use '{token.AsciiLookalike}'.",
-                                Anchor = new FindingAnchor(file, newLine, newLine)
-                            });
+                                var ruleId = token.Reason == "confusable keyword"
+                                    ? "homoglyph/confusable-keyword"
+                                    : "homoglyph/mixed-script-identifier";
+                                findings.Add(new RichFinding
+                                {
+                                    RuleId = ruleId,
+                                    Title = token.Reason,
+                                    Severity = token.Reason == "confusable keyword" ? "high" : "medium",
+                                    Category = "security",
+                                    Description = $"Token '{token.Token}' uses characters that can be confused with '{token.AsciiLookalike}'.",
+                                    Snippet = content.ToString(),
+                                    Suggestion = token.AsciiLookalike is null ? null : $"Use '{token.AsciiLookalike}'.",
+                                    Anchor = new FindingAnchor(file, newLine, newLine)
+                                });
+                            }
                         }
 
                         newLine++;
@@ -88,7 +97,7 @@ public static class HomoglyphDiffAnalyzer
         return findings;
     }
 
-    private static bool TryReadNewLine(string line, out int newLine)
+    private static bool TryReadNewLine(ReadOnlySpan<char> line, out int newLine)
     {
         newLine = 0;
         var plus = line.IndexOf('+');
