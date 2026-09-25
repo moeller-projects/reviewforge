@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ReviewForge.Service.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -325,7 +326,7 @@ public class ServiceTests : IAsyncLifetime
                 Options.Create(new RepoReadToolsOptions()),
             LoggerFactory.Create(b => { }));
         var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
-            _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
+            _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>(), new NoopRunLogLifecycle());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = worker.StartAsync(cts.Token);

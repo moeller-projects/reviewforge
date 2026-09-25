@@ -19,6 +19,7 @@ public sealed class ReviewWorker(
     InFlightClaims claims,
     IFindingStore store,
     ILogger<ReviewWorker> logger,
+    IRunLogLifecycle runLogs,
     TimeProvider? clock = null) : BackgroundService
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
@@ -45,7 +46,7 @@ public sealed class ReviewWorker(
                     "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
                     request.RunId, request.Pr, holder);
                 tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued");
-                RunLogFileProvider.Current?.CloseRun(request.RunId);
+                runLogs.CloseRun(request.RunId);
                 continue; // finally-block of the run loop is not entered; nothing to release
             }
 
@@ -125,7 +126,7 @@ public sealed class ReviewWorker(
             {
                 ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
-                RunLogFileProvider.Current?.CloseRun(request.RunId);
+                runLogs.CloseRun(request.RunId);
             }
         }
     }

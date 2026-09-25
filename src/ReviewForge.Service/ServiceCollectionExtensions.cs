@@ -40,14 +40,21 @@ public static class ServiceCollectionExtensions
             $"{ReviewForgeServiceOptions.SectionName}:RunLogs:Enabled") ?? true;
         if (runLogsEnabled)
         {
-            services.AddLogging(logging => logging.AddProvider(new RunLogFileProvider(
-                configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:WorkDir")
-                    ?? Path.Combine(Path.GetTempPath(), "reviewforge"),
+            // One instance: the logging provider and the worker's lifecycle hook are the same
+            // object (P2-31 — no ambient static).
+            var runLogProvider = new RunLogFileProvider(
+                workDir,
                 new RunLogOptions
                 {
                     MinLevel = configuration.GetValue<LogLevel?>(
-                        $"{ReviewForgeServiceOptions.SectionName}:RunLogs:MinLevel") ?? LogLevel.Debug,
-                })));
+                        $"{ReviewForgeServiceOptions.SectionName}:RunLogs:MinLevel") ?? LogLevel.Information,
+                });
+            services.AddSingleton<IRunLogLifecycle>(runLogProvider);
+            services.AddLogging(logging => logging.AddProvider(runLogProvider));
+        }
+        else
+        {
+            services.AddSingleton<IRunLogLifecycle, NoopRunLogLifecycle>();
         }
 
         // Validated options (P3-d): DataAnnotations + rule checks, fail-fast at startup and on

@@ -26,7 +26,6 @@ public class RunLogFileProviderTests : IDisposable
             d.Dispose();
         }
 
-        RunLogFileProvider.Current?.Dispose();
         if (Directory.Exists(_WorkDir))
         {
             try
@@ -70,7 +69,7 @@ public class RunLogFileProviderTests : IDisposable
     }
 
     [Fact]
-    public void CloseRun_then_log_reopens_in_append_mode()
+    public void CloseRun_then_log_is_dropped_and_writer_not_recreated()
     {
         var logger = BuildLogger(out var provider);
         var runId = Guid.NewGuid();
@@ -85,10 +84,121 @@ public class RunLogFileProviderTests : IDisposable
         {
             logger.LogInformation("second");
         }
+
+        var file = Assert.Single(Directory.GetFiles(LogsDir));
+        Assert.Equal(new[] {"first"}, File.ReadLines(file).Select(l => JsonSerializer.Deserialize<RunLogEntry>(l)!.Message));
+    }
+
+    [Fact]
+    public void Buffered_entries_are_all_flushed_by_CloseRun()
+    {
+        var logger = BuildLogger(out var provider);
+        var runId = Guid.NewGuid();
+
+        using (logger.BeginScope(new Dictionary<string, object> {["RunId"] = runId}))
+        {
+            for (var i = 0; i < 1000; i++)
+            {
+                logger.LogInformation("entry {Index}", i);
+            }
+        }
         provider.CloseRun(runId);
 
         var file = Assert.Single(Directory.GetFiles(LogsDir));
-        Assert.Equal(2, File.ReadLines(file).Count());
+        var lines = File.ReadLines(file).ToList();
+        Assert.Equal(1000, lines.Count);
+        Assert.Contains("entry 999", lines[^1]);
+    }
+
+    [Fact]
+    public async Task Write_racing_Dispose_throws_nothing()
+    {
+        var provider = new RunLogFileProvider(_WorkDir, new RunLogOptions());
+        var runId = Guid.NewGuid();
+        var writers = Enumerable.Range(0, 4)
+            .Select(_ => Task.Run(() =>
+            {
+                for (var i = 0; i < 500; i++)
+                {
+                    provider.Write(runId, LogLevel.Information, "t", new EventId(1), "m", null, new Dictionary<string, object?>());
+                }
+            }))
+            .ToList();
+
+        var dispose = Task.Run(() => provider.Dispose());
+        await Task.WhenAll(writers.Append(dispose));
+    }
+
+    [Fact]
+    public void Write_after_writer_disposal_is_swallowed()
+    {
+        var provider = new RunLogFileProvider(_WorkDir, new RunLogOptions());
+        RunLogWriter? captured = null;
+        provider.WriterFactory = path =>
+        {
+            captured = new RunLogWriter(path);
+            return captured;
+        };
+        var runId = Guid.NewGuid();
+
+        provider.Write(runId, LogLevel.Information, "t", new EventId(1), "before", null, new Dictionary<string, object?>());
+        captured!.Dispose(); // simulates CloseRun/Dispose winning the race mid-flight
+        provider.Write(runId, LogLevel.Information, "t", new EventId(1), "after", null, new Dictionary<string, object?>());
+
+        var file = Assert.Single(Directory.GetFiles(LogsDir));
+        Assert.Contains("before", File.ReadAllText(file));
+        provider.Dispose();
+    }
+
+    [Fact]
+    public void Write_after_provider_Dispose_is_dropped()
+    {
+        var provider = new RunLogFileProvider(_WorkDir, new RunLogOptions());
+        provider.Dispose();
+        provider.Write(Guid.NewGuid(), LogLevel.Information, "t", new EventId(1), "late", null, new Dictionary<string, object?>());
+        Assert.Empty(Directory.GetFiles(LogsDir));
+    }
+
+    [Fact]
+    public void Closed_run_set_is_bounded()
+    {
+        var provider = new RunLogFileProvider(_WorkDir, new RunLogOptions());
+        for (var i = 0; i < RunLogFileProvider.ClosedRunCap + 1; i++)
+        {
+            provider.CloseRun(Guid.NewGuid());
+        }
+
+        Assert.True(provider.ClosedRunCount <= RunLogFileProvider.ClosedRunCap);
+        provider.Dispose();
+    }
+
+    [Fact]
+    public void Unix_file_and_directory_modes_are_owner_only()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Unix modes do not apply
+        }
+
+        var logger = BuildLogger(out var provider);
+        var runId = Guid.NewGuid();
+        using (logger.BeginScope(new Dictionary<string, object> {["RunId"] = runId}))
+        {
+            logger.LogInformation("x");
+        }
+        provider.CloseRun(runId);
+
+        var file = Assert.Single(Directory.GetFiles(LogsDir));
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(LogsDir));
+    }
+
+    [Fact]
+    public void MinLevel_defaults_to_information()
+    {
+        Assert.Equal(LogLevel.Information, new RunLogOptions().MinLevel);
     }
 
     [Fact]
@@ -138,5 +248,33 @@ public class RunLogFileProviderTests : IDisposable
         {
             provider.Dispose();
         }
+    }
+
+    [Fact]
+    public void Noop_lifecycle_close_is_safe()
+    {
+        IRunLogLifecycle lifecycle = new NoopRunLogLifecycle();
+        lifecycle.CloseRun(Guid.NewGuid());
+    }
+
+    [Fact]
+    public void Writer_flush_and_dispose_swallow_io_errors()
+    {
+        var entry = new RunLogEntry(DateTimeOffset.UtcNow, LogLevel.Information, "t", 1, "m", null, new Dictionary<string, object?>());
+        var failing = new RunLogWriter(new ThrowOnFlushStream());
+        failing.Write(entry);
+        failing.Flush();
+        failing.Dispose();
+
+        var healthy = new RunLogWriter(new MemoryStream());
+        healthy.Write(entry);
+        healthy.Flush();
+        healthy.Dispose();
+    }
+
+    /// <summary>Simulates a stream whose final flush fails (e.g. disk full).</summary>
+    private sealed class ThrowOnFlushStream : MemoryStream
+    {
+        public override void Flush() => throw new IOException("simulated flush failure");
     }
 }

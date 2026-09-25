@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using ReviewForge.Service.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
@@ -53,7 +54,7 @@ public class ReviewWorkerTests
                 options,
                 Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
-            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock);
+            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, new NoopRunLogLifecycle(), Clock);
         }
 
         public void Dispose()
