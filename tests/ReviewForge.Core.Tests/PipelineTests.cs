@@ -660,6 +660,46 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Prepare_accepts_quoted_diff_paths_end_to_end()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git \"a/caf\\303\\251.cs\" \"b/caf\\303\\251.cs\"\n" +
+                   "--- \"a/caf\\303\\251.cs\"\n+++ \"b/caf\\303\\251.cs\"\n@@ -0,0 +1,1 @@\n+x\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("café.cs", ChangedFileType.Edit)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["café.cs"], ctx.ReviewableFiles!.Order());
+    }
+
+    [Fact]
+    public async Task Prepare_excludes_binary_manifest_file_without_failing()
+    {
+        var git = new FakeGitOps
+        {
+            Diff = "diff --git a/a.cs b/a.cs\n--- a/a.cs\n+++ b/a.cs\n@@ -0,0 +1,1 @@\n+x\n" +
+                   "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n",
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
+        };
+
+        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
+    }
+
+    [Fact]
     public async Task Prepare_still_throws_when_diff_has_unaccounted_text_file()
     {
         var git = new FakeGitOps
@@ -678,7 +718,7 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Prepare_warns_and_excludes_manifest_orphan()
+    public async Task Prepare_throws_on_manifest_orphan()
     {
         var git = new FakeGitOps
         {
@@ -690,10 +730,9 @@ public class StageTests : IDisposable
             ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("ghost.cs", ChangedFileType.Edit)],
         };
 
-        await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
-            .ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
+        Assert.Contains("ghost.cs", ex.Message);
     }
 
     [Fact]
