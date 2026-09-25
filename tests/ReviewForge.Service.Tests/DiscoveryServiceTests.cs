@@ -139,6 +139,28 @@ public class DiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Sweep_skips_head_whose_fetch_failures_are_headless()
+    {
+        // P2-33: manual submits carry HeadSha = null, so a fetch-stage failure persists an
+        // empty head. Those failures must back off a discovery submit of any real head.
+        var candidate = Candidate(1, headSha: "head-42");
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var store = new FakeFindingStore();
+        store.RecentRuns.Add(new ReviewRun(Guid.NewGuid(), candidate.Key, "", ReviewKind.Full,
+            DateTimeOffset.UtcNow.AddMinutes(-11), DateTimeOffset.UtcNow.AddMinutes(-10), false, []));
+        var service = Service(source, store, new ReviewQueue(), new RunTracker());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Contains(report.Skipped, s => s.Reason.Contains("backoff"));
+    }
+
+    [Fact]
     public async Task In_flight_claim_wins_over_backoff_attribution()
     {
         // Both conditions apply: the head failed AND a run is in flight. The cheap, correct

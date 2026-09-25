@@ -502,4 +502,43 @@ public class FailureBackoffTests
         Assert.Equal(failed.CompletedAt + TimeSpan.FromMinutes(30),
             FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
     }
+
+    [Theory]
+    [InlineData("head")]
+    [InlineData("any-other-head")]
+    public void BlockedUntil_headless_fetch_failures_count_for_any_head(string head)
+    {
+        // P2-33: endpoint submits carry HeadSha = null; a fetch-stage failure persists
+        // an empty head. Two consecutive head-less failures back off a submit of any head.
+        var t = Now.AddMinutes(-5);
+        var runs = new[] {Failed("", t), Failed("", t)};
+        Assert.Equal(t + TimeSpan.FromHours(1), FailureBackoff.BlockedUntil(runs, head, Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_headless_then_different_head_counts_only_headless()
+    {
+        // Newest first: head-less failure counts (streak 1), headed failure at a different
+        // head breaks the streak and is not attributed to the requested head.
+        var t = Now.AddMinutes(-5);
+        var runs = new[] {Failed("", t), Failed("other-head", t)};
+        Assert.Equal(t + TimeSpan.FromMinutes(30), FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_headless_failure_does_not_break_headed_streak()
+    {
+        // A head-less failure between headed failures of the same head extends, not
+        // breaks, the streak (streak 3 → 2h delay from the newest headed failure).
+        var t = Now.AddMinutes(-5);
+        var runs = new[] {Failed("head", t), Failed("", t), Failed("head", t)};
+        Assert.Equal(t + TimeSpan.FromHours(2), FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_success_resets_streak_after_headless_failure()
+    {
+        var runs = new[] {Succeeded("head", Now.AddMinutes(-5)), Failed("", Now.AddMinutes(-30))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
 }
