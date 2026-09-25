@@ -109,6 +109,16 @@ public sealed class DiscoveryService(
                     return;
                 }
 
+                // In-flight check first (P1-12): a live run legitimately owns the PR — the
+                // cheap, correct reason ("already in flight") must win the skip attribution
+                // over "head failing", and the head-failing-backoff metric must reflect
+                // only real failures.
+                if (claims.IsClaimed(candidate.Key))
+                {
+                    Skip(candidate.Key, "review already in flight");
+                    return;
+                }
+
                 // Failure memory: a head whose recent runs all failed backs off exponentially.
                 var recentRuns = await store.GetRecentRunsAsync(candidate.Key, count: 10, token);
                 var blockedUntil = FailureBackoff.BlockedUntil(

@@ -244,6 +244,31 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetStaleShells_returns_only_old_uncompleted_runs_across_prs()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var cutoff = t0.AddMinutes(30);
+        // Stale shell (old, uncompleted) — must be returned.
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h1", ReviewKind.Full, t0, null, false, []), CancellationToken.None);
+        // Recent shell (started after the cutoff — still inside the stages 75→100 window) — must NOT be returned.
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h2", ReviewKind.Full, cutoff.AddMinutes(1), null, false, []), CancellationToken.None);
+        // Completed run, even an old one — must NOT be returned.
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h3", ReviewKind.Full, t0, t0.AddMinutes(4), false, []), CancellationToken.None);
+        // Stale shell on another PR — must be returned (reaper scans all PRs).
+        var otherPr = Key with {PrId = 99};
+        var otherShell = new ReviewRun(Guid.NewGuid(), otherPr, "h4", ReviewKind.Full, t0, null, false, []);
+        await _Store.SaveRunAsync(otherShell, CancellationToken.None);
+
+        var shells = await _Store.GetStaleShellsAsync(cutoff, CancellationToken.None);
+
+        Assert.Equal(2, shells.Count);
+        Assert.Contains(shells, r => r.HeadSha == "h1");
+        Assert.Contains(shells, r => r.Id == otherShell.Id && r.Pr == otherPr);
+        Assert.DoesNotContain(shells, r => r.HeadSha is "h2" or "h3");
+        Assert.All(shells, r => Assert.Null(r.CompletedAt));
+    }
+
+    [Fact]
     public async Task SetThreadId_backfills_finding()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);

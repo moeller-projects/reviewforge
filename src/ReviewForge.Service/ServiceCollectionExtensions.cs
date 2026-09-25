@@ -77,6 +77,7 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.WorkerCount >= 1, "ReviewForge:WorkerCount must be at least 1")
             .Validate(o => ReviewForgeServiceOptions.IsValidCleanRunVote(o.CleanRunVote),
                 "ReviewForge:CleanRunVote must be NoResponse, Approved, ApprovedWithSuggestions, or None")
+            .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
             .ValidateOnStart();
 
         services.AddOptions<ApiDocsOptions>()
@@ -149,6 +150,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<DiscoverySweepWorker>();
         services.AddHostedService<CheckoutEvictionWorker>();
         services.AddHostedService<TelemetryGaugeRegistration>();
+        services.AddHostedService<ShellReaperService>();
 
         // API keys are intentionally not bound from configuration. Secrets may only enter
         // through REVIEWFORGE_API_KEYS; other Api settings remain ordinary configuration.

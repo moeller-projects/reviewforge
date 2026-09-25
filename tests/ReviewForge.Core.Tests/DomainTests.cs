@@ -479,4 +479,27 @@ public class FailureBackoffTests
         var runs = new[] {Failed("head", Now.AddHours(-9))};
         Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
     }
+
+    private static ReviewRun Shell(string head, DateTimeOffset startedAt)
+        => new(Guid.NewGuid(), new PrKey("o", "p", "r", 7), head, ReviewKind.Full, startedAt, null, false, []);
+
+    [Fact]
+    public void BlockedUntil_ignores_in_flight_shells()
+    {
+        // A shell (CompletedAt == null) proves nothing about failure: it neither blocks
+        // nor counts, even when it is the newest run for the head.
+        var runs = new[] {Shell("head", Now.AddMinutes(-2))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_shells_do_not_break_or_extend_failure_streak()
+    {
+        // Shells are skipped entirely: the failure streak behind them still counts with
+        // its own completion time, and a shell in the middle does not reset anything.
+        var failed = Failed("head", Now.AddMinutes(-10));
+        var runs = new[] {Shell("head", Now.AddMinutes(-3)), failed, Succeeded("head", Now.AddMinutes(-60))};
+        Assert.Equal(failed.CompletedAt + TimeSpan.FromMinutes(30),
+            FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
 }

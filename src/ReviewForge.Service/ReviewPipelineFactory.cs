@@ -66,6 +66,14 @@ public sealed class ReviewForgeServiceOptions
 
     /// <summary>Opt-in: exports OTel traces/metrics via OTLP. Default false (no exporter).</summary>
     public bool OtlpEnabled { get; init; }
+
+    /// <summary>
+    /// In-flight shells (runs persisted by BeginRunStage but never finalized — crash or kill
+    /// between stages 75 and 100) older than this at startup are reaped and finalized as
+    /// failures, so a crashed run blocks the head for at most this window plus normal
+    /// failure backoff. Default 10 minutes.
+    /// </summary>
+    public int StaleShellMinutes { get; init; } = 10;
 }
 
 public sealed class ReviewPipelineFactory(

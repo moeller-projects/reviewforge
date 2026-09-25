@@ -186,5 +186,26 @@ public sealed class SqliteFindingStore : IFindingStore
         ];
     }
 
+    public async Task<IReadOnlyList<ReviewRun>> GetStaleShellsAsync(DateTimeOffset olderThan, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        // SQLite cannot translate DateTimeOffset inequality — filter null completion in SQL,
+        // compare StartedAt in memory (the shell set is tiny).
+        var runs = await db.Runs
+            .Where(r => r.CompletedAt == null)
+            .ToListAsync(ct);
+
+        // Reaper input only — findings are not loaded; SaveRunAsync upsert preserves rows.
+        return
+        [
+            .. runs
+                .Where(r => r.StartedAt < olderThan)
+                .Select(r => new ReviewRun(
+                    r.Id, new PrKey(r.Org, r.Project, r.RepositoryId, r.PrId), r.HeadSha,
+                    Enum.Parse<ReviewKind>(r.Kind), r.StartedAt, r.CompletedAt, r.Success,
+                    [], r.LastObservedCommentAt))
+        ];
+    }
+
     private FindingStoreDbContext CreateContext() => new(_Options);
 }

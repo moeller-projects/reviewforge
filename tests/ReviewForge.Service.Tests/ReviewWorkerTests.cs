@@ -312,6 +312,11 @@ public class ReviewWorkerTests
         await h.Worker.StopAsync(CancellationToken.None);
 
         Assert.False(h.Claims.IsHeldBy(Key, runId), "claim must be released even on shutdown mid-run");
+        // Shutdown leaves a truthful record (P1-12): the mid-run cancellation is persisted
+        // as a failure, not silently dropped — otherwise the run would linger as a shell.
+        var record = Assert.Single(h.Store.Runs, r => r.Id == runId);
+        Assert.False(record.Success);
+        Assert.NotNull(record.CompletedAt);
     }
 
     [Fact]
