@@ -8,7 +8,7 @@ public class DomainTests
     private static readonly DateTimeOffset Now = new(2026, 9, 17, 12, 0, 0, TimeSpan.Zero);
 
     private static PullRequest Pr(bool draft = false, string head = "sha-1")
-        => new(7, "t", null, head, "base", "url", draft);
+        => new(7, "t", null, head, "base", "url", draft, "creator-1", "PR Author");
 
     private static ReviewThread HumanThread(DateTimeOffset when)
         => new(1, null, ReviewThreadStatus.Active,

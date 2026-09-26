@@ -59,7 +59,7 @@ public class ReviewPipelineTests
         var log = new List<string>();
         var pipeline = new ReviewPipeline(
             [
-                new RecordingStage("fetch", log, ctx => ctx.PullRequest = new PullRequest(1, "t", null, "head-sha", "base", "url", false)),
+                new RecordingStage("fetch", log, ctx => ctx.PullRequest = new PullRequest(1, "t", null, "head-sha", "base", "url", false, "creator-1", "PR Author")),
                 new RecordingStage("after", log),
             ],
             NullLogger<ReviewPipeline>.Instance);
@@ -612,7 +612,7 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
             ChangedFileManifest = [new ChangedFile("src/A.cs", ChangedFileType.Edit)],
         };
 
@@ -630,7 +630,7 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
             ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
         };
 
@@ -649,7 +649,7 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
             ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Rename)],
         };
 
@@ -669,7 +669,7 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
             ChangedFileManifest = [new ChangedFile("café.cs", ChangedFileType.Edit)],
         };
 
@@ -689,7 +689,7 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
             ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
         };
 
@@ -709,7 +709,7 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
             ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)],
         };
 
@@ -726,7 +726,7 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false),
+            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
             ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("ghost.cs", ChangedFileType.Edit)],
         };
 
@@ -1379,7 +1379,7 @@ public class StageTests : IDisposable
     }
 
     private static PullRequest Pr(string head)
-        => new(1, "t", null, head, "base", "url", false);
+        => new(1, "t", null, head, "base", "url", false, "creator-1", "PR Author");
 
     /// <summary>Returns the updated head on every fetch after the first (the stage-1 fetch).</summary>
     private sealed class HeadChangingSource(PullRequest first, PullRequest second) : FakePullRequestSource

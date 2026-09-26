@@ -70,6 +70,14 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     // Stage 7 — validation output: findings accepted for posting
     public IReadOnlyList<RichFinding> AcceptedFindings { get; set; } = [];
 
+    // Stage 7.2 — auto-fix: suggestion fixes that passed all gates (deterministic + commanded)
+    public IReadOnlyList<AutoFix.AppliedFix> AppliedFixes { get; set; } = [];
+    public IReadOnlyList<AutoFix.FixCommand> FixCommands { get; set; } = [];
+
+    /// <summary>Replies queued by the auto-fix stage, posted by the publish stage (declines,
+    /// verifier failures, exhausted budget, links to posted suggestions).</summary>
+    public IReadOnlyList<(int ThreadId, string Text)> FixCommandReplies { get; set; } = [];
+
     // Stage 8 — triage
     public IReadOnlyList<TriageOperation> TriagePlan { get; set; } = [];
     public IReadOnlyList<int> UnansweredThreads { get; set; } = [];

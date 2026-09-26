@@ -57,17 +57,26 @@ public sealed class NativeReviewAgent(
         TokenUsage? usage,
         IReadOnlySet<string>? changedFiles,
         DiffIndex? diff,
-        IReadOnlySet<string>? resolvedKeys)
+        IReadOnlySet<string>? resolvedKeys,
+        IReadOnlyList<AITool>? extraTools = null)
     {
         var repoTools = new RepoReadTools(
             repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
             grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines);
         var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff, resolvedKeys: resolvedKeys);
-        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
-        IChatClient invoking = new ChatClientBuilder(guarded)
-            .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = _Options.MaxIterations)
-            .Build();
-        IChatClient tracked = new UsageTrackingChatClient(invoking, usage ?? new TokenUsage(), _Logger, _Options.DebugLogging);
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(repoTools.ReadFile), AIFunctionFactory.Create(repoTools.List),
+            AIFunctionFactory.Create(repoTools.Grep), AIFunctionFactory.Create(reviewTools.ReadContext),
+            AIFunctionFactory.Create(reviewTools.GetRulebook), AIFunctionFactory.Create(reviewTools.RecordFinding),
+            AIFunctionFactory.Create(reviewTools.RecordUncertainty), AIFunctionFactory.Create(reviewTools.TaskDone),
+        };
+        if (extraTools is not null)
+        {
+            tools.AddRange(extraTools);
+        }
+
+        var tracked = CreatePipeline(collector, usage ?? new TokenUsage());
         return tracked.AsAIAgent(new ChatClientAgentOptions
         {
             Name = "reviewforge-native",
@@ -76,16 +85,21 @@ public sealed class NativeReviewAgent(
                 ModelId = chatClientFactory.ModelName,
                 Instructions = SystemPromptComposer.Compose(_Options.PromptOverridePath, ruleBook),
                 Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
-                Tools =
-                [
-                    AIFunctionFactory.Create(repoTools.ReadFile), AIFunctionFactory.Create(repoTools.List),
-                    AIFunctionFactory.Create(repoTools.Grep), AIFunctionFactory.Create(reviewTools.ReadContext),
-                    AIFunctionFactory.Create(reviewTools.GetRulebook), AIFunctionFactory.Create(reviewTools.RecordFinding),
-                    AIFunctionFactory.Create(reviewTools.RecordUncertainty), AIFunctionFactory.Create(reviewTools.TaskDone),
-                ],
+                Tools = tools,
             },
             AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
         });
+    }
+
+    /// <summary>TaskDone-guarded, function-invoking, usage-tracked client pipeline shared by
+    /// the review run and the fix pass.</summary>
+    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage)
+    {
+        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
+        IChatClient invoking = new ChatClientBuilder(guarded)
+            .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = _Options.MaxIterations)
+            .Build();
+        return new UsageTrackingChatClient(invoking, usage, _Logger, _Options.DebugLogging);
     }
 
     public Task<ReviewResult> RunAsync(string userPrompt, ReviewCollector collector, ContextStore contextStore, string repoDir, CancellationToken ct)
@@ -123,6 +137,66 @@ public sealed class NativeReviewAgent(
         }
 
         return collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", ruleBook?.VersionHash);
+    }
+
+    /// <summary>
+    /// Runs a constrained fix pass for one author-commanded "/rf fix": the agent gets ONLY
+    /// the hash-line editor tools (ReadFileWithHashes, EditFile) plus TaskDone — no
+    /// findings tools, no Grep — inside the same sandbox with a one-file writable set.
+    /// The returned <see cref="FixPassResult"/> exposes the editor so the caller can read
+    /// the merged session change and revert the file afterwards.
+    /// </summary>
+    public async Task<FixPassResult> RunWithEditToolsAsync(
+        string userPrompt,
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        IReadOnlySet<string> writablePaths,
+        int maxIterations,
+        CancellationToken ct)
+    {
+        var editor = new HashLineEditor(new RepoPathGuard(repoDir), writablePaths);
+        var reviewTools = new ReviewTools(collector, contextStore);
+        var usage = new TokenUsage();
+        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
+        IChatClient invoking = new ChatClientBuilder(guarded)
+            .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)
+            .Build();
+        IChatClient tracked = new UsageTrackingChatClient(invoking, usage, _Logger, _Options.DebugLogging);
+        var agent = tracked.AsAIAgent(new ChatClientAgentOptions
+        {
+            Name = "reviewforge-fix",
+            ChatOptions = new ChatOptions
+            {
+                ModelId = chatClientFactory.ModelName,
+                // Always the embedded fix-pass prompt: ReviewForge:PromptOverridePath targets
+                // the REVIEW system prompt, and substituting it here would hand the fix pass
+                // a contract for tools it does not have.
+                Instructions = SystemPromptComposer.ComposeFixPass(),
+                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
+                Tools =
+                [
+                    AIFunctionFactory.Create(editor.ReadFileWithHashes),
+                    AIFunctionFactory.Create(editor.EditFile),
+                    AIFunctionFactory.Create(reviewTools.TaskDone),
+                ],
+            },
+            AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
+        });
+        await agent.RunAsync(userPrompt, cancellationToken: ct);
+        _Logger?.LogInformation(
+            "fix pass token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}",
+            usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
+        if (!collector.Done)
+        {
+            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, new TagList { { "model", chatClientFactory.ModelName } });
+        }
+
+        return new FixPassResult(
+            collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", null),
+            editor,
+            usage.InputTokens,
+            usage.OutputTokens);
     }
 
     private sealed class TokenUsage

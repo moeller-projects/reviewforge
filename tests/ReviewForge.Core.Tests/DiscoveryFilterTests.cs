@@ -15,7 +15,7 @@ public class DiscoveryFilterTests
         bool draft = false)
     {
         var key = new PrKey("o", "p", "r", 1);
-        var pr = new PullRequest(1, "t", null, headSha, "base", "url", draft);
+        var pr = new PullRequest(1, "t", null, headSha, "base", "url", draft, "creator-1", "PR Author");
         return new PullRequestCandidate(key, pr, branch, creatorId, creatorName);
     }
 

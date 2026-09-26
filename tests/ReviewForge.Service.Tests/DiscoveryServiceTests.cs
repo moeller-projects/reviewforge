@@ -20,7 +20,7 @@ public class DiscoveryServiceTests
         bool draft = false)
         => new(
             new PrKey("o", "p", "r", prId),
-            new PullRequest(prId, "t", null, headSha, "base", "url", draft),
+            new PullRequest(prId, "t", null, headSha, "base", "url", draft, creatorId, creatorName),
             branch, creatorId, creatorName);
 
     private static DiscoveryService Service(
@@ -459,7 +459,7 @@ public class DiscoverySweepWorkerTests
     private static PullRequestCandidate Candidate(int prId)
         => new(
             new PrKey("o", "p", "r", prId),
-            new PullRequest(prId, "t", null, "head", "base", "url", IsDraft: false),
+            new PullRequest(prId, "t", null, "head", "base", "url", IsDraft: false, "alice", "Alice"),
             "main", "alice", "Alice");
 
     [Fact]
@@ -606,7 +606,7 @@ public class DiscoveryEndpointTests : IAsyncLifetime
     {
         var candidate = new PullRequestCandidate(
             new PrKey("o", "p", "r", 99),
-            new PullRequest(99, "t", null, "head-99", "base", "url", IsDraft: false),
+            new PullRequest(99, "t", null, "head-99", "base", "url", IsDraft: false, "alice", "Alice"),
             "main", "alice", "Alice");
         _Factory.Source.OpenPullRequests = [candidate];
         _Factory.Source.WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")];

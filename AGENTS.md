@@ -36,12 +36,14 @@ prompts/native-review-system.md   human-editable copy; the runtime default is th
 1. **Ports and adapters.** `ReviewForge.Core` must stay free of IO adapters and vendor
    SDKs. New PR host → implement `IPullRequestSource`. New reasoning provider → implement
    `IChatClientFactory`. Enrichment → `IContextEnricher` (fail-safe contract). The
-   pipeline must not change for a new adapter. Exception, deliberate:
+   pipeline must not change for a new adapter. Direct-IO exception, deliberate:
    `Analysis/PathSafety.cs` performs symlink resolution (Directory/File.Exists, LinkTarget)
    as the agent sandbox's containment primitive. It is isolated behind PathSafety so it
-   can be swapped for a port if Core is ever hosted out-of-process. All other Core IO goes
-   through `IWorkspaceFs` or is stage-local run-artifact IO documented in <remarks> (see
-   the `IWorkspaceFs` scope note).
+   can be swapped for a port if Core is ever hosted out-of-process.
+   `Reasoning/HashLineEditor.cs` (author-commanded fix passes and optional verification)
+   is under the same direct-IO exception; see rule 6 for the writable-set discipline. All
+   other Core IO goes through `IWorkspaceFs` or is stage-local run-artifact IO documented
+   in `<remarks>` (see the `IWorkspaceFs` scope note).
 2. **No engine fallback.** A failed stage fails the run; the failure is visible in run
    status. Never swallow an exception, never add a silent fallback engine or provider.
 3. **Secrets from the environment only.** ADO PAT: `REVIEWFORGE_ADO_PAT`. OpenAI key:
@@ -54,10 +56,23 @@ prompts/native-review-system.md   human-editable copy; the runtime default is th
    excluded with justification (`[ExcludeFromCodeCoverage]` is reserved for pure
    vendor-SDK wrappers like `AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`).
    All logic must live in covered code.
-6. **Agent sandbox.** `RepoReadTools` is read-only, rooted at the checkout, escape-proof,
-   deny-regex for `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. Do not add a shell tool.
+6. **Agent sandbox.** `RepoReadTools` (agent reads) is read-only, rooted at the checkout,
+   escape-proof, deny-regex for `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. The agent has
+   no shell. `HashLineEditor` (used by author-commanded fix passes and optional
+   verification) shares the same containment and deny rules via `RepoPathGuard` and is
+   additionally limited to a per-run writable set (a single anchored file for fix passes).
+   Every fix-pass write is reverted before the stage ends. External processes
+   (verification) run only via a configured `AutoFix:VerificationCommand`, only in the
+   checkout directory, only with a wall-clock timeout, and are never invoked by the agent.
 7. **Codex auth file** is rewritten atomically (temp + move) on token rotation. Any mount
    or path you introduce must preserve that (directory mount, read-write).
+8. **Auto-fix discipline.** A fix is only published when (a) the author is allowlisted,
+   (b) the rule has a registered fixer or the fix was explicitly commanded by the PR
+   author via `/rf fix`, and (c) the verifier passes. Any gate failing means the finding
+   is published as a plain comment instead. Every fix is published as an ADO suggestion
+   block — ReviewForge never writes to the PR branch, never pushes, never opens pull
+   requests. AI-drafted fixes are always labeled as such. Never resolve another person's
+   thread. Never leave a pooled checkout dirty.
 
 ## Conventions
 

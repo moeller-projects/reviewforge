@@ -17,7 +17,9 @@ public sealed record PullRequest(
     string SourceCommitSha,
     string TargetCommitSha,
     string CloneUrl,
-    bool IsDraft);
+    bool IsDraft,
+    string CreatorId,
+    string CreatorName);
 
 [ExcludeFromCodeCoverage]
 public sealed record WorkItem(
@@ -60,11 +62,17 @@ public sealed record ReviewThread(
     int Id,
     string? DedupeKey,
     ReviewThreadStatus Status,
-    IReadOnlyList<ThreadComment> Comments)
+    IReadOnlyList<ThreadComment> Comments,
+    ThreadAnchor? Anchor = null)
 {
     public ThreadComment? LastComment => Comments.Count == 0 ? null : Comments[^1];
     public bool HasPendingHumanReply => LastComment is {IsBot: false};
 }
+
+/// <summary>File location of a PR thread (from the provider's thread context). Null for
+/// general (non-file) threads.</summary>
+[ExcludeFromCodeCoverage]
+public sealed record ThreadAnchor(string FilePath, int StartLine, int EndLine);
 
 /// <summary>Location of a finding in the PR diff.</summary>
 [ExcludeFromCodeCoverage]
@@ -98,6 +106,10 @@ public sealed record RichFinding
     /// <summary>True when this finding was accepted because a known key regressed verbatim
     /// against a Fixed/Closed thread — the thread is reopened instead of re-posted (P1-11).</summary>
     public bool IsRegression { get; set; }
+
+    /// <summary>Set by the auto-fix stage; when present the published body is the fix
+    /// suggestion instead of the standard finding body. Not persisted on the entity.</summary>
+    public AutoFix.AppliedFix? AppliedFix { get; set; }
 }
 
 [ExcludeFromCodeCoverage]
