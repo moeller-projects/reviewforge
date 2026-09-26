@@ -480,4 +480,77 @@ public class SqliteFindingStoreTests : IDisposable
         Assert.Equal("h290", recent[9].HeadSha);
         Assert.All(recent, r => Assert.Equal(40, r.Findings.Count));
     }
+
+    [Fact]
+    public async Task AppliedFixJson_roundtrips_with_the_finding()
+    {
+        var fixJson = """{"DedupeKey":"k1","Proposal":{"FilePath":"script.sh","StartLine":3,"EndLine":3,"Replacement":"echo \"$name\"","Rationale":"quote it","Origin":"Deterministic","SourceThreadId":null},"VerifierName":"none"}""";
+        var completed = DateTimeOffset.UtcNow;
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h", ReviewKind.Full,
+                completed.AddMinutes(-5), completed, Success: true,
+                [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42, fixJson)]),
+            CancellationToken.None);
+
+        var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        var finding = Assert.Single(last!.Findings!);
+        Assert.Equal(fixJson, finding.AppliedFixJson);
+    }
+
+    [Fact]
+    public async Task Legacy_table_without_AppliedFixJson_column_is_migrated_and_writable()
+    {
+        // Simulate a database created before the auto-fix feature: both tables, no
+        // AppliedFixJson column on Findings.
+        await using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE "Runs" (
+                    "Id" TEXT NOT NULL CONSTRAINT "PK_Runs" PRIMARY KEY,
+                    "Org" TEXT NOT NULL,
+                    "Project" TEXT NOT NULL,
+                    "RepositoryId" TEXT NOT NULL,
+                    "PrId" INTEGER NOT NULL,
+                    "HeadSha" TEXT NOT NULL,
+                    "Kind" TEXT NOT NULL,
+                    "StartedAt" TEXT NOT NULL,
+                    "CompletedAt" TEXT NULL,
+                    "LastObservedCommentAt" TEXT NULL,
+                    "Success" INTEGER NOT NULL
+                );
+                CREATE TABLE "Findings" (
+                    "Id" INTEGER NOT NULL CONSTRAINT "PK_Findings" PRIMARY KEY AUTOINCREMENT,
+                    "RunId" TEXT NOT NULL,
+                    "DedupeKey" TEXT NOT NULL,
+                    "RuleId" TEXT NOT NULL,
+                    "Severity" TEXT NOT NULL,
+                    "Title" TEXT NOT NULL,
+                    "FilePath" TEXT NULL,
+                    "Line" INTEGER NULL,
+                    "ThreadId" INTEGER NULL
+                );
+                """;
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // Opening the store must add the column; saving and reading back must work.
+        var legacyStore = new SqliteFindingStore(_ConnectionString);
+        var completed = DateTimeOffset.UtcNow;
+        await legacyStore.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h", ReviewKind.Full,
+                completed.AddMinutes(-5), completed, Success: true,
+                [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42, "{}")]),
+            CancellationToken.None);
+
+        var last = await legacyStore.GetLastCompletedRunAsync(Key, CancellationToken.None);
+        Assert.Equal("{}", Assert.Single(last!.Findings!).AppliedFixJson);
+
+        await using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'AppliedFixJson'";
+            Assert.Equal(1L, await cmd.ExecuteScalarAsync());
+        }
+    }
 }

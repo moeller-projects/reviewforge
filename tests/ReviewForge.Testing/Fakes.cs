@@ -30,6 +30,7 @@ public class FakePullRequestSource : IPullRequestSource
     public Barrier? WorkItemBarrier { get; set; }
 
     public List<(RichFinding Finding, int ThreadId)> PostedFindings { get; } = [];
+    public List<string> PostedFindingBodies { get; } = [];
     public List<(ThreadAnchor Anchor, string Body, int ThreadId)> PostedSuggestions { get; } = [];
     public List<string?> PostedSuggestionDedupeKeys { get; } = [];
     public List<string> GeneralComments { get; } = [];
@@ -92,6 +93,7 @@ public class FakePullRequestSource : IPullRequestSource
 
             var id = _NextThreadId++;
             PostedFindings.Add((finding, id));
+            PostedFindingBodies.Add(ReviewForge.Core.Pipeline.CommentFormatter.FormatFinding(finding));
             return Task.FromResult(id);
         }
     }

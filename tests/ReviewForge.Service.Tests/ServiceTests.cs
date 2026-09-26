@@ -13,6 +13,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Service.Logging;
 using Microsoft.Extensions.Options;
+using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.AutoFix.Fixers;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
@@ -93,6 +95,21 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         return this;
     }
 
+    /// <summary>Enables the suggestion-only auto-fix feature for end-to-end tests.</summary>
+    public ReviewForgeFactory WithAutoFix(bool threadCommands = false)
+    {
+        Environment.SetEnvironmentVariable("AutoFix__Enabled", "true");
+        Environment.SetEnvironmentVariable("AutoFix__AllowedAuthors__0", "creator-1");
+        Environment.SetEnvironmentVariable("AutoFix__AllowedRuleIds__0", "bash.unquoted-vars");
+        Environment.SetEnvironmentVariable("AutoFix__AllowedRuleIds__1", "bash.set-e-missing");
+        if (threadCommands)
+        {
+            Environment.SetEnvironmentVariable("AutoFix__EnableThreadFixCommands", "true");
+        }
+
+        return this;
+    }
+
     protected override void ConfigureClient(HttpClient client)
     {
         base.ConfigureClient(client);
@@ -132,7 +149,14 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
                 new FakeChatClientFactory(Chat),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
                 sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
-                sp.GetRequiredService<ILoggerFactory>()));
+                sp.GetRequiredService<ILoggerFactory>(),
+                findingFixers:
+                [
+                    new BashUnquotedVarsFixer(), new BashSetEMissingFixer(),
+                    new PythonMutableDefaultArgFixer(), new DockerAddToCopyFixer(),
+                ],
+                fixVerifier: NullFixVerifier.Instance,
+                autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>()));
         });
     }
 
@@ -147,6 +171,9 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
                 "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString",
                 ApiKeyOptions.KeysEnvironmentVariable, "Api__AllowUnauthenticatedForDevelopment",
                 "Api__SubmitPermitLimit", "Api__SubmitWindowSeconds",
+                "AutoFix__Enabled", "AutoFix__AllowedAuthors__0",
+                "AutoFix__AllowedRuleIds__0", "AutoFix__AllowedRuleIds__1",
+                "AutoFix__EnableThreadFixCommands",
             })
             {
                 Environment.SetEnvironmentVariable(key, null);
@@ -1110,5 +1137,104 @@ public sealed class ApiDocsTests
         {
             Environment.SetEnvironmentVariable("ApiDocs__Enabled", previous);
         }
+    }
+
+    [Fact]
+    public async Task AutoFix_disabled_by_default_posts_no_suggestions()
+    {
+        var pr = new PrKey("o", "p", "r", 42);
+        _Factory.Source.ChangedFiles = [new ChangedFile("script.sh", ChangedFileType.Edit)];
+        _Factory.Git.Diff = "+++ b/script.sh\n@@ -1,1 +2,1 @@\n+echo $name\n";
+
+        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+        Directory.CreateDirectory(checkoutDir);
+        File.WriteAllLines(Path.Combine(checkoutDir, "script.sh"), ["echo $name"]);
+
+        _Factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
+            {
+                ["ruleId"] = "bash.unquoted-vars",
+                ["title"] = "unquoted variable",
+                ["severity"] = "medium",
+                ["category"] = "bug",
+                ["description"] = "quote it",
+                ["snippet"] = "echo $name",
+                ["filePath"] = "script.sh",
+                ["startLine"] = 1,
+            })),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var client = _Factory.CreateClient();
+        var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        await WaitForState(body!.RunId, RunState.Completed);
+
+        Assert.Single(_Factory.Source.PostedFindings); // plain finding, no fix label
+        Assert.DoesNotContain("Fix available", _Factory.Source.PostedFindingBodies[0]);
+        Assert.Empty(_Factory.Source.PostedSuggestions);
+        Assert.DoesNotContain(_Factory.Source.GeneralComments, c => c.Contains("Auto-fixes"));
+        // The checkout was untouched by the auto-fix stage.
+        Assert.Equal("echo $name", File.ReadAllLines(Path.Combine(checkoutDir, "script.sh"))[0]);
+    }
+
+    [Fact]
+    public async Task AutoFix_enabled_publishes_suggestion_for_allowlisted_rule()
+    {
+        await using var factory = new ReviewForgeFactory().WithAutoFix();
+        var pr = new PrKey("o", "p", "r", 42);
+        factory.Source.ChangedFiles = [new ChangedFile("script.sh", ChangedFileType.Edit)];
+        factory.Git.Diff = "+++ b/script.sh\n@@ -1,1 +2,1 @@\n+echo $name\n";
+
+        var checkoutDir = CheckoutDir(factory.WorkDir, "r", "head-sha");
+        Directory.CreateDirectory(checkoutDir);
+        var scriptPath = Path.Combine(checkoutDir, "script.sh");
+        File.WriteAllLines(scriptPath, ["echo $name"]);
+
+        factory.Chat.Reset(
+            ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
+            {
+                ["ruleId"] = "bash.unquoted-vars",
+                ["title"] = "unquoted variable",
+                ["severity"] = "medium",
+                ["category"] = "bug",
+                ["description"] = "quote it",
+                ["snippet"] = "echo $name",
+                ["filePath"] = "script.sh",
+                ["startLine"] = 1,
+            })),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+        var client = factory.CreateClient();
+        var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+
+        var tracker = factory.Services.GetRequiredService<RunTracker>();
+        RunStatus? status = null;
+        for (var i = 0; i < 200; i++)
+        {
+            if (tracker.Get(body!.RunId) is { } s
+                && s.State is RunState.Completed or RunState.Failed or RunState.Skipped)
+            {
+                status = s;
+                break;
+            }
+
+            await Task.Delay(50);
+        }
+
+        Assert.NotNull(status);
+        Assert.Equal(RunState.Completed, status!.State);
+
+        var posted = Assert.Single(factory.Source.PostedFindings);
+        Assert.Equal(1, posted.Finding.Anchor!.StartLine); // anchored at the fix range
+        Assert.Contains("**Fix available**", factory.Source.PostedFindingBodies[0]);
+        Assert.Contains("```suggestion", factory.Source.PostedFindingBodies[0]);
+        Assert.Empty(factory.Source.PostedSuggestions);
+        Assert.Contains(factory.Source.GeneralComments, c => c.Contains("> **Auto-fixes:** 1 suggestion(s) posted"));
+        // Null verifier: zero checkout writes — the file on disk is untouched.
+        Assert.Equal("echo $name", File.ReadAllLines(scriptPath)[0]);
+        // The store carries the applied-fix record forward.
+        var run = Assert.Single(factory.Store.Runs);
+        Assert.Contains(run.Findings, f => f.AppliedFixJson is not null && f.AppliedFixJson.Contains("bash.unquoted-vars"));
     }
 }
