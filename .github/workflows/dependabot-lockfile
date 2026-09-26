@@ -1,0 +1,111 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependabot lockfile
+#
+# Why this exists
+# ---------------
+# Dependabot bumps a version in Directory.Packages.props but only updates the
+# packages.lock.json of the project that holds the direct <PackageReference>.
+# Projects that pick the new version up transitively (via <ProjectReference>)
+# keep stale lock files, so ci.yml's `dotnet restore --locked-mode` fails with
+# NU1004. This workflow re-evaluates the graph, commits the refreshed lock
+# files back to the Dependabot branch, and lets ci.yml run again on the result.
+#
+# Required repository secret
+# --------------------------
+#   DEPENDABOT_REFRESH_TOKEN
+#     Fine-grained PAT or GitHub App installation token, scoped to this repo,
+#     with Contents: Read and write.
+#
+#   GITHUB_TOKEN cannot be used: commits pushed with it do not trigger
+#   `pull_request` workflows, so ci.yml would never re-run on the refreshed
+#   commit and the PR would stay red.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Dependabot lockfile
+
+on:
+  pull_request:
+    branches: [ main ]
+
+# Least privilege at the workflow level; the job elevates itself below.
+permissions:
+  contents: read
+
+# One run per PR; a newer push supersedes an in-flight run.
+concurrency:
+  group: dependabot-lockfile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  refresh-lockfiles:
+    name: Refresh packages.lock.json
+
+    # github.actor is whoever pushed the current head commit. Requiring it to be
+    # Dependabot means this job does not re-run on the commit it just pushed
+    # itself (that push uses DEPENDABOT_REFRESH_TOKEN, so the actor changes).
+    # The remaining conditions make it a no-op for anything that is not a real
+    # Dependabot PR from an in-repo dependabot/* branch.
+    if: |
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read   # the push below uses DEPENDABOT_REFRESH_TOKEN, not GITHUB_TOKEN
+
+    steps:
+      - name: Checkout Dependabot branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          # Do not wire GITHUB_TOKEN into git: pushing with it suppresses ci.yml
+          # on the refreshed commit.
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      # --force-evaluate rewrites lock files instead of validating them.
+      # RestoreLockedMode is cleared explicitly so the run cannot fail with
+      # NU1004 if that property is pinned in Directory.Build.props.
+      - name: Re-evaluate NuGet dependency graph
+        run: dotnet restore ReviewForge.slnx --force-evaluate -p:RestoreLockedMode=false
+
+      - name: Commit and push refreshed lock files
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_REFRESH_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::Repository secret DEPENDABOT_REFRESH_TOKEN is not set or is empty."
+            exit 1
+          fi
+
+          # `dotnet restore` only ever rewrites packages.lock.json among the
+          # files git tracks, so -u stages exactly what we want and nothing else.
+          git add -u
+
+          if git diff --cached --quiet; then
+            echo "Lock files are already consistent; nothing to commit."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # [dependabot skip] stops Dependabot from force-pushing over this commit.
+          # Do NOT add [skip ci] here: ci.yml must run on the refreshed commit.
+          git commit -m "chore(deps): refresh packages.lock.json [dependabot skip]"
+
+          git push \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:${HEAD_REF}"

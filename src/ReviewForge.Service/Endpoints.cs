@@ -22,7 +22,12 @@ public static class Endpoints
 {
     public static WebApplication MapReviewForgeEndpoints(this WebApplication app)
     {
-        app.MapPost("/reviews", SubmitReview)
+        // Auth lives on the group metadata: routing and enforcement cannot diverge
+        // (endpoint routing matches case-insensitively — see P1-13).
+        var reviews = app.MapGroup("/reviews")
+            .AddEndpointFilter<ApiKeyEndpointFilter>();
+
+        reviews.MapPost("/", SubmitReview)
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
@@ -31,18 +36,17 @@ public static class Endpoints
             .ProducesProblem(400)
             .ProducesProblem(503);
 
-        app.MapPost("/reviews/discover", DiscoverPullRequests)
+        reviews.MapPost("/discover", DiscoverPullRequests)
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("DiscoverPullRequests")
             .WithTags("Reviews")
             .Produces<DiscoveryReport>(200);
 
-        app.MapGet("/reviews/{runId:guid}", GetRunStatus)
+        reviews.MapGet("/{runId:guid}", GetRunStatus)
             .WithName("GetRunStatus")
             .WithSummary("In-memory run status — lost on host restart; 404 after restart or retention expiry")
             .Produces<RunStatus>()
             .ProducesProblem(404);
-
 
         return app;
     }

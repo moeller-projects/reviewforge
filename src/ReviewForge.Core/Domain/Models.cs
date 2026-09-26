@@ -94,6 +94,10 @@ public sealed record RichFinding
     public FindingAnchor? Anchor { get; set; }
     public string? DedupeKey { get; set; }
     public bool AnchorDowngraded { get; set; }
+
+    /// <summary>True when this finding was accepted because a known key regressed verbatim
+    /// against a Fixed/Closed thread — the thread is reopened instead of re-posted (P1-11).</summary>
+    public bool IsRegression { get; set; }
 }
 
 [ExcludeFromCodeCoverage]

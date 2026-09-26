@@ -88,6 +88,14 @@
       "category": "security",
       "defaultSeverity": "high",
       "enabled": true
+    },
+    {
+      "id": "homoglyph/whole-token-lookalike",
+      "title": "Whole-token lookalike identifier",
+      "description": "Identifier is written entirely in one non-Latin script whose characters look like an ASCII identifier (e.g. Cyrillic lookalikes spelling an English identifier). Replace it with unambiguous ASCII.",
+      "category": "security",
+      "defaultSeverity": "medium",
+      "enabled": true
     }
   ]
 }

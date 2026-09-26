@@ -19,16 +19,20 @@ public sealed class RepoCheckoutPool
     private readonly string? _Pat;
     private readonly string _Root;
 
-    // path -> byte size. Checkouts can gain Git objects during targeted fetches, so
-    // the reuse path refreshes the cached measurement after a successful fetch.
-    private readonly ConcurrentDictionary<string, long> _SizeCache = new(StringComparer.Ordinal);
+    // path -> measured size + refresh stamp. Sized once at materialization and refreshed
+    // lazily by the eviction sweep when older than an hour; the acquire/reuse path never
+    // walks the tree (P2-32) — drift from targeted fetches is MB-scale against a GB budget.
+    private static readonly TimeSpan SizeRefreshInterval = TimeSpan.FromHours(1);
+    private readonly ConcurrentDictionary<string, CachedCheckoutSize> _SizeCache = new(StringComparer.Ordinal);
+    private readonly TimeProvider _Clock;
 
-    public RepoCheckoutPool(IGitOps git, IWorkspaceFs fs, string root, string? pat = null)
+    public RepoCheckoutPool(IGitOps git, IWorkspaceFs fs, string root, string? pat = null, TimeProvider? clock = null)
     {
         _Git = git;
         _Fs = fs;
         _Root = Path.GetFullPath(root);
         _Pat = pat;
+        _Clock = clock ?? TimeProvider.System;
         _Fs.CreateDirectory(Path.Combine(_Root, "checkouts"));
         _Fs.CreateDirectory(Path.Combine(_Root, "mirror"));
     }
@@ -49,7 +53,8 @@ public sealed class RepoCheckoutPool
                 string.Equals(await _Git.GetHeadShaAsync(path, ct).ConfigureAwait(false), headSha, StringComparison.OrdinalIgnoreCase))
             {
                 await _Git.EnsureCommitsAsync(path, cloneUrl, baseSha, headSha, _Pat, ct).ConfigureAwait(false);
-                RefreshCachedSize(path);
+                // No size refresh here: the eviction sweep re-measures entries older than
+                // SizeRefreshInterval — the per-run full walk is not worth MB-scale drift.
                 _Fs.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
@@ -140,7 +145,7 @@ public sealed class RepoCheckoutPool
                 var (path, head, lastWrite) = heads[i];
                 if (i < options.MaxCheckoutsPerRepo && lastWrite >= cutoff.UtcDateTime)
                 {
-                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path), DeletionFailed: false));
+                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path, clock.GetUtcNow()), DeletionFailed: false));
                     continue;
                 }
 
@@ -148,7 +153,7 @@ public sealed class RepoCheckoutPool
                 if (evictionLease is null)
                 {
                     inUse++;
-                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path), DeletionFailed: false));
+                    survivors.Add((path, repoId, head, lastWrite, GetCachedSize(path, clock.GetUtcNow()), DeletionFailed: false));
                     continue;
                 }
 
@@ -172,7 +177,7 @@ public sealed class RepoCheckoutPool
                         repoId,
                         head,
                         lastWrite,
-                        size > 0 ? size : GetCachedSize(path),
+                        size > 0 ? size : GetCachedSize(path, clock.GetUtcNow()),
                         DeletionFailed: true));
                 }
                 finally
@@ -246,23 +251,25 @@ public sealed class RepoCheckoutPool
         };
     }
 
-    /// <summary>Cached size of a checkout; measured once and reused across sweeps.</summary>
-    private long GetCachedSize(string path)
+    /// <summary>Cached size of a checkout; measured once and refreshed by the sweep when
+    /// older than <see cref="SizeRefreshInterval"/> (P2-32).</summary>
+    private long GetCachedSize(string path, DateTimeOffset now)
     {
-        if (_SizeCache.TryGetValue(path, out var size))
+        if (_SizeCache.TryGetValue(path, out var cached) && now - cached.RefreshedAt < SizeRefreshInterval)
         {
-            return size;
+            return cached.Bytes;
         }
 
         try
         {
-            size = DirectorySize(path);
-            _SizeCache[path] = size;
+            var size = DirectorySize(path);
+            _SizeCache[path] = new CachedCheckoutSize(size, now);
             return size;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return 0; // transient — measured again next sweep
+            // Transient — a stale measurement beats pretending the checkout is empty.
+            return cached?.Bytes ?? 0;
         }
     }
 
@@ -270,13 +277,15 @@ public sealed class RepoCheckoutPool
     {
         try
         {
-            _SizeCache[path] = DirectorySize(path);
+            _SizeCache[path] = new CachedCheckoutSize(DirectorySize(path), _Clock.GetUtcNow());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _SizeCache.TryRemove(path, out _);
         }
     }
+
+    private sealed record CachedCheckoutSize(long Bytes, DateTimeOffset RefreshedAt);
 
     internal string CheckoutPath(string repositoryId, string headSha)
         => Path.Combine(_Root, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));

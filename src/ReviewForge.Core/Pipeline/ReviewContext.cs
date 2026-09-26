@@ -39,6 +39,11 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public CurrentUser? CurrentUser { get; set; }
     public PriorRun? PriorRun { get; set; }
 
+    /// <summary>DedupeKeys whose live ADO thread is Fixed/Closed in the stage-1 snapshot.
+    /// A verbatim re-submission of one of these resurfaces as a regression (P1-11) instead
+    /// of staying dedupe-silent; keys with Active/Pending threads stay in the known set only.</summary>
+    public IReadOnlySet<string> ResolvedKeys { get; set; } = new HashSet<string>(StringComparer.Ordinal);
+
     // Stage 2 — gate
     public GateDecision? Gate { get; set; }
 

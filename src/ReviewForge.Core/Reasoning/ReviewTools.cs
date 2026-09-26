@@ -14,11 +14,13 @@ public sealed class ReviewTools(
     RuleBook? ruleBook = null,
     IReadOnlySet<string>? changedFiles = null,
     DiffIndex? diff = null,
-    ILogger<ReviewTools>? logger = null)
+    ILogger<ReviewTools>? logger = null,
+    IReadOnlySet<string>? resolvedKeys = null)
 {
     private readonly IReadOnlySet<string>? _ChangedFiles = changedFiles;
     private readonly DiffIndex? _Diff = diff;
     private readonly RuleBook? _RuleBook = ruleBook;
+    private readonly IReadOnlySet<string> _ResolvedKeys = resolvedKeys ?? new HashSet<string>(StringComparer.Ordinal);
 
     [Description("Read the active rulebook or one active pack. Full descriptions are returned here.")]
     public string GetRulebook(string? pack = null)
@@ -46,7 +48,7 @@ public sealed class ReviewTools(
         return content is null
             ? $"unknown context entry '{name}'. Available: {string.Join(", ", contextStore.Names)}"
             : $"{PromptBuilder.UntrustedBegin}{Environment.NewLine}" +
-              $"{PromptBuilder.Sanitize(content)}{Environment.NewLine}" +
+              $"{PromptText.Clean(content)}{Environment.NewLine}" +
               PromptBuilder.UntrustedEnd;
     }
 
@@ -108,8 +110,22 @@ public sealed class ReviewTools(
         {
             if (collector.WasKnownAtStart(key))
             {
+                // Status-aware dedupe (P1-11): a verbatim regression of a finding whose
+                // thread is Fixed/Closed resurfaces — accepted through the normal path and
+                // reopened by triage. Exactly once per regression (RegressedKeys guard).
+                if (_ResolvedKeys.Contains(key) && !collector.RegressedKeys.Contains(key))
+                {
+                    finding.DedupeKey = key;
+                    finding.IsRegression = true;
+                    collector.AddFinding(finding);
+                    collector.MarkRegressed(key);
+                    logger?.LogInformation("finding regressed (previously resolved): key {DedupeKey}", key);
+                    return $"recorded finding {key} — regression of a previously resolved finding";
+                }
+
                 collector.MarkRedetected(key);
             }
+
             logger?.LogDebug("finding deduped: key {DedupeKey} already known", key);
             return $"already recorded (dedupe key {key}) — skipped";
         }

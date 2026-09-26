@@ -69,7 +69,8 @@ public sealed class DiffIndex
 
             // A "diff --git" header is a hard section boundary: recognized even when the
             // previous file's hunk is still open (real git emits it right after hunk content).
-            if (line.StartsWith("diff --git a/", StringComparison.Ordinal))
+            // Either path may be bare or C-style-quoted (DiffPathParser).
+            if (line.StartsWith("diff --git ", StringComparison.Ordinal))
             {
                 FlushRun();
                 FlushSection();
@@ -136,20 +137,27 @@ public sealed class DiffIndex
             }
 
             FlushRun();
-            if (line.StartsWith("+++ b/", StringComparison.Ordinal))
-            {
-                currentFile = line[6..].ToString();
-                sawContent = true;
-                if (!index._ChangedLines.ContainsKey(currentFile))
-                {
-                    index._ChangedLines[currentFile] = [];
-                }
-
-                inHunk = false;
-            }
-            else if (line.StartsWith("+++ /dev/null", StringComparison.Ordinal))
+            if (line.StartsWith("+++ /dev/null", StringComparison.Ordinal))
             {
                 currentFile = null; // deleted file
+                inHunk = false;
+            }
+            else if (line.StartsWith("+++ ", StringComparison.Ordinal))
+            {
+                // A +++ header signals content intent even when its path is undecodable: the
+                // file is then NOT registered, so a manifest match fails closed at the
+                // prepare-repository scope guard instead of shrinking scope silently.
+                sawContent = true;
+                currentFile = null;
+                if (DiffPathParser.TryDecodeToken(line[4..], out var decoded) && DiffPathParser.TryStripBPrefix(decoded, out var rel))
+                {
+                    currentFile = rel;
+                    if (!index._ChangedLines.ContainsKey(currentFile))
+                    {
+                        index._ChangedLines[currentFile] = [];
+                    }
+                }
+
                 inHunk = false;
             }
             else if (sectionFile is not null && line.StartsWith("Binary files ", StringComparison.Ordinal))
@@ -160,7 +168,7 @@ public sealed class DiffIndex
             else if (sectionFile is not null && line.StartsWith("rename to ", StringComparison.Ordinal))
             {
                 sectionRename = true;
-                sectionFile = line["rename to ".Length..].ToString();
+                sectionFile = DiffPathParser.TryDecodeToken(line["rename to ".Length..], out var renamed) ? renamed : null;
             }
         }
 
@@ -211,27 +219,86 @@ public sealed class DiffIndex
         return true;
     }
 
-    /// <summary>Extracts the destination path from "diff --git a/OLD b/NEW", or null.</summary>
+    /// <summary>Extracts the destination path from "diff --git a/OLD b/NEW", where either
+    /// path may be bare or C-style-quoted; returns null when unparseable.</summary>
     internal static string? DiffGitNewPath(ReadOnlySpan<char> line)
     {
-        var rest = line["diff --git a/".Length..];
-        var bIdx = rest.IndexOf(" b/", StringComparison.Ordinal);
-        return bIdx < 0 ? null : rest[(bIdx + 3)..].ToString();
-    }
-
-    /// <summary>Extracts the destination path from "Binary files a/OLD and b/NEW differ", or null.</summary>
-    internal static string? BinaryNewPath(ReadOnlySpan<char> line)
-    {
-        var rest = line["Binary files ".Length..];
-        var andIdx = rest.IndexOf(" and b/", StringComparison.Ordinal);
-        if (andIdx < 0)
+        const string prefix = "diff --git ";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal))
         {
             return null;
         }
 
-        var tail = rest[(andIdx + " and b/".Length)..];
-        var differIdx = tail.LastIndexOf(" differ", StringComparison.Ordinal);
-        return (differIdx >= 0 ? tail[..differIdx] : tail).ToString();
+        var rest = line[prefix.Length..];
+        if (!DiffPathParser.TryReadToken(rest, out _, out var consumed))
+        {
+            return null;
+        }
+
+        rest = rest[consumed..];
+        if (rest.IsEmpty || rest[0] != ' ')
+        {
+            return null;
+        }
+
+        return DiffPathParser.TryDecodeToken(rest[1..], out var decoded) && DiffPathParser.TryStripBPrefix(decoded, out var rel)
+            ? rel
+            : null;
+    }
+
+    /// <summary>Extracts the destination path from "Binary files a/OLD and b/NEW differ",
+    /// where either path may be bare or C-style-quoted; returns null when unparseable.</summary>
+    internal static string? BinaryNewPath(ReadOnlySpan<char> line)
+    {
+        const string prefix = "Binary files ";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var rest = line[prefix.Length..];
+        if (!DiffPathParser.TryReadToken(rest, out _, out var consumed))
+        {
+            return null;
+        }
+
+        rest = rest[consumed..];
+        const string and = " and ";
+        if (!rest.StartsWith(and, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        rest = rest[and.Length..];
+        if (rest.IsEmpty)
+        {
+            return null;
+        }
+
+        if (rest[0] == '"')
+        {
+            if (!DiffPathParser.TryReadToken(rest, out var quoted, out var quotedLen)
+                || !DiffPathParser.TryDecodeToken(quoted, out var decoded))
+            {
+                return null;
+            }
+
+            // git appends " differ" after the quoted token.
+            var tail = rest[quotedLen..];
+            if (!tail.IsEmpty && !tail.StartsWith(" differ", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return DiffPathParser.TryStripBPrefix(decoded, out var rel) ? rel : null;
+        }
+
+        var bareTail = rest;
+        var differIdx = bareTail.LastIndexOf(" differ", StringComparison.Ordinal);
+        var bare = differIdx >= 0 ? bareTail[..differIdx] : bareTail;
+        return DiffPathParser.TryDecodeToken(bare, out var bareDecoded) && DiffPathParser.TryStripBPrefix(bareDecoded, out var bareRel)
+            ? bareRel
+            : null;
     }
 
     /// <summary>Number of coalesced ranges for a file (test seam — asserts coalescing).</summary>

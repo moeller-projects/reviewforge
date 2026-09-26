@@ -40,14 +40,21 @@ public static class ServiceCollectionExtensions
             $"{ReviewForgeServiceOptions.SectionName}:RunLogs:Enabled") ?? true;
         if (runLogsEnabled)
         {
-            services.AddLogging(logging => logging.AddProvider(new RunLogFileProvider(
-                configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:WorkDir")
-                    ?? Path.Combine(Path.GetTempPath(), "reviewforge"),
+            // One instance: the logging provider and the worker's lifecycle hook are the same
+            // object (P2-31 — no ambient static).
+            var runLogProvider = new RunLogFileProvider(
+                workDir,
                 new RunLogOptions
                 {
                     MinLevel = configuration.GetValue<LogLevel?>(
-                        $"{ReviewForgeServiceOptions.SectionName}:RunLogs:MinLevel") ?? LogLevel.Debug,
-                })));
+                        $"{ReviewForgeServiceOptions.SectionName}:RunLogs:MinLevel") ?? LogLevel.Information,
+                });
+            services.AddSingleton<IRunLogLifecycle>(runLogProvider);
+            services.AddLogging(logging => logging.AddProvider(runLogProvider));
+        }
+        else
+        {
+            services.AddSingleton<IRunLogLifecycle, NoopRunLogLifecycle>();
         }
 
         // Validated options (P3-d): DataAnnotations + rule checks, fail-fast at startup and on
@@ -76,7 +83,15 @@ public static class ServiceCollectionExtensions
             .ValidateDataAnnotations()
             .Validate(o => o.WorkerCount >= 1, "ReviewForge:WorkerCount must be at least 1")
             .Validate(o => ReviewForgeServiceOptions.IsValidCleanRunVote(o.CleanRunVote),
-                "ReviewForge:CleanRunVote must be NoResponse, Approved, ApprovedWithSuggestions, or None")
+                "ReviewForge:CleanRunVote must be NoResponse | Approved | ApprovedWithSuggestions | None")
+            .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
+            .Validate(o => o.Retention.Days >= 1, "ReviewForge:Retention:Days must be at least 1")
+            .Validate(o => o.Retention.MinRunsPerPr >= 1, "ReviewForge:Retention:MinRunsPerPr must be at least 1")
+            .ValidateOnStart();
+
+        services.AddOptions<RepoReadToolsOptions>()
+            .Bind(configuration.GetSection(RepoReadToolsOptions.SectionName))
+            .ValidateDataAnnotations()
             .ValidateOnStart();
 
         services.AddOptions<ApiDocsOptions>()
@@ -108,6 +123,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat);
         });
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Retention);
         services.AddSingleton<DiscoveryService>();
 
         var discovery = configuration.GetSection(DiscoveryOptions.SectionName).Get<DiscoveryOptions>() ?? new DiscoveryOptions();
@@ -132,6 +148,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<RepoCheckoutPool>(),
             sp.GetRequiredService<IChatClientFactory>(),
             sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
+            sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
             sp.GetRequiredService<ILoggerFactory>(),
             enricher: null,
             clock: sp.GetRequiredService<TimeProvider>()));
@@ -149,6 +166,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<DiscoverySweepWorker>();
         services.AddHostedService<CheckoutEvictionWorker>();
         services.AddHostedService<TelemetryGaugeRegistration>();
+        services.AddHostedService<ShellReaperService>();
 
         // API keys are intentionally not bound from configuration. Secrets may only enter
         // through REVIEWFORGE_API_KEYS; other Api settings remain ordinary configuration.

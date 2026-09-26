@@ -41,6 +41,93 @@ public class DedupeKeyTests
     }
 }
 
+public class DiffPathParserTests
+{
+    [Theory]
+    // Unquoted fast path.
+    [InlineData("diff --git a/x.cs b/y.cs", "y.cs")]
+    // core.quotePath: non-ASCII path octal-escaped, both sides quoted.
+    [InlineData("diff --git \"a/caf\\303\\251.cs\" \"b/caf\\303\\251.cs\"", "café.cs")]
+    // Mixed quoting: bare old side, quoted new side with an escaped quote in the name.
+    [InlineData("diff --git a/x.cs \"b/we\\\"ird.cs\"", "we\"ird.cs")]
+    // Quoted because of spaces; " b/" appears inside the path itself.
+    [InlineData("diff --git \"a/pre b/post.cs\" \"b/pre b/post.cs\"", "pre b/post.cs")]
+    // Escaped backslash then an escaped tab.
+    [InlineData("diff --git \"a/d\\\\r\\t.cs\" \"b/d\\\\r\\t.cs\"", "d\\r\t.cs")]
+    public void DiffGitNewPath_decodes_quoted_and_bare_paths(string line, string expected)
+        => Assert.Equal(expected, DiffIndex.DiffGitNewPath(line));
+
+    [Theory]
+    [InlineData("diff --git a/x.cs")]                       // missing new side
+    [InlineData("diff --git a/x.cs b/")]                    // empty new path
+    [InlineData("diff --git a/x.cs b/y.cs trailing")]       // bare token may not contain spaces
+    [InlineData("diff --git \"a/x.cs\" \"b/bad\\q.cs\"")]   // invalid escape
+    [InlineData("diff --git \"a/x.cs\" \"b/unterminated")]  // unterminated quote
+    [InlineData("diff --git \"a/x.cs\" \"x.cs\"")]          // missing b/ prefix
+    [InlineData("not a diff header at all")]               // wrong prefix
+    [InlineData("diff --git \"unterminated b/y.cs\"")]     // old-side token unterminated
+    [InlineData("diff --git \"unterminated")]            // no closing quote at all in the line
+    public void DiffGitNewPath_rejects_malformed_headers(string line)
+        => Assert.Null(DiffIndex.DiffGitNewPath(line));
+
+    [Theory]
+    [InlineData("Binary files a/x.png b/y.png differ")]               // no " and " separator
+    [InlineData("not a binary header")]                               // wrong prefix
+    [InlineData("Binary files \"unterminated and b/y.png differ")]    // first token unterminated
+    [InlineData("Binary files a/x.png and ")]                         // empty new side
+    [InlineData("Binary files a/x.png and \"b\\q.png\" differ")]      // invalid escape in new token
+    public void BinaryNewPath_rejects_malformed_headers(string line)
+        => Assert.Null(DiffIndex.BinaryNewPath(line));
+
+    [Fact]
+    public void BinaryNewPath_decodes_quoted_paths()
+    {
+        Assert.Equal("lo go.png", DiffIndex.BinaryNewPath("Binary files \"a/lo go.png\" and \"b/lo go.png\" differ"));
+        Assert.Equal("x.png", DiffIndex.BinaryNewPath("Binary files \"a/x.png\" and \"b/x.png\" differ"));
+        Assert.Null(DiffIndex.BinaryNewPath("Binary files \"a/x.png\" and \"b/x.png\" trailing")); // junk after quote
+    }
+
+    [Theory]
+    // git's named escapes besides \t (quote.c): bell backspace formfeed newline carriage-return vtab
+    [InlineData("\"b/a\\ab\\bc.cs\"", "b/a\ab\bc.cs")]
+    [InlineData("\"b/a\\fb\\nc.cs\"", "b/a\fb\nc.cs")]
+    [InlineData("\"b/a\\rb\\vc.cs\"", "b/a\rb\vc.cs")]
+    [InlineData("plain.cs", "plain.cs")]
+    [InlineData("\"b/caf\\303\\251.cs\"", "b/café.cs")]
+    [InlineData("\"b/café.cs\"", "b/café.cs")]       // quoted, no escapes — fast path
+    [InlineData("\"b/a\\tb.cs\"", "b/a\tb.cs")]
+    [InlineData("\"b/a\\\\b.cs\"", "b/a\\b.cs")]
+    public void TryDecodeToken_roundtrips_git_quoting(string token, string expected)
+    {
+        Assert.True(DiffPathParser.TryDecodeToken(token, out var path));
+        Assert.Equal(expected, path);
+    }
+
+    [Theory]
+    [InlineData("")]              // empty
+    [InlineData("\"unterminated")]// unterminated quote
+    [InlineData("\"a\\q\"")]      // invalid escape
+    [InlineData("\"a\" junk")]    // trailing junk after closing quote
+    public void TryDecodeToken_rejects_malformed_tokens(string token)
+        => Assert.False(DiffPathParser.TryDecodeToken(token, out _));
+
+    [Fact]
+    public void TryReadToken_respects_quoted_segments()
+    {
+        Assert.True(DiffPathParser.TryReadToken("\"a/x y.cs\" rest", out var token, out var consumed));
+        Assert.Equal("\"a/x y.cs\"", token.ToString());
+        Assert.Equal(10, consumed);
+
+        Assert.True(DiffPathParser.TryReadToken("a/x.cs rest", out var bare, out var bareConsumed));
+        Assert.Equal("a/x.cs", bare.ToString());
+        Assert.Equal(6, bareConsumed);
+
+        Assert.False(DiffPathParser.TryReadToken("\"unterminated", out _, out _));
+        Assert.False(DiffPathParser.TryReadToken("", out _, out _));
+        Assert.False(DiffPathParser.TryReadToken(" ", out _, out _)); // bare token of zero length
+    }
+}
+
 public class DiffIndexTests
 {
     private const string Diff = """
@@ -271,6 +358,43 @@ public class DiffIndexTests
 
         Assert.True(index.Contains("f.cs", 1));   // +x
         Assert.False(index.Contains("f.cs", 2));  // +y follows an unexpected line — hunk ended
+    }
+
+    [Fact]
+    public void Parse_registers_quoted_paths_and_flushes_previous_section()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git a/src/A.cs b/src/A.cs\n" +
+            "--- a/src/A.cs\n+++ b/src/A.cs\n@@ -1,1 +1,2 @@\n keep\n+added\n" +
+            "diff --git \"a/caf\\303\\251.cs\" \"b/caf\\303\\251.cs\"\n" +
+            "--- \"a/caf\\303\\251.cs\"\n+++ \"b/caf\\303\\251.cs\"\n@@ -0,0 +1,1 @@\n+payload\n");
+
+        Assert.Contains("src/A.cs", index.Files);
+        Assert.True(index.Contains("src/A.cs", 2)); // +added closed the quoted section cleanly
+        Assert.True(index.Contains("café.cs", 1));  // non-ASCII name decoded
+        Assert.False(index.Contains("café.cs", 2));
+    }
+
+    [Fact]
+    public void Parse_quoted_path_with_escaped_quote_and_space()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git \"a/we\\\"ird dir/x.cs\" \"b/we\\\"ird dir/x.cs\"\n" +
+            "--- \"a/we\\\"ird dir/x.cs\"\n+++ \"b/we\\\"ird dir/x.cs\"\n@@ -0,0 +1,1 @@\n+x\n");
+
+        Assert.True(index.Contains("we\"ird dir/x.cs", 1));
+    }
+
+    [Fact]
+    public void Parse_malformed_quoted_header_fails_closed_without_throwing()
+    {
+        var index = DiffIndex.Parse(
+            "diff --git a/a.cs b/a.cs\n--- a/a.cs\n+++ b/a.cs\n@@ -0,0 +1,1 @@\n+x\n" +
+            "diff --git \"a/bad\\q.cs\" \"b/bad\\q.cs\"\n--- \"a/bad\\q.cs\"\n+++ \"b/bad\\q.cs\"\n@@ -0,0 +1,1 @@\n+y\n");
+
+        Assert.Contains("a.cs", index.Files);
+        Assert.DoesNotContain("bad\\q.cs", index.Files); // undecodable file is not indexed
+        Assert.Empty(index.NonReviewableFiles);          // ...nor whitelisted — scope guard throws
     }
 
     [Fact]

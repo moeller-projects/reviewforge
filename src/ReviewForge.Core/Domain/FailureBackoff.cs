@@ -11,7 +11,12 @@ public static class FailureBackoff
     /// <summary>
     /// Counts consecutive failed runs at <paramref name="headSha"/> (newest first) and
     /// returns the time before which the head must not be re-enqueued, or null when
-    /// the head may run now. A successful or different-head run resets the streak.
+    /// the head may run now. A successful run resets the streak; a headed failure at a
+    /// different head breaks it. Head-less failure records (empty HeadSha — endpoint
+    /// submits that died in fetch before the head was known, P2-33) count toward the
+    /// streak for any head and never break it. In-flight shells (CompletedAt == null)
+    /// prove nothing about failure and are skipped entirely; the startup reaper
+    /// converts stale ones into real records.
     /// </summary>
     public static DateTimeOffset? BlockedUntil(
         IReadOnlyList<ReviewRun> recentRuns,
@@ -26,13 +31,25 @@ public static class FailureBackoff
         DateTimeOffset? lastFailure = null;
         foreach (var run in recentRuns)
         {
-            if (run.Success || !string.Equals(run.HeadSha, headSha, StringComparison.Ordinal))
+            // In-flight shell (stages 75→100 window, or orphaned by a crash): not a
+            // failure — and must not break a real failure streak either. Skipped.
+            if (run.CompletedAt is null)
+            {
+                continue;
+            }
+
+            // A headed failure at a different head breaks the streak. Head-less
+            // failures count for whatever head the submit carries — the fetch died
+            // before we learned the head, so the record is head-agnostic.
+            var differentHead = run.HeadSha is { Length: > 0 }
+                && !string.Equals(run.HeadSha, headSha, StringComparison.Ordinal);
+            if (run.Success || differentHead)
             {
                 break;
             }
 
             streak++;
-            lastFailure ??= run.CompletedAt ?? run.StartedAt;
+            lastFailure ??= run.CompletedAt;
         }
 
         if (streak == 0 || lastFailure is null)

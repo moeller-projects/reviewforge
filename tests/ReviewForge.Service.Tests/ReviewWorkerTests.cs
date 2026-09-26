@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using ReviewForge.Service.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
@@ -51,8 +52,9 @@ public class ReviewWorkerTests
                     ScriptedChatClient.FunctionCalls(
                         ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
-            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock);
+            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, new NoopRunLogLifecycle(), Clock);
         }
 
         public void Dispose()
@@ -312,6 +314,11 @@ public class ReviewWorkerTests
         await h.Worker.StopAsync(CancellationToken.None);
 
         Assert.False(h.Claims.IsHeldBy(Key, runId), "claim must be released even on shutdown mid-run");
+        // Shutdown leaves a truthful record (P1-12): the mid-run cancellation is persisted
+        // as a failure, not silently dropped — otherwise the run would linger as a shell.
+        var record = Assert.Single(h.Store.Runs, r => r.Id == runId);
+        Assert.False(record.Success);
+        Assert.NotNull(record.CompletedAt);
     }
 
     [Fact]
@@ -337,6 +344,7 @@ public class ReviewWorkerTests
                         ScriptedChatClient.FunctionCalls(
                             ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 
             factory.Create();
