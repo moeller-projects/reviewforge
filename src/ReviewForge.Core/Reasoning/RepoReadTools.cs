@@ -27,32 +27,19 @@ public class RepoReadTools
     /// <summary>Aggregate line budget for one Grep call (P2-28).</summary>
     public const int DefaultGrepMaxLines = 200_000;
 
-    private static readonly string[] DefaultDenyPatterns =
-    [
-        @"\.git(/|$)",
-        @"\.env($|\.)", @"\.envrc$",
-        @"\.pem$", @"\.key$", @"\.pfx$", @"\.p12$", @"\.snk$",
-        @"(^|/)id_(rsa|dsa|ecdsa|ed25519)$",
-        @"(^|/)\.kube/config$|(^|/|\.)kubeconfig$",
-        @"(^|/)\.aws/",                     // AWS credentials & config
-        @"(^|/)\.npmrc$", @"(^|/)\.pypirc$", // registry tokens
-        @"(^|/)appsettings\.[^/]+\.json$",  // environment-specific settings (base appsettings.json stays readable)
-        @"secrets", @"credentials",
-    ];
-
     private static readonly string[] DefaultExcludeDirs =
     [
         "bin", "obj", "node_modules", ".git", ".vs", "packages",
     ];
 
-    private readonly Regex[] _Deny;
+    private readonly RepoPathGuard _Guard;
     private readonly HashSet<string> _ExcludeDirs;
     private readonly long _MaxGrepFileBytes;
     private readonly int _MaxLines;
     private readonly int _GrepMaxMs;
     private readonly int _GrepMaxLines;
 
-    private readonly string _Root;
+    private string Root => _Guard.Root;
 
     public RepoReadTools(
         string rootDir,
@@ -73,17 +60,12 @@ public class RepoReadTools
             throw new ArgumentOutOfRangeException(nameof(grepMaxLines), grepMaxLines, "Grep line budget must be positive.");
         }
 
-        _Root = Path.GetFullPath(rootDir);
+        _Guard = new RepoPathGuard(rootDir, denyPatterns);
         _MaxLines = maxLines;
         _ExcludeDirs = new HashSet<string>(excludeDirs ?? DefaultExcludeDirs, StringComparer.OrdinalIgnoreCase);
         _MaxGrepFileBytes = maxGrepFileBytes;
         _GrepMaxMs = grepMaxMs;
         _GrepMaxLines = grepMaxLines;
-        _Deny =
-        [
-            .. (denyPatterns ?? DefaultDenyPatterns)
-            .Select(p => new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Compiled))
-        ];
     }
 
     [Description("List files and directories under a path in the repository.")]
@@ -101,10 +83,10 @@ public class RepoReadTools
         }
 
         var sb = new StringBuilder();
-        var rootReal = PathSafety.ResolveReal(_Root, out var rootLinks);
+        var (rootReal, rootLinks) = _Guard.ResolveRoot();
         var entries = Directory.GetFileSystemEntries(dir)
-            .Select(e => (abs: e, rel: Path.GetRelativePath(_Root, e).Replace('\\', '/')))
-            .Where(e => !IsDenied(e.rel) && !IsResolvedDenied(e.abs, rootReal, rootLinks))
+            .Select(e => (abs: e, rel: Path.GetRelativePath(Root, e).Replace('\\', '/')))
+            .Where(e => !_Guard.IsDenied(e.rel) && !_Guard.IsResolvedDenied(e.abs, rootReal, rootLinks))
             .Select(e => e.rel)
             .Order(StringComparer.OrdinalIgnoreCase)
             .Take(MaxMatches)
@@ -222,21 +204,21 @@ public class RepoReadTools
         var matches = 0;
         var totalLines = 0;
         string? budget = null;
-        var rootReal = PathSafety.ResolveReal(_Root, out var rootLinks);
+        var (rootReal, rootLinks) = _Guard.ResolveRoot();
         var stopwatch = Stopwatch.StartNew();
         foreach (var file in EnumerateSearchableFiles(dir, glob ?? "*"))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var full = file.FullName;
-            var rel = Path.GetRelativePath(_Root, full).Replace('\\', '/');
-            if (IsDenied(rel))
+            var rel = Path.GetRelativePath(Root, full).Replace('\\', '/');
+            if (_Guard.IsDenied(rel))
             {
                 continue;
             }
 
             try
             {
-                if (!PathContainment.IsContained(_Root, full))
+                if (!PathContainment.IsContained(Root, full))
                 {
                     continue; // escaping
                 }
@@ -248,7 +230,7 @@ public class RepoReadTools
                 // reparse-point directories, so a regular file (LinkTarget null) shares
                 // the root's outside-the-checkout prefix — it resolves to itself, and
                 // IsResolvedDenied would reduce to the lexical IsDenied already applied.
-                if ((file.LinkTarget is not null && IsResolvedDenied(full, rootReal, rootLinks))
+                if ((file.LinkTarget is not null && _Guard.IsResolvedDenied(full, rootReal, rootLinks))
                     || file.Length > _MaxGrepFileBytes)
                 {
                     continue; // resolved-denied, symlinked, or oversized/generated output
@@ -318,65 +300,7 @@ public class RepoReadTools
 
     /// <summary>Resolves a repo-relative path to an absolute path inside the root; null + error when denied or escaping.</summary>
     private string? Resolve(string? relativePath, out string? error)
-    {
-        error = null;
-        var rel = (relativePath ?? string.Empty).Replace('\\', '/').TrimStart('/');
-
-        if (IsDenied(rel))
-        {
-            error = $"access denied: {relativePath}";
-            return null;
-        }
-
-        var full = Path.GetFullPath(Path.Combine(_Root, rel));
-        var rootReal = PathSafety.ResolveReal(_Root, out var rootLinks);
-        var resolved = PathSafety.ResolveReal(full, out var links);
-        // Symlink-aware: a checkout-controlled link that resolves outside the root must be
-        // refused even though its lexical path stays under _Root.
-        if (rel.Length != 0 && !PathContainment.IsContained(rootReal, resolved))
-        {
-            error = $"access denied: path escapes repository root";
-            return null;
-        }
-
-        // P1-15: the deny policy binds to the content actually read, not the name it is
-        // reached by — a committed symlink to a contained-but-denied file must not
-        // launder the path past the deny list.
-        var resolvedRel = RepoPath.Normalize(Path.GetRelativePath(rootReal, resolved));
-        if (IsDenied(resolvedRel))
-        {
-            error = $"access denied: {relativePath}";
-            return null;
-        }
-
-        // Symlinks inside the checkout are not traversable: review needs file content, not
-        // link semantics (mirrors the enumeration refusal for symlinked directories).
-        if (rel.Length != 0 && links > rootLinks)
-        {
-            error = $"access denied: {relativePath}";
-            return null;
-        }
-
-        return full;
-    }
-
-    /// <summary>True when the file's resolved target escapes the root, matches the deny list,
-    /// or the file is reached through a symlink inside the checkout — the deny policy binds
-    /// to the content actually read, not the name it is reached by (P1-15).</summary>
-    private bool IsResolvedDenied(string fullPath, string rootReal, int rootLinks)
-    {
-        var resolved = PathSafety.ResolveReal(fullPath, out var links);
-        if (!PathContainment.IsContained(rootReal, resolved))
-        {
-            return true;
-        }
-
-        var resolvedRel = RepoPath.Normalize(Path.GetRelativePath(rootReal, resolved));
-        return IsDenied(resolvedRel) || links > rootLinks;
-    }
-
-    private bool IsDenied(string relativePath)
-        => _Deny.Any(d => d.IsMatch(relativePath));
+        => _Guard.Resolve(relativePath, out error);
 
     /// <summary>Streaming read seam for tests — production reads line-by-line without materializing the file.</summary>
     protected virtual IEnumerable<string> ReadLinesSafe(string file)

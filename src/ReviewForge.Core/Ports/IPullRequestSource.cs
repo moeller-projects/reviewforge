@@ -28,6 +28,11 @@ public interface IPullRequestSource
     /// <summary>Post an inline (anchored) or general finding thread; returns the new thread id.</summary>
     Task<int> PostFindingThreadAsync(PrKey pr, RichFinding finding, CancellationToken ct);
 
+    /// <summary>Posts an inline suggestion thread at an anchor WITHOUT a dedupe-key property.
+    /// Used for commanded fixes: no property = invisible to triage's auto-resolve and to
+    /// publish suppression. Returns the new thread id.</summary>
+    Task<int> PostSuggestionThreadAsync(PrKey pr, ThreadAnchor anchor, string body, CancellationToken ct);
+
     Task PostGeneralCommentAsync(PrKey pr, string text, string? dedupeKey, CancellationToken ct);
 
     Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct);

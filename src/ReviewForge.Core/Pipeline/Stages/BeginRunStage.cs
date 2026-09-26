@@ -1,3 +1,4 @@
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -21,17 +22,10 @@ public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = nul
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        var acceptedKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
-
-        var findings = ctx.AcceptedFindings
-            .Select(f => new StoredFinding(
-                f.DedupeKey!, f.RuleId, f.Severity, f.Title,
-                f.Anchor?.FilePath, f.Anchor?.StartLine, ThreadId: null))
-            // Carry-forward from P0-1: prior keys remain known identities. ThreadId is nulled
-            // here only if the prior run had none; preserve it when present.
-            .Concat((ctx.PriorRun?.Findings ?? [])
-                .Where(p => !acceptedKeys.Contains(p.DedupeKey)))
-            .ToList();
+        // Rows: accepted findings (with deterministic-fix JSON) + carry-forward prior
+        // identities. Commanded-fix audit rows are added by the finalize stage, once the
+        // suggestion thread ids exist.
+        var findings = AppliedFixPersistence.BuildRows(ctx);
 
         var run = new ReviewRun(
             ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Kind,

@@ -4,10 +4,11 @@ using ReviewForge.Core.Reasoning.Rules;
 
 namespace ReviewForge.Core.Reasoning;
 
-/// <summary>Loads the embedded or configured review prompt and appends the active rule index.</summary>
+/// <summary>Loads embedded or configured review and fix-pass prompts and appends the active rule index.</summary>
 public static class SystemPromptComposer
 {
     private const string ResourceName = "ReviewForge.Core.Reasoning.Prompts.native-review-system.md";
+    private const string FixPassResourceName = "ReviewForge.Core.Reasoning.Prompts.fix-pass-system.md";
 
     public static string Compose(string? overridePath = null, RuleBook? ruleBook = null)
     {
@@ -27,11 +28,19 @@ public static class SystemPromptComposer
         return sb.ToString();
     }
 
+    public static string ComposeFixPass(string? overridePath = null)
+        => !string.IsNullOrWhiteSpace(overridePath)
+            ? File.ReadAllText(overridePath)
+            : ReadEmbedded(FixPassResourceName);
+
     private static string ReadEmbedded()
+        => ReadEmbedded(ResourceName);
+
+    private static string ReadEmbedded(string resourceName)
     {
         var assembly = Assembly.GetExecutingAssembly();
-        using var stream = assembly.GetManifestResourceStream(ResourceName)
-                           ?? throw new InvalidOperationException($"embedded prompt resource '{ResourceName}' missing");
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+                           ?? throw new InvalidOperationException($"embedded prompt resource '{resourceName}' missing");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }

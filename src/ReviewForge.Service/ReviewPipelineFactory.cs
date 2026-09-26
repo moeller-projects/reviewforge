@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
@@ -119,7 +120,10 @@ public sealed class ReviewPipelineFactory(
     IOptions<RepoReadToolsOptions> repoReadToolsOptions,
     ILoggerFactory loggerFactory,
     IContextEnricher? enricher = null,
-    TimeProvider? clock = null)
+    TimeProvider? clock = null,
+    IEnumerable<IFindingFixer>? findingFixers = null,
+    IFixVerifier? fixVerifier = null,
+    IOptions<AutoFixOptions>? autoFixOptions = null)
 {
     public ReviewPipeline Create()
     {
@@ -144,6 +148,20 @@ public sealed class ReviewPipelineFactory(
             GrepMaxLines = repoReadToolsOpts.GrepMaxLines,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
 
+        var fixers = findingFixers ?? [];
+        var registry = new FindingFixerRegistry(fixers);
+        var autoFix = autoFixOptions?.Value ?? new AutoFixOptions();
+        var verifier = fixVerifier ?? NullFixVerifier.Instance;
+        var factoryLogger = loggerFactory.CreateLogger<ReviewPipelineFactory>();
+        foreach (var ruleId in autoFix.AllowedRuleIds)
+        {
+            if (!registry.TryGet(ruleId, out _))
+            {
+                factoryLogger.LogWarning(
+                    "AutoFix:AllowedRuleIds entry '{RuleId}' has no registered fixer — it can never match", ruleId);
+            }
+        }
+
         var findingsDir = Path.Combine(opts.WorkDir, "findings");
 
         var diffBudget = new DiffBudget(
@@ -160,6 +178,8 @@ public sealed class ReviewPipelineFactory(
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
+            new AutoFixFindingsStage(
+                registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>()),
             new BeginRunStage(store, clock),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
             new PublishFindingsStage(source, store, loggerFactory.CreateLogger<PublishFindingsStage>(), cleanVote),

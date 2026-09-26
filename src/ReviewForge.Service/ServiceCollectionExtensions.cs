@@ -4,10 +4,13 @@ using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.AutoFix.Fixers;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
+using ReviewForge.Infrastructure.AutoFix;
 using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Filesystem;
 using ReviewForge.Infrastructure.Git;
@@ -94,6 +97,35 @@ public static class ServiceCollectionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
+        // Suggestion-only auto-fix: off by default (Enabled=false → byte-identical pipeline).
+        services.AddOptions<AutoFixOptions>()
+            .Bind(configuration.GetSection(AutoFixOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(o => !o.Enabled || o.AllowedAuthors.Length > 0,
+                "AutoFix:AllowedAuthors must be non-empty when AutoFix:Enabled is true")
+            .Validate(o => o.PublishMode == "Suggestion",
+                "AutoFix:PublishMode only supports 'Suggestion' in this version (CommitOnHead/StackedBranch are reserved)")
+            .Validate(o => o.VerificationCommand is null || o.VerificationCommand.Trim().Length > 0,
+                "AutoFix:VerificationCommand must not be whitespace")
+            .ValidateOnStart();
+
+        // Deterministic fixers: one class per rule; adding a fixer = one line here + a test file.
+        services.AddSingleton<IFindingFixer>(_ => new HomoglyphIdentifierFixer("homoglyph/mixed-script-identifier"));
+        services.AddSingleton<IFindingFixer>(_ => new HomoglyphIdentifierFixer("homoglyph/confusable-keyword"));
+        services.AddSingleton<IFindingFixer, BashUnquotedVarsFixer>();
+        services.AddSingleton<IFindingFixer, BashSetEMissingFixer>();
+        services.AddSingleton<IFindingFixer, PythonMutableDefaultArgFixer>();
+        services.AddSingleton<IFindingFixer, DockerAddToCopyFixer>();
+        services.AddSingleton<IFindingFixer[]>(sp => sp.GetServices<IFindingFixer>().ToArray());
+
+        services.AddSingleton<IFixVerifier>(sp =>
+        {
+            var autoFix = sp.GetRequiredService<IOptions<AutoFixOptions>>().Value;
+            return autoFix.VerificationCommand is { } command
+                ? new ProcessFixVerifier(command, autoFix.VerificationTimeoutSeconds)
+                : NullFixVerifier.Instance;
+        });
+
         services.AddOptions<ApiDocsOptions>()
             .Bind(configuration.GetSection(ApiDocsOptions.SectionName))
             .ValidateDataAnnotations()
@@ -151,7 +183,10 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
             sp.GetRequiredService<ILoggerFactory>(),
             enricher: null,
-            clock: sp.GetRequiredService<TimeProvider>()));
+            clock: sp.GetRequiredService<TimeProvider>(),
+            findingFixers: sp.GetRequiredService<IFindingFixer[]>(),
+            fixVerifier: sp.GetRequiredService<IFixVerifier>(),
+            autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>()));
 
         // WorkerCount < 1 is rejected by the options validation above (fail-fast at startup);
         // when unset it defaults to a processor-count-derived clamp, always >= 2.

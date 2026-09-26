@@ -1,3 +1,4 @@
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -19,23 +20,8 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        var acceptedKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
-
-        var findings = ctx.AcceptedFindings
-            .Select(f => new StoredFinding(
-                f.DedupeKey!,
-                f.RuleId,
-                f.Severity,
-                f.Title,
-                f.Anchor?.FilePath,
-                f.Anchor?.StartLine,
-                ctx.PostedThreadIds.TryGetValue(f.DedupeKey!, out var threadId) ? threadId : null))
-            // Carry prior findings forward: they are still known identities (still posted,
-            // still deduped) even though they were not re-accepted this run. Prior ThreadId
-            // is preserved — it still points at the live ADO thread.
-            .Concat((ctx.PriorRun?.Findings ?? [])
-                .Where(p => !acceptedKeys.Contains(p.DedupeKey)))
-            .ToList();
+        var findings = AppliedFixPersistence.BuildFinalRows(
+            ctx, key => ctx.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
 
         // Watermark for the follow-up gate (P2-24): the newest comment timestamp observed at
         // stage-1 fetch, in ADO server time. Comments the run itself posts (stage 9) are

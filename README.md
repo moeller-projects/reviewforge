@@ -33,6 +33,7 @@ tests/
 | 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                      |
 | 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files |
 | 7  | validate-findings  | re-anchors via snippet (AnchorResolver), downgrades unverifiable/out-of-diff anchors to general comments                                                   |
+| 7.2| auto-fix-findings  | suggestion-only fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; with the default null verifier the deterministic path performs **zero** checkout writes |
 | 8  | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
 | 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist            |
 | 10 | persist-run        | run + finding keys to SQLite (feeds gate + dedupe); skipped runs are never persisted                                                                       |
@@ -115,6 +116,54 @@ fail-fast at startup. PAT and API keys come from the environment only.
 - `ReviewForge:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
   `Medium`, `High`, `ExtraHigh`). Omit it (or leave unset) to keep the provider default. The
   Codex endpoint may ignore or restrict effort per model — verify against the deployed model.
+
+## Auto-fix (suggestion-only, off by default)
+
+Every fix ReviewForge produces is an ADO ` ```suggestion ` block the PR author applies
+with one click. ReviewForge **never** writes to the PR branch, never pushes, and never
+opens pull requests; the PAT keeps comment-only permissions.
+
+Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__…`):
+
+- **Deterministic** — a validated finding whose rule has a registered, enabled fixer
+  (v1: `homoglyph/mixed-script-identifier`, `homoglyph/confusable-keyword`,
+  `bash.unquoted-vars`, `bash.set-e-missing`, `py.mutable-default-arg`,
+  `docker.add-vs-copy`) gets a pure-C# proposal. With the default (null) verifier this
+  path performs **zero checkout writes**.
+- **Commanded** — the PR author replies `/rf fix` on any thread (human, bot, or a
+  ReviewForge finding). Only commands from the PR author, newer than the last completed
+  run's comment watermark, on active file-anchored threads trigger a constrained agent
+  fix pass: hash-anchored line edits, a one-file writable set, no shell, no findings
+  tools. Its writes are applied, captured, and reverted before the stage ends.
+
+```json
+"AutoFix": {
+  "Enabled": false,                 // master switch; false = byte-identical pipeline
+  "AllowedAuthors": [],             // creator ids or display names; empty = disabled
+  "AllowedRuleIds": [],             // intersected with the fixer registry
+  "PublishMode": "Suggestion",      // the only supported mode (write modes are reserved)
+  "MaxFixesPerRun": 3,              // shared budget, deterministic fixes first
+  "VerificationCommand": null,      // optional per-file verification (see below)
+  "VerificationTimeoutSeconds": 120,
+  "EnableThreadFixCommands": false, // the '/rf fix' thread command
+  "FixPassMaxIterations": 8         // iteration cap for one commanded fix pass
+}
+```
+
+**Verification trust boundary.** `AutoFix:VerificationCommand` runs per fixed file in the
+checkout (e.g. `dotnet build`). The command executes **PR-author-controlled code**
+(MSBuild targets, npm scripts, …): enable it only with a strict author allowlist, and
+note the shipped container (Alpine, read-only rootfs, no toolchains) cannot run
+heavyweight verifiers. The command runs without a shell; metacharacters are rejected at
+startup. When set, fixes are applied, verified once per file, and reverted — a verify
+failure drops that file's fixes (published as plain comments instead). A failed revert
+fails the run rather than leaving a dirty pooled checkout.
+
+Safety properties pinned by tests: fixed findings stay in the accepted set (their keys
+stay current, so triage never auto-resolves their threads); commanded suggestion threads
+carry no dedupe property (invisible to triage); only the PR author's last-comment
+commands trigger; command replies are deduplicated against retry; every fix is labeled,
+and AI-drafted fixes are marked as such.
 
 ## Rulebook
 

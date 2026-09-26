@@ -35,6 +35,9 @@ public sealed class FindingEntity
     public string? FilePath { get; set; }
     public int? Line { get; set; }
     public int? ThreadId { get; set; }
+
+    /// <summary>Serialized AppliedFix for fixes applied on that run; null for plain findings.</summary>
+    public string? AppliedFixJson { get; set; }
 }
 
 public sealed class FindingStoreDbContext(DbContextOptions<FindingStoreDbContext> options) : DbContext(options)
