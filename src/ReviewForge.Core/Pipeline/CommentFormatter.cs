@@ -14,6 +14,10 @@ public static class CommentFormatter
     /// <summary>Prepend the bot preamble to agent-authored free text.</summary>
     public static string WithBotPreamble(string text) => BotPreamble + "\n\n" + text.Trim();
 
+    /// <summary>Comment bodies are platform-independent artifacts posted to the PR host:
+    /// lines always terminate with "\n", never <see cref="Environment.NewLine"/>.</summary>
+    private static StringBuilder Line(StringBuilder sb, string text) => sb.Append(text).Append('\n');
+
     public static string FormatFinding(RichFinding finding)
     {
         if (finding.AppliedFix is { } fix)
@@ -22,29 +26,29 @@ public static class CommentFormatter
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine(BotPreamble);
-        sb.AppendLine();
-        sb.AppendLine($"### {SeverityIcon(finding.Severity)}{(finding.IsRegression ? " ⚠️ regressed:" : "")} {finding.Title}");
-        sb.AppendLine();
-        sb.AppendLine($"**Severity:** `{finding.Severity}` · **Rule:** `{finding.RuleId}` · **Category:** `{finding.Category}`");
-        sb.AppendLine();
-        sb.AppendLine(finding.Description.Trim());
+        Line(sb, BotPreamble);
+        sb.Append('\n');
+        Line(sb, $"### {SeverityIcon(finding.Severity)}{(finding.IsRegression ? " ⚠️ regressed:" : "")} {finding.Title}");
+        sb.Append('\n');
+        Line(sb, $"**Severity:** `{finding.Severity}` · **Rule:** `{finding.RuleId}` · **Category:** `{finding.Category}`");
+        sb.Append('\n');
+        Line(sb, finding.Description.Trim());
 
         if (!string.IsNullOrWhiteSpace(finding.Suggestion))
         {
-            sb.AppendLine();
-            sb.AppendLine("**Suggested fix**");
-            sb.AppendLine();
-            sb.AppendLine(finding.Suggestion.Trim());
+            sb.Append('\n');
+            Line(sb, "**Suggested fix**");
+            sb.Append('\n');
+            Line(sb, finding.Suggestion.Trim());
         }
 
         if (finding.AnchorDowngraded)
         {
-            sb.AppendLine();
-            sb.AppendLine("> **Location could not be verified**");
-            sb.AppendLine(">");
-            sb.AppendLine($"> `{finding.Anchor?.FilePath}:{finding.Anchor?.StartLine}` was not found in the latest PR iteration.");
-            sb.AppendLine("> This finding was posted as a general comment.");
+            sb.Append('\n');
+            Line(sb, "> **Location could not be verified**");
+            Line(sb, ">");
+            Line(sb, $"> `{finding.Anchor?.FilePath}:{finding.Anchor?.StartLine}` was not found in the latest PR iteration.");
+            Line(sb, "> This finding was posted as a general comment.");
         }
 
         return sb.ToString();
@@ -54,20 +58,20 @@ public static class CommentFormatter
     public static string FormatFixedFinding(RichFinding finding, AutoFix.AppliedFix fix)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(BotPreamble);
-        sb.AppendLine();
-        sb.AppendLine($"### 🔧 {finding.Title}");
-        sb.AppendLine();
-        sb.AppendLine($"**Severity:** `{finding.Severity}` · **Rule:** `{finding.RuleId}` · **Category:** `{finding.Category}`");
-        sb.AppendLine();
-        sb.AppendLine(finding.Description.Trim());
-        sb.AppendLine();
-        sb.AppendLine($"**Fix available** — {fix.Proposal.Rationale}");
-        sb.AppendLine();
+        Line(sb, BotPreamble);
+        sb.Append('\n');
+        Line(sb, $"### 🔧 {finding.Title}");
+        sb.Append('\n');
+        Line(sb, $"**Severity:** `{finding.Severity}` · **Rule:** `{finding.RuleId}` · **Category:** `{finding.Category}`");
+        sb.Append('\n');
+        Line(sb, finding.Description.Trim());
+        sb.Append('\n');
+        Line(sb, $"**Fix available** — {fix.Proposal.Rationale}");
+        sb.Append('\n');
         var fence = SuggestionFence(fix.Proposal.Replacement);
-        sb.AppendLine($"{fence}suggestion");
-        sb.AppendLine(fix.Proposal.Replacement);
-        sb.AppendLine(fence);
+        Line(sb, $"{fence}suggestion");
+        Line(sb, fix.Proposal.Replacement);
+        Line(sb, fence);
         return sb.ToString();
     }
 
@@ -75,20 +79,20 @@ public static class CommentFormatter
     public static string FormatFixedFinding(AutoFix.FixProposal fix, string threadExcerpt)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(BotPreamble);
-        sb.AppendLine();
-        sb.AppendLine("### 🔧 Requested fix");
-        sb.AppendLine();
-        sb.AppendLine($"**Requested via `/rf fix` on thread #{fix.SourceThreadId}** — {fix.Rationale}");
-        sb.AppendLine();
-        sb.AppendLine($"> {OneLine(threadExcerpt)}");
-        sb.AppendLine();
-        sb.AppendLine("**Requested fix (AI-generated from the thread command — verify before accepting)**");
-        sb.AppendLine();
+        Line(sb, BotPreamble);
+        sb.Append('\n');
+        Line(sb, "### 🔧 Requested fix");
+        sb.Append('\n');
+        Line(sb, $"**Requested via `/rf fix` on thread #{fix.SourceThreadId}** — {fix.Rationale}");
+        sb.Append('\n');
+        Line(sb, $"> {OneLine(threadExcerpt)}");
+        sb.Append('\n');
+        Line(sb, "**Requested fix (AI-generated from the thread command — verify before accepting)**");
+        sb.Append('\n');
         var fence = SuggestionFence(fix.Replacement);
-        sb.AppendLine($"{fence}suggestion");
-        sb.AppendLine(fix.Replacement);
-        sb.AppendLine(fence);
+        Line(sb, $"{fence}suggestion");
+        Line(sb, fix.Replacement);
+        Line(sb, fence);
         return sb.ToString();
     }
 
@@ -128,60 +132,60 @@ public static class CommentFormatter
     {
         var sb = new StringBuilder();
         var reviewName = kind == ReviewKind.Full ? "full review" : "follow-up review";
-        sb.AppendLine(BotPreamble);
-        sb.AppendLine();
-        sb.AppendLine($"## ReviewForge · {reviewName}");
-        sb.AppendLine();
-        sb.AppendLine($"> **Findings:** **{result.Findings.Count}** · **Review depth:** {result.ReviewDepth}");
+        Line(sb, BotPreamble);
+        sb.Append('\n');
+        Line(sb, $"## ReviewForge · {reviewName}");
+        sb.Append('\n');
+        Line(sb, $"> **Findings:** **{result.Findings.Count}** · **Review depth:** {result.ReviewDepth}");
 
         if (appliedFixCount > 0)
         {
-            sb.AppendLine($"> **Auto-fixes:** {appliedFixCount} suggestion(s) posted — review and apply individually.");
+            Line(sb, $"> **Auto-fixes:** {appliedFixCount} suggestion(s) posted — review and apply individually.");
         }
 
         if (!string.IsNullOrWhiteSpace(result.Narrative.PrSummary))
         {
-            sb.AppendLine();
-            sb.AppendLine("### Change summary");
-            sb.AppendLine();
-            sb.AppendLine(result.Narrative.PrSummary.Trim());
+            sb.Append('\n');
+            Line(sb, "### Change summary");
+            sb.Append('\n');
+            Line(sb, result.Narrative.PrSummary.Trim());
         }
 
         if (!string.IsNullOrWhiteSpace(result.Narrative.ReviewSummary))
         {
-            sb.AppendLine();
-            sb.AppendLine("### Review summary");
-            sb.AppendLine();
-            sb.AppendLine(result.Narrative.ReviewSummary.Trim());
+            sb.Append('\n');
+            Line(sb, "### Review summary");
+            sb.Append('\n');
+            Line(sb, result.Narrative.ReviewSummary.Trim());
         }
 
         if (result.Findings.Count > 0)
         {
-            sb.AppendLine();
-            sb.AppendLine("### Findings");
+            sb.Append('\n');
+            Line(sb, "### Findings");
             foreach (var severity in new[] {"critical", "high", "medium", "low", "info"})
             {
                 var count = result.Findings.Count(f => string.Equals(f.Severity, severity, StringComparison.OrdinalIgnoreCase));
                 if (count > 0)
                 {
-                    sb.AppendLine($"- {SeverityIcon(severity)} **{count} {severity}**");
+                    Line(sb, $"- {SeverityIcon(severity)} **{count} {severity}**");
                 }
             }
         }
 
         if (!string.IsNullOrWhiteSpace(result.Narrative.VerificationSummary))
         {
-            sb.AppendLine();
-            sb.AppendLine("### Verification");
-            sb.AppendLine();
-            sb.AppendLine(result.Narrative.VerificationSummary.Trim());
+            sb.Append('\n');
+            Line(sb, "### Verification");
+            sb.Append('\n');
+            Line(sb, result.Narrative.VerificationSummary.Trim());
         }
 
         var verdicts = result.Narrative.AcceptanceCriteria ?? [];
         if (workItems.Count > 0 && verdicts.Length > 0)
         {
-            sb.AppendLine();
-            sb.AppendLine("### Acceptance criteria");
+            sb.Append('\n');
+            Line(sb, "### Acceptance criteria");
             foreach (var verdict in verdicts)
             {
                 var icon = verdict.Status switch
@@ -190,38 +194,38 @@ public static class CommentFormatter
                     AcStatus.Unmet => "❌",
                     _ => "❓",
                 };
-                sb.AppendLine($"- {icon} **#{verdict.WorkItemId}** — {verdict.Criterion}");
+                Line(sb, $"- {icon} **#{verdict.WorkItemId}** — {verdict.Criterion}");
                 if (!string.IsNullOrWhiteSpace(verdict.Evidence))
                 {
-                    sb.AppendLine($"  - {verdict.Evidence.Trim()}");
+                    Line(sb, $"  - {verdict.Evidence.Trim()}");
                 }
             }
         }
 
         if (result.Narrative.GoodPractices is {Length: > 0} good)
         {
-            sb.AppendLine();
-            sb.AppendLine("### Good practices");
+            sb.Append('\n');
+            Line(sb, "### Good practices");
             foreach (var item in good.Where(item => !string.IsNullOrWhiteSpace(item)))
             {
-                sb.AppendLine($"- {item.Trim()}");
+                Line(sb, $"- {item.Trim()}");
             }
         }
 
         if (result.Uncertainties.Count > 0)
         {
-            sb.AppendLine();
-            sb.AppendLine("### Open questions");
+            sb.Append('\n');
+            Line(sb, "### Open questions");
             foreach (var uncertainty in result.Uncertainties)
             {
-                sb.AppendLine($"- **{uncertainty.Topic}**: {uncertainty.Question}");
+                Line(sb, $"- **{uncertainty.Topic}**: {uncertainty.Question}");
             }
         }
 
         if (unansweredThreads.Count > 0)
         {
-            sb.AppendLine();
-            sb.AppendLine($"> ⚠️ **{unansweredThreads.Count} thread(s) need a manual answer:** {string.Join(", ", unansweredThreads.Select(id => $"#{id}"))}");
+            sb.Append('\n');
+            Line(sb, $"> ⚠️ **{unansweredThreads.Count} thread(s) need a manual answer:** {string.Join(", ", unansweredThreads.Select(id => $"#{id}"))}");
         }
 
         return sb.ToString();

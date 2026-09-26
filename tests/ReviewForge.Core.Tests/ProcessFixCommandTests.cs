@@ -49,7 +49,6 @@ public class ProcessFixCommandTests
     [InlineData("cmd > out.txt")]
     [InlineData("cmd | tee log")]
     [InlineData("cmd; other")]
-    [InlineData("cmd \\path")]
     [InlineData("cmd $HOME")]
     [InlineData("cmd *.cs")]
     [InlineData("cmd [abc]")]
@@ -57,6 +56,15 @@ public class ProcessFixCommandTests
     {
         var ex = Assert.Throws<ArgumentException>(() => ProcessFixCommand.Parse(command));
         Assert.Contains("metacharacter", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_allows_windows_path_argument()
+    {
+        var (executable, arguments) = ProcessFixCommand.Parse(@"dotnet C:\tools\verify.exe --fast");
+
+        Assert.Equal("dotnet", executable);
+        Assert.Equal([@"C:\tools\verify.exe", "--fast"], arguments);
     }
     [Theory]
     [InlineData("cmd \"quoted")]

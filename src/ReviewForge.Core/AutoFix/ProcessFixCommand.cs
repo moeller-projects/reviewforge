@@ -10,8 +10,11 @@ namespace ReviewForge.Core.AutoFix;
 /// </summary>
 public static class ProcessFixCommand
 {
-    /// <summary>Characters that would carry meaning under a shell and are therefore refused.</summary>
-    private static readonly char[] Metacharacters = ['|', '&', ';', '<', '>', '`', '$', '(', ')', '{', '}', '\\', '*', '?', '[', ']', '~', '#', '!'];
+    /// <summary>Characters that would carry meaning under a shell and are therefore refused.
+    /// Directory separators are deliberately absent: tokens are passed to
+    /// <see cref="System.Diagnostics.ProcessStartInfo.ArgumentList"/> verbatim (no shell),
+    /// so Windows paths like <c>C:\tools\verify.exe</c> must parse.</summary>
+    private static readonly char[] Metacharacters = ['|', '&', ';', '<', '>', '`', '$', '(', ')', '{', '}', '*', '?', '[', ']', '~', '#', '!'];
 
     /// <summary>Splits the command into executable + arguments; throws on empty input, control
     /// characters, unbalanced double quotes, or metacharacters.</summary>

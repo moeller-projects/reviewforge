@@ -13,7 +13,9 @@ public sealed class HashLineEditorTests : IDisposable
     {
         _Root = Path.Combine(Path.GetTempPath(), "reviewforge-editor-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(_Root, "src"));
-        File.WriteAllLines(Path.Combine(_Root, "src", "Foo.cs"), ["alpha", "beta", "gamma", "delta"]);
+        // Explicit LF seed: the dominant-ending contract is platform-independent, so the
+        // fixture must not inherit Environment.NewLine from File.WriteAllLines.
+        File.WriteAllText(Path.Combine(_Root, "src", "Foo.cs"), "alpha\nbeta\ngamma\ndelta\n");
     }
 
     public void Dispose() => Directory.Delete(_Root, recursive: true);
@@ -559,13 +561,17 @@ public sealed class HashLineEditorTests : IDisposable
         var editor = Editor();
         var directory = Path.Combine(_Root, "src");
 
+        // Moving a file onto an existing directory throws IOException on Linux and
+        // UnauthorizedAccessException on Windows; either way the temp file must be cleaned up.
         var textError = Assert.Throws<System.Reflection.TargetInvocationException>(
             () => InvokeWriteAtomic(editor, "src", directory, "text"));
-        Assert.IsType<IOException>(textError.InnerException);
+        Assert.True(textError.InnerException is IOException or UnauthorizedAccessException,
+            $"unexpected inner exception: {textError.InnerException}");
 
         var bytesError = Assert.Throws<System.Reflection.TargetInvocationException>(
             () => InvokeWriteAtomic(editor, "src", directory, (byte[])[0x01, 0x02]));
-        Assert.IsType<IOException>(bytesError.InnerException);
+        Assert.True(bytesError.InnerException is IOException or UnauthorizedAccessException,
+            $"unexpected inner exception: {bytesError.InnerException}");
         Assert.Empty(Directory.GetFiles(directory, ".rf-edit-*.tmp"));
     }
 

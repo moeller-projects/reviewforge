@@ -30,7 +30,9 @@ public sealed class AutoFixStageTests : IDisposable
     {
         var path = Path.Combine(_Root, rel.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllLines(path, lines);
+        // Explicit LF seed: fix output must be asserted against a platform-independent
+        // line ending, not Environment.NewLine from File.WriteAllLines.
+        File.WriteAllText(path, string.Join("\n", lines) + "\n");
         return path;
     }
 
