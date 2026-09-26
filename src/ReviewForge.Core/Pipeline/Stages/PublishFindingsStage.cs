@@ -30,20 +30,36 @@ public sealed class PublishFindingsStage(
         // Mechanism B: never re-post a finding that already has a live bot thread. The ADO
         // thread properties (ReviewForge.DedupeKey) are the cross-run source of truth and
         // survive a lost/corrupt local store. Fixed/Closed threads do not suppress — a
-        // resolved finding that regresses must be re-posted.
+        // resolved finding that regresses must be re-posted, EXCEPT when the regression is
+        // resurfaced by reopening that thread in triage (P1-11): exactly one visible action.
         var liveThreadKeys = ctx.Threads
             .Where(t => t.DedupeKey is not null
                         && t.Status is ReviewThreadStatus.Active or ReviewThreadStatus.Pending)
             .Select(t => t.DedupeKey!)
             .ToHashSet(StringComparer.Ordinal);
 
+        var regressedThreadIds = ctx.Threads
+            .Where(t => t.DedupeKey is not null
+                        && ctx.Collector.RegressedKeys.Contains(t.DedupeKey)
+                        && t.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
+            .ToDictionary(t => t.DedupeKey!, t => t.Id, StringComparer.Ordinal);
+
         var toPost = ctx.AcceptedFindings
-            .Where(f => f.DedupeKey is null || !liveThreadKeys.Contains(f.DedupeKey))
+            .Where(f => f.DedupeKey is null
+                        || (!liveThreadKeys.Contains(f.DedupeKey) && !regressedThreadIds.ContainsKey(f.DedupeKey)))
             .ToList();
 
         foreach (var suppressed in ctx.AcceptedFindings.Where(f => f.DedupeKey is not null && liveThreadKeys.Contains(f.DedupeKey)))
         {
             logger.LogInformation("suppressing finding {Key}: live bot thread already exists", suppressed.DedupeKey);
+        }
+
+        foreach (var finding in ctx.AcceptedFindings)
+        {
+            if (finding.DedupeKey is { } key && regressedThreadIds.TryGetValue(key, out var threadId))
+            {
+                logger.LogInformation("suppressing finding {Key}: regressed thread {ThreadId} is reopened by triage instead", key, threadId);
+            }
         }
 
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before publish");
@@ -60,6 +76,12 @@ public sealed class PublishFindingsStage(
         }
 
         var posted = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (key, threadId) in regressedThreadIds)
+        {
+            // The finding is not re-posted (triage reopens the thread); stamp the existing
+            // thread id so persistence keeps the key → thread mapping intact (P1-11).
+            posted[key] = threadId;
+        }
 
         using var gate = new SemaphoreSlim(MaxConcurrentPosts, MaxConcurrentPosts);
 

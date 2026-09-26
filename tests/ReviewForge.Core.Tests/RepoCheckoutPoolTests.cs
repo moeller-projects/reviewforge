@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
@@ -368,12 +369,81 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Assert.True(report.BytesRemaining > 100); // delete failed, still over budget
     }
 
+    [Fact]
+    public async Task Acquire_reuse_does_not_walk_the_filesystem_for_sizes()
+    {
+        var fs = new CountingFs();
+        var git = new TestGitOps {HeadSha = "head"};
+        var pool = new RepoCheckoutPool(git, fs, _Root);
+
+        using (await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None))
+        {
+        }
+
+        var walksAfterMaterialize = fs.EnumerateFilesRecursiveCalls;
+        Assert.True(walksAfterMaterialize >= 1); // one initial measurement at materialization
+
+        using var second = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
+        Assert.Equal("head", await git.GetHeadShaAsync(second.Path, CancellationToken.None)); // reuse fast path
+        Assert.Equal(walksAfterMaterialize, fs.EnumerateFilesRecursiveCalls); // reuse never re-walks
+    }
+
+    [Fact]
+    public async Task Evict_refreshes_hour_stale_sizes()
+    {
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 25, 12, 0, 0, TimeSpan.Zero));
+        var pool = new RepoCheckoutPool(new TestGitOps(), new FakeWorkspaceFs(), _Root, clock: clock);
+        using (var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None))
+        {
+            File.WriteAllBytes(Path.Combine(checkout.Path, "growth.blob"), new byte[5 * 1024 * 1024]);
+        }
+
+        var options = new CheckoutEvictionOptions
+        {
+            MaxTotalBytes = 1024 * 1024, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30),
+        };
+
+        // Fresh stamp (< 1 h): the cached materialization size (~0) is used, no eviction.
+        var fresh = pool.Evict(options, clock);
+        Assert.Equal(0, fresh.Deleted);
+        Assert.True(Directory.Exists(pool.CheckoutPath("repo", "head")));
+
+        // Past the refresh interval: the sweep re-measures, sees 5 MB > 1 MB, evicts.
+        clock.Advance(TimeSpan.FromHours(2));
+        var stale = pool.Evict(options, clock);
+        Assert.Equal(1, stale.Deleted);
+        Assert.False(Directory.Exists(pool.CheckoutPath("repo", "head")));
+    }
+
+    /// <summary>Counts recursive file walks so tests can prove the acquire path never sizes.</summary>
+    private sealed class CountingFs : IWorkspaceFs
+    {
+        private readonly FakeWorkspaceFs _Inner = new();
+
+        public int EnumerateFilesRecursiveCalls { get; private set; }
+
+        public void CreateDirectory(string path) => _Inner.CreateDirectory(path);
+        public bool DirectoryExists(string path) => _Inner.DirectoryExists(path);
+        public IReadOnlyList<string> EnumerateDirectories(string path) => _Inner.EnumerateDirectories(path);
+        public string[] EnumerateFileSystemEntries(string path) => _Inner.EnumerateFileSystemEntries(path);
+
+        public string[] EnumerateFilesRecursive(string path)
+        {
+            EnumerateFilesRecursiveCalls++;
+            return _Inner.EnumerateFilesRecursive(path);
+        }
+
+        public long GetFileLength(string path) => _Inner.GetFileLength(path);
+        public DateTime GetLastWriteTimeUtc(string path) => _Inner.GetLastWriteTimeUtc(path);
+        public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
+        public void DeleteDirectory(string path, bool recursive) => _Inner.DeleteDirectory(path, recursive);
+    }
+
     private sealed class ThrowingFs : IWorkspaceFs
     {
         private readonly FakeWorkspaceFs _Inner = new();
         public bool ThrowOnDelete { get; init; }
         public bool ThrowOnSize { get; init; }
-
         public void CreateDirectory(string path) => _Inner.CreateDirectory(path);
         public bool DirectoryExists(string path) => _Inner.DirectoryExists(path);
         public IReadOnlyList<string> EnumerateDirectories(string path) => _Inner.EnumerateDirectories(path);

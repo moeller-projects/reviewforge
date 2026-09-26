@@ -9,14 +9,19 @@ internal static class PathSafety
 {
     /// <summary>Fully resolves symlinks/junctions in <paramref name="path"/> and returns the
     /// real path. Does NOT check containment — pair with <see cref="PathContainment.IsContained"/>.</summary>
-    public static string ResolveReal(string path) => ResolveLinks(path);
+    public static string ResolveReal(string path) => ResolveLinks(path, out _);
+
+    /// <summary>As <see cref="ResolveReal"/>, additionally reporting how many symlink/junction
+    /// components resolution traversed (used to refuse reads through committed links).</summary>
+    public static string ResolveReal(string path, out int linksTraversed) => ResolveLinks(path, out linksTraversed);
 
     public static bool IsContainedReal(string root, string candidate)
         => PathContainment.IsContained(ResolveReal(root), ResolveReal(candidate));
 
 
-    private static string ResolveLinks(string path)
+    private static string ResolveLinks(string path, out int linksTraversed)
     {
+        linksTraversed = 0;
         var full = Path.GetFullPath(path);
         var current = Path.GetPathRoot(full)!;
         foreach (var part in full[current.Length..]
@@ -39,6 +44,7 @@ internal static class PathSafety
                 return current;
             }
 
+            linksTraversed++;
             current = target.FullName;
         }
 

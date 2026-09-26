@@ -91,6 +91,17 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
         }
     }
 
+    /// <summary>True when any run holds an unexpired claim on the PR (non-mutating peek;
+    /// used by discovery to attribute "already in flight" before evaluating backoff).</summary>
+    public bool IsClaimed(PrKey pr)
+    {
+        lock (_Gate)
+        {
+            return _Claims.TryGetValue(pr, out var existing)
+                   && _Clock.GetUtcNow() - existing.ClaimedAt <= _Ttl;
+        }
+    }
+
     /// <summary>
     /// Pushes the owner's expiry forward; false when the claim was lost (expired or taken by
     /// another run). Called periodically while a run is actively executing.

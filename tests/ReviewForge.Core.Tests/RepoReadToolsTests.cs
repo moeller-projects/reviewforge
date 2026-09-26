@@ -321,4 +321,206 @@ public class RepoReadToolsTests : IDisposable
             Directory.Delete(outside, recursive: true);
         }
     }
+
+    // P1-15: the deny policy binds to the content actually read, not the name it is
+    // reached by. A committed symlink to a contained-but-denied file must not launder
+    // the path past the deny list, and symlinked files are refused outright.
+    private static bool TryLink(string link, string target, bool directory)
+    {
+        try
+        {
+            if (directory)
+            {
+                Directory.CreateSymbolicLink(link, target);
+            }
+            else
+            {
+                File.CreateSymbolicLink(link, target);
+            }
+
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false; // sandbox without symlink privilege
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    [Theory]
+    [InlineData(".env", "SECRET=1")]
+    [InlineData("appsettings.Production.json", "{\"Password\":\"SECRET123\"}")]
+    [InlineData("cert.pem", "-----BEGIN PRIVATE KEY-----")]
+    public void ReadFile_and_Grep_deny_symlink_to_denied_target(string targetName, string content)
+    {
+        File.WriteAllText(Path.Combine(_Root, targetName), content);
+        if (!TryLink(Path.Combine(_Root, "src", "readme.txt"), Path.Combine(_Root, targetName), directory: false))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: src/readme.txt", Tools().ReadFile("src/readme.txt"));
+        Assert.Equal("no matches", Tools().Grep("SECRET"));
+    }
+
+    [Fact]
+    public void ReadFile_refuses_symlink_even_to_an_allowed_file()
+    {
+        // Intentional (P1-15): review needs file content, not link semantics — any
+        // symlink-traversed read inside the checkout is refused.
+        if (!TryLink(Path.Combine(_Root, "src", "alias.cs"), Path.Combine(_Root, "src", "A.cs"), directory: false))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: src/alias.cs", Tools().ReadFile("src/alias.cs"));
+    }
+
+    [Fact]
+    public void ReadFile_denies_deep_symlink_chain_ending_at_denied_file()
+    {
+        var denied = Path.Combine(_Root, ".env");
+        var mid = Path.Combine(_Root, "src", "mid.txt");
+        if (!TryLink(mid, denied, directory: false))
+        {
+            return;
+        }
+
+        var leaf = Path.Combine(_Root, "src", "leaf.txt");
+        if (!TryLink(leaf, mid, directory: false))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: src/leaf.txt", Tools().ReadFile("src/leaf.txt"));
+        Assert.Equal("no matches", Tools().Grep("SECRET"));
+    }
+
+    [Fact]
+    public void Grep_refuses_symlinked_directory_passed_as_path()
+    {
+        if (!TryLink(Path.Combine(_Root, "docs"), Path.Combine(_Root, "src"), directory: true))
+        {
+            return;
+        }
+
+        Assert.Equal("access denied: docs", Tools().Grep("TARGET", path: "docs"));
+    }
+
+    [Fact]
+    public void List_hides_symlinked_entries()
+    {
+        if (!TryLink(Path.Combine(_Root, "alias.txt"), Path.Combine(_Root, "src", "A.cs"), directory: false))
+        {
+            return;
+        }
+
+        if (!TryLink(Path.Combine(_Root, "linked-src"), Path.Combine(_Root, "src"), directory: true))
+        {
+            return;
+        }
+
+        var listing = Tools().List();
+        Assert.Contains("src", listing);
+        Assert.DoesNotContain("alias.txt", listing);
+        Assert.DoesNotContain("linked-src", listing);
+    }
+
+    [Fact]
+    public void Symlink_denial_uses_the_same_non_oracular_message_as_lexical_denial()
+    {
+        if (!TryLink(Path.Combine(_Root, "src", "readme.txt"), Path.Combine(_Root, ".env"), directory: false))
+        {
+            return;
+        }
+
+        var viaLink = Tools().ReadFile("src/readme.txt");
+        Assert.Equal("access denied: src/readme.txt", viaLink);
+        Assert.Equal("access denied: .env", Tools().ReadFile(".env")); // identical template
+        Assert.DoesNotContain("symlink", viaLink, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("escape", viaLink, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Grep_aborts_on_aggregate_line_budget_and_marks_truncation()
+    {
+        File.WriteAllText(Path.Combine(_Root, "big.log"), string.Join("\n", Enumerable.Repeat("filler line", 50)));
+        var result = new RepoReadTools(_Root, grepMaxLines: 10).Grep("filler");
+        Assert.Contains("…[truncated: budget-lines]", result);
+    }
+
+    [Fact]
+    public void Grep_aborts_on_aggregate_time_budget_and_marks_truncation()
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            File.WriteAllText(Path.Combine(_Root, $"f{i:D3}.txt"), string.Join("\n", Enumerable.Repeat("needle line", 20)));
+        }
+
+        var result = new RepoReadTools(_Root, grepMaxMs: 1).Grep("needle");
+        Assert.Contains("…[truncated: budget-time]", result);
+    }
+
+    [Fact]
+    public void Grep_honours_cancellation_mid_scan()
+    {
+        File.WriteAllText(Path.Combine(_Root, "big.log"), string.Join("\n", Enumerable.Repeat("filler", 200)));
+        using var cts = new CancellationTokenSource();
+        var tools = new CancellingTools(_Root, cts);
+        Assert.ThrowsAny<OperationCanceledException>(() => tools.Grep("filler", cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public async Task Meai_binds_cancellation_token_into_grep()
+    {
+        var function = Microsoft.Extensions.AI.AIFunctionFactory.Create(new RepoReadTools(_Root).Grep);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await function.InvokeAsync(
+                new Microsoft.Extensions.AI.AIFunctionArguments(
+                    new Dictionary<string, object?> { ["pattern"] = "one" }),
+                cts.Token));
+    }
+
+    [Fact]
+    public void Grep_falls_back_for_lookaround_patterns_and_marks_result()
+    {
+        var result = Tools().Grep("two(?= TARGET)");
+        Assert.Contains("src/A.cs:2: two TARGET", result);
+        Assert.Contains("…[pattern-fallback]", result);
+    }
+
+    [Fact]
+    public void Grep_handles_catastrophic_pattern_within_budget()
+    {
+        File.WriteAllText(Path.Combine(_Root, "bomb.txt"), new string('a', 10_000) + "b!");
+        var result = new RepoReadTools(_Root, grepMaxMs: 5_000).Grep("(a+)+$");
+        Assert.Equal("no matches", result);
+    }
+
+    [Fact]
+    public void Grep_budget_defaults_reject_non_positive_values()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RepoReadTools(_Root, grepMaxMs: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RepoReadTools(_Root, grepMaxLines: -1));
+    }
+
+    /// <summary>Cancels the token from inside the first read so the scan must observe it (P2-28).</summary>
+    private sealed class CancellingTools : RepoReadTools
+    {
+        private readonly CancellationTokenSource _Cts;
+
+        public CancellingTools(string root, CancellationTokenSource cts) : base(root) => _Cts = cts;
+
+        protected override IEnumerable<string> ReadLinesSafe(string file)
+        {
+            _Cts.Cancel();
+            yield return "filler";
+            yield return "filler";
+        }
+    }
 }

@@ -24,6 +24,12 @@ public sealed record AgentOptions
     public IEnumerable<string>? DenyPatterns { get; init; }
     /// <summary>Directory names Grep never descends into; null = defaults (bin, obj, node_modules, .git, .vs, packages).</summary>
     public IEnumerable<string>? GrepExcludeDirs { get; init; }
+
+    /// <summary>Aggregate wall-clock budget (ms) for one Grep tool call (P2-28).</summary>
+    public int GrepMaxMs { get; init; } = RepoReadTools.DefaultGrepMaxMs;
+
+    /// <summary>Aggregate line budget for one Grep tool call (P2-28).</summary>
+    public int GrepMaxLines { get; init; } = RepoReadTools.DefaultGrepMaxLines;
     public ReasoningEffort? Effort { get; init; }
     public bool DebugLogging { get; init; }
 }
@@ -41,7 +47,7 @@ public sealed class NativeReviewAgent(
         => new RuleBookComposer().Compose(changedFiles, repoRootFiles, _Options.RuleSetsPath);
 
     public AIAgent CreateAgent(ReviewCollector collector, ContextStore contextStore, string repoDir, RuleBook? ruleBook = null)
-        => CreateAgent(collector, contextStore, repoDir, ruleBook, null, null, null);
+        => CreateAgent(collector, contextStore, repoDir, ruleBook, null, null, null, null);
 
     private AIAgent CreateAgent(
         ReviewCollector collector,
@@ -50,10 +56,13 @@ public sealed class NativeReviewAgent(
         RuleBook? ruleBook,
         TokenUsage? usage,
         IReadOnlySet<string>? changedFiles,
-        DiffIndex? diff)
+        DiffIndex? diff,
+        IReadOnlySet<string>? resolvedKeys)
     {
-        var repoTools = new RepoReadTools(repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs);
-        var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff);
+        var repoTools = new RepoReadTools(
+            repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
+            grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines);
+        var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff, resolvedKeys: resolvedKeys);
         IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
         IChatClient invoking = new ChatClientBuilder(guarded)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = _Options.MaxIterations)
@@ -80,7 +89,7 @@ public sealed class NativeReviewAgent(
     }
 
     public Task<ReviewResult> RunAsync(string userPrompt, ReviewCollector collector, ContextStore contextStore, string repoDir, CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, null, null, null, ct);
+        => RunAsync(userPrompt, collector, contextStore, repoDir, null, null, null, null, ct);
 
     public Task<ReviewResult> RunAsync(
         string userPrompt,
@@ -89,7 +98,7 @@ public sealed class NativeReviewAgent(
         string repoDir,
         RuleBook? ruleBook,
         CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, ct);
+        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, null, ct);
 
     public async Task<ReviewResult> RunAsync(
         string userPrompt,
@@ -99,10 +108,11 @@ public sealed class NativeReviewAgent(
         RuleBook? ruleBook,
         IReadOnlySet<string>? changedFiles,
         DiffIndex? diff,
+        IReadOnlySet<string>? resolvedKeys,
         CancellationToken ct)
     {
         var usage = new TokenUsage();
-        var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff);
+        var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, resolvedKeys);
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         var modelTag = new TagList { { "model", chatClientFactory.ModelName } };

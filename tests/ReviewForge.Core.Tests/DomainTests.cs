@@ -269,6 +269,89 @@ public class ThreadTriageTests
     }
 
     [Fact]
+    public void Fixed_thread_with_regressed_key_is_reopened_with_sha_note()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Fixed, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal(ReviewThreadStatus.Active, op.NewStatus);
+        Assert.Contains("Regressed in abc123d", op.Comment);
+    }
+
+    [Fact]
+    public void Closed_thread_with_regressed_key_is_reopened()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Closed, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal(ReviewThreadStatus.Active, op.NewStatus);
+    }
+
+    [Fact]
+    public void Fixed_thread_with_regressed_key_and_no_sha_reopens_without_sha_note()
+    {
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Fixed, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            null);
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal("Regressed: this previously resolved finding reproduces in the latest iteration.", op.Comment);
+    }
+
+    [Fact]
+    public void Fixed_thread_with_regressed_key_and_pending_human_reply_is_reopened()
+    {
+        // The gate often needs a new human comment to admit a follow-up run; the regression
+        // reopen still fires (and implicitly answers the human) instead of a manual flag.
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Fixed, humanLast: true)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+
+        var op = Assert.Single(plan);
+        Assert.Equal(TriageOp.Reopen, op.Op);
+        Assert.Equal(ReviewThreadStatus.Active, op.NewStatus);
+        Assert.Contains("Regressed in abc123d", op.Comment);
+    }
+
+    [Fact]
+    public void Active_thread_with_redetected_key_is_not_reopened()
+    {
+        // Redetected (thread still live) ≠ regressed: the auto-resolve heuristic owns
+        // Active threads; reopening is only for Fixed/Closed ones (P1-11).
+        var plan = ThreadTriage.Plan(
+            [BotThread(7, "k", ReviewThreadStatus.Active, humanLast: false)],
+            ["k"],
+            [],
+            postedText => postedText,
+            new HashSet<string>(["k"], StringComparer.Ordinal),
+            "abc123def456");
+        Assert.Empty(plan);
+    }
+
+    [Fact]
     public void Unanswered_empty_when_agent_acted()
     {
         var threads = new[] {BotThread(5, "k", ReviewThreadStatus.Active, humanLast: true)};
@@ -394,6 +477,68 @@ public class FailureBackoffTests
     public void BlockedUntil_returns_null_once_window_elapsed()
     {
         var runs = new[] {Failed("head", Now.AddHours(-9))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    private static ReviewRun Shell(string head, DateTimeOffset startedAt)
+        => new(Guid.NewGuid(), new PrKey("o", "p", "r", 7), head, ReviewKind.Full, startedAt, null, false, []);
+
+    [Fact]
+    public void BlockedUntil_ignores_in_flight_shells()
+    {
+        // A shell (CompletedAt == null) proves nothing about failure: it neither blocks
+        // nor counts, even when it is the newest run for the head.
+        var runs = new[] {Shell("head", Now.AddMinutes(-2))};
+        Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_shells_do_not_break_or_extend_failure_streak()
+    {
+        // Shells are skipped entirely: the failure streak behind them still counts with
+        // its own completion time, and a shell in the middle does not reset anything.
+        var failed = Failed("head", Now.AddMinutes(-10));
+        var runs = new[] {Shell("head", Now.AddMinutes(-3)), failed, Succeeded("head", Now.AddMinutes(-60))};
+        Assert.Equal(failed.CompletedAt + TimeSpan.FromMinutes(30),
+            FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Theory]
+    [InlineData("head")]
+    [InlineData("any-other-head")]
+    public void BlockedUntil_headless_fetch_failures_count_for_any_head(string head)
+    {
+        // P2-33: endpoint submits carry HeadSha = null; a fetch-stage failure persists
+        // an empty head. Two consecutive head-less failures back off a submit of any head.
+        var t = Now.AddMinutes(-5);
+        var runs = new[] {Failed("", t), Failed("", t)};
+        Assert.Equal(t + TimeSpan.FromHours(1), FailureBackoff.BlockedUntil(runs, head, Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_headless_then_different_head_counts_only_headless()
+    {
+        // Newest first: head-less failure counts (streak 1), headed failure at a different
+        // head breaks the streak and is not attributed to the requested head.
+        var t = Now.AddMinutes(-5);
+        var runs = new[] {Failed("", t), Failed("other-head", t)};
+        Assert.Equal(t + TimeSpan.FromMinutes(30), FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_headless_failure_does_not_break_headed_streak()
+    {
+        // A head-less failure between headed failures of the same head extends, not
+        // breaks, the streak (streak 3 → 2h delay from the newest headed failure).
+        var t = Now.AddMinutes(-5);
+        var runs = new[] {Failed("head", t), Failed("", t), Failed("head", t)};
+        Assert.Equal(t + TimeSpan.FromHours(2), FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
+    }
+
+    [Fact]
+    public void BlockedUntil_success_resets_streak_after_headless_failure()
+    {
+        var runs = new[] {Succeeded("head", Now.AddMinutes(-5)), Failed("", Now.AddMinutes(-30))};
         Assert.Null(FailureBackoff.BlockedUntil(runs, "head", Now, Policy));
     }
 }
