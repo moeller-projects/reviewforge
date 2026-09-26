@@ -64,6 +64,10 @@ Endpoints (all `/reviews*` require the `X-Api-Key` header; keys are configured v
 submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`, default 10/60s), 503
 when the bounded queue is full · `GET /reviews/{runId}` · `POST /reviews/discover` ·
 `GET /health` (unauthenticated).
+Rate limiting runs before API-key auth (auth is an endpoint filter, the limiter is
+middleware), so rejected requests still consume rate budget — from their own remote-IP
+partition only. Deploying behind a reverse proxy requires forwarded-headers support;
+otherwise every client shares the proxy's single partition.
 
 ## Dev loop: Aspire vs Docker Compose
 
