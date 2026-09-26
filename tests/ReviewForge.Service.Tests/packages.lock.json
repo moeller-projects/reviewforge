@@ -960,7 +960,7 @@
       },
       "OpenAI": {
         "type": "CentralTransitive",
-        "requested": "[2.13.0, )",
+        "requested": "[2.14.0, )",
         "resolved": "2.14.0",
         "contentHash": "AeyC3GxbrJ7KRoWDyFeNSUOQQWD9AnNvM7LYQijCcXcqjyr53aGRcf5GBLExcSBzIs0RWYHe+NbzPrHTeuU5zA==",
         "dependencies": {
@@ -1017,7 +1017,7 @@
       },
       "Scalar.AspNetCore": {
         "type": "CentralTransitive",
-        "requested": "[2.17.7, )",
+        "requested": "[2.17.10, )",
         "resolved": "2.17.10",
         "contentHash": "lASwa/do5YYLNp+EQ/LTfm9gxBykypyzQh52aJNYnYkMfFJDwsQ+W7+mKSFejfxA1jGaorFPSeUQHHslnBsdtA=="
       }

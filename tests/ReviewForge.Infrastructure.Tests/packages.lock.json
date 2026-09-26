@@ -699,7 +699,7 @@
       },
       "OpenAI": {
         "type": "CentralTransitive",
-        "requested": "[2.13.0, )",
+        "requested": "[2.14.0, )",
         "resolved": "2.14.0",
         "contentHash": "AeyC3GxbrJ7KRoWDyFeNSUOQQWD9AnNvM7LYQijCcXcqjyr53aGRcf5GBLExcSBzIs0RWYHe+NbzPrHTeuU5zA==",
         "dependencies": {
