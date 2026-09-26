@@ -80,6 +80,6 @@ public static class ProcessFixCommand
             }
         }
 
-        return (tokens[0], tokens[1..]);
+        return (tokens[0], tokens.Skip(1).ToArray());
     }
 }

@@ -238,8 +238,8 @@ public sealed class HashLineEditorTests : IDisposable
         var change = editor.GetSessionChange("src/Foo.cs");
         Assert.NotNull(change);
         Assert.Equal(2, change.Value.StartLine);
-        Assert.Equal(5, change.Value.EndLine);
-        Assert.Equal("two-a\ntwo-b\ntwo-c\nfour\nFIVE", change.Value.Replacement);
+        Assert.Equal(7, change.Value.EndLine);
+        Assert.Equal("two-a\ntwo-b\ntwo-c\nthree\nfour\nFIVE", change.Value.Replacement);
     }
 
     [Fact]
@@ -352,5 +352,251 @@ public sealed class HashLineEditorTests : IDisposable
         var result = editor.EditFile("src/Foo.cs", edits);
         Assert.Contains("applied 100 edits", result);
         Assert.Contains("replaced 50", Current());
+    }
+    [Fact]
+    public void EditFile_refuses_binary_before_applying()
+    {
+        File.WriteAllBytes(FilePath, [0x61, 0x00, 0x62]);
+
+        Assert.Equal(
+            "refused: binary file",
+            Editor().EditFile("src/Foo.cs", [new LineEdit(H("a"), null, null, null, "changed")]));
+        Assert.Equal([0x61, 0x00, 0x62], File.ReadAllBytes(FilePath));
+    }
+
+    [Fact]
+    public void ApplyRange_refuses_binary_before_hash_check()
+    {
+        File.WriteAllBytes(FilePath, [0x61, 0x00, 0x62]);
+
+        var result = Editor().ApplyRange("src/Foo.cs", 1, 1, "changed", H("a"));
+
+        Assert.False(result.Success);
+        Assert.Equal("refused: binary file", result.Error);
+    }
+
+    [Fact]
+    public void ApplyRange_refuses_mixed_line_endings()
+    {
+        File.WriteAllText(FilePath, "one\n two\r\nthree\nfour\r\n");
+
+        var result = Editor().ApplyRange("src/Foo.cs", 1, 1, "ONE", H("one"));
+
+        Assert.False(result.Success);
+        Assert.Equal("refused: mixed line endings", result.Error);
+    }
+
+    [Fact]
+    public void GetSessionChange_returns_null_when_file_is_deleted()
+    {
+        var editor = Editor();
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("beta"), null, null, null, "BETA")]);
+        File.Delete(FilePath);
+
+        Assert.Null(editor.GetSessionChange("src/Foo.cs"));
+    }
+
+    [Fact]
+    public void GetSessionChange_returns_null_when_current_file_is_binary()
+    {
+        var editor = Editor();
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("beta"), null, null, null, "BETA")]);
+        File.WriteAllBytes(FilePath, [0x62, 0x00, 0x61]);
+
+        Assert.Null(editor.GetSessionChange("src/Foo.cs"));
+    }
+
+    [Fact]
+    public void Session_change_shifts_when_an_earlier_edit_is_applied()
+    {
+        var editor = Editor();
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("delta"), null, null, null, "D")]);
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("alpha"), null, null, null, "A\nA2")]);
+
+        var change = editor.GetSessionChange("src/Foo.cs");
+        Assert.NotNull(change);
+        Assert.Equal(5, change.Value.StartLine);
+        Assert.Equal(5, change.Value.EndLine);
+    }
+
+    [Fact]
+    public void Session_change_merges_overlapping_edits_and_tracks_shifted_boundaries()
+    {
+        var editor = Editor();
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("beta"), null, null, null, "B1\nB2\nB3")]);
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("B2"), null, null, null, "B2a\nB2b")]);
+
+        var change = editor.GetSessionChange("src/Foo.cs");
+        Assert.NotNull(change);
+        Assert.Equal(2, change.Value.StartLine);
+        Assert.Equal(5, change.Value.EndLine);
+        Assert.Equal("B1\nB2a\nB2b\nB3", change.Value.Replacement);
+    }
+
+    [Fact]
+    public void Session_change_merges_same_boundary_edits()
+    {
+        var editor = Editor();
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("beta"), null, null, null, "B")]);
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("B"), null, null, null, "B2")]);
+
+        var change = editor.GetSessionChange("src/Foo.cs");
+        Assert.NotNull(change);
+        Assert.Equal(2, change.Value.StartLine);
+        Assert.Equal(2, change.Value.EndLine);
+        Assert.Equal("B2", change.Value.Replacement);
+    }
+
+    [Fact]
+    public void Stable_path_validation_rejects_links_missing_paths_and_mismatches()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var linkPath = Path.Combine(_Root, "src", "alias.cs");
+        try
+        {
+            File.CreateSymbolicLink(linkPath, FilePath);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return;
+        }
+
+        var editor = Editor();
+        AssertStablePathRejected(editor, "src/alias.cs", linkPath, "access denied: src/alias.cs");
+        AssertStablePathRejected(
+            editor,
+            "src/missing.cs",
+            Path.Combine(_Root, "src", "missing.cs"),
+            "not found: src/missing.cs");
+        AssertStablePathRejected(
+            editor,
+            "src/missing/file.cs",
+            Path.Combine(_Root, "src", "missing", "file.cs"),
+            "not found: src/missing/file.cs");
+        var outsidePath = Path.Combine(Path.GetTempPath(), "reviewforge-editor-outside-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(outsidePath, "outside");
+        try
+        {
+            AssertStablePathRejected(editor, "src/Foo.cs", outsidePath, "access denied: src/Foo.cs");
+        }
+        finally
+        {
+            File.Delete(outsidePath);
+        }
+    }
+
+    [Fact]
+    public void ReadRawLines_reports_stable_path_refusal_and_unreadable_files()
+    {
+        var editor = Editor();
+        var linkPath = Path.Combine(_Root, "src", "raw-alias.cs");
+        if (!OperatingSystem.IsWindows())
+        {
+            try
+            {
+                File.CreateSymbolicLink(linkPath, FilePath);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                return;
+            }
+
+            Assert.Equal(
+                "access denied: src/raw-alias.cs",
+                InvokeReadRawLines(editor, "src/raw-alias.cs", linkPath));
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            // clear_refs is a procfs write-only file; opening it for read deterministically
+            // exercises the UnauthorizedAccessException refusal.
+            var procEditor = new HashLineEditor(new RepoPathGuard("/proc"), new HashSet<string> { "1/clear_refs" });
+            Assert.Equal(
+                "unreadable: 1/clear_refs",
+                InvokeReadRawLines(procEditor, "1/clear_refs", "/proc/1/clear_refs"));
+
+            // A Unix-domain socket is a non-file endpoint; ReadAllBytes reports IOException.
+            var socketPath = Path.Combine(_Root, "src", "raw.sock");
+            using var socket = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.Unix,
+                System.Net.Sockets.SocketType.Stream,
+                System.Net.Sockets.ProtocolType.Unspecified);
+            socket.Bind(new System.Net.Sockets.UnixDomainSocketEndPoint(socketPath));
+            Assert.Equal(
+                "unreadable: src/raw.sock",
+                InvokeReadRawLines(editor, "src/raw.sock", socketPath));
+        }
+    }
+
+    [Fact]
+    public void WriteAtomic_rejects_unstable_destination_before_writing()
+    {
+        var editor = Editor();
+        var outsidePath = Path.Combine(Path.GetTempPath(), "reviewforge-editor-outside-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(outsidePath, "outside");
+        try
+        {
+            var textError = Assert.Throws<System.Reflection.TargetInvocationException>(
+                () => InvokeWriteAtomic(editor, "src/Foo.cs", outsidePath, "text"));
+            Assert.IsType<IOException>(textError.InnerException);
+            var bytesError = Assert.Throws<System.Reflection.TargetInvocationException>(
+                () => InvokeWriteAtomic(editor, "src/Foo.cs", outsidePath, (byte[])[0x01, 0x02]));
+            Assert.IsType<IOException>(bytesError.InnerException);
+        }
+        finally
+        {
+            File.Delete(outsidePath);
+        }
+    }
+
+    [Fact]
+    public void WriteAtomic_cleans_temp_files_when_destination_move_fails()
+    {
+        var editor = Editor();
+        var directory = Path.Combine(_Root, "src");
+
+        var textError = Assert.Throws<System.Reflection.TargetInvocationException>(
+            () => InvokeWriteAtomic(editor, "src", directory, "text"));
+        Assert.IsType<IOException>(textError.InnerException);
+
+        var bytesError = Assert.Throws<System.Reflection.TargetInvocationException>(
+            () => InvokeWriteAtomic(editor, "src", directory, (byte[])[0x01, 0x02]));
+        Assert.IsType<IOException>(bytesError.InnerException);
+        Assert.Empty(Directory.GetFiles(directory, ".rf-edit-*.tmp"));
+    }
+
+    private static void AssertStablePathRejected(HashLineEditor editor, string rel, string full, string expected)
+    {
+        var method = typeof(HashLineEditor).GetMethod(
+            "EnsureStablePath",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var args = new object?[] { rel, full, null };
+        Assert.False((bool)method.Invoke(editor, args)!);
+        Assert.Equal(expected, args[2]);
+    }
+
+    private static string? InvokeReadRawLines(HashLineEditor editor, string rel, string full)
+    {
+        var method = typeof(HashLineEditor).GetMethod(
+            "ReadRawLines",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var result = method.Invoke(editor, [rel, full])!;
+        return (string?)result.GetType().GetField("Item2")!.GetValue(result);
+    }
+
+    private static void InvokeWriteAtomic(HashLineEditor editor, string rel, string full, object value)
+    {
+        var isBytes = value is byte[];
+        var method = typeof(HashLineEditor).GetMethod(
+            "WriteAtomic",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            types: isBytes ? [typeof(string), typeof(string), typeof(byte[])] : [typeof(string), typeof(string), typeof(string)],
+            modifiers: null)!;
+        method.Invoke(editor, [rel, full, value]);
     }
 }

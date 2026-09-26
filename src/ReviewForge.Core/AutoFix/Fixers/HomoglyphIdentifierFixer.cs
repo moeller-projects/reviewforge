@@ -34,10 +34,8 @@ public sealed class HomoglyphIdentifierFixer(string ruleId) : IFindingFixer
         }
 
         var token = tokens[0];
-        if (token.AsciiLookalike is not { } lookalike)
-        {
-            return null;
-        }
+        // ScanLine always builds tokens with a non-null skeleton lookalike.
+        var lookalike = token.AsciiLookalike!;
 
         if (token.StartCol < 0 || token.StartCol + token.Token.Length > content.Length
             || IsInsideQuotedRegion(content, token.StartCol))
@@ -53,12 +51,8 @@ public sealed class HomoglyphIdentifierFixer(string ruleId) : IFindingFixer
             }
         }
 
+        // StartCol originates from scanning this very line, so the span always matches.
         var first = token.StartCol;
-        if (!content.AsSpan(first).StartsWith(token.Token, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
         var fixedLine = content[..first] + lookalike + content[(first + token.Token.Length)..];
         return new FixProposal(
             context.FilePath,

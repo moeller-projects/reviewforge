@@ -104,6 +104,32 @@ public sealed class AutoFixStageTests : IDisposable
             base.WriteAllLines(relativePath, lines);
         }
     }
+    private sealed class FailingEditor(
+        RepoPathGuard guard,
+        IReadOnlySet<string> writable)
+        : HashLineEditor(guard, writable)
+    {
+        public override EditResult ApplyRange(
+            string relativePath, int startLine, int endLine, string replacement, string expectedRangeHash)
+            => new(false, "synthetic apply failure", [], null);
+    }
+
+    [Fact]
+    public void Stage_exposes_expected_name_and_order()
+    {
+        var stage = Stage(Options());
+
+        Assert.Equal("auto-fix-findings", stage.Name);
+        Assert.Equal(72, stage.Order);
+    }
+
+    [Fact]
+    public void Options_expose_verification_command()
+    {
+        var options = new AutoFixOptions { VerificationCommand = "dotnet test" };
+
+        Assert.Equal("dotnet test", options.VerificationCommand);
+    }
 
     private sealed class CorruptingRestoreEditor(
         RepoPathGuard guard,
@@ -228,7 +254,7 @@ public sealed class AutoFixStageTests : IDisposable
     public async Task Empty_registered_rule_intersection_still_processes_commands()
     {
         var ctx = CommandCtx("echo $name");
-        var chat = EditScriptThenDone(Path.Combine(_Root, "script.sh"), "script.sh", 1, "echo \"$name\"");
+        var chat = EditScriptThenDone(1, "echo \"$name\"");
 
         await Stage(Options(commands: true, rules: []), chat: chat)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -483,7 +509,12 @@ public sealed class AutoFixStageTests : IDisposable
         return ctx;
     }
 
-    private static ScriptedChatClient EditThenDone(string absPath, string relPath, int line, string replacement)
+    private static ScriptedChatClient EditThenDone(
+        string absPath,
+        string relPath,
+        int line,
+        string replacement,
+        string summary = "quoted the variable.")
     {
         var lines = File.ReadAllLines(absPath);
         var hash = HashLine.Of(lines[line - 1]);
@@ -506,12 +537,15 @@ public sealed class AutoFixStageTests : IDisposable
                     },
                 })),
             ScriptedChatClient.FunctionCalls((
-                "TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "quoted the variable."})));
+                "TaskDone", new Dictionary<string, object?> {["reviewSummary"] = summary})));
     }
 
-    private ScriptedChatClient EditScriptThenDone(int line, string replacement)
+    private ScriptedChatClient EditScriptThenDone(
+        int line,
+        string replacement,
+        string summary = "quoted the variable.")
         => EditThenDone(
-            Path.Combine(_Root, "script.sh"), "script.sh", line, replacement);
+            Path.Combine(_Root, "script.sh"), "script.sh", line, replacement, summary);
 
     [Fact]
     public async Task Command_happy_path_captures_fix_and_reverts()
@@ -697,5 +731,60 @@ public sealed class AutoFixStageTests : IDisposable
 
         Assert.Empty(ctx.AppliedFixes);
         Assert.Empty(ctx.FixCommands);
+    }
+    [Fact]
+    public async Task Failed_editor_application_skips_verification_and_drops_fixes()
+    {
+        var abs = WriteFile("script.sh", "echo $name");
+        var before = File.ReadAllBytes(abs);
+        var verifier = new StubVerifier(pass: true, requiresWrites: true);
+        var ctx = Ctx();
+        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+
+        await Stage(
+                Options(),
+                verifier,
+                editorFactory: (guard, writable) => new FailingEditor(guard, writable))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AppliedFixes);
+        Assert.Empty(verifier.VerifiedFiles);
+        Assert.Equal(before, File.ReadAllBytes(abs));
+    }
+
+    [Fact]
+    public async Task Revert_cleans_temporary_file_when_restore_move_fails()
+    {
+        var abs = WriteFile("script.sh", "echo $name");
+        var verifier = new StubVerifier(
+            pass: true,
+            requiresWrites: true,
+            onVerify: (_, _) =>
+            {
+                File.Delete(abs);
+                Directory.CreateDirectory(abs);
+            });
+        var ctx = Ctx();
+        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => Stage(Options(), verifier).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.True(Directory.Exists(abs));
+        Assert.Empty(Directory.EnumerateFiles(_Root, "*.revert", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task Command_with_blank_summary_uses_default_rationale()
+    {
+        var ctx = CommandCtx("echo $name");
+
+        await Stage(
+                Options(commands: true),
+                chat: EditScriptThenDone(1, "echo \"$name\"", summary: "   "))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var fix = Assert.Single(ctx.AppliedFixes);
+        Assert.Equal("addresses the review comment with a minimal edit", fix.Proposal.Rationale);
     }
 }

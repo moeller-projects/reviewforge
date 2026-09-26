@@ -156,8 +156,16 @@ public static class LineEditEngine
                     }
                 }
 
-                var toMatches = allToMatches.Where(i => i > from).ToArray();
-                if (toMatches.Length == 0)
+                List<int>? toMatches = null;
+                foreach (var i in allToMatches)
+                {
+                    if (i > from)
+                    {
+                        (toMatches ??= []).Add(i);
+                    }
+                }
+
+                if (toMatches is not { Count: > 0 })
                 {
                     error = allToMatches.Count > 0
                         ? $"hash {toHash} must occur after start line {from + 1}"
@@ -165,7 +173,7 @@ public static class LineEditEngine
                     return false;
                 }
 
-                if (toMatches.Length > 1)
+                if (toMatches!.Count > 1)
                 {
                     if (edit.ToLine is not { } hint || !toMatches.Contains(hint - 1))
                     {

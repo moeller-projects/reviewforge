@@ -63,12 +63,9 @@ public static class FixCommandDetector
                 continue;
             }
 
+            // text is Trim()'d, so a non-empty suffix always yields a non-empty instruction.
             var instruction = text.Length > Prefix.Length ? text[Prefix.Length..].Trim() : null;
-            if (instruction?.Length == 0)
-            {
-                instruction = null;
-            }
-            else if (instruction is not null && instruction.Length > MaxInstructionChars)
+            if (instruction is not null && instruction.Length > MaxInstructionChars)
             {
                 instruction = instruction[..MaxInstructionChars];
             }

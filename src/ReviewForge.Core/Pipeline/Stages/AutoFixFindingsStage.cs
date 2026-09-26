@@ -271,7 +271,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         CancellationToken ct)
     {
         var commands = FixCommandDetector.Scan(
-            ctx.Threads, pr.CreatorId, ctx.PriorRun?.LastObservedCommentAt);
+            ctx.Threads, ctx.RequirePullRequest().CreatorId, ctx.PriorRun?.LastObservedCommentAt);
         ctx.FixCommands = commands;
         if (commands.Count == 0)
         {

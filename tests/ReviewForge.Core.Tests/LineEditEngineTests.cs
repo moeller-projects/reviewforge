@@ -259,4 +259,18 @@ public class LineEditEngineTests
         var result = LineEditEngine.Apply(["a"], [new LineEdit("deadbeef", null, null, null, "x")], "src/Foo.cs", out _);
         Assert.Equal("hash deadbeef not present in src/Foo.cs — the file changed since your last read; re-read and retry", result.Error);
     }
+    [Fact]
+    public void Duplicate_to_hash_without_hint_requires_disambiguation()
+    {
+        var lines = new[] {"start", "end", "end"};
+        var result = LineEditEngine.Apply(
+            lines,
+            [new LineEdit(H("start"), H("end"), null, null, "only")],
+            out _);
+
+        Assert.False(result.Success);
+        Assert.Equal(
+            $"hash {H("end")} matches lines 2, 3 — add fromLine/toLine to disambiguate",
+            result.Error);
+    }
 }

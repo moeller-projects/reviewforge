@@ -49,9 +49,10 @@ public class HashLineEditor
             return error;
         }
 
+        var lines = raw ?? throw new InvalidOperationException("ReadRawLines returned no error but no lines");
         var start = Math.Max(1, startLine);
         var take = Math.Min(maxLines ?? MaxLines, MaxLines);
-        var hashes = raw!.Select(HashLine.Of).ToArray();
+        var hashes = lines.Select(HashLine.Of).ToArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var duplicated = new HashSet<string>(StringComparer.Ordinal);
         foreach (var h in hashes)
@@ -64,21 +65,21 @@ public class HashLineEditor
 
         var sb = new StringBuilder();
         var emitted = 0;
-        for (var i = start - 1; i < raw.Count && emitted < take; i++, emitted++)
+        for (var i = start - 1; i < lines.Count && emitted < take; i++, emitted++)
         {
             var marker = duplicated.Contains(hashes[i]) ? "*" : string.Empty;
             sb.Append(i + 1).Append(' ').Append(hashes[i]).Append(marker).Append(": ")
-                .AppendLine(HashLine.Normalize(raw[i]));
+                .AppendLine(HashLine.Normalize(lines[i] ?? string.Empty));
         }
 
-        if (emitted == 0 && raw.Count < start)
+        if (emitted == 0 && lines.Count < start)
         {
-            return $"file has {raw.Count} lines; startLine {start} is out of range";
+            return $"file has {lines.Count} lines; startLine {start} is out of range";
         }
 
-        if (raw.Count > start - 1 + emitted)
+        if (lines.Count > start - 1 + emitted)
         {
-            sb.AppendLine($"…[{raw.Count - (start - 1 + emitted)} more lines]");
+            sb.AppendLine($"…[{lines.Count - (start - 1 + emitted)} more lines]");
         }
 
         return sb.ToString();

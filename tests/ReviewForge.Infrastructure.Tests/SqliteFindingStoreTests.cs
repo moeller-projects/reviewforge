@@ -569,4 +569,12 @@ public class SqliteFindingStoreTests : IDisposable
             }
         }
     }
+    [Fact]
+    public async Task PruneAsync_returns_zero_when_nothing_is_prunable()
+    {
+        var pruned = await _Store.PruneAsync(DateTimeOffset.UtcNow, minRunsPerPr: 1, CancellationToken.None);
+
+        Assert.Equal(0, pruned);
+        Assert.Empty(await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None));
+    }
 }

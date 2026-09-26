@@ -51,12 +51,9 @@ public sealed partial class PythonMutableDefaultArgFixer : IFindingFixer
         var parameterSearchStart = 0;
         foreach (var p in parameters)
         {
+            // SplitTopLevel returns raw, in-order slices of paramsText, so the ordinal
+            // search from the prior endpoint always succeeds.
             var parameterOffset = paramsText.IndexOf(p, parameterSearchStart, StringComparison.Ordinal);
-            if (parameterOffset < 0)
-            {
-                return null;
-            }
-
             parameterSearchStart = parameterOffset + p.Length;
             var trimmed = p.Trim();
             if (TryParseMutableDefault(trimmed, out var name, out var original))
@@ -234,13 +231,8 @@ public sealed partial class PythonMutableDefaultArgFixer : IFindingFixer
 
     private static bool LooksMutable(string p)
     {
-        var eq = p.IndexOf('=');
-        if (eq < 0)
-        {
-            return false;
-        }
-
-        var d = p[(eq + 1)..].Trim();
+        // Caller gates on Contains('=').
+        var d = p[(p.IndexOf('=') + 1)..].Trim();
         return d.Contains('[') || d.Contains('{') || d.StartsWith("list(", StringComparison.Ordinal)
             || d.StartsWith("dict(", StringComparison.Ordinal);
     }

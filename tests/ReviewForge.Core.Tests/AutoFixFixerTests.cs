@@ -383,6 +383,50 @@ public class AutoFixFixerTests
         public FixProposal? TryPropose(FixContext context) => null;
     }
 
+    // ---- Additional edge coverage for BashUnquotedVarsFixer ----
+
+    [Fact]
+    public void Bash_declines_multi_line_anchor()
+        => Assert.Null(Bash().TryPropose(Ctx("bash.unquoted-vars", ["echo $name", "echo $other"], 1, 2)));
+
+    [Fact]
+    public void Bash_quotes_expansion_on_for_command_without_in_clause()
+    {
+        var proposal = Bash().TryPropose(Ctx("bash.unquoted-vars", ["for item $items"], 1));
+        Assert.Equal("for item \"$items\"", proposal!.Replacement);
+    }
+
+    [Fact]
+    public void Bash_declines_conditional_with_escaped_and_quoted_expansions()
+        => Assert.Null(Bash().TryPropose(Ctx("bash.unquoted-vars", ["[[ \\$left == \"$right\" ]]"], 1)));
+
+    [Fact]
+    public void Bash_declines_conditional_with_only_quoted_expansions()
+        => Assert.Null(Bash().TryPropose(Ctx("bash.unquoted-vars", ["[[ \"$left\" == \"$right\" ]]"], 1)));
+
+    [Theory]
+    [InlineData("echo $")]
+    [InlineData("echo ${name")]
+    [InlineData("echo ${na-me}")]
+    public void Bash_declines_malformed_expansions(string line)
+        => Assert.Null(Bash().TryPropose(Ctx("bash.unquoted-vars", [line], 1)));
+
+    // ---- Additional edge coverage for BashSetEMissingFixer ----
+
+    [Fact]
+    public void SetE_declines_when_errexit_option_is_present_with_other_flags()
+        => Assert.Null(SetE().TryPropose(Ctx("bash.set-e-missing", ["#!/bin/bash", "set -ue"], 1)));
+
+    // ---- Additional edge coverage for DockerAddToCopyFixer ----
+
+    [Fact]
+    public void Docker_declines_multi_line_anchor()
+        => Assert.Null(Docker().TryPropose(Ctx("docker.add-vs-copy", ["ADD ./src /app", "RUN echo hi"], 1, 2)));
+
+    [Fact]
+    public void Docker_declines_anchor_out_of_range()
+        => Assert.Null(Docker().TryPropose(Ctx("docker.add-vs-copy", ["ADD ./src /app"], 2)));
+
     // ---- record shape ----
 
     [Fact]
@@ -407,4 +451,75 @@ public class AutoFixFixerTests
         Assert.Throws<ArgumentException>(() => new FixProposal("f", 1, 1, "x", "r", FixOrigin.Deterministic, 7));
         _ = new FixProposal("f", 1, 1, "x", "r", FixOrigin.LlmCommanded, 1);
     }
+    // ---- PythonMutableDefaultArgFixer additional edge cases ----
+
+    [Fact]
+    public void Py_exposes_rule_id()
+        => Assert.Equal("py.mutable-default-arg", Py().RuleId);
+
+    [Fact]
+    public void Py_declines_when_anchor_is_missing()
+    {
+        var finding = new RichFinding
+        {
+            RuleId = "py.mutable-default-arg",
+            Title = "t",
+            Severity = "medium",
+            Category = "bug",
+            Description = "d",
+            Anchor = null,
+        };
+        var context = new FixContext(
+            finding,
+            Path,
+            ["def f(items=[]):", "    return items"],
+            DiffIndex.Parse(string.Empty));
+
+        Assert.Null(Py().TryPropose(context));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    public void Py_declines_anchor_out_of_range(int startLine)
+        => Assert.Null(Py().TryPropose(Ctx(
+            "py.mutable-default-arg",
+            ["def f(items=[]):", "    return items"],
+            startLine)));
+
+    [Fact]
+    public void Py_declines_non_def_function_line()
+        => Assert.Null(Py().TryPropose(Ctx(
+            "py.mutable-default-arg",
+            ["async def f(items=[]):", "    return items"],
+            1)));
+
+    [Fact]
+    public void Py_declines_when_no_mutable_default_is_present()
+        => Assert.Null(Py().TryPropose(Ctx(
+            "py.mutable-default-arg",
+            ["def f(items, limit=1):", "    return items"],
+            1)));
+
+    [Fact]
+    public void Py_handles_parameter_without_default_before_mutable_default()
+    {
+        var proposal = Py().TryPropose(Ctx(
+            "py.mutable-default-arg",
+            ["def f(items, other=[]):", "    return other"],
+            1));
+
+        Assert.Equal(
+            "def f(items, other=None):\n    if other is None: other = []",
+            proposal!.Replacement);
+    }
+
+    [Theory]
+    [InlineData("def f(1items=[]):")]
+    [InlineData("def f(items$=[]):")]
+    public void Py_declines_invalid_parameter_name(string definition)
+        => Assert.Null(Py().TryPropose(Ctx(
+            "py.mutable-default-arg",
+            [definition, "    return items"],
+            1)));
 }
