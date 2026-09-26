@@ -1,4 +1,5 @@
 using System.Text;
+using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Reasoning;
@@ -35,7 +36,7 @@ public static class PromptBuilder
     internal const string UntrustedEnd = "</pr-supplied-data>";
 
     /// <summary>Strip our own delimiters from embedded content so the boundary cannot be forged from inside.</summary>
-    internal static string Sanitize(string? text)
+    internal static string StripDelimiters(string? text)
         => string.IsNullOrEmpty(text)
             ? string.Empty
             : text.Replace(UntrustedBegin, string.Empty, StringComparison.Ordinal)
@@ -52,10 +53,10 @@ public static class PromptBuilder
 
         sb.AppendLine("## Pull request");
         sb.AppendLine(UntrustedBegin);
-        sb.AppendLine($"- Title: {Sanitize(input.Pr.Title)}");
+        sb.AppendLine($"- Title: {PromptText.Clean(input.Pr.Title)}");
         if (!string.IsNullOrWhiteSpace(input.Pr.Description))
         {
-            sb.AppendLine($"- Description: {Sanitize(input.Pr.Description)}");
+            sb.AppendLine($"- Description: {PromptText.Clean(input.Pr.Description)}");
         }
         sb.AppendLine(UntrustedEnd);
 
@@ -70,16 +71,16 @@ public static class PromptBuilder
             sb.AppendLine(UntrustedBegin);
             foreach (var wi in input.WorkItems)
             {
-                sb.AppendLine($"### #{wi.Id} [{Sanitize(wi.Type)}] {Sanitize(wi.Title)} ({Sanitize(wi.State)})");
+                sb.AppendLine($"### #{wi.Id} [{PromptText.Clean(wi.Type)}] {PromptText.Clean(wi.Title)} ({PromptText.Clean(wi.State)})");
                 if (!string.IsNullOrWhiteSpace(wi.Description))
                 {
-                    sb.AppendLine(Sanitize(wi.Description.Trim()));
+                    sb.AppendLine(PromptText.Clean(wi.Description.Trim()));
                 }
 
                 if (!string.IsNullOrWhiteSpace(wi.AcceptanceCriteria))
                 {
                     sb.AppendLine("Acceptance criteria:");
-                    sb.AppendLine(Sanitize(wi.AcceptanceCriteria.Trim()));
+                    sb.AppendLine(PromptText.Clean(wi.AcceptanceCriteria.Trim()));
                 }
             }
             sb.AppendLine(UntrustedEnd);
@@ -95,7 +96,7 @@ public static class PromptBuilder
             sb.AppendLine(UntrustedBegin);
             foreach (var reply in input.PendingReplies)
             {
-                sb.AppendLine($"- Thread {reply.ThreadId} (finding {Sanitize(reply.DedupeKey) ?? "n/a"}), {Sanitize(reply.Author)}: {Sanitize(reply.Text)}");
+                sb.AppendLine($"- Thread {reply.ThreadId} (finding {PromptText.Clean(reply.DedupeKey) ?? "n/a"}), {PromptText.Clean(reply.Author)}: {PromptText.Clean(reply.Text)}");
             }
             sb.AppendLine(UntrustedEnd);
 
@@ -108,7 +109,7 @@ public static class PromptBuilder
         sb.AppendLine(UntrustedBegin);
         foreach (var file in input.ChangedFiles)
         {
-            sb.AppendLine($"- {Sanitize(file)}");
+            sb.AppendLine($"- {PromptText.Clean(file)}");
         }
         sb.AppendLine(UntrustedEnd);
 
@@ -131,14 +132,14 @@ public static class PromptBuilder
         if (!string.IsNullOrWhiteSpace(input.Enrichment))
         {
             sb.AppendLine("## Structural enrichment (code-review graph)");
-            sb.AppendLine(Sanitize(input.Enrichment.Trim()));
+            sb.AppendLine(StripDelimiters(input.Enrichment.Trim()));
             sb.AppendLine();
         }
 
         sb.AppendLine("## Unified diff (base → head)");
         sb.AppendLine(UntrustedBegin);
         sb.AppendLine("```diff");
-        sb.AppendLine(Sanitize(ShrinkDiff(input.DiffText.Trim(), input.MaxDiffChars, input.MaxDiffCharsPerFile)));
+        sb.AppendLine(PromptText.Clean(ShrinkDiff(input.DiffText.Trim(), input.MaxDiffChars, input.MaxDiffCharsPerFile)));
         sb.AppendLine("```");
         sb.AppendLine(UntrustedEnd);
 
@@ -214,4 +215,16 @@ public static class PromptBuilder
         var text = result.ToString();
         return text.EndsWith(nl) ? text[..(text.Length - 1)] : text;
     }
+}
+
+/// <summary>Single trust boundary for PR-author-controlled text embedded in prompts (P2-29):
+/// strips invisible/bidi/tag characters (<see cref="TextSanitizer.Sanitize"/>) and then the
+/// prompt delimiter pair (<see cref="PromptBuilder.StripDelimiters"/>) so the boundary cannot
+/// be forged from inside. Deliberately does NOT NFKC-normalize — diff/code bytes stay
+/// faithful for anchoring (detectors that need the normalized view apply
+/// <see cref="PipelineText.Preprocess"/> themselves; anchors resolve against raw file text).</summary>
+public static class PromptText
+{
+    public static string Clean(string? text)
+        => PromptBuilder.StripDelimiters(TextSanitizer.Sanitize(text));
 }

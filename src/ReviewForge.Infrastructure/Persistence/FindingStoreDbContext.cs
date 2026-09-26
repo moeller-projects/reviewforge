@@ -48,6 +48,7 @@ public sealed class FindingStoreDbContext(DbContextOptions<FindingStoreDbContext
         {
             e.HasKey(r => r.Id);
             e.HasIndex(r => new {r.Org, r.Project, r.RepositoryId, r.PrId});
+            e.HasIndex(r => new {r.Org, r.Project, r.RepositoryId, r.PrId, r.CompletedAt});
             e.HasMany(r => r.Findings).WithOne().HasForeignKey(f => f.RunId).OnDelete(DeleteBehavior.Cascade);
         });
 

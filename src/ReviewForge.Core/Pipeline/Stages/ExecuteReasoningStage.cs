@@ -1,4 +1,5 @@
 using ReviewForge.Core.Analysis;
+using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
@@ -30,6 +31,16 @@ public sealed class ExecuteReasoningStage(
             : new StreamWriter(Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl"), append: true) {AutoFlush = true};
         ctx.Collector = new ReviewCollector(
             ctx.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.PullRequest?.SourceCommitSha);
+
+        // Status-aware dedupe (P1-11): known keys whose live thread is Fixed/Closed
+        // resurface when regressed verbatim; Active/Pending threads keep suppressing.
+        // Threads were fetched at stage 1 — no extra ADO call.
+        ctx.ResolvedKeys = ctx.Threads
+            .Where(t => t.DedupeKey is not null
+                        && t.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
+            .Select(t => t.DedupeKey!)
+            .ToHashSet(StringComparer.Ordinal);
+
         foreach (var finding in HomoglyphDiffAnalyzer.Analyze(ctx.DiffText))
         {
             var key = DedupeKey.Compute(
@@ -39,7 +50,19 @@ public sealed class ExecuteReasoningStage(
             if (ctx.Collector.IsKnown(key))
             {
                 if (ctx.Collector.WasKnownAtStart(key))
-                    ctx.Collector.MarkRedetected(key);
+                {
+                    if (ctx.ResolvedKeys.Contains(key) && !ctx.Collector.RegressedKeys.Contains(key))
+                    {
+                        finding.DedupeKey = key;
+                        finding.IsRegression = true;
+                        ctx.Collector.AddFinding(finding);
+                        ctx.Collector.MarkRegressed(key);
+                    }
+                    else
+                    {
+                        ctx.Collector.MarkRedetected(key);
+                    }
+                }
 
                 continue;
             }
@@ -61,6 +84,7 @@ public sealed class ExecuteReasoningStage(
             ruleBook,
             ctx.ChangedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase),
             ctx.Diff,
+            ctx.ResolvedKeys,
             ct);
     }
 }

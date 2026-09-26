@@ -32,7 +32,6 @@ builder.Services.AddOpenApi(ApiDocsRegistration.Configure);
 var app = builder.Build();
 
 
-app.UseMiddleware<ApiKeyAuthenticationMiddleware>(); // reject unauthenticated before they consume rate budget
 app.Logger.LogInformation(
     "OTLP logs exporter enabled: {LogsEnabled}; endpoint: {LogsEndpoint}; " +
     "traces exporter enabled: {TracesEnabled}; endpoint: {TracesEndpoint}; " +

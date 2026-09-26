@@ -19,6 +19,7 @@ public sealed class ReviewWorker(
     InFlightClaims claims,
     IFindingStore store,
     ILogger<ReviewWorker> logger,
+    IRunLogLifecycle runLogs,
     TimeProvider? clock = null) : BackgroundService
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
@@ -45,7 +46,7 @@ public sealed class ReviewWorker(
                     "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
                     request.RunId, request.Pr, holder);
                 tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued");
-                RunLogFileProvider.Current?.CloseRun(request.RunId);
+                runLogs.CloseRun(request.RunId);
                 continue; // finally-block of the run loop is not entered; nothing to release
             }
 
@@ -93,6 +94,11 @@ public sealed class ReviewWorker(
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
+                // Host shutdown mid-run: leave a truthful failure record. Best-effort with a
+                // hard timeout — never the (cancelled) stoppingToken — and if the store is
+                // already torn down the startup ShellReaperService finalizes the orphaned
+                // shell on next boot.
+                await PersistFailureAsync(request, ctx, TimeSpan.FromSeconds(5));
                 return;
             }
             catch (PrHeadChangedException ex)
@@ -103,7 +109,7 @@ public sealed class ReviewWorker(
                     "run {RunId} for {Pr} superseded mid-run (head moved from {Old} to {New})",
                     request.RunId, request.Pr, ex.Expected, ex.Actual);
                 tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message);
-                await PersistFailureAsync(request, ctx, stoppingToken);
+                await PersistFailureAsync(request, ctx, TimeSpan.FromSeconds(5));
             }
             catch (Exception ex)
             {
@@ -114,22 +120,26 @@ public sealed class ReviewWorker(
                 ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);
                 ReviewForgeTelemetry.ReviewDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
-                await PersistFailureAsync(request, ctx, stoppingToken);
+                await PersistFailureAsync(request, ctx, TimeSpan.FromSeconds(5));
             }
             finally
             {
                 ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
-                RunLogFileProvider.Current?.CloseRun(request.RunId);
+                runLogs.CloseRun(request.RunId);
             }
         }
     }
 
-    /// <summary>Best-effort failure record so discovery backoff has memory. Never throws.</summary>
-    private async Task PersistFailureAsync(ReviewRequest request, ReviewContext? ctx, CancellationToken ct)
+    /// <summary>
+    /// Best-effort failure record so discovery backoff has memory. Never throws.
+    /// Uses a hard timeout — never the possibly-cancelled run token.
+    /// </summary>
+    private async Task PersistFailureAsync(ReviewRequest request, ReviewContext? ctx, TimeSpan timeout)
     {
         try
         {
+            using var timeoutCts = new CancellationTokenSource(timeout);
             await store.SaveRunAsync(new ReviewRun(
                 request.RunId,
                 request.Pr,
@@ -138,7 +148,7 @@ public sealed class ReviewWorker(
                 ctx?.StartedAt ?? request.EnqueuedAt,
                 _Clock.GetUtcNow(),
                 Success: false,
-                Findings: []), ct);
+                Findings: []), timeoutCts.Token);
         }
         catch (Exception storeEx)
         {

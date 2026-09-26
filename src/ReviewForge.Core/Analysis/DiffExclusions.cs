@@ -8,7 +8,7 @@ public static class DiffExclusions
 {
     public static bool IsExcluded(string path, IReadOnlyList<string> globs)
     {
-        var normalized = path.Replace('\\', '/').TrimStart('/');
+        var normalized = RepoPath.Normalize(path);
         return globs.Any(g => Matches(normalized.Split('/'), g.Split('/')));
     }
 
