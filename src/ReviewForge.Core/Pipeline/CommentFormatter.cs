@@ -16,6 +16,11 @@ public static class CommentFormatter
 
     public static string FormatFinding(RichFinding finding)
     {
+        if (finding.AppliedFix is { } fix)
+        {
+            return FormatFixedFinding(finding, fix);
+        }
+
         var sb = new StringBuilder();
         sb.AppendLine(BotPreamble);
         sb.AppendLine();
@@ -45,11 +50,59 @@ public static class CommentFormatter
         return sb.ToString();
     }
 
+    /// <summary>Deterministic fix: the finding body with an applicable suggestion block.</summary>
+    public static string FormatFixedFinding(RichFinding finding, AutoFix.AppliedFix fix)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(BotPreamble);
+        sb.AppendLine();
+        sb.AppendLine($"### 🔧 {finding.Title}");
+        sb.AppendLine();
+        sb.AppendLine($"**Severity:** `{finding.Severity}` · **Rule:** `{finding.RuleId}` · **Category:** `{finding.Category}`");
+        sb.AppendLine();
+        sb.AppendLine(finding.Description.Trim());
+        sb.AppendLine();
+        sb.AppendLine($"**Fix available** — {fix.Proposal.Rationale}");
+        sb.AppendLine();
+        sb.AppendLine("```suggestion");
+        sb.AppendLine(fix.Proposal.Replacement);
+        sb.AppendLine("```");
+        return sb.ToString();
+    }
+
+    /// <summary>Commanded fix: no finding exists — quote the answered thread and label the draft.</summary>
+    public static string FormatFixedFinding(AutoFix.FixProposal fix, string threadExcerpt)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(BotPreamble);
+        sb.AppendLine();
+        sb.AppendLine("### 🔧 Requested fix");
+        sb.AppendLine();
+        sb.AppendLine($"**Requested via `/rf fix` on thread #{fix.SourceThreadId}** — {fix.Rationale}");
+        sb.AppendLine();
+        sb.AppendLine($"> {OneLine(threadExcerpt)}");
+        sb.AppendLine();
+        sb.AppendLine("**Requested fix (AI-generated from the thread command — verify before accepting)**");
+        sb.AppendLine();
+        sb.AppendLine("```suggestion");
+        sb.AppendLine(fix.Replacement);
+        sb.AppendLine("```");
+        return sb.ToString();
+    }
+
+    private static string OneLine(string text)
+    {
+        var collapsed = text.Replace("\r", " ").Replace("\n", " ").Trim();
+        const int max = 200;
+        return collapsed.Length <= max ? collapsed : collapsed[..max] + "…";
+    }
+
     public static string FormatSummary(
         ReviewResult result,
         IReadOnlyList<WorkItem> workItems,
         IReadOnlyList<int> unansweredThreads,
-        ReviewKind kind)
+        ReviewKind kind,
+        int appliedFixCount = 0)
     {
         var sb = new StringBuilder();
         var reviewName = kind == ReviewKind.Full ? "full review" : "follow-up review";
@@ -58,6 +111,11 @@ public static class CommentFormatter
         sb.AppendLine($"## ReviewForge · {reviewName}");
         sb.AppendLine();
         sb.AppendLine($"> **Findings:** **{result.Findings.Count}** · **Review depth:** {result.ReviewDepth}");
+
+        if (appliedFixCount > 0)
+        {
+            sb.AppendLine($"> **Auto-fixes:** {appliedFixCount} suggestion(s) posted — review and apply individually.");
+        }
 
         if (!string.IsNullOrWhiteSpace(result.Narrative.PrSummary))
         {

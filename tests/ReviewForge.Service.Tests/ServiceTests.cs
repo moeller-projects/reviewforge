@@ -259,8 +259,8 @@ public class ServiceTests : IAsyncLifetime
     {
         var firstPr = new PrKey("o", "p", "r", 51);
         var secondPr = new PrKey("o", "p", "r", 52);
-        _Factory.Source.PullRequestsByKey[firstPr] = new PullRequest(51, "one", null, "head-one", "base", "url", false);
-        _Factory.Source.PullRequestsByKey[secondPr] = new PullRequest(52, "two", null, "head-two", "base", "url", false);
+        _Factory.Source.PullRequestsByKey[firstPr] = new PullRequest(51, "one", null, "head-one", "base", "url", false, "creator-1", "PR Author");
+        _Factory.Source.PullRequestsByKey[secondPr] = new PullRequest(52, "two", null, "head-two", "base", "url", false, "creator-1", "PR Author");
         _Factory.Git.CloneDelay = TimeSpan.FromMilliseconds(150);
         try
         {

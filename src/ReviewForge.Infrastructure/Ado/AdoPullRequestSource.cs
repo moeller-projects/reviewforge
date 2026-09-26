@@ -75,7 +75,9 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             gpr.LastMergeSourceCommit?.CommitId ?? string.Empty,
             gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
             gpr.Repository?.RemoteUrl ?? string.Empty,
-            gpr.IsDraft ?? false);
+            gpr.IsDraft ?? false,
+            gpr.CreatedBy?.Id.ToString() ?? string.Empty,
+            gpr.CreatedBy?.DisplayName ?? string.Empty);
     }
 
     public async Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
@@ -118,7 +120,9 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                         gpr.LastMergeSourceCommit?.CommitId ?? string.Empty,
                         gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
                         gpr.Repository?.RemoteUrl ?? string.Empty,
-                        gpr.IsDraft ?? false);
+                        gpr.IsDraft ?? false,
+                        gpr.CreatedBy?.Id.ToString() ?? string.Empty,
+                        gpr.CreatedBy?.DisplayName ?? string.Empty);
 
                     list.Add(new PullRequestCandidate(
                         key,
@@ -227,7 +231,13 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                                 string.Equals(c.Author?.Id.ToString(), botId, StringComparison.OrdinalIgnoreCase),
                                 c.Content ?? string.Empty,
                                 AdoTime.ToUtc(c.PublishedDate)))
-                    ]))
+                    ],
+                    t.ThreadContext?.FilePath is { } ctxPath
+                        ? new ThreadAnchor(
+                            ctxPath.TrimStart('/'),
+                            t.ThreadContext.RightFileStart?.Line ?? 0,
+                            t.ThreadContext.RightFileEnd?.Line ?? t.ThreadContext.RightFileStart?.Line ?? 0)
+                        : null))
         ];
     }
 
@@ -270,6 +280,34 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             {
                 [DedupeKeyProperty] = finding.DedupeKey ?? string.Empty,
             },
+        };
+
+        var created = await git.CreateThreadAsync(thread, pr.Project, pr.RepositoryId, pr.PrId, cancellationToken: ct);
+        return created.Id;
+    }
+
+    public async Task<int> PostSuggestionThreadAsync(PrKey pr, ThreadAnchor anchor, string body, CancellationToken ct)
+    {
+        var git = await GitClientAsync(ct);
+        var thread = new GitPullRequestCommentThread
+        {
+            Comments =
+            [
+                new AdoComment
+                {
+                    Content = body,
+                    CommentType = AdoCommentType.Text,
+                },
+            ],
+            Status = AdoThreadStatus.Active,
+            ThreadContext = new CommentThreadContext
+            {
+                FilePath = "/" + anchor.FilePath.TrimStart('/'),
+                RightFileStart = new CommentPosition {Line = anchor.StartLine, Offset = 1},
+                RightFileEnd = new CommentPosition {Line = anchor.EndLine, Offset = 1},
+            },
+            // Deliberately NO Properties: a dedupe key would make triage's auto-resolve
+            // and publish suppression see this thread; suggestion threads must stay invisible.
         };
 
         var created = await git.CreateThreadAsync(thread, pr.Project, pr.RepositoryId, pr.PrId, cancellationToken: ct);

@@ -371,8 +371,8 @@ public class ReviewWorkerTests
         public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
         {
             var pull = _Fetches++ == 0
-                ? new PullRequest(1, "t", null, "head-a", "base", "url", false)
-                : new PullRequest(1, "t", null, "head-b", "base", "url", false);
+                ? new PullRequest(1, "t", null, "head-a", "base", "url", false, "creator-1", "PR Author")
+                : new PullRequest(1, "t", null, "head-b", "base", "url", false, "creator-1", "PR Author");
             return Task.FromResult(pull);
         }
     }

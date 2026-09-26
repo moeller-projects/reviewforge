@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -49,6 +50,17 @@ public sealed class PublishFindingsStage(
                         || (!liveThreadKeys.Contains(f.DedupeKey) && !regressedThreadIds.ContainsKey(f.DedupeKey)))
             .ToList();
 
+        // Fixed findings with a live bot thread are NOT suppressed: the fix lands as a
+        // reply on the existing thread (Mechanism B would otherwise swallow it).
+        var liveFixedReplies = ctx.AcceptedFindings
+            .Where(f => f.AppliedFix is not null
+                        && f.DedupeKey is not null
+                        && liveThreadKeys.Contains(f.DedupeKey)
+                        && !regressedThreadIds.ContainsKey(f.DedupeKey))
+            .Select(f => (ThreadId: ctx.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
+                          Body: CommentFormatter.FormatFixedFinding(f)))
+            .ToList();
+
         foreach (var suppressed in ctx.AcceptedFindings.Where(f => f.DedupeKey is not null && liveThreadKeys.Contains(f.DedupeKey)))
         {
             logger.LogInformation("suppressing finding {Key}: live bot thread already exists", suppressed.DedupeKey);
@@ -93,9 +105,22 @@ public sealed class PublishFindingsStage(
                 try
                 {
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "during publish");
-                    var threadId = await source.PostFindingThreadAsync(ctx.Pr, finding, ct).ConfigureAwait(false);
+                    // A fixed finding is anchored at the FIX range: ADO applies a suggestion
+                    // block to the thread's anchored range.
+                    var toPublish = finding.AppliedFix is { } fix
+                        ? finding with
+                        {
+                            Anchor = new FindingAnchor(
+                                fix.Proposal.FilePath, fix.Proposal.StartLine, fix.Proposal.EndLine)
+                        }
+                        : finding;
+                    var threadId = await source.PostFindingThreadAsync(ctx.Pr, toPublish, ct).ConfigureAwait(false);
                     posted[finding.DedupeKey!] = threadId;
                     ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "inline" } });
+                    if (finding.AppliedFix is { } applied)
+                    {
+                        ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.Deterministic, finding.RuleId));
+                    }
                     // Mechanism A: durable per-finding record immediately after the post, so a
                     // crash before finalize never loses the fact that this finding was posted.
                     await store.SetThreadIdAsync(ctx.RunId, finding.DedupeKey!, threadId, ct).ConfigureAwait(false);
@@ -127,13 +152,60 @@ public sealed class PublishFindingsStage(
 
         await Task.WhenAll(inlineTasks.Concat(generalTasks)).ConfigureAwait(false);
 
+        // Live-thread fixed findings: reply with the fix body (never suppressed, never
+        // re-posted as a new thread).
+        foreach (var (threadId, body) in liveFixedReplies)
+        {
+            PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix reply on thread {threadId}");
+            await source.ReplyToThreadAsync(ctx.Pr, threadId, body, ct).ConfigureAwait(false);
+            ReviewForgeTelemetry.ThreadsReplied.Add(1);
+            ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.Deterministic, "existing-thread"));
+        }
+
+        // Commanded fixes: a new suggestion thread WITHOUT a dedupe property (invisible
+        // to triage and publish suppression), plus a link reply on the command thread.
+        foreach (var fix in ctx.AppliedFixes.Where(f => f.Proposal.SourceThreadId is not null))
+        {
+            PublishGuardChecks.ThrowIfClaimLost(ctx, "before fix suggestion");
+            var commandThreadId = fix.Proposal.SourceThreadId!.Value;
+            var anchor = new ThreadAnchor(
+                fix.Proposal.FilePath, fix.Proposal.StartLine, fix.Proposal.EndLine);
+            var excerpt = ctx.FixCommands.FirstOrDefault(c => c.ThreadId == commandThreadId)?.QuotedComment
+                          ?? string.Empty;
+            await source.PostSuggestionThreadAsync(
+                    ctx.Pr, anchor, CommentFormatter.FormatFixedFinding(fix.Proposal, excerpt), ct)
+                .ConfigureAwait(false);
+            var link = $"Fix posted above ⤴ (suggestion for {fix.Proposal.FilePath}:{fix.Proposal.StartLine}–{fix.Proposal.EndLine}).";
+            await source.ReplyToThreadAsync(ctx.Pr, commandThreadId, CommentFormatter.WithBotPreamble(link), ct)
+                .ConfigureAwait(false);
+            ReviewForgeTelemetry.ThreadsReplied.Add(1);
+            ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
+        }
+
+        // Replies the auto-fix stage queued (declines, verifier failures, exhausted budget).
+        foreach (var (threadId, text) in ctx.FixCommandReplies)
+        {
+            PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix command reply on thread {threadId}");
+            var body = CommentFormatter.WithBotPreamble(text);
+            if (await AlreadyRepliedAsync(ctx, threadId, body, ct).ConfigureAwait(false))
+            {
+                logger.LogInformation("thread {ThreadId}: fix reply already posted by a previous attempt — skipping", threadId);
+                continue;
+            }
+
+            await source.ReplyToThreadAsync(ctx.Pr, threadId, body, ct).ConfigureAwait(false);
+            ReviewForgeTelemetry.ThreadsReplied.Add(1);
+        }
+
         ctx.PostedThreadIds = posted;
 
         // Summary must post AFTER findings (readers of the PR see findings first).
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before summary");
         await source.PostGeneralCommentAsync(
                 ctx.Pr,
-                CommentFormatter.FormatSummary(ctx.RequireResult(), ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind),
+                CommentFormatter.FormatSummary(
+                    ctx.RequireResult(), ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind,
+                    appliedFixCount: ctx.AppliedFixes.Count),
                 dedupeKey: null,
                 ct: ct)
             .ConfigureAwait(false);
@@ -152,5 +224,19 @@ public sealed class PublishFindingsStage(
             await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, vote, ct);
             logger.LogInformation("clean run: reviewer vote reset to {Vote} for {User}", vote, ctx.CurrentUser!.DisplayName);
         }
+    }
+
+    private static TagList FixTags(FixOrigin origin, string rule)
+        => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
+
+    /// <summary>
+    /// Re-fetch the thread immediately before replying: a previous attempt or a
+    /// competing run may have posted this exact reply after ctx.Threads was fetched.
+    /// </summary>
+    private async Task<bool> AlreadyRepliedAsync(ReviewContext ctx, int threadId, string text, CancellationToken ct)
+    {
+        var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
+        return threads.FirstOrDefault(t => t.Id == threadId)?.LastComment is {IsBot: true} last
+               && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal);
     }
 }

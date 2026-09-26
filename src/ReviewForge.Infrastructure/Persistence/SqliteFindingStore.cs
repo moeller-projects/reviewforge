@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -43,6 +44,15 @@ public sealed class SqliteFindingStore : IFindingStore
                 cmd.ExecuteNonQuery();
             }
 
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'AppliedFixJson'";
+            var hasAppliedFixColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+            if (!hasAppliedFixColumn)
+            {
+                cmd.CommandText = "ALTER TABLE Findings ADD COLUMN AppliedFixJson TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
             transaction.Commit();
         }
         finally
@@ -75,9 +85,11 @@ public sealed class SqliteFindingStore : IFindingStore
             pr,
             run.HeadSha,
             run.CompletedAt!.Value,
-            [.. run.Findings.Select(f => f.DedupeKey)],
+            [.. run.Findings
+                .Where(f => !f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
+                .Select(f => f.DedupeKey)],
             [.. run.Findings.Select(f => new StoredFinding(
-                f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))],
+                f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
             run.LastObservedCommentAt);
     }
 
@@ -137,6 +149,7 @@ public sealed class SqliteFindingStore : IFindingStore
         return
         [
             .. await db.Findings
+                .Where(f => !f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix))
                 .Where(f => db.Runs.Any(r => r.Id == f.RunId
                                              && r.Org == pr.Org && r.Project == pr.Project
                                              && r.RepositoryId == pr.RepositoryId && r.PrId == pr.PrId))
@@ -200,6 +213,7 @@ public sealed class SqliteFindingStore : IFindingStore
         FilePath = f.FilePath,
         Line = f.Line,
         ThreadId = f.ThreadId,
+        AppliedFixJson = f.AppliedFixJson,
     };
 
     public async Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct)
@@ -239,7 +253,8 @@ public sealed class SqliteFindingStore : IFindingStore
                 .Select(r => new ReviewRun(
                     r.Id, pr, r.HeadSha, Enum.Parse<ReviewKind>(r.Kind),
                     r.StartedAt, r.CompletedAt, r.Success,
-                    [.. r.Findings.Select(f => new StoredFinding(f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId))],
+                    [.. r.Findings.Select(f => new StoredFinding(
+                        f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
                     r.LastObservedCommentAt))
         ];
     }

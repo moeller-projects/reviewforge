@@ -49,4 +49,8 @@ public sealed record FixProposal(
 public sealed record AppliedFix(
     string DedupeKey,         // finding key, or "thread-{ThreadId}" for commanded fixes
     FixProposal Proposal,
-    string VerifierName);
+    string VerifierName)
+{
+    /// <summary>Prefix of audit-only keys for commanded fixes; never a finding identity.</summary>
+    public const string CommandKeyPrefix = "thread-";
+}

@@ -100,6 +100,13 @@ public static class ReviewForgeTelemetry
         Meter.CreateCounter<long>("reviewforge.findings.rejected_total");  // tags: reason
     public static readonly Counter<long> FindingsPosted =
         Meter.CreateCounter<long>("reviewforge.findings.posted_total");    // tags: kind = inline|general
+
+    // ---- Auto-fix ----
+    public static readonly Counter<long> FixesApplied =
+        Meter.CreateCounter<long>("reviewforge.fixes.applied_total");    // tags: origin, rule (thread-command for /rf fix)
+    public static readonly Counter<long> FixesDeclined =
+        Meter.CreateCounter<long>("reviewforge.fixes.declined_total");   // tags: origin, rule
+
     public static readonly Counter<long> ThreadsResolved =
         Meter.CreateCounter<long>("reviewforge.threads.resolved_total");
     public static readonly Counter<long> ThreadsReplied =

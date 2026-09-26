@@ -19,7 +19,7 @@ public sealed class InstrumentedPullRequestSourceTests
             OpenPullRequests =
             [
                 new PullRequestCandidate(
-                    Pr, new PullRequest(7, "t", "d", "head", "base", "url", IsDraft: false),
+                    Pr, new PullRequest(7, "t", "d", "head", "base", "url", IsDraft: false, CreatorId: "creator-1", CreatorName: "PR Author"),
                     TargetBranch: "main", CreatorId: "alice", CreatorName: "Alice"),
             ],
             WorkItems = [new WorkItem(1, "wi", "Task", "desc", "ac", "New")],

@@ -15,7 +15,9 @@ public class FakePullRequestSource : IPullRequestSource
     public List<PullRequestCandidate> OpenPullRequests { get; set; } = [];
     public int OpenPullRequestsFetches => _openPullRequestsFetches;
     public int WorkItemFetches => _workItemFetches;
-    public PullRequest Pr { get; set; } = new(1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false);
+    public PullRequest Pr { get; set; } = new(
+        1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false,
+        CreatorId: "creator-1", CreatorName: "PR Author");
     public Dictionary<PrKey, PullRequest> PullRequestsByKey { get; } = [];
     public List<WorkItem> WorkItems { get; set; } = [];
     public List<ChangedFile> ChangedFiles { get; set; } = [];
@@ -28,6 +30,8 @@ public class FakePullRequestSource : IPullRequestSource
     public Barrier? WorkItemBarrier { get; set; }
 
     public List<(RichFinding Finding, int ThreadId)> PostedFindings { get; } = [];
+    public List<(ThreadAnchor Anchor, string Body, int ThreadId)> PostedSuggestions { get; } = [];
+    public List<string?> PostedSuggestionDedupeKeys { get; } = [];
     public List<string> GeneralComments { get; } = [];
     public List<string?> GeneralCommentDedupeKeys { get; } = [];
     public List<(int ThreadId, string Text)> Replies { get; } = [];
@@ -88,6 +92,17 @@ public class FakePullRequestSource : IPullRequestSource
 
             var id = _NextThreadId++;
             PostedFindings.Add((finding, id));
+            return Task.FromResult(id);
+        }
+    }
+
+    public virtual Task<int> PostSuggestionThreadAsync(PrKey pr, ThreadAnchor anchor, string body, CancellationToken ct)
+    {
+        lock (_Gate)
+        {
+            var id = _NextThreadId++;
+            PostedSuggestions.Add((anchor, body, id));
+            PostedSuggestionDedupeKeys.Add(null); // structural invariant: never a dedupe key
             return Task.FromResult(id);
         }
     }
