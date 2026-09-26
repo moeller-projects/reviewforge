@@ -26,6 +26,7 @@ name: Dependabot lockfile
 on:
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 # Least privilege at the workflow level; the job elevates itself below.
 permissions:
