@@ -27,7 +27,12 @@ public sealed class BashUnquotedVarsFixer : IFindingFixer
         }
 
         var line = context.FileLines[lineIndex];
-        if (ContainsHereDocMarker(line))
+        if (ContainsHereDocMarker(line)
+            || EndsWithUnescapedBackslash(line)
+            || line.Contains("$(", StringComparison.Ordinal)
+            || line.Contains('`')
+            || ContainsUnsafeForWordListExpansion(line)
+            || ContainsUnsafeConditionalExpansion(line))
         {
             return null;
         }
@@ -44,6 +49,106 @@ public sealed class BashUnquotedVarsFixer : IFindingFixer
             anchor.StartLine,
             rewritten,
             "wraps the unquoted variable expansion in double quotes to prevent word splitting and globbing");
+    }
+
+    private static bool EndsWithUnescapedBackslash(string line)
+    {
+        var backslashes = 0;
+        for (var i = line.Length - 1; i >= 0 && line[i] == '\\'; i--)
+        {
+            backslashes++;
+        }
+
+        return backslashes % 2 == 1;
+    }
+
+    private static bool ContainsUnsafeForWordListExpansion(string line)
+    {
+        if (!line.TrimStart().StartsWith("for ", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var afterFor = line.TrimStart()[4..];
+        var variableEnd = 0;
+        while (variableEnd < afterFor.Length
+               && (char.IsLetterOrDigit(afterFor[variableEnd]) || afterFor[variableEnd] == '_'))
+        {
+            variableEnd++;
+        }
+
+        if (variableEnd == 0 || !afterFor[variableEnd..].TrimStart().StartsWith("in", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var inOffset = line.IndexOf("in", line.IndexOf("for", StringComparison.Ordinal) + 3, StringComparison.Ordinal);
+        if (inOffset < 0)
+        {
+            return false;
+        }
+
+        var listEnd = line.IndexOf("; do", inOffset + 2, StringComparison.Ordinal);
+        if (listEnd < 0)
+        {
+            listEnd = line.Length;
+        }
+
+        return HasUnquotedExpansion(line, inOffset + 2, listEnd);
+    }
+
+    private static bool ContainsUnsafeConditionalExpansion(string line)
+    {
+        var open = line.IndexOf("[[", StringComparison.Ordinal);
+        if (open < 0)
+        {
+            return false;
+        }
+
+        var close = line.IndexOf("]]", open + 2, StringComparison.Ordinal);
+        if (close < 0)
+        {
+            return true;
+        }
+
+        var expression = line[(open + 2)..close];
+        if (!expression.Contains("==", StringComparison.Ordinal)
+            && !expression.Contains("=~", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return HasUnquotedExpansion(line, open + 2, close);
+    }
+
+    private static bool HasUnquotedExpansion(string line, int start, int end)
+    {
+        var inSingle = false;
+        var inDouble = false;
+        for (var i = start; i < end; i++)
+        {
+            var c = line[i];
+            if (c == '\\' && i + 1 < end)
+            {
+                i++;
+                continue;
+            }
+
+            if (c == '\'' && !inDouble)
+            {
+                inSingle = !inSingle;
+            }
+            else if (c == '"' && !inSingle)
+            {
+                inDouble = !inDouble;
+            }
+            else if (c == '$' && !inSingle && !inDouble && ReadExpansion(line, i) is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool ContainsHereDocMarker(string line)

@@ -165,6 +165,19 @@ public sealed class HashLineEditorTests : IDisposable
     }
 
     [Fact]
+    public void Writable_set_is_case_sensitive()
+    {
+        var lowerPath = Path.Combine(_Root, "src", "foo.cs");
+        File.WriteAllLines(lowerPath, ["alpha", "beta"]);
+        var editor = new HashLineEditor(new RepoPathGuard(_Root), new HashSet<string> { "src/Foo.cs" });
+
+        Assert.Equal(
+            "access denied: src/foo.cs is outside the writable set",
+            editor.EditFile("src/foo.cs", [new LineEdit(H("beta"), null, null, null, "x")]));
+    }
+
+
+    [Fact]
     public void EditFile_missing_file()
         => Assert.Equal("not found: src/ghost.cs",
             Editor(new HashSet<string> {"src/ghost.cs"}).EditFile(
@@ -203,6 +216,7 @@ public sealed class HashLineEditorTests : IDisposable
     public void GetSessionChange_merges_disjoint_edits_into_contiguous_region()
     {
         var editor = Editor();
+
         editor.EditFile("src/Foo.cs", [new LineEdit(H("alpha"), null, null, null, "A")]);
         editor.EditFile("src/Foo.cs", [new LineEdit(H("delta"), null, null, null, "D")]);
         var change = editor.GetSessionChange("src/Foo.cs");
@@ -210,6 +224,22 @@ public sealed class HashLineEditorTests : IDisposable
         Assert.Equal(1, change.Value.StartLine);
         Assert.Equal(4, change.Value.EndLine);
         Assert.Equal("A\nbeta\ngamma\nD", change.Value.Replacement);
+    }
+
+    [Fact]
+    public void GetSessionChange_tracks_current_coordinates_across_edits()
+    {
+        File.WriteAllLines(FilePath, ["one", "two", "three", "four", "five"]);
+        var editor = Editor();
+
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("two"), null, null, null, "two-a\ntwo-b\ntwo-c")]);
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("five"), null, null, null, "FIVE")]);
+
+        var change = editor.GetSessionChange("src/Foo.cs");
+        Assert.NotNull(change);
+        Assert.Equal(2, change.Value.StartLine);
+        Assert.Equal(5, change.Value.EndLine);
+        Assert.Equal("two-a\ntwo-b\ntwo-c\nfour\nFIVE", change.Value.Replacement);
     }
 
     [Fact]

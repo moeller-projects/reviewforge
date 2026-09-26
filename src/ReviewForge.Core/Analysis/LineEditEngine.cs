@@ -147,24 +147,38 @@ public static class LineEditEngine
 
             if (edit.ToHash is { } toHash && !string.Equals(toHash, fromHash, StringComparison.Ordinal))
             {
-                var toMatches = new List<int>();
-                for (var i = from + 1; i < lines.Count; i++)
+                var allToMatches = new List<int>();
+                for (var i = 0; i < lines.Count; i++)
                 {
                     if (string.Equals(HashLine.Of(lines[i]), toHash, StringComparison.Ordinal))
                     {
-                        toMatches.Add(i);
+                        allToMatches.Add(i);
                     }
                 }
 
-                if (toMatches.Count != 1)
+                var toMatches = allToMatches.Where(i => i > from).ToArray();
+                if (toMatches.Length == 0)
                 {
-                    error = toMatches.Count == 0
-                        ? $"hash {toHash} not present in {(path ?? "file")} — the file changed since your last read; re-read and retry"
-                        : $"hash {toHash} matches lines {string.Join(", ", toMatches.Select(m => m + 1))} — add fromLine/toLine to disambiguate";
+                    error = allToMatches.Count > 0
+                        ? $"hash {toHash} must occur after start line {from + 1}"
+                        : $"hash {toHash} not present in {(path ?? "file")} — the file changed since your last read; re-read and retry";
                     return false;
                 }
 
-                to = toMatches[0];
+                if (toMatches.Length > 1)
+                {
+                    if (edit.ToLine is not { } hint || !toMatches.Contains(hint - 1))
+                    {
+                        error = $"hash {toHash} matches lines {string.Join(", ", toMatches.Select(m => m + 1))} — add fromLine/toLine to disambiguate";
+                        return false;
+                    }
+
+                    to = hint - 1;
+                }
+                else
+                {
+                    to = toMatches[0];
+                }
             }
             else
             {

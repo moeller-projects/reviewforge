@@ -11,14 +11,18 @@ public sealed record FixCommand(
 
 /// <summary>
 /// Detects "/rf fix" commands from the PR author. Eligible commands: ACTIVE threads whose
-/// LAST comment is by the PR author, starts (case-insensitive, trimmed) with "/rf fix",
-/// was published after the watermark, and whose thread has a file anchor. Fixed/Closed
-/// threads and threads whose last comment is ours are excluded (the latter makes replies
-/// self-idempotent). Commands from non-authors are ignored — never publicly denied.
+/// LAST comment is by the PR author id, starts (case-insensitive, trimmed) with "/rf fix"
+/// followed by end-of-string or whitespace, was published after the watermark, and whose
+/// thread has a file anchor. Fixed/Closed threads and threads whose last comment is ours are
+/// excluded (the latter makes replies self-idempotent). Commands from non-authors are
+/// ignored — never publicly denied.
 /// </summary>
 public static class FixCommandDetector
 {
     public const string Prefix = "/rf fix";
+
+    /// <summary>Bound for the command instruction carried into the fix prompt.</summary>
+    public const int MaxInstructionChars = 300;
 
     /// <summary>Bound for the quoted comment carried into the fix prompt.</summary>
     public const int MaxQuotedCommentChars = 1000;
@@ -26,7 +30,6 @@ public static class FixCommandDetector
     public static IReadOnlyList<FixCommand> Scan(
         IReadOnlyList<ReviewThread> threads,
         string prCreatorId,
-        string prCreatorName,
         DateTimeOffset? watermark)
     {
         List<FixCommand>? commands = null;
@@ -43,7 +46,7 @@ public static class FixCommandDetector
                 continue; // our own reply makes the bot last → cannot retrigger (self-idempotent)
             }
 
-            if (!IsAuthor(last, prCreatorId, prCreatorName))
+            if (!IsAuthor(last, prCreatorId))
             {
                 continue; // only the PR author can command fixes; non-author commands are ignored
             }
@@ -54,7 +57,8 @@ public static class FixCommandDetector
             }
 
             var text = last.Text.Trim();
-            if (!text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+            if (!text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)
+                || (text.Length > Prefix.Length && !char.IsWhiteSpace(text[Prefix.Length])))
             {
                 continue;
             }
@@ -63,6 +67,10 @@ public static class FixCommandDetector
             if (instruction?.Length == 0)
             {
                 instruction = null;
+            }
+            else if (instruction is not null && instruction.Length > MaxInstructionChars)
+            {
+                instruction = instruction[..MaxInstructionChars];
             }
 
             (commands ??= []).Add(new FixCommand(
@@ -75,11 +83,9 @@ public static class FixCommandDetector
         return commands ?? [];
     }
 
-    private static bool IsAuthor(ThreadComment comment, string creatorId, string creatorName)
-        => (creatorId.Length > 0
-            && string.Equals(comment.AuthorId, creatorId, StringComparison.OrdinalIgnoreCase))
-           || (creatorName.Length > 0
-               && string.Equals(comment.AuthorName, creatorName, StringComparison.OrdinalIgnoreCase));
+    private static bool IsAuthor(ThreadComment comment, string creatorId)
+        => creatorId.Length > 0
+           && string.Equals(comment.AuthorId, creatorId, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The comment being answered: the previous non-command HUMAN comment. Bot
     /// comments (our own findings, our own replies) are skipped — agent-authored text is

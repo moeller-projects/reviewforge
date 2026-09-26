@@ -79,6 +79,31 @@ public class AutoFixPublishTests
     }
 
     [Fact]
+    public async Task Live_fix_reply_skips_exact_duplicate_on_retry()
+    {
+        var source = new FakePullRequestSource();
+        var oldComment = new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow);
+        source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active, [oldComment]));
+        var ctx = Ctx(source);
+        ctx.AcceptedFindings = [Fixable()];
+        var stage = new PublishFindingsStage(
+            source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance);
+
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
+        var reply = Assert.Single(source.Replies).Text;
+
+        source.Threads[0] = source.Threads[0] with
+        {
+            Comments = [oldComment, new ThreadComment("b", "bot", true, reply, DateTimeOffset.UtcNow)],
+        };
+        source.Replies.Clear();
+
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies);
+    }
+
+    [Fact]
     public async Task Commanded_fix_posts_suggestion_thread_without_dedupe_property_and_links_back()
     {
         var source = new FakePullRequestSource();
@@ -109,6 +134,51 @@ public class AutoFixPublishTests
     }
 
     [Fact]
+    public async Task Commanded_fix_skips_preseeded_matching_suggestion_and_link()
+    {
+        var source = new FakePullRequestSource();
+        var proposal = new FixProposal(
+            "script.sh", 3, 3, "echo \"$name\"", "Quoted as requested.",
+            FixOrigin.LlmCommanded, SourceThreadId: 42);
+        var anchor = new ThreadAnchor("script.sh", 3, 3);
+        var body = CommentFormatter.FormatFixedFinding(proposal, "please quote this");
+        source.Threads.Add(new ReviewThread(
+            900, null, ReviewThreadStatus.Active,
+            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)], anchor));
+        var ctx = Ctx(source);
+        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal, "none")];
+        ctx.FixCommands = [new FixCommand(42, anchor, null, "please quote this")];
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.PostedSuggestions);
+        Assert.DoesNotContain(source.Replies, reply => reply.ThreadId == 42);
+    }
+
+    [Fact]
+    public async Task Commanded_fix_does_not_reply_when_claim_is_lost_after_suggestion()
+    {
+        var source = new FakePullRequestSource();
+        var proposal = new FixProposal(
+            "script.sh", 3, 3, "echo \"$name\"", "Quoted as requested.",
+            FixOrigin.LlmCommanded, SourceThreadId: 42);
+        var anchor = new ThreadAnchor("script.sh", 3, 3);
+        var ctx = Ctx(source);
+        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal, "none")];
+        ctx.FixCommands = [new FixCommand(42, anchor, null, "please quote this")];
+        var guardCalls = 0;
+        ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(source.PostedSuggestions);
+        Assert.Empty(source.Replies);
+    }
+
+    [Fact]
     public async Task Queued_command_replies_post_with_bot_preamble_and_dedupe_against_retry()
     {
         var source = new FakePullRequestSource();
@@ -136,6 +206,22 @@ public class AutoFixPublishTests
     }
 
     [Fact]
+    public async Task Publish_rechecks_head_before_sequential_auto_fix_writes()
+    {
+        var source = new HeadChangingPullRequestSource();
+        source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.AcceptedFindings = [Fixable()];
+
+        await Assert.ThrowsAsync<PrHeadChangedException>(() =>
+            new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Empty(source.Replies);
+    }
+
+    [Fact]
     public async Task Summary_counts_auto_fixes()
     {
         var source = new FakePullRequestSource();
@@ -151,6 +237,26 @@ public class AutoFixPublishTests
 
         var summary = Assert.Single(source.GeneralComments);
         Assert.Contains("> **Auto-fixes:** 2 suggestion(s) posted — review and apply individually.", summary);
+    }
+
+    [Fact]
+    public async Task Summary_excludes_regressed_fixed_finding_suppressed_by_triage()
+    {
+        var source = new FakePullRequestSource();
+        source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Fixed,
+            [new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow)]));
+        var finding = Fixable();
+        finding.IsRegression = true;
+        var ctx = Ctx(source);
+        ctx.Collector.MarkRegressed("k1");
+        ctx.AcceptedFindings = [finding];
+        ctx.AppliedFixes = [finding.AppliedFix!];
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var summary = Assert.Single(source.GeneralComments);
+        Assert.DoesNotContain("Auto-fixes", summary);
     }
 
     [Fact]
@@ -193,5 +299,35 @@ public class AutoFixPublishTests
         Assert.Contains("> line one line two ", text);
         Assert.DoesNotContain("\nline two", text);
         Assert.Contains("AI-generated", text);
+    }
+
+    [Fact]
+    public void FormatFixedFinding_uses_longer_fence_for_backticks_in_replacement()
+    {
+        const string replacement = "line ``` inside";
+        var finding = Fixable();
+        finding.AppliedFix = new AppliedFix(
+            "k1",
+            new FixProposal("script.sh", 3, 3, replacement, "r", FixOrigin.Deterministic),
+            "none");
+
+        var deterministic = CommentFormatter.FormatFinding(finding);
+        Assert.Contains("````suggestion\nline ``` inside\n````", deterministic);
+
+        var commanded = CommentFormatter.FormatFixedFinding(
+            new FixProposal("script.sh", 3, 3, replacement, "r", FixOrigin.LlmCommanded, 42),
+            "please quote this");
+        Assert.Contains("````suggestion\nline ``` inside\n````", commanded);
+    }
+
+    private sealed class HeadChangingPullRequestSource : FakePullRequestSource
+    {
+        private int _fetches;
+
+        public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
+        {
+            var fetch = Interlocked.Increment(ref _fetches);
+            return Task.FromResult(fetch == 1 ? Pr : Pr with {SourceCommitSha = "changed-head"});
+        }
     }
 }

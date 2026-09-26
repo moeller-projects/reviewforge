@@ -8,7 +8,7 @@ public sealed class FindingFixerRegistry
 
     public FindingFixerRegistry(IEnumerable<IFindingFixer> fixers)
     {
-        _Fixers = new Dictionary<string, IFindingFixer>(StringComparer.Ordinal);
+        _Fixers = new Dictionary<string, IFindingFixer>(StringComparer.OrdinalIgnoreCase);
         foreach (var fixer in fixers)
         {
             if (!_Fixers.TryAdd(fixer.RuleId, fixer))

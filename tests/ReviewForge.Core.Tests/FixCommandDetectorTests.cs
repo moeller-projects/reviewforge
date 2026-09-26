@@ -34,7 +34,7 @@ public class FixCommandDetectorTests
             Thread(7,
                 [Other("this is wrong", 1), Author("  /RF FIX please use the constant", 2)]),
         };
-        var commands = FixCommandDetector.Scan(threads, CreatorId, CreatorName, watermark: null);
+        var commands = FixCommandDetector.Scan(threads, CreatorId, watermark: null);
         var command = Assert.Single(commands);
         Assert.Equal(7, command.ThreadId);
         Assert.Equal("src/A.cs", command.Anchor.FilePath);
@@ -47,24 +47,43 @@ public class FixCommandDetectorTests
     public void Bare_command_has_null_instruction()
     {
         var commands = FixCommandDetector.Scan(
-            [Thread(7, [Author("/rf fix", 1)])], CreatorId, CreatorName, watermark: null);
+            [Thread(7, [Author("/rf fix", 1)])], CreatorId, watermark: null);
         var command = Assert.Single(commands);
         Assert.Null(command.Instruction);
     }
 
     [Fact]
-    public void Command_matches_by_display_name()
+    public void Prefix_requires_a_token_boundary()
     {
         var commands = FixCommandDetector.Scan(
-            [Thread(7, [Author("/rf fix", 1)])], "someone-else", CreatorName, watermark: null);
-        Assert.Single(commands);
+            [Thread(7, [Author("/rf fixity", 1)])], CreatorId, watermark: null);
+        Assert.Empty(commands);
+    }
+
+    [Fact]
+    public void Instruction_is_bounded_at_detection()
+    {
+        var instruction = new string('x', FixCommandDetector.MaxInstructionChars + 50);
+        var command = Assert.Single(FixCommandDetector.Scan(
+            [Thread(7, [Author($"/rf fix {instruction}", 1)])],
+            CreatorId, watermark: null));
+        Assert.Equal(instruction[..FixCommandDetector.MaxInstructionChars], command.Instruction);
+    }
+
+    [Fact]
+    public void Command_with_same_display_name_but_different_author_id_is_ignored()
+    {
+        var commands = FixCommandDetector.Scan(
+            [Thread(7, [new ThreadComment("someone-else", CreatorName, false, "/rf fix", T0.AddMinutes(1))])],
+            CreatorId, watermark: null);
+        Assert.Empty(commands);
     }
 
     [Fact]
     public void Non_author_command_is_ignored()
     {
         var commands = FixCommandDetector.Scan(
-            [Thread(7, [Other("/rf fix", 1)])], CreatorId, CreatorName, watermark: null);
+            [Thread(7, [Other("/rf fix", 1)])], CreatorId, watermark: null);
         Assert.Empty(commands);
     }
 
@@ -72,7 +91,7 @@ public class FixCommandDetectorTests
     public void Non_command_last_comment_is_ignored()
     {
         var commands = FixCommandDetector.Scan(
-            [Thread(7, [Author("looks fine", 1)])], CreatorId, CreatorName, watermark: null);
+            [Thread(7, [Author("looks fine", 1)])], CreatorId, watermark: null);
         Assert.Empty(commands);
     }
 
@@ -82,7 +101,7 @@ public class FixCommandDetectorTests
         foreach (var status in new[] {ReviewThreadStatus.Fixed, ReviewThreadStatus.Closed})
         {
             var commands = FixCommandDetector.Scan(
-                [Thread(7, [Author("/rf fix", 1)], status)], CreatorId, CreatorName, watermark: null);
+                [Thread(7, [Author("/rf fix", 1)], status)], CreatorId, watermark: null);
             Assert.Empty(commands);
         }
     }
@@ -92,7 +111,7 @@ public class FixCommandDetectorTests
     {
         var commands = FixCommandDetector.Scan(
             [Thread(7, [Author("/rf fix", 1), Bot("working on it", 2)])],
-            CreatorId, CreatorName, watermark: null);
+            CreatorId, watermark: null);
         Assert.Empty(commands);
     }
 
@@ -100,7 +119,7 @@ public class FixCommandDetectorTests
     public void Command_older_than_watermark_is_ignored()
     {
         var commands = FixCommandDetector.Scan(
-            [Thread(7, [Author("/rf fix", 1)])], CreatorId, CreatorName, T0.AddMinutes(5));
+            [Thread(7, [Author("/rf fix", 1)])], CreatorId, T0.AddMinutes(5));
         Assert.Empty(commands);
     }
 
@@ -108,7 +127,7 @@ public class FixCommandDetectorTests
     public void Command_newer_than_watermark_is_detected()
     {
         var commands = FixCommandDetector.Scan(
-            [Thread(7, [Author("/rf fix", 10)])], CreatorId, CreatorName, T0.AddMinutes(5));
+            [Thread(7, [Author("/rf fix", 10)])], CreatorId, T0.AddMinutes(5));
         Assert.Single(commands);
     }
 
@@ -117,7 +136,7 @@ public class FixCommandDetectorTests
     {
         var thread = new ReviewThread(7, null, ReviewThreadStatus.Active,
             [Author("/rf fix", 1)], Anchor: null);
-        var commands = FixCommandDetector.Scan([thread], CreatorId, CreatorName, watermark: null);
+        var commands = FixCommandDetector.Scan([thread], CreatorId, watermark: null);
         Assert.Empty(commands);
     }
 
@@ -127,7 +146,7 @@ public class FixCommandDetectorTests
         var thread = new ReviewThread(9, "dedupe-key", ReviewThreadStatus.Active,
             [Bot("### finding body text", 1), Author("please address this", 2), Author("/rf fix", 3)],
             new ThreadAnchor("src/B.cs", 8, 8));
-        var commands = FixCommandDetector.Scan([thread], CreatorId, CreatorName, watermark: null);
+        var commands = FixCommandDetector.Scan([thread], CreatorId, watermark: null);
         var command = Assert.Single(commands);
         Assert.Equal(9, command.ThreadId);
         Assert.Equal("please address this", command.QuotedComment);
@@ -139,7 +158,7 @@ public class FixCommandDetectorTests
         var thread = new ReviewThread(9, "dedupe-key", ReviewThreadStatus.Active,
             [Bot("### finding body text", 1), Author("/rf fix", 2)],
             new ThreadAnchor("src/B.cs", 8, 8));
-        var command = Assert.Single(FixCommandDetector.Scan([thread], CreatorId, CreatorName, watermark: null));
+        var command = Assert.Single(FixCommandDetector.Scan([thread], CreatorId, watermark: null));
         Assert.Equal(string.Empty, command.QuotedComment);
     }
 
@@ -151,7 +170,7 @@ public class FixCommandDetectorTests
         {
             Thread(7, [Other(longText, 1), Author("/rf fix", 2), Author("/rf fix again", 3)]),
         };
-        var command = Assert.Single(FixCommandDetector.Scan(threads, CreatorId, CreatorName, watermark: null));
+        var command = Assert.Single(FixCommandDetector.Scan(threads, CreatorId, watermark: null));
         Assert.Equal(longText[..FixCommandDetector.MaxQuotedCommentChars] + "…", command.QuotedComment);
     }
 
@@ -159,7 +178,7 @@ public class FixCommandDetectorTests
     public void Thread_with_no_comments_is_ignored()
     {
         var commands = FixCommandDetector.Scan(
-            [Thread(7, [])], CreatorId, CreatorName, watermark: null);
+            [Thread(7, [])], CreatorId, watermark: null);
         Assert.Empty(commands);
     }
 }

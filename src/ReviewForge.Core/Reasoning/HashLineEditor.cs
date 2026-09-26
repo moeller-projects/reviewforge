@@ -18,15 +18,16 @@ public class HashLineEditor
     public const int MaxLines = RepoReadTools.DefaultMaxLines;
 
     private readonly RepoPathGuard _Guard;
-    private readonly HashSet<string> _Writable; // RepoPath.Normalized, OrdinalIgnoreCase
-    private readonly Dictionary<string, List<SessionEdit>> _Sessions = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string[]> _RawCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _Writable;
+    private readonly Dictionary<string, SessionRange> _Sessions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string[]> _RawCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, byte[]> _OriginalRaw = new(StringComparer.Ordinal);
 
     public HashLineEditor(RepoPathGuard guard, IReadOnlySet<string> writableRelativePaths)
     {
         _Guard = guard;
         _Writable = new HashSet<string>(
-            writableRelativePaths.Select(RepoPath.Normalize), StringComparer.OrdinalIgnoreCase);
+            writableRelativePaths.Select(RepoPath.Normalize), StringComparer.Ordinal);
     }
 
     [Description("Read a file with per-line content hashes for edit anchoring.")]
@@ -116,7 +117,7 @@ public class HashLineEditor
             return result.Error!;
         }
 
-        WriteAtomic(full!, newLines, newLine!);
+        WriteAtomic(rel, full!, newLines, newLine!);
         RecordSession(rel, result.Outcomes);
         _RawCache.Remove(rel);
         return FormatApplied(rel, edits.Length, result.Outcomes, result.NewFileHash!);
@@ -135,6 +136,11 @@ public class HashLineEditor
         if (!File.Exists(full))
         {
             throw new FileNotFoundException($"not found: {rel}", full);
+        }
+
+        if (!EnsureStablePath(rel, full, out var error))
+        {
+            throw new InvalidOperationException(error ?? $"access denied: {relativePath}");
         }
 
         return File.ReadAllLines(full).Select(HashLine.Normalize).ToArray();
@@ -187,17 +193,16 @@ public class HashLineEditor
             return result;
         }
 
-        WriteAtomic(full!, newLines, newLine!);
+        WriteAtomic(rel, full!, newLines, newLine!);
         RecordSession(rel, result.Outcomes);
         _RawCache.Remove(rel);
         return result;
     }
 
     /// <summary>
-    /// Writes content lines using the file's original per-line endings when the editor
-    /// read the file earlier in this session and the line count matches (byte-exact
-    /// revert); otherwise the dominant line ending is used. Writes outside the writable
-    /// set fail.
+    /// Writes content lines using the original raw snapshot when they restore the
+    /// session's original content; otherwise the dominant line ending is used.
+    /// Writes outside the writable set fail.
     /// </summary>
     public virtual void WriteAllLines(string relativePath, string[] lines)
     {
@@ -206,30 +211,14 @@ public class HashLineEditor
             throw new InvalidOperationException(denyError ?? $"access denied: {relativePath}");
         }
 
-        string[]? cached = null;
-        _RawCache.TryGetValue(rel, out cached);
-        if (cached is not null && cached.Length == lines.Length)
+        if (TryGetOriginalBytes(rel, lines, out var original))
         {
-            // Revert path: restore each line with its original ending.
-            var sb = new StringBuilder();
-            for (var i = 0; i < lines.Length; i++)
-            {
-                sb.Append(lines[i]);
-                var raw = cached[i];
-                if (raw.EndsWith("\r\n", StringComparison.Ordinal))
-                {
-                    sb.Append("\r\n");
-                }
-                else if (raw.EndsWith("\n", StringComparison.Ordinal))
-                {
-                    sb.Append('\n');
-                }
-            }
-
-            File.WriteAllText(full!, sb.ToString());
+            WriteAtomic(rel, full!, original);
             return;
         }
 
+        string[]? cached = null;
+        _RawCache.TryGetValue(rel, out cached);
         var newLine = "\n";
         if (cached is { Length: > 0 })
         {
@@ -244,7 +233,7 @@ public class HashLineEditor
             }
         }
 
-        File.WriteAllText(full!, string.Join(newLine, lines) + newLine);
+        WriteAtomic(rel, full!, string.Join(newLine, lines) + newLine);
     }
 
     /// <summary>The merged change this editor session produced on a file: the contiguous
@@ -253,32 +242,35 @@ public class HashLineEditor
     public virtual (int StartLine, int EndLine, string Replacement)? GetSessionChange(string relativePath)
     {
         var rel = RepoPath.Normalize(relativePath);
-        if (!_Sessions.TryGetValue(rel, out var edits) || edits.Count == 0)
+        if (!_Sessions.TryGetValue(rel, out var range))
         {
             return null;
         }
-
-        var start = edits.Min(e => e.OriginalStart);
-        var originalEnd = edits.Max(e => e.OriginalEnd);
-        var netShift = edits.Sum(e => e.ReplacementLineCount - (e.OriginalEnd - e.OriginalStart + 1));
-        var currentEnd = originalEnd + netShift;
 
         var full = _Guard.Resolve(rel, out _);
-        if (full is null || !File.Exists(full))
+        if (full is null || !File.Exists(full) || !EnsureStablePath(rel, full, out _))
         {
             return null;
         }
 
-        var current = File.ReadAllLines(full).Select(HashLine.Normalize).ToArray();
-        var length = Math.Max(0, currentEnd - start + 1);
-        var replacement = string.Join('\n', current.Skip(start - 1).Take(length));
-        return (start, currentEnd, replacement);
+        var (raw, error) = ReadRawLines(rel, full);
+        if (error is not null)
+        {
+            return null;
+        }
+
+        var current = raw!.Select(HashLine.Normalize).ToArray();
+        var length = range.EndLine >= range.StartLine
+            ? range.EndLine - range.StartLine + 1
+            : 0;
+        var replacement = string.Join('\n', current.Skip(Math.Max(0, range.StartLine - 1)).Take(length));
+        return (range.StartLine, range.EndLine, replacement);
     }
 
     private bool TryResolveWritable(string path, out string rel, out string? full, out string? error)
     {
         rel = RepoPath.Normalize(path ?? string.Empty);
-        full = _Guard.Resolve(path, out error);
+        full = _Guard.Resolve(rel, out error);
         if (full is null)
         {
             error = $"access denied: {path}";
@@ -295,6 +287,11 @@ public class HashLineEditor
         if (!File.Exists(full))
         {
             error = $"not found: {path}";
+            return false;
+        }
+
+        if (!EnsureStablePath(rel, full, out error))
+        {
             return false;
         }
 
@@ -340,14 +337,28 @@ public class HashLineEditor
             return (null, $"not found: {rel}");
         }
 
+        if (!EnsureStablePath(rel, full, out var pathError))
+        {
+            return (null, pathError);
+        }
+
         byte[] bytes;
         try
         {
             bytes = File.ReadAllBytes(full);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (IOException)
         {
-            return (null, $"unreadable: {ex.Message}");
+            return (null, $"unreadable: {rel}");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return (null, $"unreadable: {rel}");
+        }
+
+        if (!_OriginalRaw.ContainsKey(rel))
+        {
+            _OriginalRaw[rel] = bytes;
         }
 
         var scanLength = Math.Min(bytes.Length, 8192);
@@ -386,13 +397,29 @@ public class HashLineEditor
         return [.. lines];
     }
 
-    private void WriteAtomic(string full, string[] lines, string newLine)
+    private void WriteAtomic(string rel, string full, string[] lines, string newLine)
+        => WriteAtomic(rel, full, string.Join(newLine, lines) + newLine);
+
+    // File.Move(temp, full, overwrite: true) atomically replaces the destination entry,
+    // rather than following a destination symlink. Stable-path checks still have a residual
+    // race window between validation and replacement.
+    private void WriteAtomic(string rel, string full, string text)
     {
+        if (!EnsureStablePath(rel, full, out var error))
+        {
+            throw new IOException(error);
+        }
+
         var dir = Path.GetDirectoryName(full)!;
         var temp = Path.Combine(dir, ".rf-edit-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
-            File.WriteAllText(temp, string.Join(newLine, lines) + newLine);
+            File.WriteAllText(temp, text);
+            if (!EnsureStablePath(rel, full, out error))
+            {
+                throw new IOException(error);
+            }
+
             File.Move(temp, full, overwrite: true);
         }
         finally
@@ -404,19 +431,130 @@ public class HashLineEditor
         }
     }
 
-    private void RecordSession(string rel, IReadOnlyList<EditOutcome> outcomes)
+    private void WriteAtomic(string rel, string full, byte[] bytes)
     {
-        if (!_Sessions.TryGetValue(rel, out var list))
+        if (!EnsureStablePath(rel, full, out var error))
         {
-            list = [];
-            _Sessions[rel] = list;
+            throw new IOException(error);
         }
 
-        foreach (var o in outcomes)
+        var dir = Path.GetDirectoryName(full)!;
+        var temp = Path.Combine(dir, ".rf-edit-" + Guid.NewGuid().ToString("N") + ".tmp");
+        try
         {
-            list.Add(new SessionEdit(o.FromLine, o.ToLine, o.ReplacementLineCount));
+            File.WriteAllBytes(temp, bytes);
+            if (!EnsureStablePath(rel, full, out error))
+            {
+                throw new IOException(error);
+            }
+
+            File.Move(temp, full, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
         }
     }
+
+    private bool EnsureStablePath(string rel, string full, out string? error)
+    {
+        error = null;
+        try
+        {
+            var attributes = File.GetAttributes(full);
+            if (attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                error = $"access denied: {rel}";
+                return false;
+            }
+        }
+        catch (FileNotFoundException)
+        {
+            error = $"not found: {rel}";
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            error = $"not found: {rel}";
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = $"unreadable: {rel}";
+            return false;
+        }
+
+        var resolved = _Guard.Resolve(rel, out _);
+        if (resolved is null ||
+            !string.Equals(Path.GetFullPath(resolved), Path.GetFullPath(full), StringComparison.Ordinal))
+        {
+            error = $"access denied: {rel}";
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryGetOriginalBytes(string rel, IReadOnlyList<string> lines, out byte[] bytes)
+    {
+        bytes = [];
+        if (!_OriginalRaw.TryGetValue(rel, out var original))
+        {
+            return false;
+        }
+
+        var originalLines = SplitKeepEndings(Encoding.UTF8.GetString(original));
+        if (originalLines.Length != lines.Count ||
+            originalLines.Where((line, index) =>
+                !string.Equals(HashLine.Normalize(line), lines[index], StringComparison.Ordinal)).Any())
+        {
+            return false;
+        }
+
+        bytes = original;
+        return true;
+    }
+
+    private void RecordSession(string rel, IReadOnlyList<EditOutcome> outcomes)
+    {
+        foreach (var o in outcomes.OrderByDescending(o => o.FromLine))
+        {
+            var f = o.FromLine;
+            var t = o.ToLine;
+            var replacement = o.ReplacementLineCount;
+            if (!_Sessions.TryGetValue(rel, out var current))
+            {
+                _Sessions[rel] = new SessionRange(f, f + replacement - 1);
+                continue;
+            }
+
+            var delta = replacement - (t - f + 1);
+            if (f > current.EndLine)
+            {
+                _Sessions[rel] = current with { EndLine = Math.Max(current.EndLine, f + replacement - 1) };
+            }
+            else if (current.StartLine > t)
+            {
+                _Sessions[rel] = new SessionRange(
+                    current.StartLine + delta, current.EndLine + delta);
+            }
+            else
+            {
+                var shiftedStart = ShiftBoundary(current.StartLine, f, t, delta);
+                var shiftedEnd = ShiftBoundary(current.EndLine, f, t, delta);
+                _Sessions[rel] = new SessionRange(
+                    Math.Min(shiftedStart, f),
+                    Math.Max(shiftedEnd, f + replacement - 1));
+            }
+        }
+    }
+
+    private static int ShiftBoundary(int boundary, int from, int to, int delta)
+        => boundary > to ? boundary + delta : boundary >= from ? from : boundary;
+
 
     private static string FormatApplied(
         string rel, int editCount, IReadOnlyList<EditOutcome> outcomes, string newFileHash)
@@ -444,5 +582,5 @@ public class HashLineEditor
         return sb.ToString();
     }
 
-    private sealed record SessionEdit(int OriginalStart, int OriginalEnd, int ReplacementLineCount);
+    private sealed record SessionRange(int StartLine, int EndLine);
 }

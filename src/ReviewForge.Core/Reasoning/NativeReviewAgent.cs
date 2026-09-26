@@ -169,7 +169,10 @@ public sealed class NativeReviewAgent(
             ChatOptions = new ChatOptions
             {
                 ModelId = chatClientFactory.ModelName,
-                Instructions = SystemPromptComposer.Compose(_Options.PromptOverridePath, null),
+                // Always the embedded fix-pass prompt: ReviewForge:PromptOverridePath targets
+                // the REVIEW system prompt, and substituting it here would hand the fix pass
+                // a contract for tools it does not have.
+                Instructions = SystemPromptComposer.ComposeFixPass(),
                 Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
                 Tools =
                 [

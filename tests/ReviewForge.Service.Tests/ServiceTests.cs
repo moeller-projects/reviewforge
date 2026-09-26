@@ -102,10 +102,9 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("AutoFix__AllowedAuthors__0", "creator-1");
         Environment.SetEnvironmentVariable("AutoFix__AllowedRuleIds__0", "bash.unquoted-vars");
         Environment.SetEnvironmentVariable("AutoFix__AllowedRuleIds__1", "bash.set-e-missing");
-        if (threadCommands)
-        {
-            Environment.SetEnvironmentVariable("AutoFix__EnableThreadFixCommands", "true");
-        }
+        Environment.SetEnvironmentVariable(
+            "AutoFix__EnableThreadFixCommands",
+            threadCommands.ToString().ToLowerInvariant());
 
         return this;
     }
@@ -632,7 +631,9 @@ public class ServiceTests : IAsyncLifetime
 
         var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
         Directory.CreateDirectory(checkoutDir);
-        File.WriteAllLines(Path.Combine(checkoutDir, "script.sh"), ["#!/bin/sh", "echo $name"]);
+        var scriptPath = Path.Combine(checkoutDir, "script.sh");
+        File.WriteAllLines(scriptPath, ["#!/bin/sh", "echo $name"]);
+        var originalScript = File.ReadAllBytes(scriptPath);
 
         _Factory.Chat.Reset(
             ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
@@ -658,7 +659,7 @@ public class ServiceTests : IAsyncLifetime
         Assert.Empty(_Factory.Source.PostedSuggestions);
         Assert.DoesNotContain(_Factory.Source.GeneralComments, c => c.Contains("Auto-fixes"));
         // The checkout was untouched by the auto-fix stage.
-        Assert.Equal("echo $name", File.ReadAllLines(Path.Combine(checkoutDir, "script.sh"))[1]);
+        Assert.Equal(originalScript, File.ReadAllBytes(scriptPath));
     }
 
     [Fact]

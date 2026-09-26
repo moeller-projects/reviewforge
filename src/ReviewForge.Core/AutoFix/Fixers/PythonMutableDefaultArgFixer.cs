@@ -45,15 +45,35 @@ public sealed partial class PythonMutableDefaultArgFixer : IFindingFixer
         var parameters = SplitTopLevel(paramsText);
         string? mutableName = null;
         var mutableOriginal = string.Empty;
+        var mutableDefaultStart = -1;
+        var mutableDefaultLength = 0;
         var mutableCount = 0;
+        var parameterSearchStart = 0;
         foreach (var p in parameters)
         {
+            var parameterOffset = paramsText.IndexOf(p, parameterSearchStart, StringComparison.Ordinal);
+            if (parameterOffset < 0)
+            {
+                return null;
+            }
+
+            parameterSearchStart = parameterOffset + p.Length;
             var trimmed = p.Trim();
             if (TryParseMutableDefault(trimmed, out var name, out var original))
             {
                 mutableCount++;
                 mutableName = name;
                 mutableOriginal = original;
+                var leadingWhitespace = p.Length - p.TrimStart().Length;
+                var equals = trimmed.IndexOf('=');
+                var expressionOffset = equals + 1;
+                while (expressionOffset < trimmed.Length && char.IsWhiteSpace(trimmed[expressionOffset]))
+                {
+                    expressionOffset++;
+                }
+
+                mutableDefaultStart = openParen + 1 + parameterOffset + leadingWhitespace + expressionOffset;
+                mutableDefaultLength = original.Length;
             }
             else if (trimmed.Contains('=') && LooksMutable(trimmed))
             {
@@ -61,45 +81,89 @@ public sealed partial class PythonMutableDefaultArgFixer : IFindingFixer
             }
         }
 
-        if (mutableCount != 1 || mutableName is null)
+        if (mutableCount != 1 || mutableName is null || mutableDefaultStart < 0)
         {
             return null;
         }
 
-        var bodyIndent = FindBodyIndent(context.FileLines, lineIndex + 1);
-        if (bodyIndent is null)
+        var mutableMatches = MutableDefault().Matches(line);
+        if (mutableMatches.Count != 1
+            || mutableMatches[0].Groups[1].Index != mutableDefaultStart
+            || mutableMatches[0].Groups[1].Length != mutableDefaultLength)
+        {
+            return null; // another []/{} occurrence (for example in a string) is unsafe to rewrite
+        }
+
+        var definitionIndent = line.Length - line.TrimStart().Length;
+        var body = FindBodyIndent(context.FileLines, lineIndex + 1, definitionIndent);
+        if (body is null)
         {
             return null;
         }
 
-        var newDef = MutableDefault().Replace(line, "= None");
-        var guard = $"{bodyIndent}if {mutableName} is None: {mutableName} = {mutableOriginal}";
+        var newDef = line[..mutableDefaultStart] + "None" + line[(mutableDefaultStart + mutableDefaultLength)..];
+        var guard = $"{body.Value.Indent}if {mutableName} is None: {mutableName} = {mutableOriginal}";
+        var endLine = anchor.StartLine;
+        var replacement = newDef;
+        var firstBody = context.FileLines[body.Value.Index].TrimStart();
+        var firstBodyIsDocstring = firstBody.StartsWith("\"\"\"", StringComparison.Ordinal)
+            || firstBody.StartsWith("'''", StringComparison.Ordinal);
+        if (firstBodyIsDocstring && !IsSingleLineDocstring(firstBody))
+        {
+            return null;
+        }
+
+        if (IsSingleLineDocstring(firstBody))
+        {
+            replacement += "\n" + string.Join("\n", context.FileLines[(lineIndex + 1)..(body.Value.Index + 1)]);
+            replacement += "\n" + guard;
+            endLine = body.Value.Index + 1;
+        }
+        else
+        {
+            replacement += "\n" + guard;
+        }
+
         return new FixProposal(
             context.FilePath,
             anchor.StartLine,
-            anchor.StartLine,
-            newDef + "\n" + guard,
+            endLine,
+            replacement,
             $"replaces the mutable default {mutableOriginal} with None and guards with an `if {mutableName} is None` body line");
     }
 
     [GeneratedRegex(@"=\s*(\[\s*\]|\{\s*\})")]
     private static partial Regex MutableDefault();
 
-    private static string? FindBodyIndent(string[] lines, int afterIndex)
+    private static (string Indent, int Index)? FindBodyIndent(string[] lines, int afterIndex, int definitionIndent)
     {
         for (var i = afterIndex; i < lines.Length; i++)
         {
             var l = lines[i];
-            if (l.Trim().Length == 0)
+            var trimmed = l.Trim();
+            if (trimmed.Length == 0 || trimmed[0] == '#')
             {
                 continue;
             }
 
             var indentLength = l.Length - l.TrimStart().Length;
-            return l[..indentLength];
+            if (indentLength <= definitionIndent)
+            {
+                return null;
+            }
+
+            return (l[..indentLength], i);
         }
 
         return null;
+    }
+
+    private static bool IsSingleLineDocstring(string text)
+    {
+        var delimiter = text.StartsWith("\"\"\"", StringComparison.Ordinal)
+            ? "\"\"\""
+            : text.StartsWith("'''", StringComparison.Ordinal) ? "'''" : null;
+        return delimiter is not null && text.IndexOf(delimiter, delimiter.Length, StringComparison.Ordinal) >= delimiter.Length;
     }
 
     private static string[] SplitTopLevel(string text)

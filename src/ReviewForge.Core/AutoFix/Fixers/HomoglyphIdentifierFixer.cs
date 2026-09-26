@@ -39,10 +39,22 @@ public sealed class HomoglyphIdentifierFixer(string ruleId) : IFindingFixer
             return null;
         }
 
-        // The token must occur exactly once on the line, else we cannot pick a unique
-        // replacement occurrence.
-        var first = content.IndexOf(token.Token, StringComparison.Ordinal);
-        if (first < 0 || content.IndexOf(token.Token, first + token.Token.Length, StringComparison.Ordinal) >= 0)
+        if (token.StartCol < 0 || token.StartCol + token.Token.Length > content.Length
+            || IsInsideQuotedRegion(content, token.StartCol))
+        {
+            return null;
+        }
+
+        for (var i = 0; i < context.FileLines.Length; i++)
+        {
+            if (i != lineIndex && context.FileLines[i].Contains(token.Token, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        var first = token.StartCol;
+        if (!content.AsSpan(first).StartsWith(token.Token, StringComparison.Ordinal))
         {
             return null;
         }
@@ -54,5 +66,38 @@ public sealed class HomoglyphIdentifierFixer(string ruleId) : IFindingFixer
             anchor.StartLine,
             fixedLine,
             $"replaces the confusable identifier '{token.Token}' with its ASCII equivalent '{lookalike}'");
+    }
+
+    private static bool IsInsideQuotedRegion(string line, int position)
+    {
+        var inSingle = false;
+        var inDouble = false;
+        var escaped = false;
+        for (var i = 0; i < position; i++)
+        {
+            var c = line[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (c == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (c == '\'' && !inDouble)
+            {
+                inSingle = !inSingle;
+            }
+            else if (c == '"' && !inSingle)
+            {
+                inDouble = !inDouble;
+            }
+        }
+
+        return inSingle || inDouble;
     }
 }

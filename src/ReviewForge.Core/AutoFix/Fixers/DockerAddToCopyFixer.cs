@@ -1,15 +1,14 @@
 namespace ReviewForge.Core.AutoFix.Fixers;
 
 /// <summary>
-/// Fixes docker.add-vs-copy: replaces the ADD instruction on the anchor line with COPY,
 /// preserving indentation. Declines URL sources (http/https/git), local archive sources
-/// (.tar, .tar.gz, .tgz, .zip), and line continuations — ADD is semantically required
-/// for those.
+/// (.tar, .tar.gz, .tgz, .tar.bz2, .tar.xz, .tbz2, .txz, .zip), and line continuations —
+/// ADD is semantically required for those.
 /// </summary>
 public sealed class DockerAddToCopyFixer : IFindingFixer
 {
-    private static readonly string[] ArchiveExtensions = [".tar", ".tar.gz", ".tgz", ".zip"];
-
+    private static readonly string[] ArchiveExtensions =
+        [".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tbz2", ".txz", ".zip"];
     public string RuleId => "docker.add-vs-copy";
 
     public FixProposal? TryPropose(FixContext context)
@@ -46,6 +45,7 @@ public sealed class DockerAddToCopyFixer : IFindingFixer
         }
 
         if (args.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries)
+            .Select(token => token.Trim('"', '\'', '[', ']', ','))
             .Any(tok => ArchiveExtensions.Any(ext => tok.EndsWith(ext, StringComparison.OrdinalIgnoreCase))))
         {
             return null; // local archives require ADD

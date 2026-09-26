@@ -226,6 +226,34 @@ public class LineEditEngineTests
     }
 
     [Fact]
+    public void Duplicate_to_hash_uses_to_line_hint()
+    {
+        var lines = new[] {"start", "middle", "end", "end", "tail"};
+        var result = LineEditEngine.Apply(
+            lines,
+            [new LineEdit(H("start"), H("end"), null, 4, "only")],
+            out var next);
+
+        Assert.True(result.Success);
+        Assert.Equal(["only", "tail"], next);
+        Assert.Equal(new EditOutcome(1, 4, 1), result.Outcomes[0]);
+    }
+
+    [Fact]
+    public void End_hash_before_start_reports_ordering_error()
+    {
+        var lines = new[] {"start", "middle", "end"};
+        var result = LineEditEngine.Apply(
+            lines,
+            [new LineEdit(H("end"), H("start"), null, null, "only")],
+            out _);
+
+        Assert.False(result.Success);
+        Assert.Equal($"hash {H("start")} must occur after start line 3", result.Error);
+    }
+
+
+    [Fact]
     public void Path_is_included_in_hash_absent_message()
     {
         var result = LineEditEngine.Apply(["a"], [new LineEdit("deadbeef", null, null, null, "x")], "src/Foo.cs", out _);

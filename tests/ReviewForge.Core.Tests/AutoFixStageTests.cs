@@ -105,6 +105,20 @@ public sealed class AutoFixStageTests : IDisposable
         }
     }
 
+    private sealed class CorruptingRestoreEditor(
+        RepoPathGuard guard,
+        IReadOnlySet<string> writable,
+        Action corrupt)
+        : HashLineEditor(guard, writable)
+    {
+        public override string[] ReadAllLines(string relativePath)
+        {
+            var lines = base.ReadAllLines(relativePath);
+            corrupt();
+            return lines;
+        }
+    }
+
     private sealed class StubVerifier(bool pass, bool requiresWrites, Action<string, string>? onVerify = null)
         : IFixVerifier
     {
@@ -117,6 +131,29 @@ public sealed class AutoFixStageTests : IDisposable
             VerifiedFiles.Add(relativeFilePath);
             onVerify?.Invoke(repoDir, relativeFilePath);
             return Task.FromResult(new FixVerdict(pass, pass ? "ok" : "verify failed"));
+        }
+    }
+
+    private sealed class CancellingVerifier : IFixVerifier
+    {
+        public string Name => "cancelling";
+        public bool RequiresWorkspaceWrites => true;
+
+        public Task<FixVerdict> VerifyAsync(string repoDir, string relativeFilePath, CancellationToken ct)
+            => throw new OperationCanceledException(ct);
+    }
+
+    private sealed class SequenceVerifier(params bool[] outcomes) : IFixVerifier
+    {
+        private readonly Queue<bool> _Outcomes = new(outcomes);
+
+        public string Name => "sequence";
+        public bool RequiresWorkspaceWrites => true;
+
+        public Task<FixVerdict> VerifyAsync(string repoDir, string relativeFilePath, CancellationToken ct)
+        {
+            var passed = _Outcomes.Dequeue();
+            return Task.FromResult(new FixVerdict(passed, passed ? "ok" : "verify failed"));
         }
     }
 
@@ -152,7 +189,7 @@ public sealed class AutoFixStageTests : IDisposable
     }
 
     [Fact]
-    public async Task Author_matches_by_display_name()
+    public async Task Deterministic_allowlist_can_match_display_name()
     {
         WriteFile("script.sh", "echo $name");
         var ctx = Ctx();
@@ -185,6 +222,18 @@ public sealed class AutoFixStageTests : IDisposable
         await Stage(Options(rules: ["docker.add-vs-copy"])).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(ctx.AppliedFixes);
+    }
+
+    [Fact]
+    public async Task Empty_registered_rule_intersection_still_processes_commands()
+    {
+        var ctx = CommandCtx("echo $name");
+        var chat = EditScriptThenDone(Path.Combine(_Root, "script.sh"), "script.sh", 1, "echo \"$name\"");
+
+        await Stage(Options(commands: true, rules: []), chat: chat)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(ctx.AppliedFixes);
     }
 
     // ---- deterministic pass ----
@@ -286,7 +335,80 @@ public sealed class AutoFixStageTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(abs));
         Assert.NotNull(recording);
         Assert.True(recording!.ApplyRangeCalls >= 1);
-        Assert.True(recording.WriteCalls >= 1);
+        Assert.Equal(0, recording.WriteCalls);
+    }
+
+    [Fact]
+    public async Task Corrupting_editor_restore_fails_safety_check_before_publish()
+    {
+        var abs = WriteFile("script.sh", "echo $name");
+        var ctx = Ctx();
+        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Stage(
+                    Options(),
+                    new StubVerifier(pass: true, requiresWrites: true),
+                    editorFactory: (guard, writable) =>
+                        new CorruptingRestoreEditor(
+                            guard, writable, () => File.WriteAllText(abs, "corrupted")))
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Contains("poisoning", ex.Message);
+        Assert.Empty(ctx.AppliedFixes);
+    }
+
+    [Fact]
+    public async Task Cancellation_during_verification_reverts_bytes_and_propagates()
+    {
+        var abs = WriteFile("script.sh", "echo $name");
+        var before = File.ReadAllBytes(abs);
+        var ctx = Ctx();
+        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => Stage(Options(), new CancellingVerifier()).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Equal(before, File.ReadAllBytes(abs));
+    }
+
+    [Fact]
+    public async Task Deterministic_revert_preserves_file_without_trailing_newline()
+    {
+        var abs = WriteFile("script.sh", "echo $name");
+        File.WriteAllText(abs, "echo $name");
+        var before = File.ReadAllBytes(abs);
+        var ctx = Ctx();
+        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+
+        await Stage(Options(), new StubVerifier(pass: true, requiresWrites: true))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(before, File.ReadAllBytes(abs));
+    }
+
+    [Fact]
+    public async Task Dropped_deterministic_file_refunds_budget_for_command()
+    {
+        WriteFile("other.sh", "echo $x");
+        var ctx = CommandCtx("echo $name");
+        ctx.ChangedFileManifest =
+        [
+            new ChangedFile("script.sh", ChangedFileType.Edit),
+            new ChangedFile("other.sh", ChangedFileType.Edit),
+        ];
+        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "other.sh", 1, "other-key")];
+        var before = File.ReadAllBytes(Path.Combine(_Root, "script.sh"));
+
+        await Stage(
+                Options(commands: true, maxFixes: 1),
+                new SequenceVerifier(false, true),
+                chat: EditScriptThenDone(1, "echo \"$name\""))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var fix = Assert.Single(ctx.AppliedFixes);
+        Assert.Equal(FixOrigin.LlmCommanded, fix.Proposal.Origin);
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(_Root, "script.sh")));
     }
 
     [Fact]
@@ -371,7 +493,17 @@ public sealed class AutoFixStageTests : IDisposable
                 new Dictionary<string, object?>
                 {
                     ["path"] = relPath,
-                    ["edits"] = new[] {new LineEdit(hash, null, null, null, replacement)},
+                    ["edits"] = new List<object>
+                    {
+                        new Dictionary<string, object?>
+                        {
+                            ["fromHash"] = hash,
+                            ["toHash"] = null,
+                            ["fromLine"] = null,
+                            ["toLine"] = null,
+                            ["replacement"] = replacement,
+                        },
+                    },
                 })),
             ScriptedChatClient.FunctionCalls((
                 "TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "quoted the variable."})));
@@ -403,6 +535,20 @@ public sealed class AutoFixStageTests : IDisposable
     }
 
     [Fact]
+    public async Task Command_revert_preserves_file_without_trailing_newline()
+    {
+        var ctx = CommandCtx("echo $name");
+        var abs = Path.Combine(_Root, "script.sh");
+        File.WriteAllText(abs, "echo $name");
+        var before = File.ReadAllBytes(abs);
+
+        await Stage(Options(commands: true), chat: EditScriptThenDone(1, "echo \"$name\""))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(before, File.ReadAllBytes(abs));
+    }
+
+    [Fact]
     public async Task Command_out_of_diff_gets_polite_reply()
     {
         var ctx = CommandCtx("echo $name");
@@ -430,6 +576,25 @@ public sealed class AutoFixStageTests : IDisposable
         Assert.Empty(ctx.AppliedFixes);
         var reply = Assert.Single(ctx.FixCommandReplies);
         Assert.Contains("couldn't derive a safe fix", reply.Text);
+    }
+
+    [Fact]
+    public async Task Closed_bot_thread_does_not_cover_a_command()
+    {
+        var ctx = CommandCtx("echo $name");
+        ctx.Threads =
+        [
+            ..ctx.Threads,
+            new ReviewThread(
+                99, "existing-fix", ReviewThreadStatus.Closed,
+                [new ThreadComment("reviewforge-bot", "reviewforge bot", true, "fixed", DateTimeOffset.UtcNow.AddMinutes(-2))],
+                new ThreadAnchor("script.sh", 1, 1)),
+        ];
+
+        await Stage(Options(commands: true), chat: EditScriptThenDone(1, "echo \"$name\""))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(ctx.AppliedFixes);
     }
 
     [Fact]
@@ -474,10 +639,9 @@ public sealed class AutoFixStageTests : IDisposable
                 new StubVerifier(pass: false, requiresWrites: true),
                 chat: EditScriptThenDone(1, "echo \"$name\""))
             .ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.Empty(ctx.AppliedFixes);
         var reply = Assert.Single(ctx.FixCommandReplies);
         Assert.Contains("failed verification", reply.Text);
+        Assert.DoesNotContain("verify failed", reply.Text);
         Assert.Equal(before, File.ReadAllBytes(abs));
     }
 
@@ -498,6 +662,29 @@ public sealed class AutoFixStageTests : IDisposable
 
         Assert.Empty(ctx.AppliedFixes);
         Assert.Empty(ctx.FixCommandReplies);
+    }
+
+    [Theory]
+    [InlineData("../sentinel")]
+    [InlineData("")]
+    public async Task Malformed_command_anchor_is_rejected_without_agent_call(string anchorPath)
+    {
+        WriteFile("script.sh", "echo $name");
+        var t0 = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var ctx = Ctx();
+        ctx.ChangedFileManifest = [new ChangedFile(anchorPath, ChangedFileType.Edit)];
+        ctx.Threads =
+        [
+            new ReviewThread(42, null, ReviewThreadStatus.Active,
+                [new ThreadComment("creator-1", "PR Author", false, "/rf fix", t0)],
+                new ThreadAnchor(anchorPath, 1, 1)),
+        ];
+        var chat = new ScriptedChatClient();
+
+        await Stage(Options(commands: true), chat: chat).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AppliedFixes);
+        Assert.Equal(0, chat.Calls);
     }
 
     [Fact]

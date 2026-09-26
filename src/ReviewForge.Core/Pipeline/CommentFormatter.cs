@@ -64,9 +64,10 @@ public static class CommentFormatter
         sb.AppendLine();
         sb.AppendLine($"**Fix available** — {fix.Proposal.Rationale}");
         sb.AppendLine();
-        sb.AppendLine("```suggestion");
+        var fence = SuggestionFence(fix.Proposal.Replacement);
+        sb.AppendLine($"{fence}suggestion");
         sb.AppendLine(fix.Proposal.Replacement);
-        sb.AppendLine("```");
+        sb.AppendLine(fence);
         return sb.ToString();
     }
 
@@ -84,10 +85,31 @@ public static class CommentFormatter
         sb.AppendLine();
         sb.AppendLine("**Requested fix (AI-generated from the thread command — verify before accepting)**");
         sb.AppendLine();
-        sb.AppendLine("```suggestion");
+        var fence = SuggestionFence(fix.Replacement);
+        sb.AppendLine($"{fence}suggestion");
         sb.AppendLine(fix.Replacement);
-        sb.AppendLine("```");
+        sb.AppendLine(fence);
         return sb.ToString();
+    }
+
+    private static string SuggestionFence(string replacement)
+    {
+        var longestRun = 0;
+        var currentRun = 0;
+        foreach (var character in replacement)
+        {
+            if (character == '`')
+            {
+                currentRun++;
+                longestRun = Math.Max(longestRun, currentRun);
+            }
+            else
+            {
+                currentRun = 0;
+            }
+        }
+
+        return new string('`', Math.Max(3, longestRun + 1));
     }
 
     private static string OneLine(string text)

@@ -42,7 +42,8 @@ internal static class AppliedFixPersistence
             // known-key set or the carry-forward chain.
             .Concat((ctx.PriorRun?.Findings ?? [])
                 .Where(p => !acceptedKeys.Contains(p.DedupeKey)
-                            && !p.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal)))
+                            && !p.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
+                .Select(p => p with {AppliedFixJson = null}))
             .ToList();
 
         if (includeCommandedAuditRows)
@@ -56,7 +57,7 @@ internal static class AppliedFixPersistence
                     $"Commanded fix for thread {fix.Proposal.SourceThreadId}",
                     fix.Proposal.FilePath,
                     fix.Proposal.StartLine,
-                    threadIdResolver?.Invoke(fix.DedupeKey),
+                    threadIdResolver?.Invoke(fix.DedupeKey) ?? fix.Proposal.SourceThreadId,
                     JsonSerializer.Serialize(fix, JsonOptions)));
             }
         }

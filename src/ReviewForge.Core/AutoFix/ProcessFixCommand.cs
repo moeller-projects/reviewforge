@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ReviewForge.Core.AutoFix;
 
 /// <summary>
@@ -9,9 +11,10 @@ namespace ReviewForge.Core.AutoFix;
 public static class ProcessFixCommand
 {
     /// <summary>Characters that would carry meaning under a shell and are therefore refused.</summary>
-    private static readonly char[] Metacharacters = ['|', '&', ';', '<', '>', '`', '$', '(', ')', '{', '}', '\'', '"', '\\', '*', '?', '[', ']', '~', '#', '!'];
+    private static readonly char[] Metacharacters = ['|', '&', ';', '<', '>', '`', '$', '(', ')', '{', '}', '\\', '*', '?', '[', ']', '~', '#', '!'];
 
-    /// <summary>Splits the command into executable + arguments; throws on empty input or metacharacters.</summary>
+    /// <summary>Splits the command into executable + arguments; throws on empty input, control
+    /// characters, unbalanced double quotes, or metacharacters.</summary>
     public static (string Executable, string[] Arguments) Parse(string command)
     {
         if (string.IsNullOrWhiteSpace(command))
@@ -19,13 +22,59 @@ public static class ProcessFixCommand
             throw new ArgumentException("verification command must not be empty", nameof(command));
         }
 
-        var tokens = command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var token in tokens)
+        if (command.IndexOfAny(['\r', '\n', '\t']) >= 0)
         {
-            if (token.IndexOfAny(Metacharacters) >= 0)
+            throw new ArgumentException(
+                "verification command must not contain carriage returns, newlines, or tabs",
+                nameof(command));
+        }
+
+        var tokens = new List<string>();
+        var token = new StringBuilder();
+        var inQuotes = false;
+        var tokenStarted = false;
+
+        foreach (var character in command)
+        {
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                tokenStarted = true;
+            }
+            else if (character == ' ' && !inQuotes)
+            {
+                if (tokenStarted)
+                {
+                    tokens.Add(token.ToString());
+                    token.Clear();
+                    tokenStarted = false;
+                }
+            }
+            else
+            {
+                token.Append(character);
+                tokenStarted = true;
+            }
+        }
+
+        if (inQuotes)
+        {
+            throw new ArgumentException(
+                "verification command contains an unbalanced double quote",
+                nameof(command));
+        }
+
+        if (tokenStarted)
+        {
+            tokens.Add(token.ToString());
+        }
+
+        foreach (var parsedToken in tokens)
+        {
+            if (parsedToken.IndexOfAny(Metacharacters) >= 0)
             {
                 throw new ArgumentException(
-                    $"verification command token '{token}' contains a shell metacharacter; " +
+                    $"verification command token '{parsedToken}' contains a shell metacharacter; " +
                     "the command runs without a shell — pass a plain executable plus arguments",
                     nameof(command));
             }

@@ -21,7 +21,7 @@ public sealed partial class BashSetEMissingFixer : IFindingFixer
         }
 
         var line1 = context.FileLines[0];
-        if (!line1.StartsWith("#!", StringComparison.Ordinal))
+        if (!IsBashShebang(line1))
         {
             return null;
         }
@@ -37,6 +37,43 @@ public sealed partial class BashSetEMissingFixer : IFindingFixer
             1,
             line1 + "\nset -euo pipefail",
             "adds `set -euo pipefail` so the script fails fast on errors, unset variables, and pipe failures");
+    }
+
+    private static bool IsBashShebang(string line)
+    {
+        if (!line.StartsWith("#!", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var parts = line[2..].Trim().Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            return false;
+        }
+
+        var interpreter = Path.GetFileName(parts[0]);
+        if (string.Equals(interpreter, "bash", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!string.Equals(interpreter, "env", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        for (var i = 1; i < parts.Length; i++)
+        {
+            if (parts[i].Length > 0 && parts[i][0] == '-')
+            {
+                continue;
+            }
+
+            return string.Equals(Path.GetFileName(parts[i]), "bash", StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     [GeneratedRegex(@"^\s*set\s+-[a-zA-Z]*e")]

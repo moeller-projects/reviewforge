@@ -86,8 +86,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             .ToDictionary(p => p.Id, p => p.Fixer!, StringComparer.OrdinalIgnoreCase);
         if (eligible.Count == 0)
         {
-            _Logger.LogInformation("auto-fix: no allowed rule ids have a registered fixer");
-            return;
+            _Logger.LogInformation("auto-fix: no allowed rule ids have a registered fixer; deterministic pass skipped");
         }
 
         var repoDir = ctx.RequireRepoDir();
@@ -95,8 +94,13 @@ public sealed class AutoFixFindingsStage : IReviewStage
         var applied = new List<AppliedFix>();
         var budget = _Options.MaxFixesPerRun;
 
-        await RunDeterministicPassAsync(ctx, repoDir, guard, eligible, applied, () => budget, remaining => budget = remaining, ct)
-            .ConfigureAwait(false);
+        if (eligible.Count > 0)
+        {
+            await RunDeterministicPassAsync(
+                    ctx, repoDir, guard, eligible, applied,
+                    () => budget, remaining => budget = remaining, ct)
+                .ConfigureAwait(false);
+        }
 
         if (_Options.EnableThreadFixCommands)
         {
@@ -123,6 +127,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
         foreach (var finding in ctx.AcceptedFindings)
         {
+            ct.ThrowIfCancellationRequested();
             if (getBudget() <= 0)
             {
                 break;
@@ -179,8 +184,10 @@ public sealed class AutoFixFindingsStage : IReviewStage
             // Default path: zero disk writes — proposals go straight to the applied list.
             foreach (var (path, proposals) in proposalsByFile)
             {
+                ct.ThrowIfCancellationRequested();
                 foreach (var (finding, proposal) in proposals)
                 {
+                    ct.ThrowIfCancellationRequested();
                     AttachFix(finding, applied, new AppliedFix(finding.DedupeKey!, proposal, _Verifier.Name), ctx);
                 }
             }
@@ -231,8 +238,9 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 if (!verdict.Passed)
                 {
                     _Logger.LogWarning(
-                        "auto-fix: verification failed for {Path} ({Verifier}): {Reason} — dropping {Count} fix(es)",
-                        path, _Verifier.Name, verdict.Reason, proposals.Count);
+                        "auto-fix: verification failed for {Path} ({Verifier}) — dropping {Count} fix(es)",
+                        path, _Verifier.Name, proposals.Count);
+                    setBudget(getBudget() + proposals.Count);
                     foreach (var (finding, _) in proposals)
                     {
                         ReviewForgeTelemetry.FixesDeclined.Add(1, FixTags(FixOrigin.Deterministic, finding.RuleId));
@@ -248,7 +256,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
             finally
             {
-                RevertFile(editor, repoDir, path, snapshotLines, snapshotBytes);
+                RevertFile(editor, repoDir, path, snapshotBytes);
             }
         }
     }
@@ -262,9 +270,8 @@ public sealed class AutoFixFindingsStage : IReviewStage
         Action<int> setBudget,
         CancellationToken ct)
     {
-        var pr = ctx.RequirePullRequest();
         var commands = FixCommandDetector.Scan(
-            ctx.Threads, pr.CreatorId, pr.CreatorName, ctx.PriorRun?.LastObservedCommentAt);
+            ctx.Threads, pr.CreatorId, ctx.PriorRun?.LastObservedCommentAt);
         ctx.FixCommands = commands;
         if (commands.Count == 0)
         {
@@ -289,11 +296,11 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 continue;
             }
 
-            // Dedupe: our own live bot thread or this run's fixes already cover an
-            // overlapping range on the same file → link, don't duplicate.
+            // Dedupe: only active bot threads provide coverage; closed/fixed threads do not.
             var alreadyCovered =
                 ctx.Threads.Any(t =>
-                    t.DedupeKey is not null
+                    t.Status == ReviewThreadStatus.Active
+                    && t.DedupeKey is not null
                     && t.Anchor is { } a
                     && string.Equals(RepoPath.Normalize(a.FilePath), path, StringComparison.OrdinalIgnoreCase)
                     && RangesOverlap(a.StartLine, a.EndLine, anchor.StartLine, anchor.EndLine))
@@ -307,7 +314,9 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 continue;
             }
 
-            if (!changedFiles.Contains(path) || (ctx.Diff?.NonReviewableFiles.ContainsKey(path) ?? false))
+            if (guard.Resolve(path, out _) is null
+                || !changedFiles.Contains(path)
+                || (ctx.Diff?.NonReviewableFiles.ContainsKey(path) ?? false))
             {
                 replies.Add((command.ThreadId,
                     "this thread's file isn't part of the current diff — nothing to fix"));
@@ -357,10 +366,10 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     if (!verdict.Passed)
                     {
                         _Logger.LogWarning(
-                            "fix pass for thread {ThreadId}: verification failed ({Verifier}): {Reason}",
-                            command.ThreadId, _Verifier.Name, verdict.Reason);
+                            "verification failed for {Path} ({Verifier})",
+                            path, _Verifier.Name);
                         replies.Add((command.ThreadId,
-                            $"the fix failed verification ({verdict.Reason}) — nothing was published"));
+                            "the fix failed verification — nothing was published"));
                         ReviewForgeTelemetry.FixesDeclined.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
                         continue;
                     }
@@ -380,7 +389,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
             finally
             {
-                RevertFile(editor, repoDir, path, snapshotLines, snapshotBytes);
+                RevertFile(editor, repoDir, path, snapshotBytes);
             }
         }
 
@@ -401,23 +410,38 @@ public sealed class AutoFixFindingsStage : IReviewStage
             "auto-fix: {Origin} {RuleOrThread} on {Path}:{Start}-{End} for author {Author}",
             fix.Proposal.Origin, ruleOrThread, fix.Proposal.FilePath,
             fix.Proposal.StartLine, fix.Proposal.EndLine, pr.CreatorName);
-        ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(fix.Proposal.Origin, ruleOrThread));
     }
 
     /// <summary>Reverts the file to its pre-pass state; a failed revert fails the run
     /// (a dirty pooled checkout would poison later runs).</summary>
-    private void RevertFile(
-        HashLineEditor editor, string repoDir, string path, string[] snapshotLines, byte[] snapshotBytes)
+    private static void RevertFile(
+        HashLineEditor editor, string repoDir, string path, byte[] snapshotBytes)
     {
-        editor.WriteAllLines(path, snapshotLines);
         var abs = Path.Combine(repoDir, path.Replace('/', Path.DirectorySeparatorChar));
+        var directory = Path.GetDirectoryName(abs)!;
+        var temp = Path.Combine(directory, $".{Path.GetFileName(abs)}.{Guid.NewGuid():N}.revert");
+        try
+        {
+            File.WriteAllBytes(temp, snapshotBytes);
+            File.Move(temp, abs, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+        }
+
+        // Exercise the editor seam after restoring raw bytes so a corrupting editor
+        // cannot silently leave a pooled checkout dirty.
+        _ = editor.ReadAllLines(path);
         if (!File.ReadAllBytes(abs).SequenceEqual(snapshotBytes))
         {
             throw new InvalidOperationException(
                 $"auto-fix revert failed for {path}: checkout is left dirty (pooled-checkout poisoning)");
         }
     }
-
     private static string OneSentence(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

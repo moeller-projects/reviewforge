@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using ReviewForge.Infrastructure.AutoFix;
 using Xunit;
 
@@ -47,15 +49,61 @@ public class ProcessFixVerifierTests
     }
 
     [Fact]
-    public async Task Missing_executable_fails_instead_of_throwing()
+    public async Task Missing_executable_propagates_start_failure()
     {
         var dir = TempDir();
         try
         {
             var verifier = new ProcessFixVerifier("reviewforge-definitely-missing-binary", timeoutSeconds: 30);
+
+            await Assert.ThrowsAsync<Win32Exception>(
+                () => verifier.VerifyAsync(dir, "any.cs", CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_kills_process_and_rethrows()
+    {
+        var dir = TempDir();
+        try
+        {
+            var verifier = new ProcessFixVerifier("sleep 30", timeoutSeconds: 30);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var stopwatch = Stopwatch.StartNew();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => verifier.VerifyAsync(dir, "any.cs", cts.Token));
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Output_bound_counts_utf8_bytes_and_truncates_final_line()
+    {
+        var dir = TempDir();
+        var script = Path.Combine(dir, "emit-output.sh");
+        try
+        {
+            var output = new string('é', ProcessFixVerifier.MaxOutputBytes);
+            await File.WriteAllTextAsync(
+                script,
+                $"#!/bin/sh\nprintf '%s\\n' '{output}' >&2\nexit 1\n");
+
+            var verifier = new ProcessFixVerifier($"sh {script}", timeoutSeconds: 30);
             var verdict = await verifier.VerifyAsync(dir, "any.cs", CancellationToken.None);
+
             Assert.False(verdict.Passed);
-            Assert.Contains("start", verdict.Reason, StringComparison.OrdinalIgnoreCase);
+            Assert.StartsWith("exit 1:", verdict.Reason, StringComparison.Ordinal);
+            Assert.True(verdict.Reason.Length <= 2010);
         }
         finally
         {

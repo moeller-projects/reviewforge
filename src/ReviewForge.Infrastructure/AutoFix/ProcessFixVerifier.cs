@@ -1,5 +1,5 @@
+using System.ComponentModel;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using ReviewForge.Core.AutoFix;
 
@@ -15,11 +15,11 @@ namespace ReviewForge.Infrastructure.AutoFix;
 /// targets; npm test runs scripts). Enable only with a strict AutoFix author allowlist.
 /// The shipped container (Alpine, read-only rootfs, no toolchains) cannot run heavyweight
 /// verifiers.
-/// </summary>
-[ExcludeFromCodeCoverage] // pure process wrapper; command parsing/validation lives in covered Core code
 public sealed class ProcessFixVerifier : IFixVerifier
 {
     public const int MaxOutputBytes = 64 * 1024;
+
+    private static readonly int LineTerminatorBytes = Encoding.UTF8.GetByteCount(Environment.NewLine);
 
     private readonly string _Executable;
     private readonly string[] _Arguments;
@@ -57,18 +57,12 @@ public sealed class ProcessFixVerifier : IFixVerifier
 
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => AppendBounded(stdout, e.Data);
-        process.ErrorDataReceived += (_, e) => AppendBounded(stderr, e.Data);
+        var stdoutBytes = 0;
+        var stderrBytes = 0;
+        process.OutputDataReceived += (_, e) => AppendBounded(stdout, ref stdoutBytes, e.Data);
+        process.ErrorDataReceived += (_, e) => AppendBounded(stderr, ref stderrBytes, e.Data);
 
-        try
-        {
-            process.Start();
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or FileNotFoundException)
-        {
-            return new FixVerdict(false, $"verification process failed to start: {ex.Message}");
-        }
-
+        process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
@@ -76,9 +70,15 @@ public sealed class ProcessFixVerifier : IFixVerifier
         {
             await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             TryKillTree(process);
+            Reap(process);
+            if (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+
             return new FixVerdict(false, $"verification timed out after {_TimeoutSeconds}s");
         }
 
@@ -93,14 +93,52 @@ public sealed class ProcessFixVerifier : IFixVerifier
         return new FixVerdict(false, string.IsNullOrWhiteSpace(tail) ? $"exit {process.ExitCode}" : $"exit {process.ExitCode}: {tail}");
     }
 
-    private static void AppendBounded(StringBuilder sb, string? data)
+    private static void AppendBounded(StringBuilder sb, ref int retainedBytes, string? data)
     {
-        if (data is null || sb.Length >= MaxOutputBytes)
+        if (data is null)
         {
             return;
         }
 
-        sb.AppendLine(data.Length > MaxOutputBytes ? data[..MaxOutputBytes] : data);
+        var available = MaxOutputBytes - retainedBytes;
+        if (available < LineTerminatorBytes)
+        {
+            return;
+        }
+
+        var payloadBudget = available - LineTerminatorBytes;
+        var payloadBytes = Encoding.UTF8.GetByteCount(data);
+        if (payloadBytes <= payloadBudget)
+        {
+            sb.Append(data);
+            retainedBytes += payloadBytes;
+        }
+        else
+        {
+            var usedBytes = 0;
+            for (var offset = 0; offset < data.Length;)
+            {
+                var charCount = char.IsHighSurrogate(data[offset])
+                    && offset + 1 < data.Length
+                    && char.IsLowSurrogate(data[offset + 1])
+                    ? 2
+                    : 1;
+                var charBytes = Encoding.UTF8.GetByteCount(data.AsSpan(offset, charCount));
+                if (usedBytes + charBytes > payloadBudget)
+                {
+                    break;
+                }
+
+                sb.Append(data, offset, charCount);
+                usedBytes += charBytes;
+                offset += charCount;
+            }
+
+            retainedBytes += usedBytes;
+        }
+
+        sb.Append(Environment.NewLine);
+        retainedBytes += LineTerminatorBytes;
     }
 
     private static string Tail(StringBuilder stderr)
@@ -119,6 +157,26 @@ public sealed class ProcessFixVerifier : IFixVerifier
         catch (InvalidOperationException)
         {
             // already exited
+        }
+        catch (Win32Exception)
+        {
+            // process exited between the cancellation and kill attempt
+        }
+    }
+
+    private static void Reap(Process process)
+    {
+        try
+        {
+            if (process.WaitForExit(milliseconds: 1000))
+            {
+                // Synchronous WaitForExit drains redirected output event handlers.
+                process.WaitForExit();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // process was not started or has already been disposed
         }
     }
 }

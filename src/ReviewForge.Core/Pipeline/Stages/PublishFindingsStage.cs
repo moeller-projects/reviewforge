@@ -78,15 +78,9 @@ public sealed class PublishFindingsStage(
 
         // Head-SHA TOCTOU guard: the checkout, diff, and anchors were computed against the
         // stage-1 head. A force-push mid-run must not receive comments for superseded code.
-        var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
-        var reviewed = ctx.RequirePullRequest().SourceCommitSha;
-        if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
-        {
-            logger.LogWarning("PR head changed during run ({Reviewed} → {Current}); aborting before publication",
-                reviewed, current.SourceCommitSha);
-            throw new PrHeadChangedException(reviewed, current.SourceCommitSha);
-        }
+        await EnsureHeadUnchangedAsync(ctx, ct).ConfigureAwait(false);
 
+        var publishedFixCount = 0;
         var posted = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         foreach (var (key, threadId) in regressedThreadIds)
         {
@@ -119,7 +113,9 @@ public sealed class PublishFindingsStage(
                     ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "inline" } });
                     if (finding.AppliedFix is { } applied)
                     {
-                        ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.Deterministic, finding.RuleId));
+                        Interlocked.Increment(ref publishedFixCount);
+                        ReviewForgeTelemetry.FixesApplied.Add(
+                            1, FixTags(applied.Proposal.Origin, finding.RuleId));
                     }
                     // Mechanism A: durable per-finding record immediately after the post, so a
                     // crash before finalize never loses the fact that this finding was posted.
@@ -152,14 +148,26 @@ public sealed class PublishFindingsStage(
 
         await Task.WhenAll(inlineTasks.Concat(generalTasks)).ConfigureAwait(false);
 
+        // Re-check immediately before the sequential auto-fix writes. The initial check
+        // protects the ordinary finding posts; this one closes the TOCTOU window before
+        // live replies, commanded suggestions, and queued command replies.
+        await EnsureHeadUnchangedAsync(ctx, ct).ConfigureAwait(false);
+
         // Live-thread fixed findings: reply with the fix body (never suppressed, never
         // re-posted as a new thread).
         foreach (var (threadId, body) in liveFixedReplies)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix reply on thread {threadId}");
+            if (await AlreadyRepliedAsync(ctx, threadId, body, ct).ConfigureAwait(false))
+            {
+                logger.LogInformation("thread {ThreadId}: fix reply already posted by a previous attempt — skipping", threadId);
+                continue;
+            }
+
             await source.ReplyToThreadAsync(ctx.Pr, threadId, body, ct).ConfigureAwait(false);
             ReviewForgeTelemetry.ThreadsReplied.Add(1);
             ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.Deterministic, "existing-thread"));
+            Interlocked.Increment(ref publishedFixCount);
         }
 
         // Commanded fixes: a new suggestion thread WITHOUT a dedupe property (invisible
@@ -172,14 +180,26 @@ public sealed class PublishFindingsStage(
                 fix.Proposal.FilePath, fix.Proposal.StartLine, fix.Proposal.EndLine);
             var excerpt = ctx.FixCommands.FirstOrDefault(c => c.ThreadId == commandThreadId)?.QuotedComment
                           ?? string.Empty;
-            await source.PostSuggestionThreadAsync(
-                    ctx.Pr, anchor, CommentFormatter.FormatFixedFinding(fix.Proposal, excerpt), ct)
+            var body = CommentFormatter.FormatFixedFinding(fix.Proposal, excerpt);
+            if (await SuggestionAlreadyPostedAsync(ctx, anchor, body, ct).ConfigureAwait(false))
+            {
+                logger.LogInformation(
+                    "command thread {ThreadId}: matching suggestion already posted — skipping",
+                    commandThreadId);
+                continue;
+            }
+
+            await source.PostSuggestionThreadAsync(ctx.Pr, anchor, body, ct)
                 .ConfigureAwait(false);
+            Interlocked.Increment(ref publishedFixCount);
+            ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
+            // This guard deliberately sits after the awaited suggestion write and directly
+            // before the link reply, so a lost claim cannot add a second command-thread write.
+            PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix command link on thread {commandThreadId}");
             var link = $"Fix posted above ⤴ (suggestion for {fix.Proposal.FilePath}:{fix.Proposal.StartLine}–{fix.Proposal.EndLine}).";
             await source.ReplyToThreadAsync(ctx.Pr, commandThreadId, CommentFormatter.WithBotPreamble(link), ct)
                 .ConfigureAwait(false);
             ReviewForgeTelemetry.ThreadsReplied.Add(1);
-            ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
         }
 
         // Replies the auto-fix stage queued (declines, verifier failures, exhausted budget).
@@ -205,7 +225,7 @@ public sealed class PublishFindingsStage(
                 ctx.Pr,
                 CommentFormatter.FormatSummary(
                     ctx.RequireResult(), ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind,
-                    appliedFixCount: ctx.AppliedFixes.Count),
+                    appliedFixCount: publishedFixCount),
                 dedupeKey: null,
                 ct: ct)
             .ConfigureAwait(false);
@@ -228,6 +248,29 @@ public sealed class PublishFindingsStage(
 
     private static TagList FixTags(FixOrigin origin, string rule)
         => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
+
+    private async Task EnsureHeadUnchangedAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
+        var reviewed = ctx.RequirePullRequest().SourceCommitSha;
+        if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning("PR head changed during run ({Reviewed} → {Current}); aborting before publication",
+                reviewed, current.SourceCommitSha);
+            throw new PrHeadChangedException(reviewed, current.SourceCommitSha);
+        }
+    }
+
+    private async Task<bool> SuggestionAlreadyPostedAsync(
+        ReviewContext ctx, ThreadAnchor anchor, string body, CancellationToken ct)
+    {
+        var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
+        return threads.Any(thread =>
+            thread.Anchor is { } existingAnchor
+            && existingAnchor == anchor
+            && thread.Comments.FirstOrDefault() is {IsBot: true} first
+            && string.Equals(first.Text.Trim(), body.Trim(), StringComparison.Ordinal));
+    }
 
     /// <summary>
     /// Re-fetch the thread immediately before replying: a previous attempt or a
