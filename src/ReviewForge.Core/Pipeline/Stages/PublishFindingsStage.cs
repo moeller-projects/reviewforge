@@ -58,7 +58,7 @@ public sealed class PublishFindingsStage(
                         && liveThreadKeys.Contains(f.DedupeKey)
                         && !regressedThreadIds.ContainsKey(f.DedupeKey))
             .Select(f => (ThreadId: ctx.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
-                          Body: CommentFormatter.FormatFixedFinding(f)))
+                          Body: CommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
             .ToList();
 
         foreach (var suppressed in ctx.AcceptedFindings.Where(f => f.DedupeKey is not null && liveThreadKeys.Contains(f.DedupeKey)))

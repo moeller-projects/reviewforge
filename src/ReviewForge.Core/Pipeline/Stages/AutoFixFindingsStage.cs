@@ -196,7 +196,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             var abs = Path.Combine(repoDir, path.Replace('/', Path.DirectorySeparatorChar));
             var snapshotBytes = File.ReadAllBytes(abs);
             var snapshotLines = _LineReader(abs);
-            var editor = _EditorFactory(guard, new HashSet<string> { path, StringComparer.OrdinalIgnoreCase });
+            var editor = _EditorFactory(guard, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { path });
             var appliedAny = true;
 
             try
@@ -324,7 +324,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
             var snapshotBytes = File.ReadAllBytes(abs);
             var snapshotLines = _LineReader(abs);
-            var editor = _EditorFactory(guard, new HashSet<string> { path, StringComparer.OrdinalIgnoreCase });
+            var editor = _EditorFactory(guard, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { path });
             try
             {
                 var prompt = FixPromptBuilder.Build(command, path, anchor.StartLine, anchor.EndLine);
@@ -333,7 +333,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                         new ReviewCollector(),
                         ctx.ContextStore,
                         repoDir,
-                        new HashSet<string> { path, StringComparer.OrdinalIgnoreCase },
+                        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { path },
                         _Options.FixPassMaxIterations,
                         ct)
                     .ConfigureAwait(false);

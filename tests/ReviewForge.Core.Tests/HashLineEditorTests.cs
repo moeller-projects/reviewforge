@@ -143,7 +143,7 @@ public sealed class HashLineEditorTests : IDisposable
     {
         var before = File.ReadAllBytes(FilePath);
         var result = Editor().EditFile("src/Foo.cs",
-            [new LineEdit(H("beta"), null, null, null, "x"), new LineEdit(H("gamma"), null, null, null, "y")]);
+            [new LineEdit(H("beta"), H("gamma"), null, null, "x"), new LineEdit(H("gamma"), null, null, null, "y")]);
         Assert.Equal("edits overlap at line 3 — merge or reorder", result);
         Assert.Equal(before, File.ReadAllBytes(FilePath));
     }
@@ -166,7 +166,9 @@ public sealed class HashLineEditorTests : IDisposable
 
     [Fact]
     public void EditFile_missing_file()
-        => Assert.Equal("not found: src/ghost.cs", Editor().EditFile("src/ghost.cs", [new LineEdit("a", null, null, null, "x")]));
+        => Assert.Equal("not found: src/ghost.cs",
+            Editor(new HashSet<string> {"src/ghost.cs"}).EditFile(
+                "src/ghost.cs", [new LineEdit("a", null, null, null, "x")]));
 
     [Fact]
     public void EditFile_refuses_mixed_line_endings()

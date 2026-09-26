@@ -81,8 +81,9 @@ public static class FixCommandDetector
            || (creatorName.Length > 0
                && string.Equals(comment.AuthorName, creatorName, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>The comment being answered: our own bot thread quotes the finding body;
-    /// other threads quote the previous non-command comment.</summary>
+    /// <summary>The comment being answered: the previous non-command HUMAN comment. Bot
+    /// comments (our own findings, our own replies) are skipped — agent-authored text is
+    /// never re-ingested as prompt data. Empty when there is no human comment to quote.</summary>
     private static string Quote(ReviewThread thread)
     {
         ThreadComment? quoted = null;

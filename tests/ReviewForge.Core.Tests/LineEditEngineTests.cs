@@ -170,7 +170,7 @@ public class LineEditEngineTests
         var lines = new[] {"a", "b", "c", "d"};
         var result = LineEditEngine.Apply(
             lines,
-            [new LineEdit(H("b"), null, null, null, "x"), new LineEdit(H("c"), null, null, null, "y")],
+            [new LineEdit(H("b"), H("c"), null, null, "x"), new LineEdit(H("c"), null, null, null, "y")],
             out _);
         Assert.False(result.Success);
         Assert.Equal("edits overlap at line 3 — merge or reorder", result.Error);

@@ -51,8 +51,8 @@ public class FixPassAgentTests : IDisposable
         Assert.NotNull(change);
         Assert.Equal(1, change.Value.StartLine);
         Assert.Equal("echo \"$name\"", change.Value.Replacement);
-        // The edit is staged in the session only; nothing is on disk yet.
-        Assert.Equal("echo $name", File.ReadAllLines(Path.Combine(_Root, "script.sh"))[0]);
+        // The fix pass writes through to the checkout; the caller reverts from its snapshot.
+        Assert.Equal("echo \"$name\"", File.ReadAllLines(Path.Combine(_Root, "script.sh"))[0]);
     }
 
     [Fact]

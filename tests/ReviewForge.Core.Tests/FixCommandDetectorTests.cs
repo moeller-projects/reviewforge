@@ -122,15 +122,25 @@ public class FixCommandDetectorTests
     }
 
     [Fact]
-    public void Command_on_our_own_bot_thread_quotes_the_finding_body()
+    public void Command_on_our_own_bot_thread_skips_bot_text_and_quotes_the_human_comment()
     {
         var thread = new ReviewThread(9, "dedupe-key", ReviewThreadStatus.Active,
-            [Bot("### finding body text", 1), Author("/rf fix", 2)],
+            [Bot("### finding body text", 1), Author("please address this", 2), Author("/rf fix", 3)],
             new ThreadAnchor("src/B.cs", 8, 8));
         var commands = FixCommandDetector.Scan([thread], CreatorId, CreatorName, watermark: null);
         var command = Assert.Single(commands);
         Assert.Equal(9, command.ThreadId);
-        Assert.Equal("### finding body text", command.QuotedComment);
+        Assert.Equal("please address this", command.QuotedComment);
+    }
+
+    [Fact]
+    public void Command_on_pure_bot_thread_quotes_nothing()
+    {
+        var thread = new ReviewThread(9, "dedupe-key", ReviewThreadStatus.Active,
+            [Bot("### finding body text", 1), Author("/rf fix", 2)],
+            new ThreadAnchor("src/B.cs", 8, 8));
+        var command = Assert.Single(FixCommandDetector.Scan([thread], CreatorId, CreatorName, watermark: null));
+        Assert.Equal(string.Empty, command.QuotedComment);
     }
 
     [Fact]

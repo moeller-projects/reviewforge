@@ -9,7 +9,7 @@ namespace ReviewForge.Core.Reasoning;
 /// credentials. Extracted from <see cref="RepoReadTools"/> so that
 /// <see cref="HashLineEditor"/> applies byte-identical rules without duplication.
 /// </summary>
-internal sealed class RepoPathGuard
+public sealed class RepoPathGuard
 {
     private static readonly string[] DefaultDenyPatterns =
     [

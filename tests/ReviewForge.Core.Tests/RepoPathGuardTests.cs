@@ -58,7 +58,7 @@ public sealed class RepoPathGuardTests : IDisposable
     [Fact]
     public void Resolve_honors_custom_deny_patterns()
     {
-        var g = Guard(["\.cs$"]);
+        var g = Guard([@"\.cs$"]);
         Assert.Null(g.Resolve("src/A.cs", out var error));
         Assert.Equal("access denied: src/A.cs", error);
         // Custom patterns replace the defaults entirely.

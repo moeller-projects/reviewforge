@@ -4,6 +4,8 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.AutoFix.Fixers;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Reasoning;
 using ReviewForge.Testing;
 using Xunit;
@@ -39,7 +41,7 @@ public sealed class AutoFixStageTests : IDisposable
             Anchor = new FindingAnchor(path, line, line), DedupeKey = key,
         };
 
-    private static ReviewContext Ctx(PullRequest? pr = null)
+    private ReviewContext Ctx(PullRequest? pr = null)
         => new(Key, DateTimeOffset.UtcNow)
         {
             PullRequest = pr ?? new PullRequest(

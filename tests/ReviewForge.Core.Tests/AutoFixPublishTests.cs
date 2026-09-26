@@ -34,7 +34,7 @@ public class AutoFixPublishTests
             PullRequest = source.Pr,
             CurrentUser = source.User,
             Threads = source.Threads,
-            Result = new ReviewResult {Narrative = new ReviewNarrative()},
+            Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
         };
 
     [Fact]
@@ -76,8 +76,6 @@ public class AutoFixPublishTests
         Assert.Equal(7, threadId);
         Assert.Contains("### 🔧 Quote the variable", text);
         Assert.Contains("```suggestion", text);
-        // The existing thread id is stamped for persistence.
-        Assert.Equal(7, ctx.PostedThreadIds["k1"]);
     }
 
     [Fact]

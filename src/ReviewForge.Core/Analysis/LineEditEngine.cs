@@ -43,7 +43,8 @@ public static class LineEditEngine
         newLines = [];
         if (edits.Count == 0)
         {
-            return new EditResult(true, null, [], NewFileHash(lines));
+            newLines = [.. lines];
+            return new EditResult(true, null, [], NewFileHash(newLines));
         }
 
         // Pass 1: resolve every edit against the ORIGINAL lines. An unresolvable or

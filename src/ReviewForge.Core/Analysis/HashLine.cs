@@ -51,6 +51,6 @@ public static class HashLine
             }
         }
 
-        return crlf > lf ? "\r\n" : "\n";
+        return crlf > 0 && crlf >= lf ? "\r\n" : "\n";
     }
 }

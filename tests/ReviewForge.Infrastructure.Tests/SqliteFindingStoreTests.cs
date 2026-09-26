@@ -500,8 +500,13 @@ public class SqliteFindingStoreTests : IDisposable
     public async Task Legacy_table_without_AppliedFixJson_column_is_migrated_and_writable()
     {
         // Simulate a database created before the auto-fix feature: both tables, no
-        // AppliedFixJson column on Findings.
-        await using (var connection = new SqliteConnection(_ConnectionString))
+        // AppliedFixJson column on Findings. A separate database file — the test-class
+        // store has already EnsureCreated its own schema.
+        var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-legacy-" + Guid.NewGuid().ToString("N") + ".db");
+        var connectionString = $"Data Source={dbPath};Pooling=False";
+        try
+        {
+        await using (var connection = new SqliteConnection(connectionString))
         {
             await connection.OpenAsync();
             await using var cmd = connection.CreateCommand();
@@ -535,7 +540,7 @@ public class SqliteFindingStoreTests : IDisposable
         }
 
         // Opening the store must add the column; saving and reading back must work.
-        var legacyStore = new SqliteFindingStore(_ConnectionString);
+        var legacyStore = new SqliteFindingStore(connectionString);
         var completed = DateTimeOffset.UtcNow;
         await legacyStore.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h", ReviewKind.Full,
                 completed.AddMinutes(-5), completed, Success: true,
@@ -545,12 +550,23 @@ public class SqliteFindingStoreTests : IDisposable
         var last = await legacyStore.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.Equal("{}", Assert.Single(last!.Findings!).AppliedFixJson);
 
-        await using (var connection = new SqliteConnection(_ConnectionString))
+        await using (var connection = new SqliteConnection(connectionString))
         {
             await connection.OpenAsync();
             await using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'AppliedFixJson'";
             Assert.Equal(1L, await cmd.ExecuteScalarAsync());
+        }
+        }
+        finally
+        {
+            foreach (var suffix in new[] {"", "-wal", "-shm"})
+            {
+                if (File.Exists(dbPath + suffix))
+                {
+                    File.Delete(dbPath + suffix);
+                }
+            }
         }
     }
 }

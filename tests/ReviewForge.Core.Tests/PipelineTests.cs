@@ -1379,7 +1379,7 @@ public class StageTests : IDisposable
     }
 
     private static PullRequest Pr(string head)
-        => new(1, "t", null, head, "base", "url", false);
+        => new(1, "t", null, head, "base", "url", false, "creator-1", "PR Author");
 
     /// <summary>Returns the updated head on every fetch after the first (the stage-1 fetch).</summary>
     private sealed class HeadChangingSource(PullRequest first, PullRequest second) : FakePullRequestSource
