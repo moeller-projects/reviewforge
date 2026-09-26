@@ -243,9 +243,13 @@ public class RepoReadTools
 
                 // A symlinked file can point at a contained-but-denied target, so the deny
                 // list is re-applied to the resolved path; symlink-traversed files are
-                // refused outright (P1-15). Resolution (stat'ing) is reserved for files
-                // about to be opened; the length comes from the enumeration's FileInfo.
-                if (IsResolvedDenied(full, rootReal, rootLinks) || file.Length > _MaxGrepFileBytes)
+                // refused outright (P1-15). Resolution (per-component stat'ing) is
+                // reserved for symlinked files only: enumeration never descends into
+                // reparse-point directories, so a regular file (LinkTarget null) shares
+                // the root's outside-the-checkout prefix — it resolves to itself, and
+                // IsResolvedDenied would reduce to the lexical IsDenied already applied.
+                if ((file.LinkTarget is not null && IsResolvedDenied(full, rootReal, rootLinks))
+                    || file.Length > _MaxGrepFileBytes)
                 {
                     continue; // resolved-denied, symlinked, or oversized/generated output
                 }
