@@ -575,6 +575,85 @@ public sealed class HashLineEditorTests : IDisposable
         Assert.Empty(Directory.GetFiles(directory, ".rf-edit-*.tmp"));
     }
 
+    [Fact]
+    public void ReadFileWithHashes_reuses_hashes_while_file_is_unchanged()
+    {
+        var editor = Editor();
+        var hashCalls = 0;
+        editor.HashFunction = line =>
+        {
+            hashCalls++;
+            return HashLine.Of(line);
+        };
+
+        var first = editor.ReadFileWithHashes("src/Foo.cs");
+        var callsAfterFirstRead = hashCalls;
+        Assert.Equal(4, callsAfterFirstRead);
+        Assert.Contains($"1 {H("alpha")}: alpha", first);
+
+        // Second read of the byte-identical file: same output, zero new hash computations.
+        var second = editor.ReadFileWithHashes("src/Foo.cs");
+        Assert.Equal(first, second);
+        Assert.Equal(callsAfterFirstRead, hashCalls);
+    }
+
+    [Fact]
+    public void ReadFileWithHashes_recomputes_hashes_after_external_modification()
+    {
+        var editor = Editor();
+        var hashCalls = 0;
+        editor.HashFunction = line =>
+        {
+            hashCalls++;
+            return HashLine.Of(line);
+        };
+
+        editor.ReadFileWithHashes("src/Foo.cs");
+        var callsBeforeChange = hashCalls;
+
+        File.WriteAllText(FilePath, "alpha\nbeta\ngamma\ndelta!\n");
+        var output = editor.ReadFileWithHashes("src/Foo.cs");
+        Assert.Contains($"4 {H("delta!")}: delta!", output);
+        Assert.True(hashCalls > callsBeforeChange);
+    }
+
+    [Fact]
+    public void EditFile_reuses_cached_hashes_and_invalidates_after_apply()
+    {
+        var editor = Editor();
+        var hashCalls = 0;
+        editor.HashFunction = line =>
+        {
+            hashCalls++;
+            return HashLine.Of(line);
+        };
+
+        // Prime the cache: 4 lines hashed once.
+        editor.ReadFileWithHashes("src/Foo.cs");
+        var callsAfterRead = hashCalls;
+        Assert.Equal(4, callsAfterRead);
+
+        // EditFile resolves against the cached hashes: no per-line recomputation
+        // (NewFileHash still hashes the joined result once, outside the per-line cache).
+        editor.EditFile("src/Foo.cs", [new LineEdit(H("beta"), null, null, null, "BETA")]);
+        Assert.Equal(callsAfterRead + 1, hashCalls);
+
+        // The edit invalidated the cache: the next read recomputes all line hashes.
+        editor.ReadFileWithHashes("src/Foo.cs");
+        Assert.Equal(callsAfterRead + 1 + 4, hashCalls);
+    }
+
+    [Fact]
+    public void EditFile_still_detects_stale_hash_after_unchanged_reread()
+    {
+        var editor = Editor();
+        editor.ReadFileWithHashes("src/Foo.cs");
+        editor.ReadFileWithHashes("src/Foo.cs");
+        Assert.Equal(
+            $"hash {H("nope")} not present in src/Foo.cs — the file changed since your last read; re-read and retry",
+            editor.EditFile("src/Foo.cs", [new LineEdit(H("nope"), null, null, null, "x")]));
+    }
+
     private static void AssertStablePathRejected(HashLineEditor editor, string rel, string full, string expected)
     {
         var method = typeof(HashLineEditor).GetMethod(
@@ -591,7 +670,7 @@ public sealed class HashLineEditorTests : IDisposable
             "ReadRawLines",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         var result = method.Invoke(editor, [rel, full])!;
-        return (string?)result.GetType().GetField("Item2")!.GetValue(result);
+        return (string?)result.GetType().GetField("Item3")!.GetValue(result);
     }
 
     private static void InvokeWriteAtomic(HashLineEditor editor, string rel, string full, object value)
