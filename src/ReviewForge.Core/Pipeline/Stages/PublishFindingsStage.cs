@@ -28,6 +28,12 @@ public sealed class PublishFindingsStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        // Cancelled-before-first-write: a shutdown mid-reasoning must not leave a partial
+        // publish behind. Once the first write below has happened the stage prefers
+        // completing its dedupe-safe writes over aborting mid-set (AlreadyReplied checks
+        // make a re-run safe, but a clean run is cheaper than a recovered one).
+        ct.ThrowIfCancellationRequested();
+
         // Mechanism B: never re-post a finding that already has a live bot thread. The ADO
         // thread properties (ReviewForge.DedupeKey) are the cross-run source of truth and
         // survive a lost/corrupt local store. Fixed/Closed threads do not suppress — a

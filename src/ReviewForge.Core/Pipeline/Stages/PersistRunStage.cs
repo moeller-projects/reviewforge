@@ -20,6 +20,10 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        // Checked for symmetry with stages 8/9: a cancel requested before the finalize
+        // write must not persist a run the publish stages never ran.
+        ct.ThrowIfCancellationRequested();
+
         var findings = AppliedFixPersistence.BuildFinalRows(
             ctx, key => ctx.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
 

@@ -1225,6 +1225,51 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Triage_threads_with_pre_cancelled_token_writes_nothing()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult { Narrative = new ReviewNarrative(), Findings = [], Uncertainties = [] };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance)
+                .ExecuteAsync(ctx, new CancellationToken(canceled: true)));
+
+        Assert.Empty(source.Replies);
+        Assert.Empty(source.StatusChanges);
+    }
+
+    [Fact]
+    public async Task Publish_findings_with_pre_cancelled_token_writes_nothing()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var ctx = Ctx(source);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, new CancellationToken(canceled: true)));
+
+        Assert.Empty(source.PostedFindings);
+        Assert.Empty(source.GeneralComments);
+        Assert.Empty(source.Votes);
+        Assert.Empty(store.ThreadIdBackfills);
+        Assert.Empty(store.Runs);
+    }
+
+    [Fact]
+    public async Task Persist_run_with_pre_cancelled_token_saves_nothing()
+    {
+        var store = new FakeFindingStore();
+        var ctx = Ctx();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new PersistRunStage(store).ExecuteAsync(ctx, new CancellationToken(canceled: true)));
+
+        Assert.Empty(store.Runs);
+    }
+
+    [Fact]
     public async Task Triage_throws_when_claim_lost_before_writes()
     {
         var source = new FakePullRequestSource();

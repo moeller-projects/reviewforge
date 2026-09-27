@@ -9,6 +9,10 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// auto-resolve findings that no longer reproduce, flag unanswered threads for humans.
 /// Guarded by the publish claim before any external write.
 /// </summary>
+/// <remarks>Cancellation is checked at stage entry (before the first external write) so a
+/// shutdown requested during reasoning can never produce a partially published PR. Writes
+/// that have already started are finished rather than abandoned — the already-replied
+/// checks make a re-run safe, but a clean run is cheaper than a recovered one.</remarks>
 public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<TriageThreadsStage> logger) : IReviewStage
 {
     public string Name => "triage-threads";
@@ -17,6 +21,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before triage");
 
         var botThreads = ctx.Threads.Where(t => t.DedupeKey is not null).ToList();
