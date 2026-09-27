@@ -115,6 +115,21 @@ public sealed class NativeReviewAgent(
         CancellationToken ct)
         => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, null, ct);
 
+    /// <summary>Runs the review agent on the full tier. Exact pre-tier-arrival signature,
+    /// preserved so already-compiled callers do not lose the method (an optional parameter
+    /// added in place would break binary compatibility).</summary>
+    public Task<ReviewResult> RunAsync(
+        string userPrompt,
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        RuleBook? ruleBook,
+        IReadOnlySet<string>? changedFiles,
+        DiffIndex? diff,
+        IReadOnlySet<string>? resolvedKeys,
+        CancellationToken ct)
+        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, resolvedKeys, ct, ChatTier.Full);
+
     /// <summary>Runs the review agent on <paramref name="tier"/>: follow-up reviews route to
     /// the cheaper/faster model when one is configured, full reviews to the strong model.</summary>
     public async Task<ReviewResult> RunAsync(
@@ -127,7 +142,7 @@ public sealed class NativeReviewAgent(
         DiffIndex? diff,
         IReadOnlySet<string>? resolvedKeys,
         CancellationToken ct,
-        ChatTier tier = ChatTier.Full)
+        ChatTier tier)
     {
         var usage = new TokenUsage();
         var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, resolvedKeys, tier);

@@ -12,9 +12,10 @@ public enum ChatTier
     Fast,
 }
 
-/// <summary>Builds the model client for the configured reasoning provider. All members are
-/// tier-based; implementations alias <see cref="ChatTier.Fast"/> to <see cref="ChatTier.Full"/>
-/// when no fast model is configured — identical behavior, zero config.</summary>
+/// <summary>Builds the model client for the configured reasoning provider. Callers pick a
+/// <see cref="ChatTier"/> explicitly: follow-up reviews and fix passes use
+/// <see cref="ChatTier.Fast"/> (aliasing <see cref="ChatTier.Full"/> when no fast model is
+/// configured), full reviews use <see cref="ChatTier.Full"/>.</summary>
 public interface IChatClientFactory
 {
     /// <summary>Model id for <paramref name="tier"/> (without any provider routing prefix).</summary>
