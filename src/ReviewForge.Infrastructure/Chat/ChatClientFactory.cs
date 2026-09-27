@@ -37,7 +37,11 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     private readonly LlmGovernor? _Governor;
 
     public string ModelName(ChatTier tier)
-        => ResolveModelName(tier == ChatTier.Fast && _Options.FollowUpModel is { } fast ? fast : _Options.Model);
+        // Whitespace FollowUpModel counts as UNSET here and in Create(Fast): a blank value
+        // must alias the Full tier (blank ModelId would go out on the Full client otherwise).
+        => ResolveModelName(tier == ChatTier.Fast && !string.IsNullOrWhiteSpace(_Options.FollowUpModel)
+            ? _Options.FollowUpModel!
+            : _Options.Model);
 
     public IChatClient Create(ChatTier tier)
     {

@@ -659,7 +659,7 @@ public class StageTests : IDisposable
         Assert.NotNull(finding.DedupeKey);
         // Downstream stages consume ctx.Result, not the collector: the finding must survive
         // into the synthetic trivial result or validate/publish would never see it.
-        var resultFinding = Assert.Single(ctx.Result.Findings);
+        var resultFinding = Assert.Single(ctx.Result!.Findings);
         Assert.Equal(finding.DedupeKey, resultFinding.DedupeKey);
     }
 

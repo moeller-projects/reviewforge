@@ -45,6 +45,11 @@ public sealed class ChatProviderOptions : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
+        if (string.IsNullOrWhiteSpace(Model))
+        {
+            yield break; // [Required] reports a missing Model cleanly; nothing to cross-check
+        }
+
         if (!string.IsNullOrWhiteSpace(FollowUpModel)
             && !string.Equals(ProviderPrefix(FollowUpModel), ProviderPrefix(Model), StringComparison.Ordinal))
         {

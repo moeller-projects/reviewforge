@@ -23,6 +23,11 @@ public static class SystemPromptComposer
     // kind prefix separates review and fix-pass compositions of the same file.
     private static readonly ConcurrentDictionary<string, Lazy<string>> Cache = new(StringComparer.Ordinal);
 
+    // Repeated override edits or rulebook churn would otherwise grow the process-wide
+    // cache forever; clearing is safe because memoization is an optimization — entries
+    // re-compose on demand.
+    private const int CacheCap = 64;
+
     public static string Compose(string? overridePath = null, RuleBook? ruleBook = null)
         => Memoized("review", overridePath, ruleBook?.VersionHash, () => ComposeCore(overridePath, ruleBook));
 
@@ -35,6 +40,10 @@ public static class SystemPromptComposer
         var lazy = Cache.GetOrAdd(
             key,
             _ => new Lazy<string>(compose, LazyThreadSafetyMode.ExecutionAndPublication));
+        if (Cache.Count > CacheCap)
+        {
+            Cache.Clear();
+        }
         try
         {
             return lazy.Value;

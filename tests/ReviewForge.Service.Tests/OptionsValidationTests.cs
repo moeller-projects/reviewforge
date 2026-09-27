@@ -109,7 +109,7 @@ public class OptionsValidationTests
         var ex = Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
 
-        Assert.Contains("WorkerCount must be at least 1", ex.Message);
+        Assert.Contains("WorkerCount must be between 1 and 64", ex.Message);
     }
 
     [Fact]
@@ -173,6 +173,17 @@ public class OptionsValidationTests
 
         Assert.Equal("openai-codex:gpt-5.6-luna-mini",
             provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value.FollowUpModel);
+    }
+
+    [Fact]
+    public void Absent_followup_model_validates()
+    {
+        // Regression: the prefix cross-check used to NRE when FollowUpModel was absent —
+        // the unset case is the byte-identical default and must pass validation cleanly.
+        using var provider = Build(ValidConfig());
+
+        var options = provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
+        Assert.Null(options.FollowUpModel);
     }
 
     [Fact]

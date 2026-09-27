@@ -169,6 +169,32 @@ public class ChatClientFactoryTests
         }
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Fast_tier_aliases_full_when_followup_model_is_blank(string? followUpModel)
+    {
+        // ModelName(Fast) and Create(Fast) must agree on "unset": a blank FollowUpModel
+        // aliases the Full tier — never a blank ModelId on the Full client.
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var factory = new ChatClientFactory(new ChatProviderOptions
+            {
+                Provider = "openai", Model = "gpt-5", FollowUpModel = followUpModel,
+            });
+
+            Assert.Equal("gpt-5", factory.ModelName(ChatTier.Fast));
+            Assert.Same(factory.Create(ChatTier.Full), factory.Create(ChatTier.Fast));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
     [Fact]
     public void Fast_tier_uses_distinct_client_and_model_when_followup_configured()
     {
