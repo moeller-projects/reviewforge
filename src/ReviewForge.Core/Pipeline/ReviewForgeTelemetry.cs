@@ -52,6 +52,8 @@ public static class ReviewForgeTelemetry
     // ---- LLM usage ----
     public static readonly Counter<long> LlmTokens =
         Meter.CreateCounter<long>("reviewforge.llm.tokens_total", "{token}"); // tags: token_type, model
+    public static readonly Counter<long> LlmCachedTokens =
+        Meter.CreateCounter<long>("reviewforge.llm.tokens.cached_total", "{token}"); // tags: model
     public static readonly Counter<long> LlmRequests =
         Meter.CreateCounter<long>("reviewforge.llm.requests_total");           // tags: model
 

@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -224,6 +225,19 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var pipeline = (IChatClient)createPipeline.Invoke(agent, [collector, usage])!;
         var updates = new List<ChatResponseUpdate>();
 
+        long cached = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Name == "reviewforge.llm.tokens.cached_total")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
+            Interlocked.Add(ref cached, measurement));
+        listener.Start();
+
         await foreach (var update in pipeline.GetStreamingResponseAsync(
                            [new ChatMessage(ChatRole.User, "stream")]))
         {
@@ -235,6 +249,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
         Assert.Equal(1, (int)tokenUsageType.GetProperty("Turns")!.GetValue(usage)!);
         Assert.Equal(4, (long)tokenUsageType.GetProperty("InputTokens")!.GetValue(usage)!);
         Assert.Equal(3, (long)tokenUsageType.GetProperty("OutputTokens")!.GetValue(usage)!);
+        Assert.Equal(2, Interlocked.Read(ref cached)); // CachedInputTokenCount surfaced by the provider
     }
 
     private static string Echo(string value) => "echo:" + value;
@@ -259,6 +274,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
                     InputTokenCount = 4,
                     OutputTokenCount = 3,
                     TotalTokenCount = 7,
+                    CachedInputTokenCount = 2,
                 })]);
         }
 

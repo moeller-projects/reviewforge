@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
+using ReviewForge.Core.Reasoning.Rules;
 using Xunit;
 
 namespace ReviewForge.Core.Tests;
@@ -672,6 +673,36 @@ public class PromptBuilderTests
             """;
         Assert.Equal(expected, prompt);
     }
+
+    [Fact]
+    public void Build_is_byte_identical_across_invocations_and_diff_is_the_last_section()
+    {
+        var input = BaseInput() with
+        {
+            WorkItems = [new WorkItem(1, "Add rate limit", "User Story", "Limit requests", "Given 100 rps when exceeded then 429", "Active")],
+            PendingReplies = [new PendingReply(9, "rule/x:file.cs:abc", "alice", "please fix")],
+            DiffText = "+++ b/src/A.cs\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+            Enrichment = "graph: 1 node",
+            ContextNames = ["crg"],
+        };
+
+        var first = PromptBuilder.Build(input);
+        var second = PromptBuilder.Build(input);
+        Assert.Equal(first, second); // ordinal equality — the per-run tail is the only variance
+
+        // Prompt-cache contract: per-run content must not migrate above the diff section,
+        // so the expensive prefix stays byte-identical across requests.
+        var diffIndex = first.IndexOf("## Unified diff (base → head)", StringComparison.Ordinal);
+        Assert.True(diffIndex > 0);
+        foreach (var sectionStart in first
+                     .Split('\n')
+                     .Select((line, index) => (line, index))
+                     .Where(t => t.line.StartsWith("## ", StringComparison.Ordinal)))
+        {
+            Assert.True(sectionStart.index <= diffIndex,
+                $"section '{sectionStart.line}' appears after the diff — the stable-prefix contract is broken");
+        }
+    }
 }
 
 public class SystemPromptComposerTests
@@ -700,6 +731,75 @@ public class SystemPromptComposerTests
         try
         {
             Assert.Equal("custom prompt", SystemPromptComposer.Compose(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Compose_is_byte_identical_across_invocations_with_same_inputs()
+    {
+        var book = new RuleBookComposer().Compose(["a.cs"], []);
+
+        var first = SystemPromptComposer.Compose(ruleBook: book);
+        var second = SystemPromptComposer.Compose(ruleBook: new RuleBookComposer().Compose(["a.cs"], []));
+
+        Assert.Equal(first, second); // ordinal string equality — byte-identical prefix
+    }
+
+    [Fact]
+    public void Compose_invalidates_memo_when_override_file_changes()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".md");
+        File.WriteAllText(path, "prompt v1");
+        try
+        {
+            Assert.Equal("prompt v1", SystemPromptComposer.Compose(path));
+
+            File.WriteAllText(path, "prompt v2");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1)); // deterministic mtime bump
+            Assert.Equal("prompt v2", SystemPromptComposer.Compose(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Compose_fault_does_not_poison_the_cache()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".md");
+        try
+        {
+            Assert.ThrowsAny<IOException>(() => SystemPromptComposer.Compose(path));
+
+            File.WriteAllText(path, "arrived late");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1));
+            Assert.Equal("arrived late", SystemPromptComposer.Compose(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ComposeFixPass_memoizes_and_follows_override_edits()
+    {
+        var embedded = SystemPromptComposer.ComposeFixPass();
+        Assert.Equal(embedded, SystemPromptComposer.ComposeFixPass());
+
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".md");
+        File.WriteAllText(path, "fix v1");
+        try
+        {
+            Assert.Equal("fix v1", SystemPromptComposer.ComposeFixPass(path));
+            File.WriteAllText(path, "fix v2");
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1));
+            Assert.Equal("fix v2", SystemPromptComposer.ComposeFixPass(path));
         }
         finally
         {

@@ -244,6 +244,14 @@ public sealed class NativeReviewAgent(
                 ReviewForgeTelemetry.LlmTokens.Add(outputTokens, new TagList { { "token_type", "output" }, { "model", model } });
             }
 
+            // Prompt-cache measurement: emitted only when the provider reports cached
+            // input tokens — absence means "unsupported/unknown", never zero-spam.
+            var cachedTokens = response.Usage?.CachedInputTokenCount ?? 0;
+            if (cachedTokens > 0)
+            {
+                ReviewForgeTelemetry.LlmCachedTokens.Add(cachedTokens, new TagList { { "model", model } });
+            }
+
             logger?.LogDebug(
                 "llm call: iteration tokens in={InputTokens} out={OutputTokens} elapsed={ElapsedMs}ms toolCalls={ToolCallCount}",
                 response.Usage?.InputTokenCount ?? 0, response.Usage?.OutputTokenCount ?? 0,
@@ -273,6 +281,13 @@ public sealed class NativeReviewAgent(
                 foreach (var usageContent in update.Contents.OfType<UsageContent>())
                 {
                     usage.Add(usageContent.Details);
+                    var cachedTokens = usageContent.Details?.CachedInputTokenCount ?? 0;
+                    if (cachedTokens > 0)
+                    {
+                        ReviewForgeTelemetry.LlmCachedTokens.Add(
+                            cachedTokens,
+                            new TagList { { "model", options?.ModelId ?? "default" } });
+                    }
                 }
 
                 yield return update;
