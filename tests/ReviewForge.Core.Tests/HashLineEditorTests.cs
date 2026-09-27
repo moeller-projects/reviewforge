@@ -633,14 +633,15 @@ public sealed class HashLineEditorTests : IDisposable
         var callsAfterRead = hashCalls;
         Assert.Equal(4, callsAfterRead);
 
-        // EditFile resolves against the cached hashes: no per-line recomputation
-        // (NewFileHash still hashes the joined result once, outside the per-line cache).
+        // EditFile resolves against the cached hashes: no per-line recomputation. (The
+        // result's NewFileHash is a whole-file hash computed inside LineEditEngine via
+        // HashLine.Of directly — it never routes through the per-line HashFunction seam.)
         editor.EditFile("src/Foo.cs", [new LineEdit(H("beta"), null, null, null, "BETA")]);
-        Assert.Equal(callsAfterRead + 1, hashCalls);
+        Assert.Equal(callsAfterRead, hashCalls);
 
         // The edit invalidated the cache: the next read recomputes all line hashes.
         editor.ReadFileWithHashes("src/Foo.cs");
-        Assert.Equal(callsAfterRead + 1 + 4, hashCalls);
+        Assert.Equal(callsAfterRead + 4, hashCalls);
     }
 
     [Fact]

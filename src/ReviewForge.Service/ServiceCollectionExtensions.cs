@@ -44,7 +44,10 @@ public static class ServiceCollectionExtensions
         }
         else
         {
-            services.AddSingleton<IReviewQueue, ReviewQueue>();
+            // Concrete registration is the test seam for queue-failure behavior
+            // (ReviewQueue.Complete); production traffic only resolves IReviewQueue.
+            services.AddSingleton<ReviewQueue>();
+            services.AddSingleton<IReviewQueue>(sp => sp.GetRequiredService<ReviewQueue>());
         }
 
         // Runtime directories are created once at composition time; the per-run pipeline

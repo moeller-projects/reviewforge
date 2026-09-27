@@ -61,12 +61,16 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Wal_mode_uses_synchronous_normal()
+    public async Task Wal_mode_applies_synchronous_normal_to_store_connections()
     {
         await _Store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
 
+        // synchronous is a per-connection pragma — unlike journal_mode it is NOT persisted
+        // in the file, so a raw connection shows the SQLite default (FULL=2). The contract
+        // is that connections going through the store's interceptor carry NORMAL(1).
         await using var connection = new SqliteConnection(_ConnectionString);
         await connection.OpenAsync();
+        new SqliteConnectionPragmasInterceptor(journalMode: StoreJournalMode.Wal).ApplyPragmas(connection);
         await using var command = new SqliteCommand("PRAGMA synchronous", connection);
         Assert.Equal(1L, Assert.IsType<long>(await command.ExecuteScalarAsync()));
     }
