@@ -35,4 +35,11 @@ public interface IGitOps
     /// <summary>Ensures both commits are present in the checkout, fetching them by SHA
     /// directly from the authoritative clone URL when targeted fetch is enabled.</summary>
     Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct);
+
+    /// <summary>Speculative prefetch of base/head commits into the shared bare mirror so a
+    /// later acquire skips the origin fetch. The mirror may not exist yet — implementations
+    /// create it under the SAME per-mirror lock that guards checkout acquisition, so warmup
+    /// never races a clone/fetch of the same repository. Warmup is an optimization: failure
+    /// must not affect the run, whose own clone/fetch remains the correctness path.</summary>
+    Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct);
 }

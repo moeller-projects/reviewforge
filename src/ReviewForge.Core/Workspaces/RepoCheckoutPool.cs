@@ -309,11 +309,12 @@ public sealed class RepoCheckoutPool
 
     /// <summary>
     /// Best-effort prefetch of base/head commits into the shared mirror so a later acquire's
-    /// clone skips the origin fetch. Throws on failure; callers swallow — the run's own
-    /// fetch remains the correctness path.
+    /// clone skips the origin fetch. The adapter creates the mirror under its own per-mirror
+    /// lock when this repo has never been checked out. Throws on failure; callers swallow —
+    /// the run's own fetch remains the correctness path.
     /// </summary>
     public Task WarmupAsync(string repositoryId, string cloneUrl, string baseSha, string headSha, CancellationToken ct)
-        => _Git.EnsureCommitsAsync(MirrorPath(repositoryId), cloneUrl, baseSha, headSha, _Pat, ct);
+        => _Git.WarmupMirrorAsync(MirrorPath(repositoryId), cloneUrl, baseSha, headSha, _Pat, ct);
 
     /// <summary>Records that a sweep warmup completed for this head; the next acquire tags
     /// its duration measurement as warmed (one-shot attribution).</summary>

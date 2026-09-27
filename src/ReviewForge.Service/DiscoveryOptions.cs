@@ -23,7 +23,7 @@ public sealed class DiscoveryOptions
     /// behavior. Keep low (2–4) on PATs shared with other tooling; default 8 stays far
     /// below ADO per-user throttling limits.
     /// </summary>
-    public int MaxDegreeOfParallelism { get; init; } = 8;
+    public int MaxDegreeOfParallelism { get; init; } = 4;
 
     /// <summary>Concurrent warmups during a sweep; bounded so prefetch traffic stays modest
     /// on PATs shared with other tooling.</summary>

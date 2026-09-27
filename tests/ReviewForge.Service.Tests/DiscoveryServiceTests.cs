@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
 using Microsoft.Extensions.Time.Testing;
@@ -569,8 +570,8 @@ public class DiscoverySweepWorkerTests
         var report = await service.RunSweepAsync(CancellationToken.None);
 
         Assert.Equal(2, report.Enqueued.Count);
-        Assert.Equal(2, git.EnsureCalls.Count);
-        Assert.All(git.EnsureCalls, c =>
+        Assert.Equal(2, git.WarmupCalls.Count);
+        Assert.All(git.WarmupCalls, c =>
         {
             Assert.Contains($"{Path.DirectorySeparatorChar}mirror{Path.DirectorySeparatorChar}", c.Path);
             Assert.Equal("url", c.CloneUrl);
@@ -596,7 +597,7 @@ public class DiscoverySweepWorkerTests
         var report = await service.RunSweepAsync(CancellationToken.None);
 
         Assert.Single(report.Enqueued);
-        Assert.Empty(git.EnsureCalls);
+        Assert.Empty(git.WarmupCalls);
     }
 
     [Fact]
@@ -616,13 +617,13 @@ public class DiscoverySweepWorkerTests
 
         await service.RunSweepAsync(CancellationToken.None);
 
-        Assert.Equal(2, git.EnsureCalls.Count);
+        Assert.Equal(2, git.WarmupCalls.Count);
     }
 
     [Fact]
     public async Task Warmup_failure_does_not_fail_the_sweep()
     {
-        var git = new RecordingGitOps { ThrowOnEnsure = true };
+        var git = new RecordingGitOps { ThrowOnWarmup = true };
         var pool = NewPool(git);
         var source = new FakePullRequestSource
         {
@@ -638,7 +639,7 @@ public class DiscoverySweepWorkerTests
 
         // The run's own fetch remains the correctness path; the enqueue is unaffected.
         Assert.Single(report.Enqueued);
-        Assert.Single(git.EnsureCalls);
+        Assert.Single(git.WarmupCalls);
     }
 
     [Fact]
@@ -651,7 +652,6 @@ public class DiscoverySweepWorkerTests
             Assert.False(string.IsNullOrEmpty(lease.Path));
         }
 
-        var callsAfterAcquire = git.EnsureCalls.Count;
         var source = new FakePullRequestSource
         {
             OpenPullRequests = [Candidate(1)], // head "head", repository "r" — the acquired key
@@ -665,7 +665,7 @@ public class DiscoverySweepWorkerTests
         var report = await service.RunSweepAsync(CancellationToken.None);
 
         Assert.Single(report.Enqueued);
-        Assert.Equal(callsAfterAcquire, git.EnsureCalls.Count); // sweep added no warmups
+        Assert.Empty(git.WarmupCalls); // checkout already existed: nothing to prefetch
     }
 
     private static RepoCheckoutPool NewPool(RecordingGitOps git)
@@ -673,16 +673,57 @@ public class DiscoverySweepWorkerTests
 
     private sealed class RecordingGitOps : FakeGitOps
     {
-        public List<(string Path, string CloneUrl, string Base, string Head)> EnsureCalls { get; } = [];
-        public bool ThrowOnEnsure { get; init; }
+        public List<(string Path, string CloneUrl, string Base, string Head)> WarmupCalls { get; } = [];
+        public bool ThrowOnWarmup { get; init; }
 
-        public override Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+        public override Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
         {
-            EnsureCalls.Add((repoPath, cloneUrl, baseSha, headSha));
-            return ThrowOnEnsure
+            WarmupCalls.Add((mirrorPath, cloneUrl, baseSha, headSha));
+            return ThrowOnWarmup
                 ? throw new InvalidOperationException("warmup boom")
-                : base.EnsureCommitsAsync(repoPath, cloneUrl, baseSha, headSha, pat, ct);
+                : base.WarmupMirrorAsync(mirrorPath, cloneUrl, baseSha, headSha, pat, ct);
         }
+    }
+
+    [Fact]
+    public async Task Enqueue_throw_rolls_back_claim_and_tracker_entry()
+    {
+        // A durable queue can throw from TryEnqueue (database/I/O/constraint): the
+        // candidate must be reported as a plain skip, with no orphan claim and no
+        // permanent Queued tracker entry for a run that never entered the queue.
+        var queue = new ThrowingQueue();
+        var tracker = new RunTracker();
+        var claims = new InFlightClaims();
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), queue, tracker,
+            claims, new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Contains(report.Skipped, s => s.Reason == "enqueue failed");
+        Assert.Empty(tracker.Snapshot()); // nothing left Running/Queued
+    }
+
+    private sealed class ThrowingQueue : IReviewQueue
+    {
+        public int Capacity => 100;
+        public int ApproximateDepth => 0;
+        public EnqueueResult TryEnqueue(ReviewRequest request) => throw new InvalidOperationException("db down");
+        public async IAsyncEnumerable<ReviewRequest> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public void Acknowledge(Guid runId) { }
+        public bool RenewClaim(Guid runId) => true;
+        public ReviewRequest? TryGetQueued(Guid runId) => null;
     }
 
     [Fact]

@@ -308,6 +308,8 @@ public class FakeGitOps : IGitOps
     public string RepoDir { get; set; } = Path.Combine(Path.GetTempPath(), "reviewforge-fake-repo");
     public List<string> Checkouts { get; } = [];
     public List<(string Base, string Head)> EnsuredCommits { get; } = [];
+
+    public List<(string MirrorPath, string Base, string Head)> Warmups { get; } = [];
     public TimeSpan CloneDelay { get; set; }
     public int MaxConcurrentClones => _MaxConcurrentClones;
 
@@ -350,6 +352,16 @@ public class FakeGitOps : IGitOps
         lock (_Gate)
         {
             EnsuredCommits.Add((baseSha, headSha));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public virtual Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+    {
+        lock (_Gate)
+        {
+            Warmups.Add((mirrorPath, baseSha, headSha));
         }
 
         return Task.CompletedTask;

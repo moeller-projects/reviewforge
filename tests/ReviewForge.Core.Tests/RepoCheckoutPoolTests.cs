@@ -701,5 +701,18 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         }
 
         public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null) => Task.FromResult(string.Empty);
+
+        public Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+        {
+            lock (_Gate)
+            {
+                Calls.Add("warmup");
+                EnsuredCommits.Add((baseSha, headSha));
+            }
+
+            return ThrowOnEnsure
+                ? Task.FromException(new IOException("warmup failed"))
+                : Task.CompletedTask;
+        }
     }
 }

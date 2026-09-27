@@ -226,12 +226,28 @@ public sealed class DiscoveryService(
                 // Track-then-enqueue (P2-25): Queued is recorded before the channel write so a
                 // fast worker can never resurrect a finished run with a stale write.
                 tracker.Set(runId, candidate.Key, RunState.Queued);
-                var result = queue.TryEnqueue(new ReviewRequest(
-                    runId,
-                    candidate.Key,
-                    _Clock.GetUtcNow(),
-                    Activity.Current?.Context,
-                    candidate.Pr.SourceCommitSha));
+                EnqueueResult result;
+                try
+                {
+                    result = queue.TryEnqueue(new ReviewRequest(
+                        runId,
+                        candidate.Key,
+                        _Clock.GetUtcNow(),
+                        Activity.Current?.Context,
+                        candidate.Pr.SourceCommitSha));
+                }
+                catch (Exception ex)
+                {
+                    // A durable queue can throw on database/I/O/constraint failures. The
+                    // claim and tracker entry were already recorded but no queue item
+                    // exists — roll both back so the candidate is not stuck "Queued"
+                    // forever and no orphan claim blocks the PR.
+                    tracker.Remove(runId);
+                    claims.Release(candidate.Key, runId);
+                    logger?.LogWarning(ex, "enqueue for {Pr} failed; claim and tracker entry rolled back", candidate.Key);
+                    Skip(candidate.Key, "enqueue failed");
+                    return;
+                }
                 if (!result.Accepted)
                 {
                     tracker.Remove(runId);
