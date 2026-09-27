@@ -77,7 +77,7 @@ public sealed class ArchitectureTests
         Assert.True(unexpected.Length == 0, $"Unexpected Ports types: {string.Join(", ", unexpected)}");
 
         AssertRule(Types.InAssembly(Core)
-            .That().ResideInNamespace("ReviewForge.Core.Ports", true)
+            .That().ResideInNamespaceStartingWith("ReviewForge.Core.Ports")
             .ShouldNot().HaveDependencyOnAny(
                 "LibGit2Sharp", "Microsoft.EntityFrameworkCore", "Microsoft.AspNetCore",
                 "Microsoft.TeamFoundationServer", "Microsoft.VisualStudio.Services", "System.Net.Http")
