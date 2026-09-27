@@ -150,6 +150,8 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(DiscoveryOptions.SectionName))
             .ValidateDataAnnotations()
             .Validate(o => o.MaxEnqueuesPerSweep >= 1, "Discovery:MaxEnqueuesPerSweep must be at least 1")
+            .Validate(o => o.MaxDegreeOfParallelism is >= 1 and <= 16,
+                "Discovery:MaxDegreeOfParallelism must be between 1 and 16")
             .Validate(o => o.FailureBackoffBase > TimeSpan.Zero, "Discovery:FailureBackoffBase must be greater than 0")
             .Validate(o => o.FailureBackoffMax >= o.FailureBackoffBase, "Discovery:FailureBackoffMax must be at least FailureBackoffBase")
             .ValidateOnStart();

@@ -463,6 +463,87 @@ public class DiscoverySweepWorkerTests
             "main", "alice", "Alice");
 
     [Fact]
+    public async Task Faulting_candidate_is_isolated_as_a_skip_and_others_still_enqueue()
+    {
+        var source = new FaultingWorkItemsSource(faultPrId: 1)
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        // The sweep itself succeeds; the faulting candidate is a skip, never a sweep failure.
+        var faulted = Assert.Single(report.Skipped, s => s.Pr.PrId == 1);
+        Assert.StartsWith("error:", faulted.Reason, StringComparison.Ordinal);
+        Assert.Equal(new PrKey("o", "p", "r", 2), Assert.Single(report.Enqueued));
+    }
+
+    [Fact]
+    public async Task Report_ordering_is_deterministic_regardless_of_completion_order()
+    {
+        // Sweep A gates PR 2's work-item fetch behind PR 1's; sweep B swaps the gate. The
+        // completion order differs, so an order leak would surface as differing reports.
+        var reportA = await RunGatedSweepAsync(gatedPrId: 2, releasePrId: 1);
+        var reportB = await RunGatedSweepAsync(gatedPrId: 1, releasePrId: 2);
+
+        Assert.Equal(
+            reportA.Enqueued.Select(k => k.PrId).ToList(),
+            reportB.Enqueued.Select(k => k.PrId).ToList());
+        Assert.Equal(
+            reportA.Skipped.Select(s => (s.Pr.PrId, s.Reason)).ToList(),
+            reportB.Skipped.Select(s => (s.Pr.PrId, s.Reason)).ToList());
+        Assert.True(reportA.Enqueued.Select(k => k.PrId).SequenceEqual(reportA.Enqueued.Select(k => k.PrId).OrderBy(id => id)));
+    }
+
+    private static async Task<DiscoveryReport> RunGatedSweepAsync(int gatedPrId, int releasePrId)
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new GatedWorkItemsSource(async key =>
+        {
+            if (key.PrId == releasePrId)
+            {
+                release.TrySetResult();
+            }
+
+            if (key.PrId == gatedPrId)
+            {
+                await release.Task;
+            }
+        })
+        {
+            // Discovery order deliberately reversed relative to PrId, too; the draft PR is a
+            // phase-1 skip so the skipped list also has to come out of the deterministic sort.
+            OpenPullRequests = [Candidate(2), Candidate(3, draft: true), Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+        return await service.RunSweepAsync(CancellationToken.None);
+    }
+
+    /// <summary>Throws from the work-item fetch for one PR; other PRs behave normally.</summary>
+    private sealed class FaultingWorkItemsSource(int faultPrId) : FakePullRequestSource
+    {
+        public override Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
+            => pr.PrId == faultPrId
+                ? throw new InvalidOperationException("boom")
+                : base.GetLinkedWorkItemsAsync(pr, ct);
+    }
+
+    /// <summary>Runs a per-PR hook before the work-item fetch so tests can force completion order.</summary>
+    private sealed class GatedWorkItemsSource(Func<PrKey, Task> beforeWorkItems) : FakePullRequestSource
+    {
+        public override async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
+        {
+            await beforeWorkItems(pr);
+            return await base.GetLinkedWorkItemsAsync(pr, ct);
+        }
+    }
+
+    [Fact]
     public async Task Worker_is_disabled_when_no_interval()
     {
         var source = new FakePullRequestSource();

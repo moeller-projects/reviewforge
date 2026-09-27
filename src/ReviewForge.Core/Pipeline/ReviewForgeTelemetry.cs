@@ -87,7 +87,9 @@ public static class ReviewForgeTelemetry
 
     // ---- Discovery ----
     public static readonly Histogram<double> DiscoverySweepDurationMilliseconds =
-        Meter.CreateHistogram<double>("reviewforge.discovery.sweep_duration_ms", "ms");
+        Meter.CreateHistogram<double>("reviewforge.discovery.sweep.duration_ms", "ms");
+    public static readonly Counter<long> DiscoveryCandidateErrors =
+        Meter.CreateCounter<long>("reviewforge.discovery.candidate_errors_total"); // faulting candidate isolated as a skip
     public static readonly Counter<long> DiscoveryCandidates =
         Meter.CreateCounter<long>("reviewforge.discovery.candidates_total");
     public static readonly Counter<long> DiscoveryEnqueued =

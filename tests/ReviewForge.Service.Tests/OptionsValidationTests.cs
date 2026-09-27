@@ -185,6 +185,19 @@ public class OptionsValidationTests
         Assert.Contains("MaxEnqueuesPerSweep must be at least 1", ex.Message);
     }
 
+    [Theory]
+    [InlineData("0")]
+    [InlineData("17")]
+    public void Discovery_parallelism_outside_1_to_16_is_rejected(string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Discovery:MaxDegreeOfParallelism", value))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+
+        Assert.Contains("MaxDegreeOfParallelism must be between 1 and 16", ex.Message);
+    }
+
     [Fact]
     public void Invalid_clean_run_vote_is_rejected_at_options_validation()
     {
