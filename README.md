@@ -9,20 +9,35 @@ criteria, triages existing threads, posts findings, and sets the reviewer vote.
 ```
 src/
   ReviewForge.Core/           pure domain + pipeline + agent loop (no IO adapters)
-    Domain/                   models, ReviewGate, RunClassifier, ThreadTriage
-    Analysis/                 DedupeKey (shift-proof), DiffIndex, AnchorResolver
-    Reasoning/                NativeReviewAgent, tools, collector, prompt building
-    Pipeline/                 ReviewPipeline + 10 stages, CommentFormatter, telemetry
-    Ports/                    IPullRequestSource, IFindingStore, IGitOps, IChatClientFactory, IContextEnricher
-  ReviewForge.Infrastructure/ adapters: ADO (SDK), LibGit2Sharp, Codex OAuth, SQLite (EF Core), OpenAI
-  ReviewForge.Service/        ASP.NET host: REST ingest + queue + worker + OpenTelemetry
+    Domain/                   models, ReviewGate, RunClassifier, ThreadTriage, FailureBackoff
+    Analysis/                 DedupeKey (shift-proof), DiffIndex, AnchorResolver, ShardPlanner,
+                              homoglyph analyzer, LineEditEngine
+    Reasoning/                NativeReviewAgent, RepoReadTools, prompt building, RuleBook,
+                              embedded prompts (native-review-system.md, fix-pass-system.md)
+    AutoFix/                  fixer registry + deterministic fixers, fix-pass prompt, applied-fix rows
+    Workspaces/               RepoCheckoutPool (per-head checkout leases, idle eviction)
+    Pipeline/                 ReviewPipeline + stages, CommentFormatter, telemetry
+    Ports/                    IPullRequestSource, IFindingStore, IGitOps, IChatClientFactory,
+                              IContextEnricher, IReviewQueue, IWorkspaceFs
+  ReviewForge.Infrastructure/ adapters: Ado/ (ADO SDK + retry policy), Git/ (LibGit2Sharp + operation
+                              scheduler), Codex/ (OAuth file, streaming client), Chat/ (OpenAI/Codex
+                              clients + LLM governor), Persistence/ (SQLite via EF Core), Filesystem/
+  ReviewForge.Service/        ASP.NET host: Endpoints, Queue/ (ReviewQueue+RunTracker, InFlightClaims),
+                              Security/ (API-key filter), Logging/ (per-run JSONL), hosted workers
+                              (ReviewWorker, DiscoverySweepWorker, CheckoutEvictionWorker,
+                              ShellReaperService), ReviewPipelineFactory (composition root), OpenTelemetry
+  ReviewForge.AppHost/        Aspire orchestration for the dev loop (dashboard + OTLP injection)
   ReviewForge.Cli/            thin client for the service (submit / status)
 tests/
   ReviewForge.Testing/        shared fakes + ScriptedChatClient
   ReviewForge.{Core,Infrastructure,Service}.Tests/
+  ReviewForge.Architecture.Tests/  assembly-boundary tests (deliberately no coverlet gate)
 ```
 
-## The 10-stage pipeline
+## The review pipeline
+
+10 numbered stages plus two inserts (7.2 auto-fix, 7.5 begin-run); every stage is a class in
+`Core/Pipeline/Stages/` and a failed stage fails the run.
 
 | #  | Stage              | What it does                                                                                                                                               |
 |----|--------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -34,9 +49,10 @@ tests/
 | 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files |
 | 7  | validate-findings  | re-anchors via snippet (AnchorResolver), downgrades unverifiable/out-of-diff anchors to general comments                                                   |
 | 7.2| auto-fix-findings  | suggestion-only fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; with the default null verifier the deterministic path performs **zero** checkout writes |
+| 7.5| begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService |
 | 8  | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
-| 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist            |
-| 10 | persist-run        | run + finding keys to SQLite (feeds gate + dedupe); skipped runs are never persisted                                                                       |
+| 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `ReviewForge:CleanRunVote` (default NoResponse) |
+| 10 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
 
 ## Run it
 
@@ -60,17 +76,20 @@ dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <gu
 ```
 
 Endpoints (all `/reviews*` require the `X-Api-Key` header; keys are configured via the
-`REVIEWFORGE_API_KEYS` environment variable, comma-separated for rotation):
-`POST /reviews` → 202 `{runId, statusUrl}`, 401 without a valid key, 429 over the per-key
-submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`, default 10/60s), 503
-when the bounded queue is full · `GET /reviews/{runId}` (status: the in-memory tracker first,
-then queued-row and store read-through — with `ReviewForge:QueueMode=Sqlite` queued and
-finalized runs stay visible across host restarts; with the default `Memory` mode status is
-lost on restart) · `POST /reviews/discover` · `GET /health` (unauthenticated).
-Rate limiting runs before API-key auth (auth is an endpoint filter, the limiter is
-middleware), so rejected requests still consume rate budget — from their own remote-IP
-partition only. Deploying behind a reverse proxy requires forwarded-headers support;
-otherwise every client shares the proxy's single partition.
+`REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation):
+`POST /reviews` → 202 `{runId, statusUrl}`, 400 on validation errors, 401 without a valid
+key, 409 when a review for the same PR is already in flight (the conflicting run id is in
+the body), 429 over the submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`,
+default 10/60s), 503 when the bounded queue is full ·
+`GET /reviews/{runId}` (status: the bounded in-memory tracker first, then queued-row and
+store read-through — with `ReviewForge:QueueMode=Sqlite` queued and finalized runs stay
+visible across host restarts; with the default `Memory` mode in-flight status is lost on
+restart) · `POST /reviews/discover` · `GET /health` (store-backed, unauthenticated) ·
+`GET /alive` (liveness, unauthenticated). Rate limiting runs before API-key auth (auth is
+an endpoint filter, the limiter is middleware), so rejected requests still consume rate
+budget. The limiter partitions by `X-Api-Key` when keys are configured, by remote IP
+otherwise — deploying behind a reverse proxy requires forwarded-headers support, otherwise
+every key-less client shares the proxy's single partition.
 
 ## Dev loop: Aspire vs Docker Compose
 
@@ -85,7 +104,8 @@ dotnet user-secrets set "Parameters:openai-api-key" "<openai-key>"
 dotnet user-secrets set "Parameters:api-key" "<reviewforge-api-key>"
 ```
 
-The dashboard URL is printed on startup; `WorkDir` is `%TEMP%/reviewforge`. Aspire injects the
+The dashboard URL is printed on startup; `WorkDir` is the system temp dir
+(`Path.GetTempPath()/reviewforge`). Aspire injects the
 `OTEL_EXPORTER_OTLP_*` variables automatically, so no OTLP endpoint is ever hardcoded.
 
 **Production — Docker Compose.** `docker compose up -d` runs exactly as before (no telemetry
@@ -156,6 +176,34 @@ fail-fast at startup. PAT and API keys come from the environment only.
   defaults to `ReviewForge:WorkerCount × 2`; an acquisition timeout fails the run with a
   visible `LlmGovernorTimeoutException` (counted by `reviewforge.llm.governor.timeout_total`).
   Watch `reviewforge.llm.governor.wait_ms` before tightening the cap.
+- `ReviewForge:WorkerCount` — concurrent queue workers (validated 1–64; unset defaults to
+  `processorCount/2` clamped to 2–8).
+- `ReviewForge:CleanRunVote` — reviewer vote on clean runs (no findings, all AC met, no
+  unanswered threads): `NoResponse` (default) | `Approved` | `ApprovedWithSuggestions` |
+  `None` (leave the vote untouched).
+- `ReviewForge:StaleShellMinutes` — 10 by default. At startup, in-flight run shells
+  (persisted by begin-run, never finalized — a crash between stages 7.5 and 10) older than
+  this are reaped and finalized as failures so a crashed head can be re-reviewed after a
+  bounded window.
+- `ReviewForge:Retention:Days` / `MinRunsPerPr` — 30 / 5. Old store runs are pruned at the
+  discovery-sweep tail (at most hourly); the latest completed run and the last
+  `MinRunsPerPr` runs of a PR are always kept.
+- `ReviewForge:GitMaxConcurrency` — dedicated LibGit2Sharp operation scheduler bound
+  (unset defaults to `processorCount/2` clamped to 2–4).
+- `ReviewForge:TargetedFetchEnabled` — default true; targeted/partial fetches into the
+  shared mirror so prepare-repository skips full origin fetches.
+- `ReviewForge:OtlpEnabled` — opt-in switch enabling OTLP export without an env endpoint;
+  the standard `OTEL_EXPORTER_OTLP_*` variables alone also turn export on (per-signal
+  variants included). Never hardcode an endpoint in configuration.
+- `ReviewForge:RunLogs:Enabled` / `MinLevel` — per-run JSONL log files under
+  `{WorkDir}/logs/{runId}.jsonl` (enabled, Information by default).
+- `RepoReadTools:GrepMaxMs` / `GrepMaxLines` — aggregate wall-clock (default 10 s) and
+  line (default 200k) budgets for one agent Grep call; the call aborts with a truncation
+  marker when either is hit.
+- Diff budgets: `ReviewForge:MaxDiffChars` (200k) / `MaxDiffCharsPerFile` (40k) and
+  `MaxDiffBytes` (4 MiB) / `MaxDiffBytesPerFile` (256 KiB); oversized diffs are truncated
+  with a marker. `ReviewForge:DiffExcludeGlobs` replaces the default exclusion set
+  (lockfiles, generated code) when set.
 
 ## Auto-fix (suggestion-only, off by default)
 
@@ -232,27 +280,33 @@ filters them, and enqueues the interesting ones (up to `Discovery:MaxEnqueuesPer
 ```
 
 `Discovery` options: `TargetBranches` (default `["main","develop"]`, case-insensitive on branch
-short name), `Creators` (empty = allow all; matches creator id or name), `MaxEnqueuesPerSweep`
-(default 20), `MaxDegreeOfParallelism` (default 8, validated 1–16), `SweepInterval` (a `hh:mm:ss`
-interval; unset/null disables the background sweep worker), and `WarmupEnabled` (default false) —
-when on, each accepted enqueue pre-fetches its head commits into the shared git mirror
-(`WarmupMaxPerSweep` = 5 per sweep, `WarmupConcurrency` = 2) so the run's prepare-repository
-stage skips the origin fetch; warmups are best-effort (failures are logged and counted by
-`reviewforge.discovery.warmup.total`) and acquire durations are tagged with `warmed` so the win
-is measurable. Skip reasons are checked in order: draft, target branch, creator, no linked work
-items, already-reviewed head, enqueue cap, review already in flight, and queue full. The per-run
-review gate remains the final dedupe net — a sweep enqueue is only a candidate; the gate decides
-whether a run actually proceeds.
+short name), `Creators` (matches creator id or name; a **required allowlist** when
+`SweepInterval` is set — startup fails fast with an empty list unless
+`AllowAllCreators=true` explicitly opts into reviewing PRs from any author, external
+contributors included), `MaxEnqueuesPerSweep` (default 20), `MaxDegreeOfParallelism`
+(default 4, validated 1–16), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables
+the background sweep worker), `FailureBackoffBase` (default 30 min) / `FailureBackoffMax`
+(default 8 h) — a head whose recent runs keep failing is skipped until a doubling backoff
+elapses, and `WarmupEnabled` (default false) — when on, each accepted enqueue pre-fetches
+its head commits into the shared git mirror (`WarmupMaxPerSweep` = 5 per sweep,
+`WarmupConcurrency` = 2) so the run's prepare-repository stage skips the origin fetch;
+warmups are best-effort (failures are logged and counted by
+`reviewforge.discovery.warmup.total`) and acquire durations are tagged with `warmed` so the
+win is measurable. Skip reasons are checked in order: draft, target branch, creator, no
+linked work items, already-reviewed head, head failing (backoff), enqueue cap, review
+already in flight, and queue full. The per-run review gate remains the final dedupe net — a
+sweep enqueue is only a candidate; the gate decides whether a run actually proceeds.
 
 ## Runtime concurrency and checkout storage
 
-`ReviewForge:WorkerCount` controls the number of concurrent queue workers. A full queue rejects
-submissions immediately with HTTP 503; discovery records a `queue full` skip. Queue depth is
-exported as `reviewforge.queue.depth`, and rejected enqueues as
-`reviewforge.queue.rejected_total`. Each review holds its per-head checkout lease until the run
-finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
-`MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts but
-never mirrors, and skips checkouts currently held by a review.
+`ReviewForge:WorkerCount` controls the number of concurrent queue workers (default
+`processorCount/2` clamped to 2–8). The ingest queue has a fixed capacity of 100; a full
+queue rejects submissions immediately with HTTP 503 (and discovery records a `queue full`
+skip). Queue depth is exported as `reviewforge.queue.depth`, and rejected enqueues as
+`reviewforge.queue.rejected_total`. Each review holds its per-head checkout lease until the
+run finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
+`MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts
+but never mirrors, and skips checkouts currently held by a review.
 
 ## Observability model
 
@@ -265,7 +319,10 @@ Signals and where they land:
   agent iterations / `task_done` misses, findings accepted/rejected/posted, ADO latency /
   failures, discovery sweeps, enrichment failures, checkout evictions.
 - **Logs** — structured, with per-run scope properties `RunId`/`PrId`/`Org`/`Project`/
-  `RepositoryId`/`HeadSha`/`Stage` (OBS-2); per-run JSONL under `{WorkDir}/logs/{runId}.jsonl`.
+  `RepositoryId`/`HeadSha`/`Stage` (OBS-2); the OTLP log exporter is env-driven like the
+  other signals (`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or the common endpoint);
+  additionally a per-run JSONL file under `{WorkDir}/logs/{runId}.jsonl` via
+  `ReviewForge:RunLogs` (local, independent of any exporter).
 
 Backends:
 
@@ -288,10 +345,12 @@ dotnet test
 dotnet test tests/ReviewForge.Core.Tests /p:CollectCoverage=true
 ```
 
-Every test project enforces **at least 97% line coverage** via coverlet (`Threshold=97`)
-on its own SUT assembly. Vendor-only adapters such as `AdoPullRequestSource`,
-`LibGit2SharpGitOps`, and `Program.cs` are excluded by design; all application logic
-remains covered.
+Every production-code test project enforces **at least 97% line coverage** via coverlet
+(`Threshold=97`) on its own SUT assembly. Vendor-only adapters such as
+`AdoPullRequestSource`, `LibGit2SharpGitOps`, and `Program.cs` are excluded by design; all
+application logic remains covered. `ReviewForge.Architecture.Tests` is the deliberate
+exception: it validates assembly boundaries (NetArchTest) and covers no production code,
+so it carries no coverlet threshold.
 
 ## Extension points
 
