@@ -766,7 +766,7 @@ public class QueueSaturationEndpointTests
     {
         using var factory = new ReviewForgeFactory().WithoutWorkers();
         using var client = factory.CreateClient();
-        var queue = factory.Services.GetRequiredService<ReviewQueue>();
+        var queue = factory.Services.GetRequiredService<IReviewQueue>();
 
         for (var i = 0; i < queue.Capacity; i++)
         {
@@ -834,7 +834,7 @@ public class DiWiringTests
             services.AddReviewForge(BuildConfig());
             using var provider = services.BuildServiceProvider();
 
-            Assert.NotNull(provider.GetRequiredService<ReviewQueue>());
+            Assert.NotNull(provider.GetRequiredService<IReviewQueue>());
             Assert.NotNull(provider.GetRequiredService<RunTracker>());
             Assert.NotNull(provider.GetRequiredService<InFlightClaims>());
             Assert.NotNull(provider.GetRequiredService<TimeProvider>());

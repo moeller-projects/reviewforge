@@ -63,8 +63,10 @@ Endpoints (all `/reviews*` require the `X-Api-Key` header; keys are configured v
 `REVIEWFORGE_API_KEYS` environment variable, comma-separated for rotation):
 `POST /reviews` → 202 `{runId, statusUrl}`, 401 without a valid key, 429 over the per-key
 submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`, default 10/60s), 503
-when the bounded queue is full · `GET /reviews/{runId}` · `POST /reviews/discover` ·
-`GET /health` (unauthenticated).
+when the bounded queue is full · `GET /reviews/{runId}` (status: the in-memory tracker first,
+then queued-row and store read-through — with `ReviewForge:QueueMode=Sqlite` queued and
+finalized runs stay visible across host restarts; with the default `Memory` mode status is
+lost on restart) · `POST /reviews/discover` · `GET /health` (unauthenticated).
 Rate limiting runs before API-key auth (auth is an endpoint filter, the limiter is
 middleware), so rejected requests still consume rate budget — from their own remote-IP
 partition only. Deploying behind a reverse proxy requires forwarded-headers support;
@@ -120,6 +122,12 @@ fail-fast at startup. PAT and API keys come from the environment only.
   during writes and tolerates a power loss losing only the last transaction — safe for this
   dedupe/audit store. WAL requires POSIX advisory locks: keep `StoreConnectionString` on a
   local disk (the shipped container volume is fine); on network filesystems use `Delete`.
+- `ReviewForge:QueueMode` — `Memory` (default, in-memory channel) or `Sqlite` (durable rows on
+  the store's database file). Sqlite mode survives host restarts: queued runs are re-claimed
+  after the claim TTL, `GET /reviews/{runId}` reads through the queue row (`Queued`) and the
+  store row (`Completed`/`Failed`), and expired claims are counted by
+  `reviewforge.queue.reclaimed_total`. In-flight PR claims remain in-memory for now — a
+  restarted run is re-acquired idempotently at dequeue.
 - `Reasoning:FollowUpModel` — optional cheaper/faster model for the Fast tier: follow-up
   reviews and `/rf fix` passes route to it; full reviews keep `Reasoning:Model`. Must carry
   the same provider routing prefix (`openai-codex:…` with `openai-codex:…`); mismatches fail

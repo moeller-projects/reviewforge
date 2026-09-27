@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 using Xunit;
 
@@ -41,6 +42,38 @@ public class QueueTests
         Assert.Equal(2, read.Count);
         Assert.Equal(1, read[0].Pr.PrId);
         Assert.Equal(2, read[1].Pr.PrId);
+    }
+
+    [Fact]
+    public async Task TryGetQueued_tracks_live_requests_and_ignores_consumed_ones()
+    {
+        var queue = new ReviewQueue();
+        var live = new ReviewRequest(Guid.NewGuid(), Key, DateTimeOffset.UtcNow);
+        queue.TryEnqueue(live);
+
+        Assert.Equal(live.RunId, queue.TryGetQueued(live.RunId)?.RunId);
+        Assert.Null(queue.TryGetQueued(Guid.NewGuid())); // unknown id
+
+        queue.Complete();
+        await foreach (var _ in queue.ReadAllAsync(CancellationToken.None))
+        {
+            break; // consume one item
+        }
+
+        Assert.Null(queue.TryGetQueued(live.RunId)); // consumed requests are no longer queued
+        queue.Acknowledge(live.RunId); // channel ack is an idempotent no-op
+    }
+
+    [Fact]
+    public void TryGetQueued_ignores_rejected_enqueues()
+    {
+        var queue = new ReviewQueue(capacity: 1);
+        queue.TryEnqueue(new ReviewRequest(Guid.NewGuid(), Key, DateTimeOffset.UtcNow));
+        var rejectedRequest = new ReviewRequest(Guid.NewGuid(), Key with {PrId = 2}, DateTimeOffset.UtcNow);
+        var rejected = queue.TryEnqueue(rejectedRequest);
+
+        Assert.False(rejected.Accepted);
+        Assert.Null(queue.TryGetQueued(rejectedRequest.RunId));
     }
 
     [Fact]

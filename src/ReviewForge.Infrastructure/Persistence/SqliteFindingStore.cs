@@ -94,6 +94,31 @@ public sealed class SqliteFindingStore : IFindingStore
             run.LastObservedCommentAt);
     }
 
+    /// <summary>The run row by id regardless of outcome, or null when unknown.</summary>
+    public async Task<ReviewRun?> GetRunAsync(Guid runId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var run = await db.Runs
+            .Include(r => r.Findings)
+            .FirstOrDefaultAsync(r => r.Id == runId, ct).ConfigureAwait(false);
+        if (run is null)
+        {
+            return null;
+        }
+
+        return new ReviewRun(
+            run.Id,
+            new PrKey(run.Org, run.Project, run.RepositoryId, run.PrId),
+            run.HeadSha,
+            Enum.Parse<ReviewKind>(run.Kind, ignoreCase: true),
+            run.StartedAt,
+            run.CompletedAt,
+            run.Success,
+            [.. run.Findings.Select(f => new StoredFinding(
+                f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
+            run.LastObservedCommentAt);
+    }
+
     /// <summary>Runs one of the bounded rowid-ordered id queries against <paramref name="sql"/>.</summary>
     private static async Task<Guid?> QuerySingleRunId(
         FindingStoreDbContext db, string sql, PrKey pr, CancellationToken ct)

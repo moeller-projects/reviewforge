@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
 
@@ -44,7 +45,7 @@ public static class Endpoints
 
         reviews.MapGet("/{runId:guid}", GetRunStatus)
             .WithName("GetRunStatus")
-            .WithSummary("In-memory run status — lost on host restart; 404 after restart or retention expiry")
+            .WithSummary("Run status — in-memory tracker first, then queue/store read-through so finalized runs stay visible after restart")
             .Produces<RunStatus>()
             .ProducesProblem(404);
 
@@ -53,7 +54,7 @@ public static class Endpoints
 
     private static IResult SubmitReview(
         SubmitReviewRequest request,
-        ReviewQueue queue,
+        IReviewQueue queue,
         RunTracker tracker,
         InFlightClaims claims,
         TimeProvider clock,
@@ -99,8 +100,31 @@ public static class Endpoints
     private static async Task<IResult> DiscoverPullRequests(DiscoveryService discovery, CancellationToken ct)
         => TypedResults.Ok(await discovery.RunSweepAsync(ct));
 
-    private static IResult GetRunStatus(Guid runId, RunTracker tracker)
-        => tracker.Get(runId) is { } status ? TypedResults.Ok(status) : TypedResults.NotFound();
+    /// <summary>Tracker first (authoritative while the process lives); then the durable queue
+    /// row (Queued read-through after restart); then the store's run row (Completed/Failed
+    /// read-through after restart or tracker retention expiry). Unknown → 404.</summary>
+    private static async Task<IResult> GetRunStatus(
+        Guid runId, RunTracker tracker, IReviewQueue queue, IFindingStore store, CancellationToken ct)
+    {
+        if (tracker.Get(runId) is { } status)
+        {
+            return TypedResults.Ok(status);
+        }
+
+        if (queue.TryGetQueued(runId) is { } queued)
+        {
+            return TypedResults.Ok(new RunStatus(runId, queued.Pr, RunState.Queued, null, queued.EnqueuedAt));
+        }
+
+        var run = await store.GetRunAsync(runId, ct);
+        return run switch
+        {
+            null => TypedResults.NotFound(),
+            { CompletedAt: null } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Running, null, run.StartedAt)),
+            { Success: true } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Completed, null, run.CompletedAt.Value)),
+            _ => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Failed, null, run.CompletedAt!.Value)),
+        };
+    }
 
     private static List<string> Validate(object instance)
     {

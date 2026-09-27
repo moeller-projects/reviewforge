@@ -39,6 +39,8 @@ public static class ReviewForgeTelemetry
     // ---- Queue ----
     public static readonly Counter<long> QueueRejected =
         Meter.CreateCounter<long>("reviewforge.queue.rejected_total");
+    public static readonly Counter<long> QueueReclaimed =
+        Meter.CreateCounter<long>("reviewforge.queue.reclaimed_total"); // expired claim re-claimed by a worker
 
     // ---- Review run lifecycle ----
     public static readonly Counter<long> ReviewsStarted =

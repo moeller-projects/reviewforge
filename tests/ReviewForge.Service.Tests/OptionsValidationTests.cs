@@ -169,9 +169,20 @@ public class OptionsValidationTests
     [Fact]
     public void Store_journal_mode_accepts_case_insensitive_delete()
     {
-        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "delete"))]);
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "DELETE"))]);
 
-        Assert.Equal("delete", provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Store.JournalMode);
+        Assert.Equal("DELETE", provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Store.JournalMode);
+    }
+
+    [Fact]
+    public void Invalid_queue_mode_is_rejected_at_options_validation()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:QueueMode", "Bogus"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("QueueMode must be Memory | Sqlite", ex.Message);
     }
 
     [Fact]

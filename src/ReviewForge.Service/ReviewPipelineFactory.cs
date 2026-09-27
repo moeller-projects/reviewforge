@@ -22,6 +22,10 @@ public sealed class ReviewForgeServiceOptions
     /// <summary>SQLite connection string for the finding store.</summary>
     public string StoreConnectionString { get; init; } = "Data Source=reviewforge.db";
 
+    /// <summary>Ingest queue backing: "Memory" (default, in-memory channel — queued runs are
+    /// lost on restart) or "Sqlite" (durable rows on the store's database file).</summary>
+    public string QueueMode { get; init; } = nameof(Service.Queue.QueueMode.Memory);
+
     /// <summary>Optional path to a system-prompt override file.</summary>
     public string? PromptOverridePath { get; init; }
 

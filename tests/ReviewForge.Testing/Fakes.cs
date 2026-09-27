@@ -292,6 +292,9 @@ public class FakeFindingStore : IFindingStore
         => Task.FromResult<IReadOnlyList<ReviewRun>>(
             [.. RecentRuns.Where(r => r.Pr == pr).OrderByDescending(r => r.StartedAt).Take(count)]);
 
+    public virtual Task<ReviewRun?> GetRunAsync(Guid runId, CancellationToken ct)
+        => Task.FromResult(Runs.FirstOrDefault(r => r.Id == runId));
+
     public virtual Task PingAsync(CancellationToken ct) => Task.CompletedTask;
 }
 

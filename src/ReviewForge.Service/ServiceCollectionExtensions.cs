@@ -27,9 +27,25 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddReviewForge(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<ReviewQueue>();
         services.AddSingleton<RunTracker>();
         services.AddSingleton<InFlightClaims>();
+
+        // Ingest queue backing: memory channel (default) or durable SQLite rows on the store's
+        // database file (ReviewForge:QueueMode). Worker and endpoints only see IReviewQueue.
+        var queueModeText = configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:QueueMode");
+        if (Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var queueMode)
+            && queueMode == QueueMode.Sqlite)
+        {
+            services.AddSingleton<IReviewQueue>(sp =>
+            {
+                var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+                return new SqliteReviewQueue(opts.StoreConnectionString);
+            });
+        }
+        else
+        {
+            services.AddSingleton<IReviewQueue, ReviewQueue>();
+        }
 
         // Runtime directories are created once at composition time; the per-run pipeline
         // factory must not touch the filesystem (P3-m). RunLogFileProvider uses the same
@@ -105,6 +121,8 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.Retention.MinRunsPerPr >= 1, "ReviewForge:Retention:MinRunsPerPr must be at least 1")
             .Validate(o => Enum.TryParse<StoreJournalMode>(o.Store.JournalMode, ignoreCase: true, out _),
                 "ReviewForge:Store:JournalMode must be Wal | Delete")
+            .Validate(o => Enum.TryParse<QueueMode>(o.QueueMode, ignoreCase: true, out _),
+                "ReviewForge:QueueMode must be Memory | Sqlite")
             .ValidateOnStart();
 
         services.AddOptions<RepoReadToolsOptions>()

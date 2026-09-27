@@ -10,7 +10,7 @@ namespace ReviewForge.Service;
 /// gauge publication from singleton construction order.
 /// </summary>
 public sealed class TelemetryGaugeRegistration(
-    ReviewQueue queue,
+    IReviewQueue queue,
     InFlightClaims claims,
     RepoCheckoutPool pool,
     LlmGovernor governor) : IHostedService

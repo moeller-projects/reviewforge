@@ -13,7 +13,7 @@ namespace ReviewForge.Service;
 /// draining (no poison-message shutdown).
 /// </summary>
 public sealed class ReviewWorker(
-    ReviewQueue queue,
+    IReviewQueue queue,
     RunTracker tracker,
     ReviewPipelineFactory pipelineFactory,
     InFlightClaims claims,
@@ -124,6 +124,8 @@ public sealed class ReviewWorker(
             }
             finally
             {
+                // Durable queues keep the claimed row until ack; the channel queue is a no-op.
+                queue.Acknowledge(request.RunId);
                 ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
                 runLogs.CloseRun(request.RunId);

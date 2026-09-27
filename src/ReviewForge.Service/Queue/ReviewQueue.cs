@@ -1,18 +1,12 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Service.Queue;
-
-public sealed record ReviewRequest(
-    Guid RunId,
-    PrKey Pr,
-    DateTimeOffset EnqueuedAt,
-    ActivityContext? EnqueueContext = null,
-    string? HeadSha = null);
-
-public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 
 public enum RunState
 {
@@ -25,11 +19,21 @@ public enum RunState
 
 public sealed record RunStatus(Guid RunId, PrKey Pr, RunState State, string? Detail, DateTimeOffset UpdatedAt);
 
-/// <summary>Bounded ingest queue shared by the review workers.</summary>
-public sealed class ReviewQueue
+/// <summary>How the ingest queue is backed. Memory (default, in-memory channel — queued runs
+/// are lost on restart) or Sqlite (durable rows on the store's database file).</summary>
+public enum QueueMode
+{
+    Memory,
+    Sqlite,
+}
+
+/// <summary>Bounded ingest queue backed by an in-memory channel. Queued runs are lost on host
+/// restart; queued-run status read-through dies with the process.</summary>
+public sealed class ReviewQueue : IReviewQueue
 {
     private readonly int _Capacity;
     private readonly Channel<ReviewRequest> _Channel;
+    private readonly ConcurrentDictionary<Guid, ReviewRequest> _Pending = new();
 
     public ReviewQueue(int capacity = 100)
     {
@@ -58,12 +62,27 @@ public sealed class ReviewQueue
         {
             ReviewForgeTelemetry.QueueRejected.Add(1);
         }
+        else
+        {
+            _Pending[request.RunId] = request;
+        }
 
         return new EnqueueResult(accepted, depth);
     }
 
-    public IAsyncEnumerable<ReviewRequest> ReadAllAsync(CancellationToken ct)
-        => _Channel.Reader.ReadAllAsync(ct);
+    public async IAsyncEnumerable<ReviewRequest> ReadAllAsync([EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var request in _Channel.Reader.ReadAllAsync(ct))
+        {
+            _Pending.TryRemove(request.RunId, out _);
+            yield return request;
+        }
+    }
+
+    public void Acknowledge(Guid runId) => _Pending.TryRemove(runId, out _);
+
+    public ReviewRequest? TryGetQueued(Guid runId)
+        => _Pending.TryGetValue(runId, out var request) ? request : null;
 
     public void Complete() => _Channel.Writer.Complete();
 }

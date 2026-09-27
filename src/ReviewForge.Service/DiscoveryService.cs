@@ -27,7 +27,7 @@ public sealed record DiscoveryReport(
 public sealed class DiscoveryService(
     IPullRequestSource source,
     IFindingStore store,
-    ReviewQueue queue,
+    IReviewQueue queue,
     RunTracker tracker,
     InFlightClaims claims,
     DiscoveryOptions options,
