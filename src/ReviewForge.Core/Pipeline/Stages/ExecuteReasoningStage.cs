@@ -1,5 +1,6 @@
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
@@ -85,6 +86,7 @@ public sealed class ExecuteReasoningStage(
             ctx.ChangedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase),
             ctx.Diff,
             ctx.ResolvedKeys,
-            ct);
+            ct,
+            ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full);
     }
 }

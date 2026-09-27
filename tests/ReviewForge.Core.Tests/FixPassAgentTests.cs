@@ -5,6 +5,7 @@ using Microsoft.Extensions.AI;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;
 using ReviewForge.Testing;
 using Xunit;
@@ -165,11 +166,11 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var collector = new ReviewCollector();
         var createAgent = typeof(NativeReviewAgent).GetMethods(
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            .Single(method => method.Name == "CreateAgent" && method.GetParameters().Length == 9);
+            .Single(method => method.Name == "CreateAgent" && method.GetParameters().Length == 10);
         var extraTool = AIFunctionFactory.Create((Func<string, string>)Echo, "Echo", null, null);
 
         var created = (AIAgent)createAgent.Invoke(agent,
-            [collector, new ContextStore(), _Root, null, null, null, null, null, new[] {extraTool}])!;
+            [collector, new ContextStore(), _Root, null, null, null, null, null, ChatTier.Full, new[] {extraTool}])!;
         await created.RunAsync(
             [new ChatMessage(ChatRole.User, "review")], cancellationToken: CancellationToken.None);
 
@@ -213,6 +214,25 @@ public class NativeReviewAgentCoverageTests : IDisposable
     }
 
     [Fact]
+    public async Task Fix_pass_always_runs_on_the_fast_tier_and_addresses_the_fast_model()
+    {
+        var chat = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(
+                ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "fixed"})));
+        var factory = new FakeChatClientFactory(chat, model: "strong-model", fastModel: "fast-model");
+
+        var result = await new NativeReviewAgent(factory)
+            .RunWithEditToolsAsync(
+                "fix it", new ReviewCollector(), new ContextStore(), _Root,
+                new HashSet<string>(StringComparer.Ordinal) {"script.sh"},
+                maxIterations: 1, CancellationToken.None);
+
+        Assert.Equal("fixed", result.Result.Narrative.ReviewSummary);
+        Assert.Equal([ChatTier.Fast], factory.RequestedTiers);
+        Assert.Contains(chat.ReceivedOptions, o => o?.ModelId == "fast-model");
+    }
+
+    [Fact]
     public async Task Streaming_usage_is_recorded_and_updates_are_forwarded()
     {
         var agent = new NativeReviewAgent(new FakeChatClientFactory(new StreamingChatClient()));
@@ -222,7 +242,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var usage = Activator.CreateInstance(tokenUsageType, nonPublic: true)!;
         var createPipeline = typeof(NativeReviewAgent).GetMethod(
             "CreatePipeline", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var pipeline = (IChatClient)createPipeline.Invoke(agent, [collector, usage])!;
+        var pipeline = (IChatClient)createPipeline.Invoke(agent, [collector, usage, ChatTier.Full])!;
         var updates = new List<ChatResponseUpdate>();
 
         long cached = 0;

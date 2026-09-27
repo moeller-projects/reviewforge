@@ -2,6 +2,7 @@ using System.ClientModel;
 using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Codex;
 using Xunit;
@@ -127,6 +128,104 @@ public class ChatClientFactoryTests
         });
         factory.Create();
         factory.Dispose();
+    }
+
+    [Fact]
+    public void Dispose_after_both_tiers_created_does_not_throw()
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var factory = new ChatClientFactory(new ChatProviderOptions
+            {
+                Provider = "openai", Model = "gpt-5", FollowUpModel = "gpt-5-mini",
+            });
+            factory.Create(ChatTier.Full);
+            factory.Create(ChatTier.Fast);
+            factory.Dispose();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
+    [Fact]
+    public void Fast_tier_aliases_full_when_followup_model_unset()
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
+
+            Assert.Equal("gpt-5", factory.ModelName(ChatTier.Fast));
+            Assert.Same(factory.Create(ChatTier.Full), factory.Create(ChatTier.Fast));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
+    [Fact]
+    public void Fast_tier_uses_distinct_client_and_model_when_followup_configured()
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var factory = new ChatClientFactory(new ChatProviderOptions
+            {
+                Provider = "openai", Model = "gpt-5", FollowUpModel = "gpt-5-mini",
+            });
+
+            Assert.Equal("gpt-5", factory.ModelName(ChatTier.Full));
+            Assert.Equal("gpt-5-mini", factory.ModelName(ChatTier.Fast));
+            Assert.NotSame(factory.Create(ChatTier.Full), factory.Create(ChatTier.Fast));
+            Assert.Same(factory.Create(ChatTier.Fast), factory.Create(ChatTier.Fast)); // cached per tier
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
+    [Fact]
+    public void Mismatched_provider_prefixes_are_rejected()
+    {
+        var options = new ChatProviderOptions
+        {
+            Provider = "openai-codex",
+            Model = "openai-codex:gpt-5.6-luna",
+            FollowUpModel = "openai:gpt-5-mini",
+        };
+
+        var results = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
+        var valid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
+            options, new System.ComponentModel.DataAnnotations.ValidationContext(options), results, validateAllProperties: true);
+
+        Assert.False(valid);
+        Assert.Contains(results, r => r.MemberNames.Contains(nameof(ChatProviderOptions.FollowUpModel)));
+    }
+
+    [Fact]
+    public void Matching_provider_prefixes_validate()
+    {
+        var options = new ChatProviderOptions
+        {
+            Provider = "openai-codex",
+            Model = "openai-codex:gpt-5.6-luna",
+            FollowUpModel = "openai-codex:gpt-5.6-luna-mini",
+        };
+
+        var results = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
+        var valid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
+            options, new System.ComponentModel.DataAnnotations.ValidationContext(options), results, validateAllProperties: true);
+
+        Assert.True(valid);
+        Assert.Empty(results);
     }
 
     [Fact]

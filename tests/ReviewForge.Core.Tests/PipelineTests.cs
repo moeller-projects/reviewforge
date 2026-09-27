@@ -323,6 +323,37 @@ public class StageTests : IDisposable
         Assert.Contains("full code review", prompt);
     }
 
+    [Theory]
+    [InlineData(ReviewKind.Full, ChatTier.Full)]
+    [InlineData(ReviewKind.FollowUp, ChatTier.Fast)]
+    public async Task ExecuteReasoning_runs_followups_on_the_fast_tier(ReviewKind kind, ChatTier expectedTier)
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var factory = new FakeChatClientFactory(script);
+        var ctx = Ctx();
+        ctx.Kind = kind;
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains(expectedTier, factory.RequestedTiers);
+        Assert.DoesNotContain(expectedTier == ChatTier.Fast ? ChatTier.Full : ChatTier.Fast, factory.RequestedTiers);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_addresses_the_fast_model_id_for_followups()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var factory = new FakeChatClientFactory(script, model: "strong-model", fastModel: "fast-model");
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.FollowUp;
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains(script.ReceivedOptions, o => o?.ModelId == "fast-model");
+    }
+
     [Fact]
     public async Task ExecuteReasoning_assigns_and_deduplicates_automatic_homoglyph_findings()
     {

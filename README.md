@@ -120,6 +120,12 @@ fail-fast at startup. PAT and API keys come from the environment only.
   during writes and tolerates a power loss losing only the last transaction — safe for this
   dedupe/audit store. WAL requires POSIX advisory locks: keep `StoreConnectionString` on a
   local disk (the shipped container volume is fine); on network filesystems use `Delete`.
+- `Reasoning:FollowUpModel` — optional cheaper/faster model for the Fast tier: follow-up
+  reviews and `/rf fix` passes route to it; full reviews keep `Reasoning:Model`. Must carry
+  the same provider routing prefix (`openai-codex:…` with `openai-codex:…`); mismatches fail
+  startup validation. Unset (default) aliases the Fast tier to the full model — identical
+  behavior, zero config. Token metrics carry a `model` tag, so per-tier cost splits out
+  without new series.
 
 ## Auto-fix (suggestion-only, off by default)
 

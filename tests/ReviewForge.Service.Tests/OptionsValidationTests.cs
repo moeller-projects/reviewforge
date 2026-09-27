@@ -115,6 +115,30 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void Followup_model_with_mismatched_provider_prefix_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(),
+            ("Reasoning:Model", "openai-codex:gpt-5.6-luna"),
+            ("Reasoning:FollowUpModel", "openai:gpt-5-mini"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
+
+        Assert.Contains("FollowUpModel", ex.Message);
+    }
+
+    [Fact]
+    public void Followup_model_with_matching_prefix_validates()
+    {
+        using var provider = Build([.. With(ValidConfig(),
+            ("Reasoning:Model", "openai-codex:gpt-5.6-luna"),
+            ("Reasoning:FollowUpModel", "openai-codex:gpt-5.6-luna-mini"))]);
+
+        Assert.Equal("openai-codex:gpt-5.6-luna-mini",
+            provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value.FollowUpModel);
+    }
+
+    [Fact]
     public void Store_journal_mode_accepts_case_insensitive_delete()
     {
         using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "delete"))]);

@@ -1,5 +1,6 @@
 using System.ClientModel;
 using System.ClientModel.Primitives;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenAI.Responses;
@@ -10,13 +11,15 @@ namespace ReviewForge.Infrastructure.Chat;
 
 /// <summary>
 /// Builds the model client for the configured provider. No engine fallback — config errors throw.
-/// The client is built once and cached process-wide: each run sharing this factory must not open
-/// a fresh transport (socket exhaustion), and the Codex credential is read from disk exactly once.
+/// Clients are cached per <see cref="ChatTier"/> process-wide: each run sharing this factory must
+/// not open a fresh transport (socket exhaustion), and the Codex credential is read from disk
+/// once per created client. When <c>FollowUpModel</c> is unset the Fast tier aliases the Full
+/// tier — one client, identical behavior.
 /// </summary>
 public sealed class ChatClientFactory : IChatClientFactory, IDisposable
 {
     public const string CodexEndpoint = "https://chatgpt.com/backend-api/codex";
-    private readonly Lazy<IChatClient> _Client;
+    private readonly ConcurrentDictionary<ChatTier, Lazy<IChatClient>> _Clients = new();
     private readonly HttpMessageHandler? _HttpHandler;
 
     private readonly ChatProviderOptions _Options;
@@ -25,17 +28,35 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     {
         _Options = options;
         _HttpHandler = httpHandler;
-        _Client = new Lazy<IChatClient>(BuildClient, true);
     }
 
-    public string ModelName => ResolveModelName(_Options.Model);
+    public string ModelName => ModelName(ChatTier.Full);
 
-    public IChatClient Create() => _Client.Value;
+    public string ModelName(ChatTier tier)
+        => ResolveModelName(tier == ChatTier.Fast && _Options.FollowUpModel is { } fast ? fast : _Options.Model);
 
-    /// <summary>Releases the cached client's transport (if any) on host shutdown.</summary>
+    public IChatClient Create() => Create(ChatTier.Full);
+
+    public IChatClient Create(ChatTier tier)
+    {
+        if (tier == ChatTier.Fast && string.IsNullOrWhiteSpace(_Options.FollowUpModel))
+        {
+            return Create(ChatTier.Full); // Fast aliases Full: identical behavior, zero config
+        }
+
+        return _Clients.GetOrAdd(tier, static (_, self) => new Lazy<IChatClient>(self.BuildClient, true), this).Value;
+    }
+
+    /// <summary>Releases every created client's transport (if any) on host shutdown.</summary>
     public void Dispose()
     {
-        if (_Client.IsValueCreated && _Client.Value is IDisposable d) d.Dispose();
+        foreach (var lazy in _Clients.Values)
+        {
+            if (lazy.IsValueCreated && lazy.Value is IDisposable d)
+            {
+                d.Dispose();
+            }
+        }
     }
 
     private IChatClient BuildClient() => _Options.Provider switch

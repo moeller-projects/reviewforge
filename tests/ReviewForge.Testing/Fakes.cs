@@ -372,11 +372,25 @@ public class FakeEnricher(string? payload = null, bool throws = false) : IContex
     }
 }
 
-/// <summary>Factory handing out one scripted chat client.</summary>
-public class FakeChatClientFactory(IChatClient client, string model = "test-model") : IChatClientFactory
+/// <summary>Factory handing out one scripted chat client. Records the tiers requested via
+/// <see cref="Create(ChatTier)"/> so routing tests can assert which model a run used.</summary>
+public class FakeChatClientFactory(IChatClient client, string model = "test-model", string? fastModel = null) : IChatClientFactory
 {
+    /// <summary>Tier sequence passed to <see cref="Create(ChatTier)"/>, in call order.</summary>
+    public List<ChatTier> RequestedTiers { get; } = [];
+
     public string ModelName => model;
-    public IChatClient Create() => client;
+
+    public string ModelName(ChatTier tier)
+        => tier == ChatTier.Fast && fastModel is not null ? fastModel : model;
+
+    public IChatClient Create() => Create(ChatTier.Full);
+
+    public IChatClient Create(ChatTier tier)
+    {
+        RequestedTiers.Add(tier);
+        return client;
+    }
 }
 
 /// <summary>In-memory <see cref="IWorkspaceFs"/> backed by the real filesystem (temp dirs).</summary>
