@@ -93,11 +93,14 @@ public sealed class ExecuteReasoningStage(
             && TrivialDiff.IsTrivial(ctx.Diff ?? DiffIndex.Parse(ctx.DiffText), ctx.PendingReplies, reviewable))
         {
             ReviewForgeTelemetry.TrivialReviews.Add(1);
+            // The synthetic result must carry the collector's findings: the homoglyph
+            // analyzer ran above and downstream stages (validate/publish/summary/vote)
+            // consume ctx.Result, not the collector.
             ctx.Result = new ReviewResult
             {
                 Narrative = new ReviewNarrative {ReviewSummary = "No reviewable changes in this iteration."},
-                Findings = [],
-                Uncertainties = [],
+                Findings = ctx.Collector.Findings,
+                Uncertainties = ctx.Collector.Uncertainties,
                 ReviewDepth = "trivial diff — no agent run",
             };
             return;
@@ -177,7 +180,7 @@ public sealed class ExecuteReasoningStage(
                     Pr: ctx.RequirePullRequest(), Kind: ctx.Kind, WorkItems: ctx.WorkItems,
                     ChangedFiles: shard.Files, PendingReplies: ctx.PendingReplies, DiffText: shard.DiffText,
                     Enrichment: null, ContextNames: ctx.ContextStore.Names,
-                    MaxDiffChars: Math.Max(shard.DiffText.Length, 1), MaxDiffCharsPerFile: shardMaxChars));
+                    MaxDiffChars: Math.Max(shard.DiffText.Length, 1), MaxDiffCharsPerFile: maxDiffCharsPerFile));
                 var result = await agent.RunAsync(
                     shardPrompt,
                     shardCollector,
@@ -185,13 +188,14 @@ public sealed class ExecuteReasoningStage(
                     repoDir,
                     agent.ComposeRuleBook(shard.Files, rootFiles),
                     shard.Files.ToHashSet(StringComparer.OrdinalIgnoreCase),
-                    null,
+                    DiffIndex.Parse(shard.DiffText),
                     ctx.ResolvedKeys,
                     token,
                     tier);
                 shardNarratives[i] = result.Narrative;
                 ReviewForgeTelemetry.ShardDurationMilliseconds.Record(
-                    Stopwatch.GetElapsedTime(shardStart).TotalMilliseconds);
+                    Stopwatch.GetElapsedTime(shardStart).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(ReviewForgeTelemetry.TagShards, shards.Count));
             }).ConfigureAwait(false);
 
         var allDone = true;
@@ -241,7 +245,13 @@ public sealed class ExecuteReasoningStage(
             PrSummary = Join(narratives.Select(n => n?.PrSummary)),
             GoodPractices = [.. narratives.SelectMany(n => n?.GoodPractices ?? [])],
             AcceptanceCriteria = [.. narratives.SelectMany(n => n?.AcceptanceCriteria ?? [])],
-            ThreadActions = [.. narratives.SelectMany(n => n?.ThreadActions ?? [])],
+            // Every shard sees the full PendingReplies list, so duplicate actions for the
+            // same thread are expected: first shard wins (matches ThreadTriage's
+            // FirstOrDefault), the rest are dropped deterministically.
+            ThreadActions = [.. narratives
+                .SelectMany(n => n?.ThreadActions ?? [])
+                .GroupBy(a => a.ThreadId)
+                .Select(g => g.First())],
         };
     }
 }

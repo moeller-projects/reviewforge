@@ -176,6 +176,20 @@ public class ReviewCollectorTests
         Assert.Equal(2, primary.Findings.Count);
         Assert.Single(primary.Findings, f => f.DedupeKey == "fresh");
     }
+
+    [Fact]
+    public void MergeFrom_keeps_prior_key_regressions_from_shards()
+    {
+        // A shard accepted a finding whose key the prior run already knew: that is a
+        // regression and must survive the merge, not be dropped as "already known".
+        var primary = new ReviewCollector(["prior-key"]);
+        var shard = new ReviewCollector(["prior-key"]);
+        shard.AddFinding(Finding("prior-key"));
+
+        primary.MergeFrom(shard);
+
+        Assert.Single(primary.Findings, f => f.DedupeKey == "prior-key");
+    }
 }
 
 public class ReviewToolsTests

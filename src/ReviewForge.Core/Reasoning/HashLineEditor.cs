@@ -54,11 +54,12 @@ public class HashLineEditor
         }
 
         var lines = raw ?? throw new InvalidOperationException("ReadRawLines returned no error but no lines");
+        var lineHashes = hashes ?? throw new InvalidOperationException("ReadRawLines returned no error but no hashes");
         var start = Math.Max(1, startLine);
         var take = Math.Min(maxLines ?? MaxLines, MaxLines);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var duplicated = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var h in hashes)
+        foreach (var h in lineHashes)
         {
             if (!seen.Add(h))
             {
@@ -70,8 +71,8 @@ public class HashLineEditor
         var emitted = 0;
         for (var i = start - 1; i < lines.Count && emitted < take; i++, emitted++)
         {
-            var marker = duplicated.Contains(hashes[i]) ? "*" : string.Empty;
-            sb.Append(i + 1).Append(' ').Append(hashes[i]).Append(marker).Append(": ")
+            var marker = duplicated.Contains(lineHashes[i]) ? "*" : string.Empty;
+            sb.Append(i + 1).Append(' ').Append(lineHashes[i]).Append(marker).Append(": ")
                 .AppendLine(HashLine.Normalize(lines[i] ?? string.Empty));
         }
 

@@ -200,7 +200,10 @@ public sealed class ReviewCollector
 
         foreach (var finding in shard.Findings)
         {
-            if (finding.DedupeKey is { Length: > 0 } key && IsKnown(key))
+            // Drop only duplicates accepted earlier THIS run (the primary or another
+            // shard). Prior-run keys must not suppress regressions: the shard accepted
+            // the finding through the normal path precisely because it reproduces.
+            if (finding.DedupeKey is { Length: > 0 } key && IsKnown(key) && !WasKnownAtStart(key))
             {
                 continue;
             }

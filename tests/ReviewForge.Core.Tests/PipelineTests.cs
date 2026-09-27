@@ -626,6 +626,10 @@ public class StageTests : IDisposable
         Assert.Equal(0, script.Calls); // trivial: zero added lines in reviewable files
         var finding = Assert.Single(ctx.Collector.Findings); // homoglyph finding still recorded
         Assert.NotNull(finding.DedupeKey);
+        // Downstream stages consume ctx.Result, not the collector: the finding must survive
+        // into the synthetic trivial result or validate/publish would never see it.
+        var resultFinding = Assert.Single(ctx.Result.Findings);
+        Assert.Equal(finding.DedupeKey, resultFinding.DedupeKey);
     }
 
     [Fact]

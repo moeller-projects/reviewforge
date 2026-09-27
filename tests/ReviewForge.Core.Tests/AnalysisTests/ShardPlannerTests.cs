@@ -127,6 +127,41 @@ public sealed class ShardPlannerTests
         Assert.Empty(plan.Shards);
     }
 
+    [Fact]
+    public void Plan_QuotedGitPaths_AreResolvedLikeDiffIndex()
+    {
+        // git C-quotes paths containing spaces: "diff --git \"a/x y.cs\" \"b/x y.cs\"".
+        const string file = "src/x y.cs";
+        var block =
+            "diff --git \"a/src/x y.cs\" \"b/src/x y.cs\"\n" +
+            "--- \"a/src/x y.cs\"\n" +
+            "+++ \"b/src/x y.cs\"\n" +
+            "@@ -0,0 +1,1 @@\n" +
+            "+content\n";
+        var other = Block("src/a.cs");
+        var plan = ShardPlanner.Plan(block + other, block.Length + other.Length, 4);
+
+        Assert.False(plan.Overflowed);
+        Assert.Single(plan.Shards);
+        Assert.Equal(["src/a.cs", file], plan.Shards[0].Files);
+    }
+
+    [Fact]
+    public void Plan_UnresolvableHunkBlock_Overflows_FailsClosedToLegacy()
+    {
+        // A hunk-bearing block whose file cannot be attributed must never be silently
+        // dropped from the sharded review: the plan overflows so the caller takes the
+        // legacy whole-diff path.
+        // "diff --git" header whose b-side cannot be resolved and no +++ line to rescue
+        // it: added content that must force the fail-closed legacy path.
+        var a = Block("src/a.cs");
+        var mystery = "diff --git a/orphan.cs\n@@ -0,0 +1,1 @@\n+orphan\n";
+        var plan = ShardPlanner.Plan(a + mystery, 10_000, 4);
+
+        Assert.True(plan.Overflowed);
+        Assert.Empty(plan.Shards);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
