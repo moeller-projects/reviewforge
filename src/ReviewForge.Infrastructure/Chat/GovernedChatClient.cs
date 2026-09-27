@@ -16,11 +16,8 @@ public sealed class LlmGovernorTimeoutException(string message) : TimeoutExcepti
 public sealed class GovernedChatClient(
     IChatClient inner,
     LlmGovernor governor,
-    int acquireTimeoutSeconds = 300,
-    TimeProvider? clock = null) : DelegatingChatClient(inner)
+    int acquireTimeoutSeconds = 300) : DelegatingChatClient(inner)
 {
-    private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
-
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -51,7 +48,7 @@ public sealed class GovernedChatClient(
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(acquireTimeoutSeconds), _Clock);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(acquireTimeoutSeconds));
             var slot = await governor.AcquireAsync(timeoutCts.Token).ConfigureAwait(false);
             ReviewForgeTelemetry.LlmGovernorWait.Record(sw.Elapsed.TotalMilliseconds);
             return slot;

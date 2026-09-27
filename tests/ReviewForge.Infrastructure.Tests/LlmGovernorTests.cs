@@ -79,7 +79,7 @@ public class LlmGovernorTests
     public async Task Acquire_timeout_throws_the_distinct_exception_and_counts_it()
     {
         var governor = new LlmGovernor(1);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuedAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var holder = new GateChatClient(() => governor.Inflight, release.Task);
         var governed = new GovernedChatClient(holder, governor, acquireTimeoutSeconds: 1);
 
@@ -117,7 +117,7 @@ public class LlmGovernorTests
     public async Task Wait_time_is_recorded_for_a_queued_request()
     {
         var governor = new LlmGovernor(1);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuedAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var inner = new GateChatClient(() => governor.Inflight, release.Task);
         var governed = new GovernedChatClient(inner, governor, acquireTimeoutSeconds: 30);
 
@@ -140,9 +140,10 @@ public class LlmGovernorTests
         listener.Start();
 
         var waited = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "wait behind the holder")]);
-        await waited;
+        await Task.Delay(200); // let the queued request block in slot acquisition
         release.TrySetResult();
         await held;
+        await waited;
 
         Assert.True(waits >= 1, "the queued request's slot acquisition was not recorded");
         Assert.Equal(0, governor.Inflight);
@@ -152,7 +153,7 @@ public class LlmGovernorTests
     public async Task Streaming_holds_the_slot_for_the_whole_enumeration()
     {
         var governor = new LlmGovernor(1);
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuedAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var inner = new GateChatClient(() => governor.Inflight, gate.Task);
         var governed = new GovernedChatClient(inner, governor, acquireTimeoutSeconds: 30);
 

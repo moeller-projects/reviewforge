@@ -39,7 +39,7 @@ public static class LineEditEngine
     /// <summary>As <see cref="Apply"/>, formatting error messages with the file path when given.</summary>
     internal static EditResult Apply(
         IReadOnlyList<string> lines, IReadOnlyList<LineEdit> edits, string? path, out string[] newLines)
-        => Apply(lines, hashes: null, edits, path, out newLines);
+        => ApplyCore(lines, hashes: null, edits, path, out newLines);
 
     /// <summary>As the path-form <see cref="Apply"/>, resolving hash-anchored edits against
     /// caller-supplied per-line hashes (<paramref name="hashes"/>[i] is the hash of
@@ -51,9 +51,9 @@ public static class LineEditEngine
         IReadOnlyList<LineEdit> edits,
         string? path,
         out string[] newLines)
-        => Apply(lines, (string[]?)hashes, edits, path, out newLines);
+        => ApplyCore(lines, hashes, edits, path, out newLines);
 
-    private static EditResult Apply(
+    private static EditResult ApplyCore(
         IReadOnlyList<string> lines,
         string[]? hashes,
         IReadOnlyList<LineEdit> edits,

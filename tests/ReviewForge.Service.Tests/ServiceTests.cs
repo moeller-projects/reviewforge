@@ -31,8 +31,9 @@ public sealed class ReviewForgeServiceCollectionDefinition
 {
 }
 
-/// <summary>In-process host with fake ports; the real worker drains the queue.</summary>
-public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
+/// <summary>In-process host with fake ports; the real worker drains the queue. Unsealed so
+/// restart-scenario fixtures (durable queue) can derive and re-point the store/queue.</summary>
+public class ReviewForgeFactory : WebApplicationFactory<Program>
 {
     private bool _WithoutWorkers;
     private List<string>? _LogSink;
@@ -143,9 +144,10 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
             services.AddSingleton<IGitOps>(Git);
             services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory(Chat));
             services.AddSingleton(sp => new ReviewPipelineFactory(
-                Source, Store,
+                sp.GetRequiredService<IPullRequestSource>(),
+                sp.GetRequiredService<IFindingStore>(),
                 sp.GetRequiredService<RepoCheckoutPool>(),
-                new FakeChatClientFactory(Chat),
+                sp.GetRequiredService<IChatClientFactory>(),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
                 sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>(),

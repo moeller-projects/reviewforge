@@ -12,16 +12,13 @@ public enum ChatTier
     Fast,
 }
 
-/// <summary>Builds the model client for the configured reasoning provider.</summary>
+/// <summary>Builds the model client for the configured reasoning provider. All members are
+/// tier-based; implementations alias <see cref="ChatTier.Fast"/> to <see cref="ChatTier.Full"/>
+/// when no fast model is configured — identical behavior, zero config.</summary>
 public interface IChatClientFactory
 {
-    /// <summary>Model id the agent should address (without any provider routing prefix).</summary>
-    string ModelName { get; }
-
     /// <summary>Model id for <paramref name="tier"/> (without any provider routing prefix).</summary>
     string ModelName(ChatTier tier);
-
-    IChatClient Create();
 
     IChatClient Create(ChatTier tier);
 }

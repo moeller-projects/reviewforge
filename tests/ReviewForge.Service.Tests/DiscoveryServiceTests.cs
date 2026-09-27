@@ -457,11 +457,18 @@ public class DiscoveryServiceTests
 
 public class DiscoverySweepWorkerTests
 {
-    private static PullRequestCandidate Candidate(int prId)
+    private static PullRequestCandidate Candidate(int prId, bool draft = false)
         => new(
             new PrKey("o", "p", "r", prId),
-            new PullRequest(prId, "t", null, "head", "base", "url", IsDraft: false, "alice", "Alice"),
+            new PullRequest(prId, "t", null, "head", "base", "url", IsDraft: draft, "alice", "Alice"),
             "main", "alice", "Alice");
+
+    // Named CreateService: inside namespace ReviewForge.Service.Tests an unqualified `Service`
+    // binds to the parent namespace, not a method.
+    private static DiscoveryService CreateService(
+        FakePullRequestSource source, FakeFindingStore store, ReviewQueue queue, RunTracker tracker,
+        DiscoveryOptions? options = null)
+        => new(source, store, queue, tracker, new InFlightClaims(), options ?? new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions());
 
     [Fact]
     public async Task Faulting_candidate_is_isolated_as_a_skip_and_others_still_enqueue()
@@ -472,7 +479,7 @@ public class DiscoverySweepWorkerTests
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
         var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
-        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+        var service = CreateService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 
@@ -521,7 +528,7 @@ public class DiscoverySweepWorkerTests
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
         var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
-        var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+        var service = CreateService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
         return await service.RunSweepAsync(CancellationToken.None);
     }
 

@@ -382,12 +382,8 @@ public class FakeChatClientFactory(IChatClient client, string model = "test-mode
     /// <summary>Tier sequence passed to <see cref="Create(ChatTier)"/>, in call order.</summary>
     public List<ChatTier> RequestedTiers { get; } = [];
 
-    public string ModelName => model;
-
     public string ModelName(ChatTier tier)
         => tier == ChatTier.Fast && fastModel is not null ? fastModel : model;
-
-    public IChatClient Create() => Create(ChatTier.Full);
 
     public IChatClient Create(ChatTier tier)
     {

@@ -23,14 +23,14 @@ public class ChatClientFactoryTests
     public void ModelName_uses_resolved_model()
     {
         var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "openai:gpt-5"});
-        Assert.Equal("gpt-5", factory.ModelName);
+        Assert.Equal("gpt-5", factory.ModelName(ChatTier.Full));
     }
 
     [Fact]
     public void Unknown_provider_throws()
     {
         var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "bogus", Model = "m"});
-        Assert.Throws<InvalidOperationException>(() => factory.Create());
+        Assert.Throws<InvalidOperationException>(() => factory.Create(ChatTier.Full));
     }
 
     [Fact]
@@ -41,7 +41,7 @@ public class ChatClientFactoryTests
         try
         {
             var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
-            Assert.Throws<InvalidOperationException>(() => factory.Create());
+            Assert.Throws<InvalidOperationException>(() => factory.Create(ChatTier.Full));
         }
         finally
         {
@@ -57,7 +57,7 @@ public class ChatClientFactoryTests
         try
         {
             var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
-            Assert.NotNull(factory.Create());
+            Assert.NotNull(factory.Create(ChatTier.Full));
         }
         finally
         {
@@ -74,8 +74,8 @@ public class ChatClientFactoryTests
             Model = "openai-codex:gpt-5.6-luna",
             CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
         });
-        Assert.NotNull(factory.Create());
-        Assert.Equal("gpt-5.6-luna", factory.ModelName);
+        Assert.NotNull(factory.Create(ChatTier.Full));
+        Assert.Equal("gpt-5.6-luna", factory.ModelName(ChatTier.Full));
     }
 
     [Fact]
@@ -86,8 +86,8 @@ public class ChatClientFactoryTests
         try
         {
             var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
-            var a = factory.Create();
-            var b = factory.Create();
+            var a = factory.Create(ChatTier.Full);
+            var b = factory.Create(ChatTier.Full);
             Assert.Same(a, b);
         }
         finally
@@ -105,8 +105,8 @@ public class ChatClientFactoryTests
             Model = "openai-codex:gpt-5.6-luna",
             CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
         });
-        var a = factory.Create();
-        var b = factory.Create();
+        var a = factory.Create(ChatTier.Full);
+        var b = factory.Create(ChatTier.Full);
         Assert.Same(a, b);
     }
 
@@ -126,7 +126,7 @@ public class ChatClientFactoryTests
             Model = "openai-codex:gpt-5.6-luna",
             CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
         });
-        factory.Create();
+        factory.Create(ChatTier.Full);
         factory.Dispose();
     }
 
@@ -250,7 +250,7 @@ public class ChatClientFactoryTests
                 CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
             });
 
-            var ex = Assert.Throws<InvalidOperationException>(() => factory.Create());
+            var ex = Assert.Throws<InvalidOperationException>(() => factory.Create(ChatTier.Full));
 
             Assert.Contains("refused in Production", ex.Message);
         }
@@ -280,7 +280,7 @@ public class ChatClientFactoryTests
                 CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
             });
 
-            var ex = Assert.Throws<InvalidOperationException>(() => factory.Create());
+            var ex = Assert.Throws<InvalidOperationException>(() => factory.Create(ChatTier.Full));
 
             Assert.Contains("refused in Production", ex.Message);
         }
@@ -310,7 +310,7 @@ public class ChatClientFactoryTests
                 CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
             });
 
-            Assert.NotNull(factory.Create());
+            Assert.NotNull(factory.Create(ChatTier.Full));
         }
         finally
         {
@@ -346,9 +346,9 @@ public class ChatClientFactoryTests
             }, handler);
 
             var exception = await Assert.ThrowsAsync<ClientResultException>(() =>
-                factory.Create().GetResponseAsync(
+                factory.Create(ChatTier.Full).GetResponseAsync(
                     [new ChatMessage(ChatRole.User, "review")],
-                    new ChatOptions { ModelId = factory.ModelName }));
+                    new ChatOptions { ModelId = factory.ModelName(ChatTier.Full) }));
 
             Assert.Equal((int)HttpStatusCode.BadRequest, exception.Status);
             using var body = JsonDocument.Parse(Assert.Single(handler.RequestBodies));

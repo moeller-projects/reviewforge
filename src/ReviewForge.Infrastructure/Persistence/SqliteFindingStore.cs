@@ -25,10 +25,10 @@ public sealed class SqliteFindingStore : IFindingStore
             .Options;
 
         using var db = CreateContext();
-        db.Database.EnsureCreated();
 
-        // EnsureCreated never alters existing tables. An immediate SQLite transaction
-        // serializes the check-and-alter sequence across concurrently starting instances.
+        // The shared database file may already exist with only the queue schema (durable
+        // queue mode) or be brand new. EnsureCreated() is a no-op once ANY table exists,
+        // so create the store schema explicitly whenever the Runs table is missing.
         var connection = (SqliteConnection)db.Database.GetDbConnection();
         db.Database.OpenConnection();
         try
@@ -36,6 +36,15 @@ public sealed class SqliteFindingStore : IFindingStore
             using var transaction = connection.BeginTransaction(deferred: false);
             using var cmd = connection.CreateCommand();
             cmd.Transaction = transaction;
+            cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'Runs'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = db.Database.GenerateCreateScript();
+                cmd.ExecuteNonQuery();
+            }
+
+            // EnsureCreated never alters existing tables. The immediate transaction above
+            // serializes the check-and-alter sequence across concurrently starting instances.
             cmd.CommandText =
                 "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
             var hasWatermarkColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;

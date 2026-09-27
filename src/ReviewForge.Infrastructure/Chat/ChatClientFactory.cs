@@ -27,24 +27,17 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     public ChatClientFactory(
         ChatProviderOptions options,
         HttpMessageHandler? httpHandler = null,
-        LlmGovernor? governor = null,
-        TimeProvider? clock = null)
+        LlmGovernor? governor = null)
     {
         _Options = options;
         _HttpHandler = httpHandler;
         _Governor = governor;
-        _Clock = clock ?? TimeProvider.System;
     }
 
     private readonly LlmGovernor? _Governor;
-    private readonly TimeProvider _Clock;
-
-    public string ModelName => ModelName(ChatTier.Full);
 
     public string ModelName(ChatTier tier)
         => ResolveModelName(tier == ChatTier.Fast && _Options.FollowUpModel is { } fast ? fast : _Options.Model);
-
-    public IChatClient Create() => Create(ChatTier.Full);
 
     public IChatClient Create(ChatTier tier)
     {
@@ -80,7 +73,7 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
         // Between usage tracking and the transport: tracking measures real provider
         // traffic, the governor shapes it. Both tiers share one process-wide governor.
         return _Governor is { } governor
-            ? new GovernedChatClient(raw, governor, _Options.GovernorAcquireTimeoutSeconds, _Clock)
+            ? new GovernedChatClient(raw, governor, _Options.GovernorAcquireTimeoutSeconds)
             : raw;
     }
 

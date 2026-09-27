@@ -49,14 +49,23 @@ public class OptionsValidationTests
     [Fact]
     public void Pull_request_source_is_registered_as_singleton()
     {
-        using var provider = Build([.. ValidConfig()]);
+        var previousPat = Environment.GetEnvironmentVariable("REVIEWFORGE_ADO_PAT");
+        Environment.SetEnvironmentVariable("REVIEWFORGE_ADO_PAT", "test-pat");
+        try
+        {
+            using var provider = Build([.. ValidConfig()]);
 
-        var first = provider.GetRequiredService<IPullRequestSource>();
-        var second = provider.GetRequiredService<IPullRequestSource>();
+            var first = provider.GetRequiredService<IPullRequestSource>();
+            var second = provider.GetRequiredService<IPullRequestSource>();
 
-        // Pins the ADO pooling contract: one VssConnection (and its cached typed
-        // clients) per process — see the remark on AdoPullRequestSource.
-        Assert.Same(first, second);
+            // Pins the ADO pooling contract: one VssConnection (and its cached typed
+            // clients) per process — see the remark on AdoPullRequestSource.
+            Assert.Same(first, second);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("REVIEWFORGE_ADO_PAT", previousPat);
+        }
     }
 
     [Fact]
@@ -356,5 +365,52 @@ public class OptionsValidationTests
         var verifier = provider.GetRequiredService<IFixVerifier>();
         Assert.IsType<ProcessFixVerifier>(verifier);
         Assert.True(verifier.RequiresWorkspaceWrites);
+    }
+
+    [Fact]
+    public void Sharding_defaults_resolve_disabled()
+    {
+        using var provider = Build([.. ValidConfig()]);
+
+        var options = provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+
+        Assert.False(options.Sharding.Enabled);
+        Assert.Equal(30_000, options.Sharding.ShardMaxChars);
+        Assert.Equal(8, options.Sharding.MaxShards);
+        Assert.Equal(2, options.Sharding.ShardConcurrency);
+    }
+
+    [Fact]
+    public void Sharding_concurrency_above_max_shards_is_rejected()
+    {
+        using var provider = Build(
+        [
+            .. With(ValidConfig(),
+                ("ReviewForge:Sharding:Enabled", "true"),
+                ("ReviewForge:Sharding:MaxShards", "2"),
+                ("ReviewForge:Sharding:ShardConcurrency", "3")),
+        ]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("ShardConcurrency must be between 1 and MaxShards", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("ShardMaxChars", "999")]
+    [InlineData("MaxShards", "1")]
+    [InlineData("MaxShards", "33")]
+    public void Sharding_out_of_range_values_are_rejected(string key, string value)
+    {
+        using var provider = Build(
+        [
+            .. With(ValidConfig(),
+                ("ReviewForge:Sharding:Enabled", "true"),
+                ($"ReviewForge:Sharding:{key}", value)),
+        ]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
     }
 }
