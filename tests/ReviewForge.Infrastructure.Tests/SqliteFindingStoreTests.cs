@@ -161,6 +161,47 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetRunAsync_round_trips_a_completed_run_by_id()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.FollowUp, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42)]);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var loaded = await _Store.GetRunAsync(run.Id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(run.Id, loaded.Id);
+        Assert.Equal(Key, loaded.Pr);
+        Assert.Equal("head", loaded.HeadSha);
+        Assert.Equal(ReviewKind.FollowUp, loaded.Kind);
+        Assert.Equal(t0.AddMinutes(-5), loaded.StartedAt);
+        Assert.Equal(t0, loaded.CompletedAt);
+        Assert.True(loaded.Success);
+        var finding = Assert.Single(loaded.Findings);
+        Assert.Equal("k1", finding.DedupeKey);
+        Assert.Equal(42, finding.ThreadId);
+    }
+
+    [Fact]
+    public async Task GetRunAsync_returns_null_for_unknown_run_id()
+        => Assert.Null(await _Store.GetRunAsync(Guid.NewGuid(), CancellationToken.None));
+
+    [Fact]
+    public async Task GetRunAsync_returns_unfinalized_shell_runs_too()
+    {
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full,
+            DateTimeOffset.UtcNow, CompletedAt: null, Success: false, []);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var loaded = await _Store.GetRunAsync(run.Id, CancellationToken.None);
+        Assert.NotNull(loaded);
+        Assert.Null(loaded.CompletedAt); // still running: visible, not completed
+    }
+
+    [Fact]
     public async Task Save_and_read_back_latest_completed_run()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
