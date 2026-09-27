@@ -116,12 +116,21 @@ public class SqliteFindingStoreTests : IDisposable
             var store = new SqliteFindingStore($"Data Source={dbPath}", StoreJournalMode.Delete);
             await store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
 
-            await using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
-            await connection.OpenAsync();
-            await using var journal = new SqliteCommand("PRAGMA journal_mode", connection);
-            Assert.Equal("delete", Assert.IsType<string>(await journal.ExecuteScalarAsync()));
-            await using var synchronous = new SqliteCommand("PRAGMA synchronous", connection);
-            Assert.Equal(2L, Assert.IsType<long>(await synchronous.ExecuteScalarAsync()));
+            await using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                await connection.OpenAsync();
+                await using (var journal = new SqliteCommand("PRAGMA journal_mode", connection))
+                {
+                    Assert.Equal("delete", Assert.IsType<string>(await journal.ExecuteScalarAsync()));
+                }
+
+                await using (var synchronous = new SqliteCommand("PRAGMA synchronous", connection))
+                {
+                    Assert.Equal(2L, Assert.IsType<long>(await synchronous.ExecuteScalarAsync()));
+                }
+
+                await connection.CloseAsync();
+            }
         }
         finally
         {
@@ -182,6 +191,28 @@ public class SqliteFindingStoreTests : IDisposable
         var finding = Assert.Single(loaded.Findings);
         Assert.Equal("k1", finding.DedupeKey);
         Assert.Equal(42, finding.ThreadId);
+    }
+
+    [Fact]
+    public async Task Commanded_fix_thread_ids_include_valid_keys_for_the_requested_pr_only()
+    {
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full,
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, true,
+            [
+                new StoredFinding("thread-42", "rule", "high", "title", "f.cs", 1, null),
+                new StoredFinding("thread-not-a-number", "rule", "high", "title", "f.cs", 1, null),
+                new StoredFinding("ordinary", "rule", "high", "title", "f.cs", 1, null)
+            ]);
+        var otherPrRun = new ReviewRun(Guid.NewGuid(), Key with {PrId = 8}, "other",
+            ReviewKind.Full, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, true,
+            [new StoredFinding("thread-99", "rule", "high", "title", "f.cs", 1, null)]);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+        await _Store.SaveRunAsync(otherPrRun, CancellationToken.None);
+
+        var ids = await _Store.GetCommandedFixThreadIdsAsync(Key, CancellationToken.None);
+
+        Assert.Equal([42L], ids);
     }
 
     [Fact]

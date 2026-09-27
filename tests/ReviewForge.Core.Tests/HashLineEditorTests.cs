@@ -167,15 +167,24 @@ public sealed class HashLineEditorTests : IDisposable
     }
 
     [Fact]
-    public void Writable_set_is_case_sensitive()
+    public void Writable_set_follows_filesystem_case_rules()
     {
         var lowerPath = Path.Combine(_Root, "src", "foo.cs");
         File.WriteAllLines(lowerPath, ["alpha", "beta"]);
         var editor = new HashLineEditor(new RepoPathGuard(_Root), new HashSet<string> { "src/Foo.cs" });
 
-        Assert.Equal(
-            "access denied: src/foo.cs is outside the writable set",
-            editor.EditFile("src/foo.cs", [new LineEdit(H("beta"), null, null, null, "x")]));
+        var result = editor.EditFile("src/foo.cs", [new LineEdit(H("beta"), null, null, null, "x")]);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("applied 1 edits", result);
+            Assert.Equal(["alpha", "x"], File.ReadAllLines(lowerPath));
+        }
+        else
+        {
+            Assert.Equal("access denied: src/foo.cs is outside the writable set", result);
+            Assert.Equal(["alpha", "beta"], File.ReadAllLines(lowerPath));
+        }
     }
 
 
