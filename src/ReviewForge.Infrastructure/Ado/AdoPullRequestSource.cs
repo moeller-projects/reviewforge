@@ -22,6 +22,15 @@ namespace ReviewForge.Infrastructure.Ado;
 /// by design; behavior is verified against a live organization, logic lives in Core.
 /// Bot-authored finding threads carry their dedupe key in thread Properties.
 /// </summary>
+/// <remarks>
+/// Connection pooling contract: this class holds ONE <see cref="VssConnection"/> per
+/// instance and resolves every typed client through <c>GetClientAsync{T}</c>, which
+/// caches clients on the connection — the same one-transport-per-endpoint discipline as
+/// <c>ChatClientFactory</c>. Do NOT "simplify" client resolution to per-call
+/// <c>new GitHttpClient(...)</c>: each construction spins up its own HTTP handler and
+/// exhausts sockets under load. The DI registration must stay a singleton so the whole
+/// process shares one connection (pinned by ServiceTests).
+/// </remarks>
 [ExcludeFromCodeCoverage]
 public sealed class AdoPullRequestSource : IPullRequestSource
 {

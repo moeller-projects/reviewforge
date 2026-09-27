@@ -70,6 +70,8 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.OrgUrl?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true,
                 "Ado:OrgUrl must be an https:// URL — the PAT is sent to this endpoint.")
             .ValidateOnStart();
+        // Singleton deliberately: one VssConnection (and its cached typed clients) per
+        // process — see the pooling-contract remark on AdoPullRequestSource.
         services.AddSingleton<IPullRequestSource>(sp =>
             new InstrumentedPullRequestSource(
                 new AdoPullRequestSource(sp.GetRequiredService<IOptions<AdoOptions>>().Value)));

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.AutoFix;
 using ReviewForge.Infrastructure.Chat;
@@ -43,6 +44,19 @@ public class OptionsValidationTests
         Assert.NotNull(provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<ApiDocsOptions>>().Value);
+    }
+
+    [Fact]
+    public void Pull_request_source_is_registered_as_singleton()
+    {
+        using var provider = Build([.. ValidConfig()]);
+
+        var first = provider.GetRequiredService<IPullRequestSource>();
+        var second = provider.GetRequiredService<IPullRequestSource>();
+
+        // Pins the ADO pooling contract: one VssConnection (and its cached typed
+        // clients) per process — see the remark on AdoPullRequestSource.
+        Assert.Same(first, second);
     }
 
     [Fact]
