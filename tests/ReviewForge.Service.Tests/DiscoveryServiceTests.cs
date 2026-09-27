@@ -781,7 +781,10 @@ public class DiscoverySweepWorkerTests
     [Fact]
     public async Task Worker_logs_and_continues_when_a_sweep_fails()
     {
-        var source = new ThrowingPullRequestSource();
+        var source = new FakePullRequestSource
+        {
+            ThrowOnGetOpenPullRequests = new InvalidOperationException("sweep failed"),
+        };
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = TimeSpan.FromMilliseconds(25)};
         var worker = new DiscoverySweepWorker(
             new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options, new RetentionOptions()),
@@ -790,14 +793,14 @@ public class DiscoverySweepWorkerTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await worker.StartAsync(cts.Token);
-        while (source.Calls == 0)
+        while (source.OpenPullRequestsFetches == 0)
         {
             await Task.Delay(10, CancellationToken.None);
         }
 
         await cts.CancelAsync();
         await worker.StopAsync(CancellationToken.None);
-        Assert.True(source.Calls > 0);
+        Assert.True(source.OpenPullRequestsFetches > 0);
     }
 
     [Fact]
@@ -840,16 +843,6 @@ public class DiscoverySweepWorkerTests
         Assert.Equal(2, store.PruneCalls.Count);
     }
 
-    private sealed class ThrowingPullRequestSource : FakePullRequestSource
-    {
-        public int Calls { get; private set; }
-
-        public override Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
-        {
-            Calls++;
-            throw new InvalidOperationException("sweep failed");
-        }
-    }
 }
 
 [Collection("ReviewForge service host")]

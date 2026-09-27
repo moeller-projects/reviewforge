@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
+using ReviewForge.Testing;
 using Xunit;
 
 namespace ReviewForge.Service.Tests;
@@ -22,7 +23,10 @@ public class StoreHealthCheckTests
     [Fact]
     public async Task Reports_unhealthy_when_store_throws()
     {
-        var check = new StoreHealthCheck(new ThrowingStore());
+        var check = new StoreHealthCheck(new FakeFindingStore
+        {
+            ThrowOnPing = new InvalidOperationException("db down"),
+        });
 
         var result = await check.CheckHealthAsync(Ctx);
 
@@ -42,16 +46,4 @@ public class StoreHealthCheckTests
         public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
-    private sealed class ThrowingStore : IFindingStore
-    {
-        public Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
-        public Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct) => Task.FromResult<PriorRun?>(null);
-        public Task<ReviewRun?> GetRunAsync(Guid runId, CancellationToken ct) => Task.FromResult<ReviewRun?>(null);
-        public Task SaveRunAsync(ReviewRun run, CancellationToken ct) => Task.CompletedTask;
-        public Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct) => Task.CompletedTask;
-        public Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
-        public Task<IReadOnlyList<ReviewRun>> GetStaleShellsAsync(DateTimeOffset olderThan, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
-        public Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct) => Task.FromResult(0);
-        public Task PingAsync(CancellationToken ct) => throw new InvalidOperationException("db down");
-    }
 }

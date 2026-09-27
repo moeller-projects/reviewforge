@@ -132,7 +132,10 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     public async Task AcquireAsync_CleanupFailure_OriginalExceptionPropagates()
     {
         var git = new TestGitOps {FailCloneTimes = 2};
-        var pool = new RepoCheckoutPool(git, new ThrowingFs {ThrowOnDelete = true}, _Root);
+        var pool = new RepoCheckoutPool(git, new FakeWorkspaceFs
+        {
+            ThrowOnDeleteDirectory = new IOException("delete failed"),
+        }, _Root);
 
         var ex = await Assert.ThrowsAsync<IOException>(
             () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
@@ -316,7 +319,10 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     [Fact]
     public async Task Acquire_tolerates_size_measurement_failure()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnSize = true }, _Root);
+        var pool = new RepoCheckoutPool(new TestGitOps(), new FakeWorkspaceFs
+        {
+            ThrowOnEnumerateFilesRecursive = new IOException("size failed"),
+        }, _Root);
 
         using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
 
@@ -326,7 +332,10 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     [Fact]
     public void Evict_tolerates_size_failure_for_survivors()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnSize = true }, _Root);
+        var pool = new RepoCheckoutPool(new TestGitOps(), new FakeWorkspaceFs
+        {
+            ThrowOnEnumerateFilesRecursive = new IOException("size failed"),
+        }, _Root);
         var path = pool.CheckoutPath("repo", "head");
         CreateCheckout(path, 1000, DateTime.UtcNow);
 
@@ -340,7 +349,10 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     [Fact]
     public void Evict_reports_delete_failures_from_count_pass()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnDelete = true }, _Root);
+        var pool = new RepoCheckoutPool(new TestGitOps(), new FakeWorkspaceFs
+        {
+            ThrowOnDeleteDirectory = new IOException("delete failed"),
+        }, _Root);
         var path = pool.CheckoutPath("repo", "head");
         CreateCheckout(path, 1000, DateTime.UtcNow.AddDays(-10));
 
@@ -356,7 +368,10 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     [Fact]
     public void Evict_reports_delete_failures_from_budget_pass()
     {
-        var pool = new RepoCheckoutPool(new TestGitOps(), new ThrowingFs { ThrowOnDelete = true }, _Root);
+        var pool = new RepoCheckoutPool(new TestGitOps(), new FakeWorkspaceFs
+        {
+            ThrowOnDeleteDirectory = new IOException("delete failed"),
+        }, _Root);
         var path = pool.CheckoutPath("repo", "head");
         CreateCheckout(path, 1000, DateTime.UtcNow);
 
@@ -439,33 +454,6 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         public void DeleteDirectory(string path, bool recursive) => _Inner.DeleteDirectory(path, recursive);
     }
 
-    private sealed class ThrowingFs : IWorkspaceFs
-    {
-        private readonly FakeWorkspaceFs _Inner = new();
-        public bool ThrowOnDelete { get; init; }
-        public bool ThrowOnSize { get; init; }
-        public void CreateDirectory(string path) => _Inner.CreateDirectory(path);
-        public bool DirectoryExists(string path) => _Inner.DirectoryExists(path);
-        public IReadOnlyList<string> EnumerateDirectories(string path) => _Inner.EnumerateDirectories(path);
-        public string[] EnumerateFileSystemEntries(string path) => _Inner.EnumerateFileSystemEntries(path);
-
-        public string[] EnumerateFilesRecursive(string path)
-            => ThrowOnSize ? throw new IOException("size failed") : _Inner.EnumerateFilesRecursive(path);
-
-        public long GetFileLength(string path) => _Inner.GetFileLength(path);
-        public DateTime GetLastWriteTimeUtc(string path) => _Inner.GetLastWriteTimeUtc(path);
-        public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
-
-        public void DeleteDirectory(string path, bool recursive)
-        {
-            if (ThrowOnDelete)
-            {
-                throw new IOException("delete failed");
-            }
-
-            _Inner.DeleteDirectory(path, recursive);
-        }
-    }
 
     [Fact]
     public async Task Evict_skips_a_checkout_held_by_a_lease()

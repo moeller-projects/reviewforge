@@ -171,7 +171,10 @@ public class ReviewWorkerTests
     [Fact]
     public async Task Worker_persists_failed_run()
     {
-        using var h = new Harness(git: new ThrowingGitOps());
+        using var h = new Harness(git: new FakeGitOps
+        {
+            ThrowOnGetDiff = new InvalidOperationException("git exploded"),
+        });
         var runId = Guid.NewGuid();
         Assert.True(h.Claims.TryClaim(Key, runId, out _));
         Assert.True(h.Queue.TryEnqueue(new ReviewRequest(runId, Key, h.Clock.GetUtcNow())).Accepted);
@@ -233,7 +236,9 @@ public class ReviewWorkerTests
     [Fact]
     public async Task Worker_failure_persist_never_throws_when_store_fails()
     {
-        using var h = new Harness(git: new ThrowingGitOps(), store: new ThrowingStore());
+        using var h = new Harness(
+            git: new FakeGitOps {ThrowOnGetDiff = new InvalidOperationException("git exploded")},
+            store: new FakeFindingStore {ThrowOnSave = new InvalidOperationException("store down")});
         var pr2 = Key with {PrId = 2};
         var runA = Guid.NewGuid();
         var runB = Guid.NewGuid();
@@ -264,17 +269,6 @@ public class ReviewWorkerTests
         }
     }
 
-    private sealed class ThrowingGitOps : FakeGitOps
-    {
-        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
-            => throw new InvalidOperationException("git exploded");
-    }
-
-    private sealed class ThrowingStore : FakeFindingStore
-    {
-        public override Task SaveRunAsync(ReviewRun run, CancellationToken ct)
-            => throw new InvalidOperationException("store down");
-    }
 
     private sealed class FailingFetchSource : FakePullRequestSource
     {

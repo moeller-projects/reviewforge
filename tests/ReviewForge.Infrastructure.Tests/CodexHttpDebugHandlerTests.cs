@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using ReviewForge.Infrastructure.Codex;
+using ReviewForge.Testing;
 using Xunit;
 
 namespace ReviewForge.Infrastructure.Tests;
@@ -12,7 +13,7 @@ public class CodexHttpDebugHandlerTests
     public async Task Logs_request_and_response_without_authorization_header()
     {
         var output = new StringWriter();
-        var api = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+        var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
         });
@@ -29,10 +30,8 @@ public class CodexHttpDebugHandlerTests
         var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        // Body was buffered for logging, then re-buffered so the caller can still read it.
         Assert.Equal("{\"ok\":true}", await response.Content.ReadAsStringAsync());
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
-
         var log = output.ToString();
         Assert.Contains("[codex-http] request POST https://chatgpt.com/backend-api/codex/responses", log);
         Assert.Contains("X-Trace=abc", log);
@@ -46,7 +45,7 @@ public class CodexHttpDebugHandlerTests
     public async Task Handles_bodyless_request_and_response_without_content_type()
     {
         var output = new StringWriter();
-        var api = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.NoContent));
+        var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.NoContent));
         var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
         var client = new HttpClient(handler);
 
@@ -58,17 +57,11 @@ public class CodexHttpDebugHandlerTests
         Assert.Contains("[codex-http] response 204", log);
     }
 
-    private sealed class StubHandler(Func<HttpResponseMessage> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(respond());
-    }
-
     [Fact]
     public async Task Long_body_is_truncated_with_marker()
     {
         var output = new StringWriter();
-        var api = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+        var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
         });
@@ -89,7 +82,7 @@ public class CodexHttpDebugHandlerTests
     public async Task Short_body_is_logged_in_full()
     {
         var output = new StringWriter();
-        var api = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
+        var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
         var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
         var client = new HttpClient(handler);
 
@@ -104,7 +97,7 @@ public class CodexHttpDebugHandlerTests
     public async Task Sensitive_headers_are_redacted_by_name()
     {
         var output = new StringWriter();
-        var api = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
+        var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
         var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
         var client = new HttpClient(handler);
         var request = new HttpRequestMessage(HttpMethod.Post, "https://chatgpt.com/backend-api/codex/responses");
@@ -126,7 +119,7 @@ public class CodexHttpDebugHandlerTests
     public async Task Non_sensitive_headers_stay_visible()
     {
         var output = new StringWriter();
-        var api = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
+        var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
         var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
         var client = new HttpClient(handler);
         var request = new HttpRequestMessage(HttpMethod.Post, "https://chatgpt.com/backend-api/codex/responses");
@@ -145,7 +138,7 @@ public class CodexHttpDebugHandlerTests
         {
             Environment.SetEnvironmentVariable(CodexHttpDebugHandler.MaxBytesEnvironmentVariable, "16");
             var output = new StringWriter();
-            var api = new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
+            var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
             var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
             var client = new HttpClient(handler);
 

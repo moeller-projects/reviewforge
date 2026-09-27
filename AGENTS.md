@@ -84,7 +84,10 @@ prompts/native-review-system.md   human-editable copy; the runtime default is th
 - Tests: xUnit, no mocking framework — hand-written fakes live in `ReviewForge.Testing`.
   Service tests run the real host in-process via `WebApplicationFactory<Program>` with
   fakes swapped in DI. `ScriptedChatClient` scripts the agent loop's tool calls.
-- Test projects get internals via `<InternalsVisibleTo>` in the SUT csproj.
+  New doubles go to `ReviewForge.Testing` unless provably single-use; dependency-direction
+  changes require an architecture-test change in the same PR.
+  `ReviewForge.Testing` is the canonical shared-double layer; configure its narrow
+  `ThrowOn*` knobs for failure paths instead of adding duplicate throwing subclasses.
 - Commits: Conventional Commits (`feat`, `fix`, `refactor`, `test`, …), imperative,
   no trailing period.
 

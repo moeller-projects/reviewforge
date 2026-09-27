@@ -235,7 +235,8 @@ public class NativeReviewAgentCoverageTests : IDisposable
     [Fact]
     public async Task Streaming_usage_is_recorded_and_updates_are_forwarded()
     {
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(new StreamingChatClient()));
+        const string model = "streaming-usage-model";
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(new StreamingChatClient(), model));
         var collector = new ReviewCollector();
         var tokenUsageType = typeof(NativeReviewAgent).GetNestedType(
             "TokenUsage", System.Reflection.BindingFlags.NonPublic)!;
@@ -255,11 +256,21 @@ public class NativeReviewAgentCoverageTests : IDisposable
             }
         };
         listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
-            Interlocked.Add(ref cached, measurement));
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "model" && (string?)tag.Value == model)
+                {
+                    Interlocked.Add(ref cached, measurement);
+                    break;
+                }
+            }
+        });
         listener.Start();
 
         await foreach (var update in pipeline.GetStreamingResponseAsync(
-                           [new ChatMessage(ChatRole.User, "stream")]))
+                           [new ChatMessage(ChatRole.User, "stream")],
+                           new ChatOptions {ModelId = model}))
         {
             updates.Add(update);
         }
