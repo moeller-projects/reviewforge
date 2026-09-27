@@ -1,12 +1,47 @@
 # ReviewForge alert rules (PrometheusRule). PromQL against the Prometheus-sanitized
 # OBS-1 series names (dots -> underscores; histograms gain _bucket/_sum/_count).
-# Start with static thresholds; convert latency/cost rules to baseline-relative once
-# 2+ weeks of history exist. Route all to a low-noise channel first to measure false
-# positives before paging.
+#
+# Two rule families, per the roadmap (item 3.4):
+#   - STATIC floors detect *broken*: conditions that are never acceptable regardless of
+#     history (queue rejecting, failure rate, task_done missing). These fire from day one.
+#   - BASELINE-RELATIVE rules detect *drift*: ratios against 14-day recording-rule
+#     baselines of this system's own normal. They gate on the baseline series existing
+#     (`and on() (count(...))`) so a cold start with no history never fires.
+#
+# Route all to a low-noise channel first to measure false positives before paging.
 
 groups:
+  - name: reviewforge-baselines
+    rules:
+      # 14-day average run duration (ms) across all runs.
+      - record: reviewforge:run_duration_ms:baseline_avg14d
+        expr: |
+          sum(rate(reviewforge_review_duration_ms_sum[14d]))
+          /
+          sum(rate(reviewforge_review_duration_ms_count[14d]))
+
+      # 14-day average per-stage duration (ms), tagged by stage.
+      - record: reviewforge:stage_duration_ms:baseline_avg14d
+        expr: |
+          sum by (stage) (rate(reviewforge_stage_duration_ms_sum[14d]))
+          /
+          sum by (stage) (rate(reviewforge_stage_duration_ms_count[14d]))
+
+      # 14-day average LLM tokens consumed per completed run.
+      - record: reviewforge:llm_tokens_per_run:baseline_avg14d
+        expr: |
+          sum(rate(reviewforge_llm_tokens_total[14d]))
+          /
+          sum(rate(reviewforge_reviews_completed_total[14d]))
+
+      # 14-day average queue depth.
+      - record: reviewforge:queue_depth:baseline_avg14d
+        expr: avg_over_time(reviewforge_queue_depth[14d])
+
   - name: reviewforge
     rules:
+      # ---- Static floors: broken, never acceptable, fire from day one ----
+
       - alert: ReviewForgeQueueSaturated
         expr: reviewforge_queue_depth / reviewforge_queue_capacity > 0.8
         for: 5m
@@ -34,24 +69,6 @@ groups:
           summary: "Review run failure rate exceeded 5%"
           description: "{{ $value | humanizePercentage }} of recent runs failed."
 
-      - alert: ReviewForgeRunLatencyRegression
-        expr: histogram_quantile(0.95, rate(reviewforge_review_duration_ms_bucket[30m])) > 1.5 * (histogram_quantile(0.95, rate(reviewforge_review_duration_ms_bucket[7d])))
-        for: 30m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Review run p95 latency regressed"
-          description: "p95 run latency is >1.5x the 7-day baseline."
-
-      - alert: ReviewForgeTokenSpike
-        expr: rate(reviewforge_llm_tokens_total[1h]) > 2 * (rate(reviewforge_llm_tokens_total[7d]))
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "LLM token burn spiked"
-          description: "Token consumption is >2x the 7-day baseline — cost anomaly."
-
       - alert: ReviewForgeTaskDoneMissing
         expr: rate(reviewforge_agent_task_done_missing_total[15m]) > 0
         for: 0m
@@ -78,3 +95,68 @@ groups:
         annotations:
           summary: "In-flight claims are expiring"
           description: "Claim expiry observed — possible P1-6 regression (claim lost while queued)."
+
+      # ---- Baseline-relative: drift against this system's own 14-day normal ----
+      # Fires only once baseline history exists (the `and on() (count(...))` gate); a
+      # cold start with no history stays silent instead of guessing.
+
+      - alert: ReviewForgeRunLatencyDrift
+        expr: |
+          (
+            histogram_quantile(0.95, sum by (le) (rate(reviewforge_review_duration_ms_bucket[30m])))
+            /
+            reviewforge:run_duration_ms:baseline_avg14d
+          ) > 3
+          and on() (count(reviewforge:run_duration_ms:baseline_avg14d) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Review run p95 latency drifted from baseline"
+          description: "p95 run latency is {{ $value | humanize }}x the 14-day baseline average."
+
+      - alert: ReviewForgeStageLatencyDrift
+        # No existence gate needed: the on(stage) division drops any stage without a
+        # baseline, so cold starts (no history at all) cannot fire this alert.
+        expr: |
+          (
+            histogram_quantile(0.95, sum by (le, stage) (rate(reviewforge_stage_duration_ms_bucket[30m])))
+            /
+            on(stage) reviewforge:stage_duration_ms:baseline_avg14d
+          ) > 3
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stage {{ $labels.stage }} p95 latency drifted from baseline"
+          description: "Stage {{ $labels.stage }} p95 is {{ $value | humanize }}x its 14-day baseline average."
+
+      - alert: ReviewForgeTokenDrift
+        expr: |
+          (
+            sum(rate(reviewforge_llm_tokens_total[1h]))
+            /
+            sum(rate(reviewforge_reviews_completed_total[1h]))
+          )
+          /
+          reviewforge:llm_tokens_per_run:baseline_avg14d > 3
+          and on() (count(reviewforge:llm_tokens_per_run:baseline_avg14d) > 0)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM token burn drifted from baseline"
+          description: "Tokens per run are {{ $value | humanize }}x the 14-day baseline — cost anomaly."
+
+      - alert: ReviewForgeQueueDepthDrift
+        expr: |
+          reviewforge_queue_depth
+          /
+          reviewforge:queue_depth:baseline_avg14d > 3
+          and on() (count(reviewforge:queue_depth:baseline_avg14d) > 0)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue depth drifted from baseline"
+          description: "Queue depth is {{ $value | humanize }}x the 14-day baseline average — reviews backing up."

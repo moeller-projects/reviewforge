@@ -96,16 +96,32 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: "**/coverage.cobertura.xml"
 
+  # Alert-rule correctness is schema-blind (PromQL parses without a live Prometheus), so
+  # it runs as its own small job. promtool runs from the image pinned by digest below —
+  # bump the digest (not a tag) when upgrading.
+  alert-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate alert rules with promtool
+        run: |
+          docker run --rm -v "$PWD/deploy/grafana/alerts:/alerts:ro" \
+            prom/prometheus@sha256:29c1e0b48ad816750245dea3d65ac3ce57dda30547e67b1e9a5176e2953cc4dc \
+            promtool check rules /alerts/reviewforge.yaml
+
   # One status check regardless of matrix leg: use "CI Result" for branch protection.
   ci-result:
-    needs: build-and-test
+    needs: [build-and-test, alert-rules]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate matrix result
         run: |
           result="${{ needs.build-and-test.result }}"
-          echo "Matrix result: $result"
-          if [ "$result" != "success" ]; then
+          alerts="${{ needs.alert-rules.result }}"
+          echo "Matrix result: $result; alert rules: $alerts"
+          if [ "$result" != "success" ] || [ "$alerts" != "success" ]; then
             exit 1
           fi
