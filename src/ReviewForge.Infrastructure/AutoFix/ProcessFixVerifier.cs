@@ -19,7 +19,6 @@ public sealed class ProcessFixVerifier : IFixVerifier
 {
     public const int MaxOutputBytes = 64 * 1024;
 
-    private static readonly int LineTerminatorBytes = Encoding.UTF8.GetByteCount(Environment.NewLine);
 
     private readonly string _Executable;
     private readonly string[] _Arguments;
@@ -50,7 +49,9 @@ public sealed class ProcessFixVerifier : IFixVerifier
 
         if (editedFiles.Count > MaxFileInvocations)
         {
-            return await RunOnceAsync(repoDir, _Arguments, ct).ConfigureAwait(false);
+            return new FixVerdict(
+                false,
+                $"verification supports at most {MaxFileInvocations} edited files when {ProcessFixCommand.FilePlaceholder} is used");
         }
 
         var failures = new List<string>();
@@ -93,16 +94,9 @@ public sealed class ProcessFixVerifier : IFixVerifier
             process.StartInfo.ArgumentList.Add(arg);
         }
 
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        var stdoutBytes = 0;
-        var stderrBytes = 0;
-        process.OutputDataReceived += (_, e) => AppendBounded(stdout, ref stdoutBytes, e.Data);
-        process.ErrorDataReceived += (_, e) => AppendBounded(stderr, ref stderrBytes, e.Data);
-
         process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+        var stdoutTask = ReadBoundedAsync(process.StandardOutput.BaseStream, timeoutCts.Token);
+        var stderrTask = ReadBoundedAsync(process.StandardError.BaseStream, timeoutCts.Token);
         try
         {
             await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
@@ -111,6 +105,7 @@ public sealed class ProcessFixVerifier : IFixVerifier
         {
             TryKillTree(process);
             Reap(process);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             if (ct.IsCancellationRequested)
             {
                 throw;
@@ -119,69 +114,46 @@ public sealed class ProcessFixVerifier : IFixVerifier
             return new FixVerdict(false, $"verification timed out after {_TimeoutSeconds}s");
         }
 
+        var output = await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
         process.WaitForExit();
         if (process.ExitCode == 0)
         {
             return new FixVerdict(true, "exit 0");
         }
 
-        var tail = Tail(stderr);
+        var tail = Tail(Encoding.UTF8.GetString(output[1]));
         return new FixVerdict(false, string.IsNullOrWhiteSpace(tail)
             ? $"exit {process.ExitCode}"
             : $"exit {process.ExitCode}: {tail}");
     }
 
-    private static void AppendBounded(StringBuilder sb, ref int retainedBytes, string? data)
+    private static async Task<byte[]> ReadBoundedAsync(Stream stream, CancellationToken ct)
     {
-        if (data is null)
+        var buffer = new byte[8192];
+        using var retained = new MemoryStream(capacity: MaxOutputBytes);
+        try
         {
-            return;
-        }
-
-        var available = MaxOutputBytes - retainedBytes;
-        if (available < LineTerminatorBytes)
-        {
-            return;
-        }
-
-        var payloadBudget = available - LineTerminatorBytes;
-        var payloadBytes = Encoding.UTF8.GetByteCount(data);
-        if (payloadBytes <= payloadBudget)
-        {
-            sb.Append(data);
-            retainedBytes += payloadBytes;
-        }
-        else
-        {
-            var usedBytes = 0;
-            for (var offset = 0; offset < data.Length;)
+            int read;
+            while ((read = await stream.ReadAsync(buffer.AsMemory(), ct).ConfigureAwait(false)) > 0)
             {
-                var charCount = char.IsHighSurrogate(data[offset])
-                    && offset + 1 < data.Length
-                    && char.IsLowSurrogate(data[offset + 1])
-                    ? 2
-                    : 1;
-                var charBytes = Encoding.UTF8.GetByteCount(data.AsSpan(offset, charCount));
-                if (usedBytes + charBytes > payloadBudget)
+                var remaining = MaxOutputBytes - (int)retained.Length;
+                if (remaining > 0)
                 {
-                    break;
+                    retained.Write(buffer, 0, Math.Min(read, remaining));
                 }
-
-                sb.Append(data, offset, charCount);
-                usedBytes += charBytes;
-                offset += charCount;
             }
-
-            retainedBytes += usedBytes;
+        }
+        catch (OperationCanceledException)
+        {
+            // Preserve the bounded prefix while the process is being terminated.
         }
 
-        sb.Append(Environment.NewLine);
-        retainedBytes += LineTerminatorBytes;
+        return retained.ToArray();
     }
 
-    private static string Tail(StringBuilder stderr)
+
+    private static string Tail(string text)
     {
-        var text = stderr.ToString();
         const int max = 2000;
         return text.Length <= max ? text.Trim() : text[^max..].Trim();
     }

@@ -201,6 +201,7 @@ public sealed class PublishFindingsStage(
 
             await source.PostSuggestionThreadAsync(ctx.Pr, anchor, body, ct)
                 .ConfigureAwait(false);
+            await PersistCommandAuditAsync(ctx, ct).ConfigureAwait(false);
             Interlocked.Increment(ref publishedFixCount);
             ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
             // This guard deliberately sits after the awaited suggestion write and directly
@@ -258,6 +259,17 @@ public sealed class PublishFindingsStage(
 
     private static TagList FixTags(FixOrigin origin, string rule)
         => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
+    private Task PersistCommandAuditAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        var findings = AppliedFixPersistence.BuildFinalRows(
+            ctx, key => ctx.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
+        var pr = ctx.RequirePullRequest();
+        return store.SaveRunAsync(
+            new ReviewRun(
+                ctx.RunId, ctx.Pr, pr.SourceCommitSha, ctx.Kind,
+                ctx.StartedAt, CompletedAt: null, Success: false, findings),
+            ct);
+    }
 
     private async Task EnsureHeadUnchangedAsync(ReviewContext ctx, CancellationToken ct)
     {

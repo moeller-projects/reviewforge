@@ -42,15 +42,26 @@ internal static class ExecutableResolver
         var extensions = OperatingSystem.IsWindows()
             ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            : [string.Empty];
+            : [];
+        var configuredExtension = Path.GetExtension(executable);
+        var hasPathext = extensions.Any(ext =>
+            string.Equals(ext, configuredExtension, StringComparison.OrdinalIgnoreCase));
 
         foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
-            foreach (var extension in extensions)
+            if (File.Exists(Path.Combine(directory, executable)))
             {
-                if (File.Exists(Path.Combine(directory, executable + extension)))
+                return true;
+            }
+
+            if (!hasPathext)
+            {
+                foreach (var extension in extensions)
                 {
-                    return true;
+                    if (File.Exists(Path.Combine(directory, executable + extension)))
+                    {
+                        return true;
+                    }
                 }
             }
         }

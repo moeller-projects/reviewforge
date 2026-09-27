@@ -276,7 +276,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
             finally
             {
-                RevertFile(editor, repoDir, path, snapshotBytes);
+                RevertFile(editor, guard, repoDir, path, snapshotBytes);
             }
         }
     }
@@ -411,21 +411,10 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     command.ThreadId);
                 AttachFix(null, applied, new AppliedFix($"{AppliedFix.CommandKeyPrefix}{command.ThreadId}", proposal, _Verifier.Name), ctx);
                 setBudget(getBudget() - 1);
-                if (_Store is not null)
-                {
-                    ctx.AppliedFixes = applied;
-                    var auditRows = AppliedFixPersistence.BuildFinalRows(
-                        ctx, key => ctx.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
-                    await _Store.SaveRunAsync(
-                        new ReviewRun(
-                            ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Kind,
-                            ctx.StartedAt, null, false, auditRows),
-                        ct).ConfigureAwait(false);
-                }
             }
             finally
             {
-                RevertFile(editor, repoDir, path, snapshotBytes);
+                RevertFile(editor, guard, repoDir, path, snapshotBytes);
             }
         }
 
@@ -455,11 +444,18 @@ public sealed class AutoFixFindingsStage : IReviewStage
     /// <summary>Reverts the file to its pre-pass state; a failed revert fails the run
     /// (a dirty pooled checkout would poison later runs).</summary>
     private static void RevertFile(
-        HashLineEditor editor, string repoDir, string path, byte[] snapshotBytes)
+        HashLineEditor editor, RepoPathGuard guard, string repoDir, string path, byte[] snapshotBytes)
     {
-        var abs = Path.Combine(repoDir, path.Replace('/', Path.DirectorySeparatorChar));
-        var directory = Path.GetDirectoryName(abs)!;
-        var temp = Path.Combine(directory, "." + Path.GetFileName(abs) + ".rf-revert.tmp");
+        var resolved = guard.Resolve(path, out var resolveError)
+            ?? throw new IOException($"auto-fix revert path denied for {path}: {resolveError}");
+        var directory = Path.GetDirectoryName(resolved)
+            ?? throw new IOException($"auto-fix revert path has no directory: {path}");
+        if (new DirectoryInfo(directory).LinkTarget is not null)
+        {
+            throw new IOException($"auto-fix revert parent is a symlink: {directory}");
+        }
+
+        var temp = Path.Combine(directory, "." + Path.GetFileName(resolved) + ".rf-revert.tmp");
         try
         {
             if (File.Exists(temp))
@@ -468,7 +464,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
 
             File.WriteAllBytes(temp, snapshotBytes);
-            File.Move(temp, abs, overwrite: true);
+            File.Move(temp, resolved, overwrite: true);
         }
         finally
         {
@@ -479,12 +475,13 @@ public sealed class AutoFixFindingsStage : IReviewStage
         }
 
         _ = editor.ReadAllLines(path);
-        if (!File.ReadAllBytes(abs).SequenceEqual(snapshotBytes))
+        if (!File.ReadAllBytes(resolved).SequenceEqual(snapshotBytes))
         {
             throw new InvalidOperationException(
                 $"auto-fix revert failed for {path}: checkout is left dirty (pooled-checkout poisoning)");
         }
     }
+
     private static string OneSentence(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
