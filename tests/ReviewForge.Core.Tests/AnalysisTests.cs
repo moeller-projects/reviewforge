@@ -610,3 +610,68 @@ public class RepoPathTests
     public void NormalizeKey_lowercases()
         => Assert.Equal("src/foo.cs", RepoPath.NormalizeKey(@"\Src\Foo.cs"));
 }
+public class TrivialDiffTests
+{
+    private const string DeletionsOnly = """
+        diff --git a/src/A.cs b/src/A.cs
+        --- a/src/A.cs
+        +++ b/src/A.cs
+        @@ -1,2 +1,0 @@
+        -line one
+        -line two
+        """;
+
+    private const string OneAddedLine = """
+        diff --git a/src/A.cs b/src/A.cs
+        --- a/src/A.cs
+        +++ b/src/A.cs
+        @@ -1,0 +2,1 @@
+        +added line
+        """;
+
+    private const string ExcludedFileChurn = """
+        diff --git a/package-lock.json b/package-lock.json
+        --- a/package-lock.json
+        +++ b/package-lock.json
+        @@ -1,0 +2,1 @@
+        +"added dependency entry"
+        """;
+
+    [Fact]
+    public void Deletions_only_diff_is_trivial()
+    {
+        var diff = DiffIndex.Parse(DeletionsOnly);
+        Assert.True(TrivialDiff.IsTrivial(diff, [], ["src/A.cs"]));
+    }
+
+    [Fact]
+    public void One_added_line_is_not_trivial()
+    {
+        var diff = DiffIndex.Parse(OneAddedLine);
+        Assert.False(TrivialDiff.IsTrivial(diff, [], ["src/A.cs"]));
+    }
+
+    [Fact]
+    public void Excluded_files_do_not_count_toward_the_skip()
+    {
+        // The lockfile gained a line, but it is not reviewable — only src/A.cs counts.
+        var diff = DiffIndex.Parse(DeletionsOnly + "\n" + ExcludedFileChurn);
+        Assert.True(TrivialDiff.IsTrivial(diff, [], ["src/A.cs"]));
+        Assert.False(TrivialDiff.IsTrivial(diff, [], ["src/A.cs", "package-lock.json"]));
+    }
+
+    [Fact]
+    public void Pending_replies_force_a_real_run()
+    {
+        var diff = DiffIndex.Parse(DeletionsOnly);
+        Assert.False(TrivialDiff.IsTrivial(
+            diff, [new PendingReply(1, "k", "alice", "please fix")], ["src/A.cs"]));
+    }
+
+    [Fact]
+    public void Empty_reviewable_set_is_trivial()
+    {
+        var diff = DiffIndex.Parse(OneAddedLine);
+        Assert.True(TrivialDiff.IsTrivial(diff, [], []));
+    }
+}

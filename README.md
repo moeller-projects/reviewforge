@@ -126,6 +126,10 @@ fail-fast at startup. PAT and API keys come from the environment only.
   startup validation. Unset (default) aliases the Fast tier to the full model — identical
   behavior, zero config. Token metrics carry a `model` tag, so per-tier cost splits out
   without new series.
+- `ReviewForge:TrivialDiffSkipEnabled` — default true. Iterations whose post-exclusion diff
+  adds zero reviewable lines (lockfile-only churn, deletions-only) with no open threads get
+  a clean vote without an LLM call; counted by `reviewforge.reviews.trivial_total`. The
+  deterministic homoglyph analyzer still runs. Set false to restore the always-run behavior.
 
 ## Auto-fix (suggestion-only, off by default)
 

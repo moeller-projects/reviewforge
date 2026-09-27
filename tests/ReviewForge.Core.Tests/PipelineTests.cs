@@ -355,6 +355,104 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteReasoning_skips_the_agent_for_a_trivial_diff()
+    {
+        var script = new ScriptedChatClient();
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.FollowUp;
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(0, script.Calls);
+        Assert.NotNull(ctx.Result);
+        Assert.Equal("trivial diff — no agent run", ctx.Result.ReviewDepth);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_runs_the_agent_when_the_skip_is_disabled()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+
+        await new ExecuteReasoningStage(
+                new NativeReviewAgent(new FakeChatClientFactory(script)), trivialDiffSkipEnabled: false)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotEqual(0, script.Calls);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_runs_the_agent_when_threads_await_answers()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+        ctx.PendingReplies = [new PendingReply(1, "k", "alice", "please fix")];
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotEqual(0, script.Calls);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_records_homoglyph_findings_even_when_trivial()
+    {
+        // The added (homoglyph-bearing) line lives in an excluded file: the deterministic
+        // analyzer sees the raw diff, the trivial predicate sees only reviewable files.
+        var script = new ScriptedChatClient();
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/gen/logo.gen.cs b/src/gen/logo.gen.cs
+            --- a/src/gen/logo.gen.cs
+            +++ b/src/gen/logo.gen.cs
+            @@ -1,0 +2,1 @@
+            +var fileNаme = value;
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(0, script.Calls); // trivial: zero added lines in reviewable files
+        var finding = Assert.Single(ctx.Collector.Findings); // homoglyph finding still recorded
+        Assert.NotNull(finding.DedupeKey);
+    }
+
+    [Fact]
     public async Task ExecuteReasoning_assigns_and_deduplicates_automatic_homoglyph_findings()
     {
         var script = new ScriptedChatClient(

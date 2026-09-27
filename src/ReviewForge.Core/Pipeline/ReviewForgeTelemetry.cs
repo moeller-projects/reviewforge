@@ -46,6 +46,8 @@ public static class ReviewForgeTelemetry
         Meter.CreateCounter<long>("reviewforge.reviews.completed_total");   // tags: result
     public static readonly Histogram<double> ReviewDurationMilliseconds =
         Meter.CreateHistogram<double>("reviewforge.review.duration_ms", "ms"); // tags: result
+    public static readonly Counter<long> TrivialReviews =
+        Meter.CreateCounter<long>("reviewforge.reviews.trivial_total"); // LLM skipped: zero added reviewable lines
     public static readonly Histogram<double> StageDurationMilliseconds =
         Meter.CreateHistogram<double>("reviewforge.stage.duration_ms", "ms");  // tags: stage, result
 

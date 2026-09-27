@@ -69,6 +69,11 @@ public sealed class ReviewForgeServiceOptions
     /// <summary>Opt-in: exports OTel traces/metrics via OTLP. Default false (no exporter).</summary>
     public bool OtlpEnabled { get; init; }
 
+    /// <summary>Skips the LLM call when an iteration adds zero reviewable lines and has no
+    /// open threads (lockfile-only churn, deletions-only) — the run publishes a clean vote
+    /// from a synthetic result. Default true; set false to restore the pre-skip behavior.</summary>
+    public bool TrivialDiffSkipEnabled { get; init; } = true;
+
     /// <summary>
     /// In-flight shells (runs persisted by BeginRunStage but never finalized — crash or kill
     /// between stages 75 and 100) older than this at startup are reaped and finalized as
@@ -187,7 +192,10 @@ public sealed class ReviewPipelineFactory(
             new PrepareRepositoryStage(checkoutPool, loggerFactory.CreateLogger<PrepareRepositoryStage>(), diffBudget),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
-            new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),
+            new ExecuteReasoningStage(
+                agent, findingsDir,
+                maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile,
+                trivialDiffSkipEnabled: opts.TrivialDiffSkipEnabled),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new AutoFixFindingsStage(
                 registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>()),

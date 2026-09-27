@@ -280,6 +280,34 @@ public class ServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Trivial_diff_run_skips_the_llm_and_publishes_a_clean_vote()
+    {
+        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        _Factory.Git.Diff = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+
+        var client = _Factory.CreateClient();
+        var submit = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
+
+        Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+        Assert.Equal(RunState.Completed, status.State);
+        Assert.Equal(0, _Factory.Chat.Calls); // zero LLM calls on the trivial path
+        Assert.Single(_Factory.Source.Votes);
+        Assert.Equal(ReviewerVote.NoResponse, _Factory.Source.Votes[0].Vote); // clean-run vote
+        var run = Assert.Single(_Factory.Store.Runs);
+        Assert.True(run.Success); // head is marked reviewed for the gate
+    }
+
+    [Fact]
     public async Task Different_heads_in_same_repo_complete_concurrently()
     {
         var firstPr = new PrKey("o", "p", "r", 51);

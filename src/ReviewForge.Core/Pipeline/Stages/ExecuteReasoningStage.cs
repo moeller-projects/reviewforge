@@ -14,7 +14,8 @@ public sealed class ExecuteReasoningStage(
     NativeReviewAgent agent,
     string? findingsDir = null,
     int maxDiffChars = 200_000,
-    int maxDiffCharsPerFile = 40_000) : IReviewStage
+    int maxDiffCharsPerFile = 40_000,
+    bool trivialDiffSkipEnabled = true) : IReviewStage
 {
     // Defaults mirror PromptInput so unconfigured hosts keep the same prompt budget.
 
@@ -71,6 +72,25 @@ public sealed class ExecuteReasoningStage(
             finding.DedupeKey = key;
             ctx.Collector.AddFinding(finding);
         }
+
+        // Trivial-diff fast path: zero added reviewable lines and nothing awaiting an
+        // answer → clean vote without an LLM call. The deterministic homoglyph analyzer
+        // above has already run, so its findings are still recorded. Unknown reviewability
+        // (stage-3 fields unset, e.g. stage unit tests) never skips.
+        if (trivialDiffSkipEnabled && ctx.ReviewableFiles is { } reviewable
+            && TrivialDiff.IsTrivial(ctx.Diff ?? DiffIndex.Parse(ctx.DiffText), ctx.PendingReplies, reviewable))
+        {
+            ReviewForgeTelemetry.TrivialReviews.Add(1);
+            ctx.Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative {ReviewSummary = "No reviewable changes in this iteration."},
+                Findings = [],
+                Uncertainties = [],
+                ReviewDepth = "trivial diff — no agent run",
+            };
+            return;
+        }
+
         var rootFiles = Directory.Exists(repoDir) ? Directory.GetFiles(repoDir, "*", SearchOption.TopDirectoryOnly) : [];
         var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
