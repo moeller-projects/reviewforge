@@ -60,7 +60,13 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
             RunStatus? status = null;
             for (var i = 0; i < 400 && status?.State != RunState.Completed && status?.State != RunState.Failed; i++)
             {
-                status = await client.GetFromJsonAsync<RunStatus>($"/reviews/{runId}");
+                // 404 is a legitimate in-flight window: the worker's claim removed the
+                // queue row and BeginRunStage has not yet persisted the run shell. Linux
+                // CI never lands in it; Windows timing does.
+                var response = await client.GetAsync($"/reviews/{runId}");
+                status = response.IsSuccessStatusCode
+                    ? await response.Content.ReadFromJsonAsync<RunStatus>()
+                    : null;
                 await Task.Delay(50);
             }
 

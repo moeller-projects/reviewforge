@@ -113,7 +113,10 @@ public class SqliteFindingStoreTests : IDisposable
         var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-store-" + Guid.NewGuid().ToString("N") + ".db");
         try
         {
-            var store = new SqliteFindingStore($"Data Source={dbPath}", StoreJournalMode.Delete);
+            // Pooling=False: a pooled store connection would keep the file handle open
+            // after SaveRunAsync, and the cleanup File.Delete below fails on Windows
+            // (Linux unlinks open files). The class fixture uses the same setting.
+            var store = new SqliteFindingStore($"Data Source={dbPath};Pooling=False", StoreJournalMode.Delete);
             await store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
 
             await using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
