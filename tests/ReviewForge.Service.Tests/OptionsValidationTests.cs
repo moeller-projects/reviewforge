@@ -90,6 +90,25 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void Store_journal_mode_outside_wal_delete_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "Truncate"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("JournalMode must be Wal | Delete", ex.Message);
+    }
+
+    [Fact]
+    public void Store_journal_mode_accepts_case_insensitive_delete()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "delete"))]);
+
+        Assert.Equal("delete", provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Store.JournalMode);
+    }
+
+    [Fact]
     public void Discovery_max_enqueues_below_one_is_rejected()
     {
         using var provider = Build([.. With(ValidConfig(), ("Discovery:MaxEnqueuesPerSweep", "0"))]);

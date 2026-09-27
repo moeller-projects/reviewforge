@@ -116,6 +116,10 @@ fail-fast at startup. PAT and API keys come from the environment only.
 - `ReviewForge:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
   `Medium`, `High`, `ExtraHigh`). Omit it (or leave unset) to keep the provider default. The
   Codex endpoint may ignore or restrict effort per model — verify against the deployed model.
+- `ReviewForge:Store:JournalMode` — `Wal` (default) or `Delete`. WAL lets readers proceed
+  during writes and tolerates a power loss losing only the last transaction — safe for this
+  dedupe/audit store. WAL requires POSIX advisory locks: keep `StoreConnectionString` on a
+  local disk (the shipped container volume is fine); on network filesystems use `Delete`.
 
 ## Auto-fix (suggestion-only, off by default)
 

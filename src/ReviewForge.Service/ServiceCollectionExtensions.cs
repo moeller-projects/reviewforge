@@ -90,6 +90,8 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
             .Validate(o => o.Retention.Days >= 1, "ReviewForge:Retention:Days must be at least 1")
             .Validate(o => o.Retention.MinRunsPerPr >= 1, "ReviewForge:Retention:MinRunsPerPr must be at least 1")
+            .Validate(o => Enum.TryParse<StoreJournalMode>(o.Store.JournalMode, ignoreCase: true, out _),
+                "ReviewForge:Store:JournalMode must be Wal | Delete")
             .ValidateOnStart();
 
         services.AddOptions<RepoReadToolsOptions>()
@@ -171,7 +173,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IFindingStore>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
-            return new SqliteFindingStore(opts.StoreConnectionString);
+            return new SqliteFindingStore(
+                opts.StoreConnectionString,
+                Enum.Parse<StoreJournalMode>(opts.Store.JournalMode, ignoreCase: true));
         });
 
         services.AddSingleton(sp => new ReviewPipelineFactory(

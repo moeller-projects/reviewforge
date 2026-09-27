@@ -8,23 +8,24 @@ namespace ReviewForge.Infrastructure.Persistence;
 
 /// <summary>
 /// SQLite-backed finding store. Schema via EnsureCreated — no migrations needed.
-/// WAL journal mode (set once, persists in the file) plus a per-connection busy_timeout
-/// let multiple workers read and write the same database without SQLITE_BUSY failures.
+/// WAL journal mode plus a per-connection busy_timeout (both applied by
+/// <see cref="SqliteConnectionPragmasInterceptor"/> on every opened connection) let
+/// multiple workers read and write the same database without SQLITE_BUSY failures.
+/// Use <see cref="StoreJournalMode.Delete"/> on filesystems without POSIX advisory locks.
 /// </summary>
 public sealed class SqliteFindingStore : IFindingStore
 {
     private readonly DbContextOptions<FindingStoreDbContext> _Options;
 
-    public SqliteFindingStore(string connectionString)
+    public SqliteFindingStore(string connectionString, StoreJournalMode journalMode = StoreJournalMode.Wal)
     {
         _Options = new DbContextOptionsBuilder<FindingStoreDbContext>()
             .UseSqlite(connectionString)
-            .AddInterceptors(new SqliteBusyTimeoutInterceptor())
+            .AddInterceptors(new SqliteConnectionPragmasInterceptor(journalMode: journalMode))
             .Options;
 
         using var db = CreateContext();
         db.Database.EnsureCreated();
-        db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
 
         // EnsureCreated never alters existing tables. An immediate SQLite transaction
         // serializes the check-and-alter sequence across concurrently starting instances.

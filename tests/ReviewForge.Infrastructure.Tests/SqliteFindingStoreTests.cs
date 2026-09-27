@@ -61,12 +61,83 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Wal_mode_uses_synchronous_normal()
+    {
+        await _Store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await using var connection = new SqliteConnection(_ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqliteCommand("PRAGMA synchronous", connection);
+        Assert.Equal(1L, Assert.IsType<long>(await command.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task Wal_mode_allows_readers_during_an_open_writer_transaction()
+    {
+        await _Store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await using var writer = new SqliteConnection(_ConnectionString);
+        await using var reader = new SqliteConnection(_ConnectionString);
+        await writer.OpenAsync();
+        await reader.OpenAsync();
+        var pragmas = new SqliteConnectionPragmasInterceptor();
+        pragmas.ApplyPragmas(writer);
+        pragmas.ApplyPragmas(reader);
+
+        // WAL: a reader must not block while another connection holds an open write
+        // transaction. In rollback-journal mode this read would wait (or SQLITE_BUSY).
+        await using (var transaction = writer.BeginTransaction())
+        {
+            await using (var write = new SqliteCommand(
+                "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, StartedAt, Success) " +
+                "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', $started, 1)", writer, transaction))
+            {
+                write.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+                write.Parameters.AddWithValue("$started", DateTimeOffset.UtcNow.ToString("O"));
+                await write.ExecuteNonQueryAsync();
+            }
+
+            await using var read = new SqliteCommand("SELECT COUNT(*) FROM Runs", reader);
+            var count = await read.ExecuteScalarAsync();
+            Assert.NotNull(count); // completed without waiting for the writer
+        }
+    }
+
+    [Fact]
+    public async Task Delete_mode_keeps_rollback_journal_with_full_synchronous()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-store-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            var store = new SqliteFindingStore($"Data Source={dbPath}", StoreJournalMode.Delete);
+            await store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
+
+            await using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            await connection.OpenAsync();
+            await using var journal = new SqliteCommand("PRAGMA journal_mode", connection);
+            Assert.Equal("delete", Assert.IsType<string>(await journal.ExecuteScalarAsync()));
+            await using var synchronous = new SqliteCommand("PRAGMA synchronous", connection);
+            Assert.Equal(2L, Assert.IsType<long>(await synchronous.ExecuteScalarAsync()));
+        }
+        finally
+        {
+            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+            {
+                if (File.Exists(dbPath + suffix))
+                {
+                    File.Delete(dbPath + suffix);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task Interceptor_sets_busy_timeout_on_connection()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
 
-        SqliteBusyTimeoutInterceptor.ApplyBusyTimeout(connection, 5000);
+        new SqliteConnectionPragmasInterceptor().ApplyPragmas(connection);
 
         await using var command = new SqliteCommand("PRAGMA busy_timeout", connection);
         Assert.Equal(5000L, Assert.IsType<long>(await command.ExecuteScalarAsync()));

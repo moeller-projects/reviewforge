@@ -79,6 +79,17 @@ public sealed class ReviewForgeServiceOptions
 
     /// <summary>Finding-store retention (P2-26); pruned at the discovery-sweep tail.</summary>
     public RetentionOptions Retention { get; init; } = new();
+
+    /// <summary>Finding-store storage tuning (journal mode escape hatch).</summary>
+    public StoreOptions Store { get; init; } = new();
+}
+
+/// <summary>Finding-store storage tuning.</summary>
+public sealed class StoreOptions
+{
+    /// <summary>Wal (default) | Delete. WAL requires POSIX advisory locks — keep the
+    /// database on local disk; use Delete on network filesystems.</summary>
+    public string JournalMode { get; init; } = "Wal";
 }
 
 /// <summary>Agent repo-scan budgets (P2-28): one Grep tool call aborts with a truncation
