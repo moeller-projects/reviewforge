@@ -80,8 +80,19 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(ChatProviderOptions.SectionName))
             .ValidateDataAnnotations()
             .ValidateOnStart();
+        // One governor per host, shared by both model tiers: bounds concurrent provider
+        // requests process-wide (WorkerCount × iterations, later × shards). Default cap is
+        // permissive (WorkerCount × 2) — tighten from reviewforge.llm.governor.wait_ms.
+        services.AddSingleton(sp =>
+        {
+            var chat = sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
+            var service = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+            return new LlmGovernor(chat.MaxConcurrentRequests ?? service.WorkerCount * 2);
+        });
         services.AddSingleton<IChatClientFactory>(sp =>
-            new ChatClientFactory(sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value));
+            new ChatClientFactory(
+                sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value,
+                governor: sp.GetRequiredService<LlmGovernor>()));
 
         services.AddOptions<ReviewForgeServiceOptions>()
             .Bind(configuration.GetSection(ReviewForgeServiceOptions.SectionName))

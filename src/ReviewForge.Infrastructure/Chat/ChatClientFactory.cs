@@ -24,11 +24,20 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
 
     private readonly ChatProviderOptions _Options;
 
-    public ChatClientFactory(ChatProviderOptions options, HttpMessageHandler? httpHandler = null)
+    public ChatClientFactory(
+        ChatProviderOptions options,
+        HttpMessageHandler? httpHandler = null,
+        LlmGovernor? governor = null,
+        TimeProvider? clock = null)
     {
         _Options = options;
         _HttpHandler = httpHandler;
+        _Governor = governor;
+        _Clock = clock ?? TimeProvider.System;
     }
+
+    private readonly LlmGovernor? _Governor;
+    private readonly TimeProvider _Clock;
 
     public string ModelName => ModelName(ChatTier.Full);
 
@@ -59,12 +68,21 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
         }
     }
 
-    private IChatClient BuildClient() => _Options.Provider switch
+    private IChatClient BuildClient()
     {
-        "openai-codex" => CreateCodexClient(),
-        "openai" => CreateOpenAiClient(),
-        _ => throw new InvalidOperationException($"unknown reasoning provider '{_Options.Provider}'"),
-    };
+        IChatClient raw = _Options.Provider switch
+        {
+            "openai-codex" => CreateCodexClient(),
+            "openai" => CreateOpenAiClient(),
+            _ => throw new InvalidOperationException($"unknown reasoning provider '{_Options.Provider}'"),
+        };
+
+        // Between usage tracking and the transport: tracking measures real provider
+        // traffic, the governor shapes it. Both tiers share one process-wide governor.
+        return _Governor is { } governor
+            ? new GovernedChatClient(raw, governor, _Options.GovernorAcquireTimeoutSeconds, _Clock)
+            : raw;
+    }
 
     /// <summary>Strips the provider routing prefix, e.g. "openai-codex:gpt-5.6-luna" → "gpt-5.6-luna".</summary>
     public static string ResolveModelName(string configured)

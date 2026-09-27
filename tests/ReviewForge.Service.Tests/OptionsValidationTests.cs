@@ -139,6 +139,34 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void Governor_acquire_timeout_below_one_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Reasoning:GovernorAcquireTimeoutSeconds", "0"))]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
+    }
+
+    [Fact]
+    public void Governor_max_concurrent_requests_below_one_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Reasoning:MaxConcurrentRequests", "0"))]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
+    }
+
+    [Fact]
+    public void Governor_resolves_default_cap_from_worker_count()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:WorkerCount", "3"))]);
+
+        var governor = provider.GetRequiredService<LlmGovernor>();
+
+        Assert.Equal(6, governor.MaxConcurrency); // WorkerCount × 2
+    }
+
+    [Fact]
     public void Store_journal_mode_accepts_case_insensitive_delete()
     {
         using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "delete"))]);

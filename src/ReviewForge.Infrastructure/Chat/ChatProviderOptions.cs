@@ -27,6 +27,19 @@ public sealed class ChatProviderOptions : IValidatableObject
     /// <summary>OAuth credential file for openai-codex; defaults to ~/.codex/auth.json.</summary>
     public string? CredentialPath { get; init; }
 
+    /// <summary>
+    /// Process-wide cap on concurrent provider HTTP requests (across both model tiers).
+    /// Null (default) resolves to ReviewForge:WorkerCount × 2 — permissive on purpose;
+    /// tighten from the reviewforge.llm.governor.wait_ms histogram.
+    /// </summary>
+    [Range(1, 10_000)]
+    public int? MaxConcurrentRequests { get; init; }
+
+    /// <summary>Seconds a request waits for a governor slot before the run fails with a
+    /// visible <see cref="LlmGovernorTimeoutException"/>. Default 300.</summary>
+    [Range(1, 3_600)]
+    public int GovernorAcquireTimeoutSeconds { get; init; } = 300;
+
     public static string DefaultCredentialPath()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
 

@@ -130,6 +130,12 @@ fail-fast at startup. PAT and API keys come from the environment only.
   adds zero reviewable lines (lockfile-only churn, deletions-only) with no open threads get
   a clean vote without an LLM call; counted by `reviewforge.reviews.trivial_total`. The
   deterministic homoglyph analyzer still runs. Set false to restore the always-run behavior.
+- `Reasoning:MaxConcurrentRequests` / `Reasoning:GovernorAcquireTimeoutSeconds` — the
+  process-wide LLM governor bounds concurrent provider HTTP requests (across both model
+  tiers) so `WorkerCount × iterations` cannot burst the provider into 429s. Unset cap
+  defaults to `ReviewForge:WorkerCount × 2`; an acquisition timeout fails the run with a
+  visible `LlmGovernorTimeoutException` (counted by `reviewforge.llm.governor.timeout_total`).
+  Watch `reviewforge.llm.governor.wait_ms` before tightening the cap.
 
 ## Auto-fix (suggestion-only, off by default)
 

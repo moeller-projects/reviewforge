@@ -58,6 +58,10 @@ public static class ReviewForgeTelemetry
         Meter.CreateCounter<long>("reviewforge.llm.tokens.cached_total", "{token}"); // tags: model
     public static readonly Counter<long> LlmRequests =
         Meter.CreateCounter<long>("reviewforge.llm.requests_total");           // tags: model
+    public static readonly Histogram<double> LlmGovernorWait =
+        Meter.CreateHistogram<double>("reviewforge.llm.governor.wait_ms", "ms"); // slot acquisition wait
+    public static readonly Counter<long> LlmGovernorTimeouts =
+        Meter.CreateCounter<long>("reviewforge.llm.governor.timeout_total");     // slot acquisition timed out
 
     // ---- Agent loop quality ----
     public static readonly Histogram<int> AgentIterations =
@@ -122,11 +126,16 @@ public static class ReviewForgeTelemetry
     /// </summary>
     public static void RegisterGauges(
         Func<int> queueDepth, Func<int> queueCapacity,
-        Func<int> activeClaims, Func<int> checkoutDirs)
+        Func<int> activeClaims, Func<int> checkoutDirs,
+        Func<int>? llmInflight = null)
     {
         Meter.CreateObservableGauge("reviewforge.queue.depth", queueDepth);
         Meter.CreateObservableGauge("reviewforge.queue.capacity", queueCapacity);
         Meter.CreateObservableGauge("reviewforge.claims.active", activeClaims);
         Meter.CreateObservableGauge("reviewforge.checkout.pool_size", checkoutDirs);
+        if (llmInflight is not null)
+        {
+            Meter.CreateObservableGauge("reviewforge.llm.governor.inflight", llmInflight);
+        }
     }
 }
