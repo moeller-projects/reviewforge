@@ -271,16 +271,15 @@ Backends:
 
 - **Dev** — the Aspire dashboard (see "Dev loop").
 - **Prod (optional)** — the compose `observability` profile runs a standalone Aspire
-  dashboard; point `OTEL_EXPORTER_OTLP_ENDPOINT` at any OTLP collector (or Seq) instead.
-- **Dashboards + alerts** — Grafana provisioning lives in `deploy/grafana/` (dashboard
-  `reviewforge.json`, alert rules `reviewforge.yaml`); alerts cover queue saturation/rejection,
-  run failure rate/latency, token spikes, `task_done` misses, enrichment failures, and claim
-  expiry.
-- **Run debugging** — Seq saved searches in `deploy/seq/searches.md` (`RunId = '...'`).
+  dashboard. For another backend, set `OTEL_EXPORTER_OTLP_ENDPOINT` (+ `_HEADERS`) to an
+  OTLP collector supported by the platform.
+- **Repository-owned dashboards and searches** — none. Operators must use the configured OTLP
+  backend's native queries and dashboards. The structured run fields above remain the
+  correlation contract.
 
-Rollout gates (OBS-1→4): green `dotnet test` and inert instruments (no exporter) →
-24h staging log-volume check → traces/metrics/logs arrive in the backend → dashboards
-populate and alerts fire on a synthetic failure.
+Rollout gates: green `dotnet test` and inert instruments (no exporter) → 24h staging
+log-volume check → traces/metrics/logs arrive in the configured backend → a synthetic failure
+can be located by `RunId` and `Stage`.
 
 ## Tests and coverage gate
 
