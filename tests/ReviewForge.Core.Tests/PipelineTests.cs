@@ -285,6 +285,180 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Classify_consumes_overlap_refresh_without_a_second_fetch()
+    {
+        var source = new FakePullRequestSource();
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        ctx.PendingThreadsRefresh = (
+            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+            preparedAt.AddSeconds(-1)); // launched before the clone finished
+
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(0, source.ThreadFetches); // the in-flight fetch was consumed
+        Assert.Single(ctx.PendingReplies);
+    }
+
+    [Fact]
+    public async Task Classify_refetches_when_the_overlap_stamp_is_not_before_preparation()
+    {
+        var source = new FakePullRequestSource();
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        // Started AFTER preparation ended (stale/future stamp): not a genuine overlap.
+        ctx.PendingThreadsRefresh = (
+            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+            preparedAt.AddSeconds(1));
+
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, source.ThreadFetches);
+    }
+
+    [Fact]
+    public async Task Classify_refetches_when_the_overlap_boundary_is_exact()
+    {
+        // Boundary safety: "started before the clone finished" is strict — an equal stamp
+        // falls back to the serial refetch.
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        ctx.PendingThreadsRefresh = (
+            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+            preparedAt);
+
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, source.ThreadFetches);
+    }
+
+    [Fact]
+    public async Task Classify_propagates_a_faulted_overlap_task_like_a_faulted_refetch()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        ctx.PendingThreadsRefresh = (
+            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("threads down")),
+            preparedAt.AddSeconds(-1));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None));
+        Assert.Equal(0, source.ThreadFetches); // no silent fallback engine
+    }
+
+    [Fact]
+    public async Task Prepare_starts_the_threads_refresh_and_enrichment_for_later_stages()
+    {
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n",
+        };
+        var source = new FakePullRequestSource();
+        source.ChangedFiles.Add(new ChangedFile("src/A.cs", ChangedFileType.Edit));
+        var ctx = Ctx(source);
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance,
+            source: source,
+            enricher: new FakeEnricher("graph")).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotNull(ctx.PendingThreadsRefresh);
+        Assert.NotNull(ctx.PendingEnrichment);
+        Assert.NotNull(ctx.RepoPreparedAt);
+        Assert.True(ctx.PendingThreadsRefresh!.Value.StartedAt <= ctx.RepoPreparedAt);
+        Assert.Equal(1, source.ThreadFetches); // one fetch, launched by stage 3
+    }
+
+    [Fact]
+    public async Task Prepare_leaves_overlap_tasks_null_without_source_or_enricher()
+    {
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n",
+        };
+        var ctx = Ctx();
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Null(ctx.PendingThreadsRefresh);
+        Assert.Null(ctx.PendingEnrichment);
+        Assert.NotNull(ctx.RepoPreparedAt);
+    }
+
+    [Fact]
+    public async Task Prepare_captures_a_synchronously_throwing_enricher_into_the_pending_task()
+    {
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n",
+        };
+        var ctx = Ctx();
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance,
+            enricher: new SyncThrowingEnricher()).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotNull(ctx.PendingEnrichment);
+        // Stage 5 applies its usual fail-safe handling to the captured task.
+        await new EnrichContextStage(
+            new SyncThrowingEnricher(), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+        Assert.Empty(ctx.ContextStore.Names);
+    }
+
+    [Fact]
+    public async Task Enrich_consumes_the_pending_task_without_calling_the_enricher_again()
+    {
+        var ctx = Ctx();
+        ctx.PendingEnrichment = Task.FromResult<string?>("graph");
+
+        // The enricher would throw if called: success proves the pending task was consumed.
+        await new EnrichContextStage(
+            new FakeEnricher(throws: true), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal("graph", ctx.ContextStore.Read("crg"));
+    }
+
+    [Fact]
+    public async Task Enrich_swallows_a_faulted_pending_task()
+    {
+        var ctx = Ctx();
+        ctx.PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("enricher down"));
+
+        await new EnrichContextStage(
+            new FakeEnricher("unused"), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.ContextStore.Names);
+    }
+
+    private sealed class SyncThrowingEnricher : IContextEnricher
+    {
+        public Task<string?> EnrichAsync(string repoDir, string diffText, CancellationToken ct)
+            => throw new InvalidOperationException("sync boom");
+    }
+
+    [Fact]
     public async Task Enrich_stores_payload_skips_null_and_swallows_failures()
     {
         var logger = NullLogger<EnrichContextStage>.Instance;

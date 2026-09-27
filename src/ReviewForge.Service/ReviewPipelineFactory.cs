@@ -189,7 +189,13 @@ public sealed class ReviewPipelineFactory(
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
-            new PrepareRepositoryStage(checkoutPool, loggerFactory.CreateLogger<PrepareRepositoryStage>(), diffBudget),
+            new PrepareRepositoryStage(
+                checkoutPool,
+                loggerFactory.CreateLogger<PrepareRepositoryStage>(),
+                diffBudget,
+                source,
+                enricher,
+                clock),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(

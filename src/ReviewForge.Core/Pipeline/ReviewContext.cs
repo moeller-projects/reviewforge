@@ -58,6 +58,19 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     /// <summary>Manifest ∩ diff files that carry reviewable text (set by stage 3).</summary>
     public IReadOnlyCollection<string>? ReviewableFiles { get; set; }
 
+    /// <summary>Threads refresh that stage 3 starts before the clone so stage 4 can consume
+    /// the in-flight fetch instead of paying the round-trip serially. Stage 4 applies the
+    /// freshness predicate against <see cref="RepoPreparedAt"/> before trusting it.</summary>
+    public (Task<IReadOnlyList<ReviewThread>> Task, DateTimeOffset StartedAt)? PendingThreadsRefresh { get; set; }
+
+    /// <summary>Wall-clock stamp for when repository preparation finished; bounds the stage-4
+    /// freshness predicate on <see cref="PendingThreadsRefresh"/>.</summary>
+    public DateTimeOffset? RepoPreparedAt { get; set; }
+
+    /// <summary>Enrichment call stage 3 starts once RepoDir+DiffText exist; stage 5 awaits it
+    /// with the same fail-safe handling as a call it made itself.</summary>
+    public Task<string?>? PendingEnrichment { get; set; }
+
     // Stage 4 — classify
     public ReviewKind Kind { get; set; } = ReviewKind.Full;
     public IReadOnlyList<PendingReply> PendingReplies { get; set; } = [];
