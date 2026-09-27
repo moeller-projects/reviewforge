@@ -176,6 +176,38 @@ public sealed class ReviewCollector
             ReviewDepth = reviewDepth,
             RuleBookVersion = ruleBookVersion,
         };
+
+    /// <summary>Merges a shard collector into this run collector: uncertainties and
+    /// redetected/regressed keys append; a finding whose dedupe key is already known (recorded
+    /// by another shard) is dropped — shard overlap dedupes to one. Findings flow through
+    /// <see cref="AddFinding"/> so the JSONL sink stays the single run-scoped writer.</summary>
+    public void MergeFrom(ReviewCollector shard)
+    {
+        foreach (var key in shard.RedetectedKeys)
+        {
+            MarkRedetected(key);
+        }
+
+        foreach (var key in shard.RegressedKeys)
+        {
+            MarkRegressed(key);
+        }
+
+        foreach (var uncertainty in shard.Uncertainties)
+        {
+            AddUncertainty(uncertainty);
+        }
+
+        foreach (var finding in shard.Findings)
+        {
+            if (finding.DedupeKey is { Length: > 0 } key && IsKnown(key))
+            {
+                continue;
+            }
+
+            AddFinding(finding);
+        }
+    }
 }
 
 /// <summary>One JSONL line: run metadata plus the recorded finding.</summary>

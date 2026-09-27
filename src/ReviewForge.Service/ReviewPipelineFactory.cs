@@ -11,6 +11,24 @@ using ReviewForge.Core.Workspaces;
 
 namespace ReviewForge.Service;
 
+/// <summary>Map-reduce sharding for large diffs. When enabled and the planned shard count is
+/// at least two, stage 6 runs one agent per shard concurrently and merges findings into the
+/// single run collector. Shard-cap overflow never fails a run — it falls back to the legacy
+/// truncated single-agent path (counted by reviewforge.shard.fallback_total).</summary>
+public sealed class ShardingOptions
+{
+    public bool Enabled { get; init; }
+
+    /// <summary>Cumulative diff chars per shard; a file larger than this gets a shard of its own.</summary>
+    public int ShardMaxChars { get; init; } = 30_000;
+
+    /// <summary>Shard cap. Overflow → legacy fallback, never a run failure.</summary>
+    public int MaxShards { get; init; } = 8;
+
+    /// <summary>Max concurrent shard agents (bounded by the LLM governor as well).</summary>
+    public int ShardConcurrency { get; init; } = 2;
+}
+
 /// <summary>Service options for the pipeline host.</summary>
 public sealed class ReviewForgeServiceOptions
 {
@@ -77,6 +95,10 @@ public sealed class ReviewForgeServiceOptions
     /// open threads (lockfile-only churn, deletions-only) — the run publishes a clean vote
     /// from a synthetic result. Default true; set false to restore the pre-skip behavior.</summary>
     public bool TrivialDiffSkipEnabled { get; init; } = true;
+
+    /// <summary>Map-reduce sharding for large diffs (v1: no merge pass). Disabled by default;
+    /// small PRs always take the exact legacy single-agent path.</summary>
+    public ShardingOptions Sharding { get; init; } = new();
 
     /// <summary>
     /// In-flight shells (runs persisted by BeginRunStage but never finalized — crash or kill
@@ -205,7 +227,11 @@ public sealed class ReviewPipelineFactory(
             new ExecuteReasoningStage(
                 agent, findingsDir,
                 maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile,
-                trivialDiffSkipEnabled: opts.TrivialDiffSkipEnabled),
+                trivialDiffSkipEnabled: opts.TrivialDiffSkipEnabled,
+                shardingEnabled: opts.Sharding.Enabled,
+                shardMaxChars: opts.Sharding.ShardMaxChars,
+                maxShards: opts.Sharding.MaxShards,
+                shardConcurrency: opts.Sharding.ShardConcurrency),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new AutoFixFindingsStage(
                 registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>()),

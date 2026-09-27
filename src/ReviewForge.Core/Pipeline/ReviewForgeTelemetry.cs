@@ -23,6 +23,7 @@ public static class ReviewForgeTelemetry
     public const string TagResult = "result";      // completed | skipped | failed
     public const string TagReason = "reason";
     public const string TagWarmed = "warmed";      // true when a discovery mirror warmup prefetched this head
+    public const string TagShards = "shards";      // shard count on sharded review run metrics
 
     // ---- Checkouts (existing, unchanged) ----
     public static readonly Histogram<double> CheckoutAcquireMilliseconds =
@@ -51,6 +52,10 @@ public static class ReviewForgeTelemetry
         Meter.CreateHistogram<double>("reviewforge.review.duration_ms", "ms"); // tags: result
     public static readonly Counter<long> TrivialReviews =
         Meter.CreateCounter<long>("reviewforge.reviews.trivial_total"); // LLM skipped: zero added reviewable lines
+    public static readonly Histogram<double> ShardDurationMilliseconds =
+        Meter.CreateHistogram<double>("reviewforge.shard.duration_ms", "ms"); // per-shard agent duration
+    public static readonly Counter<long> ShardFallback =
+        Meter.CreateCounter<long>("reviewforge.shard.fallback_total"); // shard-cap overflow → legacy single-agent path
     public static readonly Histogram<double> StageDurationMilliseconds =
         Meter.CreateHistogram<double>("reviewforge.stage.duration_ms", "ms");  // tags: stage, result
 

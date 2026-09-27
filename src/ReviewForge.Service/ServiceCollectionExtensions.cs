@@ -123,6 +123,10 @@ public static class ServiceCollectionExtensions
                 "ReviewForge:Store:JournalMode must be Wal | Delete")
             .Validate(o => Enum.TryParse<QueueMode>(o.QueueMode, ignoreCase: true, out _),
                 "ReviewForge:QueueMode must be Memory | Sqlite")
+            .Validate(o => o.Sharding.ShardMaxChars >= 1_000, "ReviewForge:Sharding:ShardMaxChars must be at least 1000")
+            .Validate(o => o.Sharding.MaxShards is >= 2 and <= 32, "ReviewForge:Sharding:MaxShards must be between 2 and 32")
+            .Validate(o => o.Sharding.ShardConcurrency >= 1 && o.Sharding.ShardConcurrency <= o.Sharding.MaxShards,
+                "ReviewForge:Sharding:ShardConcurrency must be between 1 and MaxShards")
             .ValidateOnStart();
 
         services.AddOptions<RepoReadToolsOptions>()
