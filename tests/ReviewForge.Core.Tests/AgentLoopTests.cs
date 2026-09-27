@@ -41,6 +41,25 @@ public class TaskDoneGuardTests
 
         Assert.NotEmpty(updates);
     }
+
+    [Fact]
+    public async Task Done_response_is_a_fresh_instance_per_call()
+    {
+        // The function invoker aggregates loop usage into the final response's message
+        // contents. A shared static response would carry every prior run's usage into the
+        // next run's token metrics — each short-circuit must return its own response.
+        var collector = new ReviewCollector();
+        var inner = new ScriptedChatClient();
+        var guard = new TaskDoneGuardChatClient(collector, inner);
+        collector.Complete(new ReviewNarrative {ReviewSummary = "done"});
+
+        var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "a")]);
+        first.Messages[0].Contents.Add(new UsageContent(new UsageDetails {InputTokenCount = 5}));
+
+        var second = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "b")]);
+        Assert.DoesNotContain(second.Messages[0].Contents, c => c is UsageContent);
+        Assert.Contains("already marked as done", second.Text);
+    }
 }
 
 public class AgentLoopTests : IDisposable
@@ -122,7 +141,9 @@ public class AgentLoopTests : IDisposable
             },
         };
         var script = new ScriptedChatClient(withCached);
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        // Model tag scopes the listener: MeterListener measurement events are process-wide,
+        // so a parallel test's emissions on this instrument would otherwise cross-talk.
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(script, model: "cached-model"));
         var collector = new ReviewCollector();
 
         long cached = 0;
@@ -135,7 +156,15 @@ public class AgentLoopTests : IDisposable
             }
         };
         listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
-            Interlocked.Add(ref cached, measurement));
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "model" && (string?)tag.Value == "cached-model")
+                {
+                    Interlocked.Add(ref cached, measurement);
+                }
+            }
+        });
         listener.Start();
 
         await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
@@ -154,7 +183,7 @@ public class AgentLoopTests : IDisposable
             Usage = new UsageDetails { InputTokenCount = 12, OutputTokenCount = 7, TotalTokenCount = 19 },
         };
         var script = new ScriptedChatClient(withUsage);
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(script, model: "no-cached-model"));
         var collector = new ReviewCollector();
 
         var sawCachedMeasurement = false;
@@ -167,7 +196,15 @@ public class AgentLoopTests : IDisposable
             }
         };
         listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
-            sawCachedMeasurement = true);
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "model" && (string?)tag.Value == "no-cached-model")
+                {
+                    sawCachedMeasurement = true;
+                }
+            }
+        });
         listener.Start();
 
         await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
