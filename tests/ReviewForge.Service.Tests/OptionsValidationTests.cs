@@ -199,6 +199,30 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void Discovery_warmup_max_per_sweep_below_one_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Discovery:WarmupMaxPerSweep", "0"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+
+        Assert.Contains("WarmupMaxPerSweep must be at least 1", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("9")]
+    public void Discovery_warmup_concurrency_outside_1_to_8_is_rejected(string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Discovery:WarmupConcurrency", value))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+
+        Assert.Contains("WarmupConcurrency must be between 1 and 8", ex.Message);
+    }
+
+    [Fact]
     public void Invalid_clean_run_vote_is_rejected_at_options_validation()
     {
         using var provider = Build([.. With(ValidConfig(), ("ReviewForge:CleanRunVote", "Bogus"))]);

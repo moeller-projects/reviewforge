@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Testing;
@@ -540,6 +541,140 @@ public class DiscoverySweepWorkerTests
         {
             await beforeWorkItems(pr);
             return await base.GetLinkedWorkItemsAsync(pr, ct);
+        }
+    }
+
+    [Fact]
+    public async Task Warmup_prefetches_mirror_for_each_accepted_enqueue_when_enabled()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(2, report.Enqueued.Count);
+        Assert.Equal(2, git.EnsureCalls.Count);
+        Assert.All(git.EnsureCalls, c =>
+        {
+            Assert.Contains($"{Path.DirectorySeparatorChar}mirror{Path.DirectorySeparatorChar}", c.Path);
+            Assert.Equal("url", c.CloneUrl);
+            Assert.Equal("base", c.Base);
+            Assert.Equal("head", c.Head);
+        });
+    }
+
+    [Fact]
+    public async Task Warmup_is_disabled_by_default_and_issues_zero_git_calls()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Empty(git.EnsureCalls);
+    }
+
+    [Fact]
+    public async Task Warmup_is_capped_per_sweep()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2), Candidate(3)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true, WarmupMaxPerSweep = 2 };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(2, git.EnsureCalls.Count);
+    }
+
+    [Fact]
+    public async Task Warmup_failure_does_not_fail_the_sweep()
+    {
+        var git = new RecordingGitOps { ThrowOnEnsure = true };
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        // The run's own fetch remains the correctness path; the enqueue is unaffected.
+        Assert.Single(report.Enqueued);
+        Assert.Single(git.EnsureCalls);
+    }
+
+    [Fact]
+    public async Task Warmup_skips_heads_that_already_have_a_checkout()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        using (var lease = await pool.AcquireAsync("r", "url", "base", "head", CancellationToken.None))
+        {
+            Assert.False(string.IsNullOrEmpty(lease.Path));
+        }
+
+        var callsAfterAcquire = git.EnsureCalls.Count;
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)], // head "head", repository "r" — the acquired key
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Equal(callsAfterAcquire, git.EnsureCalls.Count); // sweep added no warmups
+    }
+
+    private static RepoCheckoutPool NewPool(RecordingGitOps git)
+        => new(git, new FakeWorkspaceFs(), Path.Combine(Path.GetTempPath(), $"rf-warmup-{Guid.NewGuid():N}"));
+
+    private sealed class RecordingGitOps : FakeGitOps
+    {
+        public List<(string Path, string CloneUrl, string Base, string Head)> EnsureCalls { get; } = [];
+        public bool ThrowOnEnsure { get; init; }
+
+        public override Task EnsureCommitsAsync(string repoPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+        {
+            EnsureCalls.Add((repoPath, cloneUrl, baseSha, headSha));
+            return ThrowOnEnsure
+                ? throw new InvalidOperationException("warmup boom")
+                : base.EnsureCommitsAsync(repoPath, cloneUrl, baseSha, headSha, pat, ct);
         }
     }
 

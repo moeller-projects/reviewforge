@@ -212,11 +212,16 @@ filters them, and enqueues the interesting ones (up to `Discovery:MaxEnqueuesPer
 
 `Discovery` options: `TargetBranches` (default `["main","develop"]`, case-insensitive on branch
 short name), `Creators` (empty = allow all; matches creator id or name), `MaxEnqueuesPerSweep`
-(default 20), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables the background sweep
-worker). Skip reasons are checked in order: draft, target branch, creator, no linked work items,
-already-reviewed head, enqueue cap, review already in flight, and queue full. The per-run review
-gate remains the final dedupe net — a sweep enqueue is only a candidate; the gate decides whether
-a run actually proceeds.
+(default 20), `MaxDegreeOfParallelism` (default 8, validated 1–16), `SweepInterval` (a `hh:mm:ss`
+interval; unset/null disables the background sweep worker), and `WarmupEnabled` (default false) —
+when on, each accepted enqueue pre-fetches its head commits into the shared git mirror
+(`WarmupMaxPerSweep` = 5 per sweep, `WarmupConcurrency` = 2) so the run's prepare-repository
+stage skips the origin fetch; warmups are best-effort (failures are logged and counted by
+`reviewforge.discovery.warmup.total`) and acquire durations are tagged with `warmed` so the win
+is measurable. Skip reasons are checked in order: draft, target branch, creator, no linked work
+items, already-reviewed head, enqueue cap, review already in flight, and queue full. The per-run
+review gate remains the final dedupe net — a sweep enqueue is only a candidate; the gate decides
+whether a run actually proceeds.
 
 ## Runtime concurrency and checkout storage
 

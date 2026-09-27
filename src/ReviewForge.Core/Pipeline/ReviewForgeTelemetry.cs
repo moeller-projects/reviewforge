@@ -22,6 +22,7 @@ public static class ReviewForgeTelemetry
     public const string TagStage = "stage";
     public const string TagResult = "result";      // completed | skipped | failed
     public const string TagReason = "reason";
+    public const string TagWarmed = "warmed";      // true when a discovery mirror warmup prefetched this head
 
     // ---- Checkouts (existing, unchanged) ----
     public static readonly Histogram<double> CheckoutAcquireMilliseconds =
@@ -90,6 +91,8 @@ public static class ReviewForgeTelemetry
         Meter.CreateHistogram<double>("reviewforge.discovery.sweep.duration_ms", "ms");
     public static readonly Counter<long> DiscoveryCandidateErrors =
         Meter.CreateCounter<long>("reviewforge.discovery.candidate_errors_total"); // faulting candidate isolated as a skip
+    public static readonly Counter<long> DiscoveryWarmup =
+        Meter.CreateCounter<long>("reviewforge.discovery.warmup.total"); // result: completed | failed
     public static readonly Counter<long> DiscoveryCandidates =
         Meter.CreateCounter<long>("reviewforge.discovery.candidates_total");
     public static readonly Counter<long> DiscoveryEnqueued =

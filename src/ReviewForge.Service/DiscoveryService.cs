@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
@@ -30,11 +32,15 @@ public sealed class DiscoveryService(
     InFlightClaims claims,
     DiscoveryOptions options,
     RetentionOptions retention,
+    RepoCheckoutPool? pool = null,
     ILogger<DiscoveryService>? logger = null,
     TimeProvider? clock = null)
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     private readonly DiscoveryRules _Rules = new(options.TargetBranches, options.Creators, options.MaxEnqueuesPerSweep);
+    private readonly RepoCheckoutPool? _Pool = pool;
+    private readonly SemaphoreSlim? _WarmupGate =
+        pool is not null && options.WarmupEnabled ? new SemaphoreSlim(Math.Max(1, options.WarmupConcurrency)) : null;
     private DateTimeOffset _LastPrune = DateTimeOffset.MinValue; // sweep-throttled (P2-26)
 
     public async Task<DiscoveryReport> RunSweepAsync(CancellationToken ct)
@@ -48,6 +54,7 @@ public sealed class DiscoveryService(
         var skipped = new ConcurrentQueue<SkippedPr>();
         var interesting = 0;
         var gate = new object(); // guards the cap-check/claim/enqueue critical section
+        var warmups = _WarmupGate is null ? (List<Task>?)null : []; // mirror prefetches, awaited before the sweep returns
 
         void Skip(PrKey pr, string reason)
         {
@@ -112,6 +119,13 @@ public sealed class DiscoveryService(
         foreach (var skip in skipped)
         {
             logger?.LogDebug("discovery skipped {Pr}: {Reason}", skip.Pr, skip.Reason);
+        }
+
+        // Warmups are part of the sweep: the span and the sweep-duration metric cover their
+        // outcomes. Individual failures are already swallowed into skip-free telemetry above.
+        if (warmups is { Count: > 0 })
+        {
+            await Task.WhenAll(warmups).ConfigureAwait(false);
         }
 
         ReviewForgeTelemetry.DiscoverySweepDurationMilliseconds.Record(
@@ -228,6 +242,46 @@ public sealed class DiscoveryService(
 
                 ReviewForgeTelemetry.DiscoveryEnqueued.Add(1);
                 enqueued.Enqueue(candidate.Key);
+
+                // Speculative mirror warmup: prefetch the accepted head's commits so the
+                // run's prepare-repository stage skips the origin fetch. Skipped when the
+                // checkout already exists (nothing to save) and capped per sweep.
+                if (warmups is not null
+                    && warmups.Count < options.WarmupMaxPerSweep
+                    && !_Pool!.HasCheckout(candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha))
+                {
+                    warmups.Add(WarmupMirrorAsync(candidate, token));
+                }
+            }
+        }
+
+        async Task WarmupMirrorAsync(PullRequestCandidate candidate, CancellationToken token)
+        {
+            try
+            {
+                await _WarmupGate!.WaitAsync(token).ConfigureAwait(false);
+                try
+                {
+                    await _Pool!.WarmupAsync(
+                        candidate.Key.RepositoryId,
+                        candidate.Pr.CloneUrl,
+                        candidate.Pr.TargetCommitSha,
+                        candidate.Pr.SourceCommitSha,
+                        token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _WarmupGate.Release();
+                }
+
+                _Pool.MarkWarmed(candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha);
+                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList { { ReviewForgeTelemetry.TagResult, "completed" } });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Warmup is an optimization only: the run's own fetch remains the correctness path.
+                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList { { ReviewForgeTelemetry.TagResult, "failed" } });
+                logger?.LogWarning(ex, "mirror warmup for {Pr} failed; the run's own fetch remains the correctness path", candidate.Key);
             }
         }
     }

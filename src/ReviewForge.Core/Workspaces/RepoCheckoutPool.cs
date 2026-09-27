@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 using ReviewForge.Core.Pipeline;
@@ -26,6 +27,10 @@ public sealed class RepoCheckoutPool
     private readonly ConcurrentDictionary<string, CachedCheckoutSize> _SizeCache = new(StringComparer.Ordinal);
     private readonly TimeProvider _Clock;
 
+    // Heads whose mirror prefetch completed during a discovery sweep. The next acquire tags
+    // its duration measurement with "warmed" (one-shot, TryRemove) so warmup wins are measurable.
+    private readonly ConcurrentDictionary<string, byte> _WarmedHeads = new(StringComparer.Ordinal);
+
     public RepoCheckoutPool(IGitOps git, IWorkspaceFs fs, string root, string? pat = null, TimeProvider? clock = null)
     {
         _Git = git;
@@ -42,6 +47,7 @@ public sealed class RepoCheckoutPool
     {
         var started = Stopwatch.GetTimestamp();
         var key = CheckoutKey(repositoryId, headSha);
+        var warmed = _WarmedHeads.TryRemove(key, out _); // one-shot warmup attribution
         var lockLease = await _Locks.AcquireAsync(key, ct).ConfigureAwait(false)
                         ?? throw new InvalidOperationException("checkout lock acquisition returned no lease");
         ReviewForgeTelemetry.CheckoutActive.Add(1);
@@ -56,7 +62,9 @@ public sealed class RepoCheckoutPool
                 // No size refresh here: the eviction sweep re-measures entries older than
                 // SizeRefreshInterval — the per-run full walk is not worth MB-scale drift.
                 _Fs.SetLastWriteTimeUtc(path, DateTime.UtcNow);
-                ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
+                    Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                    new TagList { { ReviewForgeTelemetry.TagWarmed, warmed } });
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
 
@@ -79,7 +87,9 @@ public sealed class RepoCheckoutPool
 
                     RefreshCachedSize(repoPath);
 
-                    ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                    ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
+                        Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                        new TagList { { ReviewForgeTelemetry.TagWarmed, warmed } });
                     return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
                 }
                 catch (Exception)
@@ -98,7 +108,9 @@ public sealed class RepoCheckoutPool
         }
         catch
         {
-            ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                new TagList { { ReviewForgeTelemetry.TagWarmed, warmed } });
             ReviewForgeTelemetry.CheckoutActive.Add(-1);
             lockLease.Dispose();
             throw;
@@ -289,6 +301,29 @@ public sealed class RepoCheckoutPool
 
     internal string CheckoutPath(string repositoryId, string headSha)
         => Path.Combine(_Root, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));
+
+    /// <summary>True when a checkout directory for this repo/head already exists on disk
+    /// (path-existence only). Used to skip mirror warmup for heads that need no clone.</summary>
+    public bool HasCheckout(string repositoryId, string headSha)
+        => _Fs.DirectoryExists(CheckoutPath(repositoryId, headSha));
+
+    /// <summary>
+    /// Best-effort prefetch of base/head commits into the shared mirror so a later acquire's
+    /// clone skips the origin fetch. Throws on failure; callers swallow — the run's own
+    /// fetch remains the correctness path.
+    /// </summary>
+    public Task WarmupAsync(string repositoryId, string cloneUrl, string baseSha, string headSha, CancellationToken ct)
+        => _Git.EnsureCommitsAsync(MirrorPath(repositoryId), cloneUrl, baseSha, headSha, _Pat, ct);
+
+    /// <summary>Records that a sweep warmup completed for this head; the next acquire tags
+    /// its duration measurement as warmed (one-shot attribution).</summary>
+    public void MarkWarmed(string repositoryId, string headSha)
+        => _WarmedHeads[CheckoutKey(repositoryId, headSha)] = 1;
+
+    // The infrastructure mirror layout mirrors this: <root>/mirror/<repo-dirname>, where the
+    // repo directory name is the sanitized KeyComponent (see LibGit2SharpGitOps.MirrorPath).
+    internal string MirrorPath(string repositoryId)
+        => Path.Combine(_Root, "mirror", KeyComponent(repositoryId));
 
     /// <summary>Number of materialized head checkouts currently on disk.</summary>
     public int CheckoutDirectoryCount()
