@@ -68,12 +68,12 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
+        Interlocked.Increment(ref _openPullRequestsFetches);
         if (ThrowOnGetOpenPullRequests is { } error)
         {
             return Task.FromException<IReadOnlyList<PullRequestCandidate>>(error);
         }
 
-        Interlocked.Increment(ref _openPullRequestsFetches);
         return Task.FromResult<IReadOnlyList<PullRequestCandidate>>(OpenPullRequests);
     }
 
