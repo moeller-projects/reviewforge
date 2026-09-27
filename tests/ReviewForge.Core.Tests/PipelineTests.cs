@@ -287,7 +287,7 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Classify_consumes_overlap_refresh_without_a_second_fetch()
+    public async Task Classify_consumes_overlap_refresh_when_the_response_postdates_preparation()
     {
         var source = new FakePullRequestSource();
         source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
@@ -296,9 +296,14 @@ public class StageTests : IDisposable
         ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
         var preparedAt = DateTimeOffset.UtcNow;
         ctx.RepoPreparedAt = preparedAt;
-        ctx.PendingThreadsRefresh = (
+        // Response received after the clone window closed: as fresh as the refetch it
+        // replaces, so the in-flight fetch is consumed without a second round-trip.
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
             Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
-            preparedAt.AddSeconds(-1)); // launched before the clone finished
+            preparedAt.AddSeconds(-30))
+        {
+            CompletedAt = preparedAt.AddSeconds(1),
+        };
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -307,8 +312,10 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Classify_refetches_when_the_overlap_stamp_is_not_before_preparation()
+    public async Task Classify_refetches_when_the_overlap_response_predates_preparation()
     {
+        // A response that landed BEFORE the clone finished missed comments that arrived
+        // during it — exactly what the post-clone refetch exists to catch.
         var source = new FakePullRequestSource();
         source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
             [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
@@ -316,10 +323,12 @@ public class StageTests : IDisposable
         ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
         var preparedAt = DateTimeOffset.UtcNow;
         ctx.RepoPreparedAt = preparedAt;
-        // Started AFTER preparation ended (stale/future stamp): not a genuine overlap.
-        ctx.PendingThreadsRefresh = (
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
             Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
-            preparedAt.AddSeconds(1));
+            preparedAt.AddSeconds(-30))
+        {
+            CompletedAt = preparedAt.AddSeconds(-1),
+        };
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -327,17 +336,17 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Classify_refetches_when_the_overlap_boundary_is_exact()
+    public async Task Classify_refetches_when_the_overlap_is_complete_but_unstamped()
     {
-        // Boundary safety: "started before the clone finished" is strict — an equal stamp
-        // falls back to the serial refetch.
+        // "Already complete but no completion stamp" is unproven freshness (the stamping
+        // continuation may not have run yet) — conservatively serial.
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
         var preparedAt = DateTimeOffset.UtcNow;
         ctx.RepoPreparedAt = preparedAt;
-        ctx.PendingThreadsRefresh = (
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
             Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
-            preparedAt);
+            preparedAt.AddSeconds(-30)); // CompletedAt left null
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -345,19 +354,41 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Classify_propagates_a_faulted_overlap_task_like_a_faulted_refetch()
+    public async Task Classify_falls_back_to_a_serial_refetch_when_the_overlap_faulted()
     {
+        // The overlap is an optimization, never a correctness path: a faulted overlap
+        // task must not fail the run — the serial refetch replaces it (and still surfaces
+        // its own failures, per the no-engine-fallback rule).
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
         var preparedAt = DateTimeOffset.UtcNow;
         ctx.RepoPreparedAt = preparedAt;
-        ctx.PendingThreadsRefresh = (
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
             Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("threads down")),
-            preparedAt.AddSeconds(-1));
+            preparedAt.AddSeconds(-30));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None));
-        Assert.Equal(0, source.ThreadFetches); // no silent fallback engine
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, source.ThreadFetches);
+        Assert.NotNull(ctx.Threads); // serial fetch supplied the threads
+    }
+
+    [Fact]
+    public void Context_dispose_cancels_overlap_work_and_observes_late_faults()
+    {
+        // A run that fails after stage 3's kickoff must not leak the overlap tasks:
+        // disposal cancels them (via OverlapCts) and observes late faults so they never
+        // surface as unobserved-task exceptions.
+        var ctx = Ctx();
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
+            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("late fault")),
+            DateTimeOffset.UtcNow);
+        ctx.PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("late fault"));
+
+        var ex = Record.Exception(() => ctx.Dispose());
+
+        Assert.Null(ex); // late faults observed, not surfaced
+        Assert.True(ctx.OverlapCts.IsCancellationRequested);
     }
 
     [Fact]
@@ -381,7 +412,7 @@ public class StageTests : IDisposable
         Assert.NotNull(ctx.PendingThreadsRefresh);
         Assert.NotNull(ctx.PendingEnrichment);
         Assert.NotNull(ctx.RepoPreparedAt);
-        Assert.True(ctx.PendingThreadsRefresh!.Value.StartedAt <= ctx.RepoPreparedAt);
+        Assert.True(ctx.PendingThreadsRefresh!.StartedAt <= ctx.RepoPreparedAt);
         Assert.Equal(1, source.ThreadFetches); // one fetch, launched by stage 3
     }
 

@@ -26,11 +26,17 @@ public sealed class PrepareRepositoryStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        // The refresh is launched before the clone begins; stage 4 trusts it only when this
-        // start stamp predates the preparation stamp (see ClassifyRunStage).
+        // The refresh is launched before the clone begins. Its token is linked with the
+        // context's overlap CTS so a failed run's Dispose cancels it; the completion
+        // continuation stamps CompletedAt for stage 4's freshness predicate and observes
+        // any fault for runs that never reach stage 4.
         if (source is not null)
         {
-            ctx.PendingThreadsRefresh = (source.GetThreadsAsync(ctx.Pr, ct), _Clock.GetUtcNow());
+            var overlap = new ThreadsRefreshOverlap(
+                source.GetThreadsAsync(ctx.Pr, LinkOverlapToken(ct, ctx.OverlapCts.Token)),
+                _Clock.GetUtcNow());
+            ctx.PendingThreadsRefresh = overlap;
+            _ = ObserveCompletionAsync(overlap);
         }
 
         var pr = ctx.RequirePullRequest();
@@ -90,7 +96,8 @@ public sealed class PrepareRepositoryStage(
         {
             try
             {
-                ctx.PendingEnrichment = enricher.EnrichAsync(ctx.RepoDir, ctx.DiffText, ct);
+                ctx.PendingEnrichment = enricher.EnrichAsync(
+                    ctx.RepoDir, ctx.DiffText, LinkOverlapToken(ct, ctx.OverlapCts.Token));
             }
             catch (Exception ex)
             {
@@ -99,4 +106,25 @@ public sealed class PrepareRepositoryStage(
         }
     }
 
+    private async Task ObserveCompletionAsync(ThreadsRefreshOverlap overlap)
+    {
+        try
+        {
+            await overlap.Task.ConfigureAwait(false);
+            overlap.CompletedAt = _Clock.GetUtcNow();
+        }
+        catch
+        {
+            // Observed here so a run that never reaches stage 4 never surfaces an
+            // unobserved-task exception; ClassifyRunStage catches the rethrown await and
+            // falls back to the serial refetch.
+        }
     }
+
+    /// <summary>Links the run token with the context's overlap token so either a run-wide
+    /// cancellation or context disposal stops the overlap work. The linked source is
+    /// deliberately not disposed: it is one small allocation per run, and disposing while
+    /// the consumer's registration is live is a worse failure mode than GC reclamation.</summary>
+    private static CancellationToken LinkOverlapToken(CancellationToken runToken, CancellationToken overlapToken)
+        => CancellationTokenSource.CreateLinkedTokenSource(runToken, overlapToken).Token;
+}

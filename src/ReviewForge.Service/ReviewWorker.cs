@@ -97,7 +97,10 @@ public sealed class ReviewWorker(
                 // Host shutdown mid-run: leave a truthful failure record. Best-effort with a
                 // hard timeout — never the (cancelled) stoppingToken — and if the store is
                 // already torn down the startup ShellReaperService finalizes the orphaned
-                // shell on next boot.
+                // shell on next boot. The tracker must reach the same terminal state as the
+                // persisted row: a leftover Running entry would read as alive until the
+                // tracker's own eviction.
+                tracker.Set(request.RunId, request.Pr, RunState.Failed, "cancelled by host shutdown");
                 await PersistFailureAsync(request, ctx, TimeSpan.FromSeconds(5));
                 return;
             }

@@ -59,9 +59,10 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public IReadOnlyCollection<string>? ReviewableFiles { get; set; }
 
     /// <summary>Threads refresh that stage 3 starts before the clone so stage 4 can consume
-    /// the in-flight fetch instead of paying the round-trip serially. Stage 4 applies the
-    /// freshness predicate against <see cref="RepoPreparedAt"/> before trusting it.</summary>
-    public (Task<IReadOnlyList<ReviewThread>> Task, DateTimeOffset StartedAt)? PendingThreadsRefresh { get; set; }
+    /// the in-flight fetch instead of paying the round-trip serially. Stage 4 consumes it
+    /// only when the response was received at/after <see cref="RepoPreparedAt"/> — see
+    /// <see cref="ThreadsRefreshOverlap.CompletedAt"/>.</summary>
+    public ThreadsRefreshOverlap? PendingThreadsRefresh { get; set; }
 
     /// <summary>Wall-clock stamp for when repository preparation finished; bounds the stage-4
     /// freshness predicate on <see cref="PendingThreadsRefresh"/>.</summary>
@@ -111,8 +112,33 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public void Dispose()
     {
+        // Stage 3 may still have the threads refresh or the enrichment call in flight when a
+        // later stage fails: cancel them so neither keeps running against a released
+        // checkout, and observe any late fault so it never surfaces as an unobserved-task
+        // exception. By disposal time no consumer cares about the results anymore.
+        OverlapCts.Cancel();
+        ObserveFault(PendingThreadsRefresh?.Task);
+        ObserveFault(PendingEnrichment);
         RepoLease?.Dispose();
         RepoLease = null;
+    }
+
+    /// <summary>Cancels stage-3 overlap work (threads refresh, enrichment) on disposal so a
+    /// failed or reaped run cannot leave fetches running against a released checkout.</summary>
+    internal CancellationTokenSource OverlapCts => field ??= new();
+
+    private static void ObserveFault(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        _ = task.ContinueWith(
+            static t => { _ = t.Exception; },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     public string RequireRepoDir()
@@ -139,4 +165,20 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
         Terminated = true;
         TerminationReason = reason;
     }
+}
+
+/// <summary>
+/// Stage-3 threads-refresh overlap: the fetch task plus the stamp of when it was launched.
+/// <see cref="CompletedAt"/> is stamped by the completion continuation stage 3 attaches at
+/// kickoff; stage 4 consumes the result only when that stamp is at/after preparation time
+/// (a response received earlier predates the clone window and missed comments that arrived
+/// during it, so it takes the serial refetch exactly like the pre-overlap pipeline).
+/// </summary>
+public sealed record ThreadsRefreshOverlap(
+    Task<IReadOnlyList<ReviewThread>> Task,
+    DateTimeOffset StartedAt)
+{
+    /// <summary>Utc stamp of the received response; null while genuinely in flight. Stage 4
+    /// conservatively treats "already complete but unstamped" as unproven and re-fetches.</summary>
+    public DateTimeOffset? CompletedAt { get; internal set; }
 }
