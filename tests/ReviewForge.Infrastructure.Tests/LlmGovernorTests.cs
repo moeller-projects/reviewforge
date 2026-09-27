@@ -140,12 +140,14 @@ public class LlmGovernorTests
         listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
             Interlocked.Add(ref timeouts, measurement));
         listener.Start();
+        var baseline = Interlocked.Read(ref timeouts);
 
         var ex = await Assert.ThrowsAsync<LlmGovernorTimeoutException>(() =>
             governed.GetResponseAsync([new ChatMessage(ChatRole.User, "queue behind the holder")]));
 
         Assert.Contains("waiting for an LLM concurrency slot", ex.Message);
-        Assert.Equal(1, Interlocked.Read(ref timeouts));
+        // Delta, not absolute: parallel test classes also emit on this process-wide meter.
+        Assert.Equal(1, Interlocked.Read(ref timeouts) - baseline);
 
         release.TrySetResult();
         await held;
@@ -177,6 +179,7 @@ public class LlmGovernorTests
         };
         listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, state) => Interlocked.Increment(ref waits));
         listener.Start();
+        var baseline = waits;
 
         var waited = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "wait behind the holder")]);
         await Task.Delay(200); // let the queued request block in slot acquisition
@@ -184,7 +187,9 @@ public class LlmGovernorTests
         await held;
         await waited;
 
-        Assert.True(waits >= 1, "the queued request's slot acquisition was not recorded");
+        // Delta, not absolute: the holder's own (near-zero) acquisition and any parallel
+        // test class emissions must not satisfy this assertion.
+        Assert.True(waits - baseline >= 1, "the queued request's slot acquisition was not recorded");
         Assert.Equal(0, governor.Inflight);
     }
 

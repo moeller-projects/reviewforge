@@ -128,6 +128,18 @@ fail-fast at startup. PAT and API keys come from the environment only.
   store row (`Completed`/`Failed`), and expired claims are counted by
   `reviewforge.queue.reclaimed_total`. In-flight PR claims remain in-memory for now — a
   restarted run is re-acquired idempotently at dequeue.
+- `ReviewForge:Sharding` — map-reduce sharding for large diffs. `Enabled` (default `false`)
+  turns it on; when the planned shard count is at least two, stage 6 runs one agent per
+  shard concurrently and merges findings into the single run collector. `ShardMaxChars`
+  (default 30000) is the cumulative diff budget per shard — a file larger than the budget
+  gets a shard of its own and is never split across shards. `MaxShards` (default 8) caps the
+  shard count: overflow falls back to the legacy truncated single-agent path, never a run
+  failure (`reviewforge.shard.fallback_total` counts it). `ShardConcurrency` (default 2)
+  bounds concurrent shard agents and is also bounded by the LLM governor's global cap.
+  Runs report their shard count under the `shards` metric tag; per-shard durations land in
+  `reviewforge.shard.duration_ms`. Accepted v1 limitation: cross-file findings confined to
+  no single shard can be missed — every shard still sees the full file manifest and per-file
+  diff headers, so interface-level reasoning is preserved.
 - `Reasoning:FollowUpModel` — optional cheaper/faster model for the Fast tier: follow-up
   reviews and `/rf fix` passes route to it; full reviews keep `Reasoning:Model`. Must carry
   the same provider routing prefix (`openai-codex:…` with `openai-codex:…`); mismatches fail

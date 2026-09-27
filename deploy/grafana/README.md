@@ -20,3 +20,10 @@
 
 Ratio threshold is 3x baseline for 30m–1h. Tune per deployment after measuring the
 false-positive rate on the low-noise channel.
+
+## Storage caveat
+
+The `reviewforge.queue.*` and store-backed panels assume the SQLite store in WAL mode
+(the shipped default). WAL requires POSIX advisory locks — keep the store on a local
+disk (the container volume is fine). Network filesystems must switch
+`ReviewForge:Store:JournalMode` to `Delete`; see the main README's Configuration section.
