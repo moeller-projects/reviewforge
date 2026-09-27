@@ -6,7 +6,19 @@ namespace ReviewForge.Core.Analysis;
 /// </summary>
 public static class RepoPath
 {
-    /// <summary>Canonical form for comparison (OrdinalIgnoreCase sets carry case).</summary>
+    /// <summary>Comparer matching the host filesystem's normal path identity rules.</summary>
+    public static StringComparer PathComparer { get; } =
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+    /// <summary>Comparison matching <see cref="PathComparer"/>.</summary>
+    public static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+    /// <summary>Canonical form for comparison: forward slashes and no leading slash.</summary>
     public static string Normalize(string path)
         => path.Replace('\\', '/').TrimStart('/');
 

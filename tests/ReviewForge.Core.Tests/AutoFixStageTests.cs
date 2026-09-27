@@ -357,7 +357,7 @@ public sealed class AutoFixStageTests : IDisposable
 
         Assert.Single(ctx.AppliedFixes);
         Assert.Equal("stub", ctx.AppliedFixes[0].VerifierName);
-        Assert.Equal("script.sh", verifier.VerifiedFiles.Single());
+        Assert.Equal(abs, verifier.VerifiedFiles.Single());
         // The fix WAS on disk at verification time, and the file is byte-identical after revert.
         Assert.Contains("echo \"$name\"", contentAtVerify);
         Assert.Equal(before, File.ReadAllBytes(abs));

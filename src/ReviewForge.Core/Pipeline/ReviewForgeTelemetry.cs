@@ -126,6 +126,10 @@ public static class ReviewForgeTelemetry
         Meter.CreateCounter<long>("reviewforge.fixes.applied_total");    // tags: origin, rule (thread-command for /rf fix)
     public static readonly Counter<long> FixesDeclined =
         Meter.CreateCounter<long>("reviewforge.fixes.declined_total");   // tags: origin, rule
+    public static readonly Counter<long> DeterministicGuardSkipped =
+        Meter.CreateCounter<long>("reviewforge.autofix.deterministic.guard_skipped");
+    public static readonly Counter<long> CommandedWatermarkSkipped =
+        Meter.CreateCounter<long>("reviewforge.autofix.commanded.skipped_watermark");
 
     public static readonly Counter<long> ThreadsResolved =
         Meter.CreateCounter<long>("reviewforge.threads.resolved_total");

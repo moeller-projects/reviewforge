@@ -390,12 +390,12 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void AutoFix_verification_command_with_metacharacters_fails_at_verifier_construction()
+    public void AutoFix_verification_command_with_metacharacters_fails_at_startup_validation()
     {
         using var provider = Build([.. With(ValidConfig(), ("AutoFix:VerificationCommand", "make verify && echo hi"))]);
 
-        var ex = Assert.Throws<ArgumentException>(
-            () => provider.GetRequiredService<IFixVerifier>());
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
 
         Assert.Contains("metacharacter", ex.Message);
     }

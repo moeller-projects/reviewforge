@@ -24,17 +24,55 @@ public sealed class ProcessFixVerifier : IFixVerifier
     private readonly string _Executable;
     private readonly string[] _Arguments;
     private readonly int _TimeoutSeconds;
+    private const int MaxFileInvocations = 32;
 
     public ProcessFixVerifier(string command, int timeoutSeconds)
     {
-        (_Executable, _Arguments) = ProcessFixCommand.Parse(command);
+        var parsed = ProcessFixCommand.Parse(command);
+        _Executable = parsed.Executable;
+        _Arguments = parsed.Arguments;
         _TimeoutSeconds = timeoutSeconds;
     }
 
     public string Name => "process";
     public bool RequiresWorkspaceWrites => true;
+    public Task<FixVerdict> VerifyAsync(
+        string repoDir, string relativeFilePath, CancellationToken ct)
+        => VerifyAsync(repoDir, new[] { relativeFilePath }, ct);
 
-    public async Task<FixVerdict> VerifyAsync(string repoDir, string relativeFilePath, CancellationToken ct)
+    public async Task<FixVerdict> VerifyAsync(
+        string repoDir, IReadOnlyList<string> editedFiles, CancellationToken ct)
+    {
+        if (!_Arguments.Contains(ProcessFixCommand.FilePlaceholder, StringComparer.Ordinal))
+        {
+            return await RunOnceAsync(repoDir, _Arguments, ct).ConfigureAwait(false);
+        }
+
+        if (editedFiles.Count > MaxFileInvocations)
+        {
+            return await RunOnceAsync(repoDir, _Arguments, ct).ConfigureAwait(false);
+        }
+
+        var failures = new List<string>();
+        foreach (var file in editedFiles)
+        {
+            var arguments = _Arguments
+                .Select(a => a == ProcessFixCommand.FilePlaceholder ? file : a)
+                .ToArray();
+            var verdict = await RunOnceAsync(repoDir, arguments, ct).ConfigureAwait(false);
+            if (!verdict.Passed)
+            {
+                failures.Add($"{file}: {verdict.Reason}");
+            }
+        }
+
+        return failures.Count == 0
+            ? new FixVerdict(true, $"verified {editedFiles.Count} file(s)")
+            : new FixVerdict(false, $"verification failed for {string.Join("; ", failures)}");
+    }
+
+    private async Task<FixVerdict> RunOnceAsync(
+        string repoDir, IReadOnlyList<string> arguments, CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(_TimeoutSeconds));
@@ -50,7 +88,7 @@ public sealed class ProcessFixVerifier : IFixVerifier
                 UseShellExecute = false,
             },
         };
-        foreach (var arg in _Arguments)
+        foreach (var arg in arguments)
         {
             process.StartInfo.ArgumentList.Add(arg);
         }
@@ -65,7 +103,6 @@ public sealed class ProcessFixVerifier : IFixVerifier
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-
         try
         {
             await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
@@ -82,7 +119,6 @@ public sealed class ProcessFixVerifier : IFixVerifier
             return new FixVerdict(false, $"verification timed out after {_TimeoutSeconds}s");
         }
 
-        // WaitForExitAsync may return before async output drains; give it a moment.
         process.WaitForExit();
         if (process.ExitCode == 0)
         {
@@ -90,7 +126,9 @@ public sealed class ProcessFixVerifier : IFixVerifier
         }
 
         var tail = Tail(stderr);
-        return new FixVerdict(false, string.IsNullOrWhiteSpace(tail) ? $"exit {process.ExitCode}" : $"exit {process.ExitCode}: {tail}");
+        return new FixVerdict(false, string.IsNullOrWhiteSpace(tail)
+            ? $"exit {process.ExitCode}"
+            : $"exit {process.ExitCode}: {tail}");
     }
 
     private static void AppendBounded(StringBuilder sb, ref int retainedBytes, string? data)

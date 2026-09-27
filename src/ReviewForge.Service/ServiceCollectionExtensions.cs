@@ -151,7 +151,6 @@ public static class ServiceCollectionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
-        // Suggestion-only auto-fix: off by default (Enabled=false → byte-identical pipeline).
         services.AddOptions<AutoFixOptions>()
             .Bind(configuration.GetSection(AutoFixOptions.SectionName))
             .ValidateDataAnnotations()
@@ -162,6 +161,7 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.VerificationCommand is null || o.VerificationCommand.Trim().Length > 0,
                 "AutoFix:VerificationCommand must not be whitespace")
             .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<AutoFixOptions>, VerificationCommandValidator>();
 
         // Deterministic fixers: one class per rule; adding a fixer = one line here + a test file.
         services.AddSingleton<IFindingFixer>(_ => new HomoglyphIdentifierFixer("homoglyph/mixed-script-identifier"));

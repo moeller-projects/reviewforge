@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -303,6 +304,15 @@ public class FakeFindingStore : IFindingStore
     }
 
     public virtual Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(KnownKeys);
+    public virtual Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
+        => Task.FromResult<IReadOnlySet<long>>(
+            Runs.Where(r => r.Pr == pr)
+                .SelectMany(r => r.Findings)
+                .Where(f => f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
+                .Select(f => f.DedupeKey[AppliedFix.CommandKeyPrefix.Length..])
+                .Where(s => long.TryParse(s, out _))
+                .Select(long.Parse)
+                .ToHashSet());
 
     public virtual Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {

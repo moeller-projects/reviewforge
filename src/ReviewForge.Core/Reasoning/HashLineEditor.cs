@@ -31,7 +31,7 @@ public class HashLineEditor
     {
         _Guard = guard;
         _Writable = new HashSet<string>(
-            writableRelativePaths.Select(RepoPath.Normalize), StringComparer.Ordinal);
+            writableRelativePaths.Select(RepoPath.Normalize), RepoPath.PathComparer);
     }
 
     [Description("Read a file with per-line content hashes for edit anchoring.")]
@@ -425,7 +425,9 @@ public class HashLineEditor
         }
 
         var dir = Path.GetDirectoryName(full)!;
-        var temp = Path.Combine(dir, ".rf-edit-" + Guid.NewGuid().ToString("N") + ".tmp");
+        // KeyedLockPool serializes writers for a checkout; deterministic sibling names are safe.
+        var temp = Path.Combine(dir, "." + Path.GetFileName(full) + ".rf-edit.tmp");
+        TryDeleteStale(temp);
         try
         {
             File.WriteAllText(temp, text);
@@ -438,10 +440,7 @@ public class HashLineEditor
         }
         finally
         {
-            if (File.Exists(temp))
-            {
-                File.Delete(temp);
-            }
+            TryDeleteStale(temp);
         }
     }
 
@@ -453,7 +452,9 @@ public class HashLineEditor
         }
 
         var dir = Path.GetDirectoryName(full)!;
-        var temp = Path.Combine(dir, ".rf-edit-" + Guid.NewGuid().ToString("N") + ".tmp");
+        // KeyedLockPool serializes writers for a checkout; deterministic sibling names are safe.
+        var temp = Path.Combine(dir, "." + Path.GetFileName(full) + ".rf-revert.tmp");
+        TryDeleteStale(temp);
         try
         {
             File.WriteAllBytes(temp, bytes);
@@ -466,12 +467,23 @@ public class HashLineEditor
         }
         finally
         {
-            if (File.Exists(temp))
-            {
-                File.Delete(temp);
-            }
+            TryDeleteStale(temp);
         }
     }
+
+    private static void TryDeleteStale(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
 
     private bool EnsureStablePath(string rel, string full, out string? error)
     {

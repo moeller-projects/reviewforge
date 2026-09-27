@@ -46,8 +46,8 @@ public sealed class PrepareRepositoryStage(
         ctx.DiffText = await pool.GetDiffAsync(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
         ctx.Diff = DiffIndex.Parse(ctx.DiffText);
 
-        var nonReviewable = ctx.Diff.NonReviewableFiles.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var reviewable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var nonReviewable = ctx.Diff.NonReviewableFiles.Keys.ToHashSet(RepoPath.PathComparer);
+        var reviewable = new HashSet<string>(RepoPath.PathComparer);
         foreach (var file in ctx.ChangedFileManifest.Where(f => f.ChangeType != ChangedFileType.Delete))
         {
             var path = RepoPath.Normalize(file.Path);
@@ -69,8 +69,8 @@ public sealed class PrepareRepositoryStage(
             reviewable.Add(path);
         }
 
-        var diffFiles = ctx.Diff.Files.Select(RepoPath.Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var missingFromDiff = reviewable.Where(f => !diffFiles.Contains(f)).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var diffFiles = ctx.Diff.Files.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
+        var missingFromDiff = reviewable.Where(f => !diffFiles.Contains(f)).Order(RepoPath.PathComparer).ToArray();
         if (missingFromDiff.Length > 0)
         {
             // Fail closed (P1-14): a manifest file with no diff entry means quoting/parsing

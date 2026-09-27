@@ -193,6 +193,25 @@ public sealed class SqliteFindingStore : IFindingStore
                 .ToListAsync(ct)
         ];
     }
+    public async Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var keys = await db.Findings
+            .Where(f => f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix))
+            .Where(f => db.Runs.Any(r => r.Id == f.RunId
+                                         && r.Org == pr.Org && r.Project == pr.Project
+                                         && r.RepositoryId == pr.RepositoryId && r.PrId == pr.PrId))
+            .Select(f => f.DedupeKey)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        return keys
+            .Select(key => key[AppliedFix.CommandKeyPrefix.Length..])
+            .Select(suffix => long.TryParse(suffix, out var id) ? (long?)id : null)
+            .Where(id => id is not null)
+            .Select(id => id!.Value)
+            .ToHashSet();
+    }
 
     public async Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {

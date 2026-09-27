@@ -234,7 +234,8 @@ public sealed class ReviewPipelineFactory(
                 shardConcurrency: opts.Sharding.ShardConcurrency),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new AutoFixFindingsStage(
-                registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>()),
+                registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>(),
+                store: store),
             new BeginRunStage(store, clock),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
             new PublishFindingsStage(source, store, loggerFactory.CreateLogger<PublishFindingsStage>(), cleanVote),

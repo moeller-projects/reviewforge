@@ -8,6 +8,8 @@ public interface IFindingStore
     Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct);
 
     Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct);
+    /// <summary>Returns commanded-fix thread ids already recorded as audit rows for this PR.</summary>
+    Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct);
 
     /// <summary>
     /// Saves a run. Upsert semantics: unknown run id → insert (in-flight shell when

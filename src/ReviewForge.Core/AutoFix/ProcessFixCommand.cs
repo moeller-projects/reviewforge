@@ -10,33 +10,47 @@ namespace ReviewForge.Core.AutoFix;
 /// </summary>
 public static class ProcessFixCommand
 {
-    /// <summary>Characters that would carry meaning under a shell and are therefore refused.
-    /// Directory separators are deliberately absent: tokens are passed to
-    /// <see cref="System.Diagnostics.ProcessStartInfo.ArgumentList"/> verbatim (no shell),
-    /// so Windows paths like <c>C:\tools\verify.exe</c> must parse.</summary>
-    private static readonly char[] Metacharacters = ['|', '&', ';', '<', '>', '`', '$', '(', ')', '{', '}', '*', '?', '[', ']', '~', '#', '!'];
+    public const string FilePlaceholder = "{file}";
+    private static readonly char[] Metacharacters = ['|', '&', ';', '<', '>', '`', '$', '(', ')', '*', '?', '[', ']', '~', '#', '!'];
 
-    /// <summary>Splits the command into executable + arguments; throws on empty input, control
-    /// characters, unbalanced double quotes, or metacharacters.</summary>
-    public static (string Executable, string[] Arguments) Parse(string command)
+    public readonly record struct Parsed(string Executable, string[] Arguments)
     {
+        public bool HasFilePlaceholder => Arguments.Any(a => a == FilePlaceholder);
+        public void Deconstruct(out string executable, out string[] arguments)
+            => (executable, arguments) = (Executable, Arguments);
+    }
+
+    /// <summary>Splits the command into executable + arguments without invoking a shell.</summary>
+    public static Parsed Parse(string command)
+    {
+        if (!TryParse(command, out var parsed, out var error))
+        {
+            throw new ArgumentException(error, nameof(command));
+        }
+
+        return parsed;
+    }
+
+    public static bool TryParse(string? command, out Parsed parsed, out string error)
+    {
+        parsed = default;
+        error = string.Empty;
         if (string.IsNullOrWhiteSpace(command))
         {
-            throw new ArgumentException("verification command must not be empty", nameof(command));
+            error = "verification command must not be empty";
+            return false;
         }
 
         if (command.IndexOfAny(['\r', '\n', '\t']) >= 0)
         {
-            throw new ArgumentException(
-                "verification command must not contain carriage returns, newlines, or tabs",
-                nameof(command));
+            error = "verification command must not contain carriage returns, newlines, or tabs";
+            return false;
         }
 
         var tokens = new List<string>();
         var token = new StringBuilder();
         var inQuotes = false;
         var tokenStarted = false;
-
         foreach (var character in command)
         {
             if (character == '"')
@@ -62,9 +76,8 @@ public static class ProcessFixCommand
 
         if (inQuotes)
         {
-            throw new ArgumentException(
-                "verification command contains an unbalanced double quote",
-                nameof(command));
+            error = "verification command contains an unbalanced double quote";
+            return false;
         }
 
         if (tokenStarted)
@@ -74,15 +87,29 @@ public static class ProcessFixCommand
 
         foreach (var parsedToken in tokens)
         {
-            if (parsedToken.IndexOfAny(Metacharacters) >= 0)
+            if (parsedToken.Contains(FilePlaceholder, StringComparison.Ordinal)
+                && !string.Equals(parsedToken, FilePlaceholder, StringComparison.Ordinal))
             {
-                throw new ArgumentException(
-                    $"verification command token '{parsedToken}' contains a shell metacharacter; " +
-                    "the command runs without a shell — pass a plain executable plus arguments",
-                    nameof(command));
+                error = $"verification command token '{parsedToken}' must use {FilePlaceholder} as a whole argument";
+                return false;
+            }
+
+            if (parsedToken != FilePlaceholder && parsedToken.IndexOfAny(Metacharacters) >= 0
+                || parsedToken == FilePlaceholder && parsedToken.IndexOfAny(Metacharacters) >= 0)
+            {
+                error = $"verification command token '{parsedToken}' contains a shell metacharacter; " +
+                        "the command runs without a shell — pass a plain executable plus arguments";
+                return false;
             }
         }
 
-        return (tokens[0], tokens.Skip(1).ToArray());
+        if (tokens.Count == 0)
+        {
+            error = "verification command must not be empty";
+            return false;
+        }
+
+        parsed = new Parsed(tokens[0], tokens.Skip(1).ToArray());
+        return true;
     }
 }

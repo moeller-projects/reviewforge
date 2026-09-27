@@ -190,14 +190,15 @@ Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__�
 }
 ```
 
-**Verification trust boundary.** `AutoFix:VerificationCommand` runs per fixed file in the
-checkout (e.g. `dotnet build`). The command executes **PR-author-controlled code**
-(MSBuild targets, npm scripts, …): enable it only with a strict author allowlist, and
-note the shipped container (Alpine, read-only rootfs, no toolchains) cannot run
-heavyweight verifiers. The command runs without a shell; metacharacters are rejected at
-startup. When set, fixes are applied, verified once per file, and reverted — a verify
-failure drops that file's fixes (published as plain comments instead). A failed revert
-fails the run rather than leaving a dirty pooled checkout.
+**Verification trust boundary.** `AutoFix:VerificationCommand` runs in the checkout and
+executes **PR-author-controlled code** (MSBuild targets, npm scripts, …): enable it only
+with a strict author allowlist. The configured executable is checked at host startup and
+the command runs without a shell; metacharacters are rejected. Use `{file}` as a whole
+argument, for example `bash -n {file}`, to verify each edited file; without `{file}`, the
+command runs once per batch. File paths are passed as `ArgumentList` entries, never shell text.
+When set, fixes are applied, verified, and reverted — a verify failure drops that file's fixes
+(published as plain comments instead). A failed revert fails the run rather than leaving a
+dirty pooled checkout.
 
 Safety properties pinned by tests: fixed findings stay in the accepted set (their keys
 stay current, so triage never auto-resolves their threads); commanded suggestion threads
