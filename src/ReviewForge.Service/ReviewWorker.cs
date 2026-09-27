@@ -47,6 +47,9 @@ public sealed class ReviewWorker(
                     request.RunId, request.Pr, holder);
                 tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued");
                 runLogs.CloseRun(request.RunId);
+                // The request was already dequeued (claimed) from the queue; without this
+                // ack a durable row would stay claimed and be reclaimed forever.
+                queue.Acknowledge(request.RunId);
                 continue; // finally-block of the run loop is not entered; nothing to release
             }
 
@@ -66,11 +69,20 @@ public sealed class ReviewWorker(
 
                 // Keep the reservation alive for the whole run so a review that outlives the
                 // claim TTL does not admit a duplicate; the publish guard still fails the run
-                // safely if the claim is ever lost.
+                // safely if the claim is ever lost. The durable queue's claim lease (default
+                // 10 min) renews on the same tick, so the interval is capped well under it —
+                // the in-memory TTL alone would allow a 30-minute cadence.
                 using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var heartbeatInterval = TimeSpan.FromTicks(Math.Max(claims.Ttl.Ticks / 4, TimeSpan.FromSeconds(1).Ticks));
+                if (heartbeatInterval > TimeSpan.FromMinutes(3))
+                {
+                    heartbeatInterval = TimeSpan.FromMinutes(3);
+                }
+
                 var heartbeat = new ClaimHeartbeat(
-                        claims, request.Pr, request.RunId,
-                        TimeSpan.FromTicks(Math.Max(claims.Ttl.Ticks / 4, TimeSpan.FromSeconds(1).Ticks)))
+                        claims, request.Pr, request.RunId, heartbeatInterval,
+                        time: _Clock,
+                        renewDurableClaim: () => queue.RenewClaim(request.RunId))
                     .RunUntilCancelled(heartbeatCts.Token);
                 try
                 {

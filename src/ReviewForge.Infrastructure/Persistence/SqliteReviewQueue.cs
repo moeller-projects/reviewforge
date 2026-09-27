@@ -24,6 +24,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
     private readonly TimeProvider _Clock;
     private readonly TimeSpan _ClaimTtl;
     private readonly TimeSpan _PollInterval;
+    private readonly string _Pragmas;
     private readonly string _ClaimWorker = $"{Environment.MachineName}-{Guid.NewGuid():N}";
 
     public SqliteReviewQueue(
@@ -31,13 +32,19 @@ public sealed class SqliteReviewQueue : IReviewQueue
         int capacity = 100,
         TimeProvider? clock = null,
         TimeSpan? claimTtl = null,
-        TimeSpan? pollInterval = null)
+        TimeSpan? pollInterval = null,
+        StoreJournalMode journalMode = StoreJournalMode.Wal)
     {
         _ConnectionString = connectionString;
         _Capacity = capacity;
         _Clock = clock ?? TimeProvider.System;
         _ClaimTtl = claimTtl ?? TimeSpan.FromMinutes(10);
         _PollInterval = pollInterval ?? TimeSpan.FromMilliseconds(250);
+        // Mirror SqliteConnectionPragmasInterceptor: WAL pairs with synchronous=NORMAL;
+        // Delete keeps FULL durability for filesystems without POSIX advisory locks.
+        _Pragmas = journalMode == StoreJournalMode.Wal
+            ? "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;"
+            : "PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE;";
         EnsureSchema();
     }
 
@@ -115,6 +122,18 @@ public sealed class SqliteReviewQueue : IReviewQueue
         cmd.ExecuteNonQuery();
     }
 
+    public bool RenewClaim(Guid runId)
+    {
+        using var connection = Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "UPDATE QueuedRuns SET ClaimedAt = $now WHERE RunId = $runId AND ClaimedBy = $worker;";
+        cmd.Parameters.AddWithValue("$now", Stamp(_Clock.GetUtcNow()));
+        cmd.Parameters.AddWithValue("$worker", _ClaimWorker);
+        cmd.Parameters.AddWithValue("$runId", runId.ToString());
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
     public ReviewRequest? TryGetQueued(Guid runId)
     {
         using var connection = Open();
@@ -188,11 +207,21 @@ public sealed class SqliteReviewQueue : IReviewQueue
     private SqliteConnection Open()
     {
         var connection = new SqliteConnection(_ConnectionString);
-        connection.Open();
-        using var pragma = connection.CreateCommand();
-        pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
-        pragma.ExecuteNonQuery();
-        return connection;
+        try
+        {
+            connection.Open();
+            using var pragma = connection.CreateCommand();
+            pragma.CommandText = _Pragmas;
+            pragma.ExecuteNonQuery();
+            return connection;
+        }
+        catch
+        {
+            // Never leak the native handle when open/pragma fails (transient lock or
+            // journal errors during startup/polling).
+            connection.Dispose();
+            throw;
+        }
     }
 
     // UTC "O" stamps: lexicographic comparison in SQL equals chronological comparison.

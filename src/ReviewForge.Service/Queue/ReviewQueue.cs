@@ -56,15 +56,16 @@ public sealed class ReviewQueue : IReviewQueue
 
     public EnqueueResult TryEnqueue(ReviewRequest request)
     {
+        // _Pending must be registered BEFORE the channel write: a fast worker can
+        // dequeue, complete, and ack in the window between TryWrite and registration,
+        // which would resurrect a finished run as "Queued" on status read-through.
+        _Pending[request.RunId] = request;
         var accepted = _Channel.Writer.TryWrite(request);
         var depth = _Channel.Reader.Count;
         if (!accepted)
         {
+            _Pending.TryRemove(request.RunId, out _);
             ReviewForgeTelemetry.QueueRejected.Add(1);
-        }
-        else
-        {
-            _Pending[request.RunId] = request;
         }
 
         return new EnqueueResult(accepted, depth);
@@ -80,6 +81,8 @@ public sealed class ReviewQueue : IReviewQueue
     }
 
     public void Acknowledge(Guid runId) => _Pending.TryRemove(runId, out _);
+
+    public bool RenewClaim(Guid runId) => true; // no durable lease; InFlightClaims renews itself
 
     public ReviewRequest? TryGetQueued(Guid runId)
         => _Pending.TryGetValue(runId, out var request) ? request : null;

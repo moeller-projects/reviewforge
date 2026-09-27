@@ -30,6 +30,12 @@ public interface IReviewQueue
     /// implementation is a no-op (the item left the channel at read time).</summary>
     void Acknowledge(Guid runId);
 
+    /// <summary>Renews this consumer's durable claim so a long-running review is not
+    /// reclaimed while still executing. The channel implementation is a no-op (in-memory
+    /// claims renew via their own heartbeat). False when this consumer no longer holds the
+    /// row — the caller should let the run wind down rather than renew forever.</summary>
+    bool RenewClaim(Guid runId);
+
     /// <summary>The request when it is still live-queued (unclaimed); used for status
     /// read-through after a tracker miss.</summary>
     ReviewRequest? TryGetQueued(Guid runId);

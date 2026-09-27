@@ -32,14 +32,25 @@ public static class ServiceCollectionExtensions
 
         // Ingest queue backing: memory channel (default) or durable SQLite rows on the store's
         // database file (ReviewForge:QueueMode). Worker and endpoints only see IReviewQueue.
+        // Enum.TryParse accepts undefined numeric values, so definedness is checked here at
+        // compose time too — "2" must never silently become Memory and disable durability.
         var queueModeText = configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:QueueMode");
-        if (Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var queueMode)
-            && queueMode == QueueMode.Sqlite)
+        if (queueModeText is not null
+            && (!Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var queueMode) || !Enum.IsDefined(queueMode)))
+        {
+            throw new InvalidOperationException(
+                $"ReviewForge:QueueMode must be one of {string.Join(" | ", Enum.GetNames<QueueMode>())} (got '{queueModeText}')");
+        }
+
+        if (Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var parsedQueueMode)
+            && parsedQueueMode == QueueMode.Sqlite)
         {
             services.AddSingleton<IReviewQueue>(sp =>
             {
                 var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
-                return new SqliteReviewQueue(opts.StoreConnectionString);
+                return new SqliteReviewQueue(
+                    opts.StoreConnectionString,
+                    journalMode: Enum.Parse<StoreJournalMode>(opts.Store.JournalMode, ignoreCase: true));
             });
         }
         else
@@ -122,9 +133,11 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
             .Validate(o => o.Retention.Days >= 1, "ReviewForge:Retention:Days must be at least 1")
             .Validate(o => o.Retention.MinRunsPerPr >= 1, "ReviewForge:Retention:MinRunsPerPr must be at least 1")
-            .Validate(o => Enum.TryParse<StoreJournalMode>(o.Store.JournalMode, ignoreCase: true, out _),
+            .Validate(o => Enum.TryParse<StoreJournalMode>(o.Store.JournalMode, ignoreCase: true, out var jm)
+                    && Enum.IsDefined(jm),
                 "ReviewForge:Store:JournalMode must be Wal | Delete")
-            .Validate(o => Enum.TryParse<QueueMode>(o.QueueMode, ignoreCase: true, out _),
+            .Validate(o => Enum.TryParse<QueueMode>(o.QueueMode, ignoreCase: true, out var qm)
+                    && Enum.IsDefined(qm),
                 "ReviewForge:QueueMode must be Memory | Sqlite")
             .Validate(o => o.Sharding.ShardMaxChars >= 1_000, "ReviewForge:Sharding:ShardMaxChars must be at least 1000")
             .Validate(o => o.Sharding.MaxShards is >= 2 and <= 32, "ReviewForge:Sharding:MaxShards must be between 2 and 32")

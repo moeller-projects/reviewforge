@@ -103,6 +103,54 @@ public sealed class SqliteReviewQueueTests : IDisposable
     }
 
     [Fact]
+    public async Task RenewClaim_extends_the_lease_past_the_ttl_and_requires_ownership()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var queue = NewQueue(_DbPath, clock: clock);
+        var request = Request(1);
+        Assert.True(queue.TryEnqueue(request).Accepted);
+        var claimed = await ClaimOneAsync(queue);
+        Assert.Equal(request.RunId, claimed.RunId);
+
+        // A live worker renews every few minutes; an active claim must never become
+        // reclaimable, even well past the raw TTL.
+        for (var i = 0; i < 4; i++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(3));
+            Assert.True(queue.RenewClaim(request.RunId));
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(9)); // within 10 min of the LAST renewal
+        // Nothing claimable: the renewed lease holds.
+        Assert.Null(await ProbeClaimableAsync(new SqliteReviewQueue(
+            $"Data Source={_DbPath};Pooling=False", 100, clock, pollInterval: TimeSpan.FromMilliseconds(10))));
+
+        // Ownership matters: an unknown run id is not renewable.
+        Assert.False(queue.RenewClaim(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task Reclaimed_rows_stop_renewing_for_the_original_consumer()
+    {
+        // After the lease lapses and another consumer reclaims the row, the original
+        // consumer's renewal no longer matches ClaimedBy and reports false.
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var original = NewQueue(_DbPath, clock: clock);
+        var request = Request(1);
+        Assert.True(original.TryEnqueue(request).Accepted);
+        await ClaimOneAsync(original);
+
+        clock.Advance(TimeSpan.FromMinutes(11)); // original worker died without renewing
+
+        var successor = NewQueue(_DbPath, clock: clock);
+        var reclaimed = await ClaimOneAsync(successor);
+        Assert.Equal(request.RunId, reclaimed.RunId);
+
+        Assert.False(original.RenewClaim(request.RunId));
+        Assert.True(successor.RenewClaim(request.RunId));
+    }
+
+    [Fact]
     public async Task Expired_claims_are_reclaimed_for_crash_recovery()
     {
         var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
@@ -163,5 +211,24 @@ public sealed class SqliteReviewQueueTests : IDisposable
         }
 
         throw new InvalidOperationException("enumeration ended without a claim");
+    }
+
+    /// <summary>Claims at most one row within a short window; null when nothing is claimable.</summary>
+    private static async Task<ReviewRequest?> ProbeClaimableAsync(SqliteReviewQueue queue)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            await foreach (var request in queue.ReadAllAsync(cts.Token))
+            {
+                return request;
+            }
+
+            return null;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
     }
 }
