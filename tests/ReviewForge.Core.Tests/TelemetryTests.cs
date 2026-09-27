@@ -78,12 +78,26 @@ public sealed class TelemetryTests
         };
         listener.SetMeasurementEventCallback<double>((instrument, measurement, tags, state) =>
         {
+            // MeterListener is process-wide: parallel test collections record the same
+            // instrument. Only capture this test's stage ("cancel" is unique to this
+            // class), otherwise a concurrent run overwrites result with "completed".
+            var isThisStage = false;
+            string? stageResult = null;
             foreach (var tag in tags)
             {
-                if (tag.Key == ReviewForgeTelemetry.TagResult)
+                if (tag.Key == ReviewForgeTelemetry.TagStage)
                 {
-                    result = tag.Value?.ToString();
+                    isThisStage = tag.Value?.ToString() == "cancel";
                 }
+                else if (tag.Key == ReviewForgeTelemetry.TagResult)
+                {
+                    stageResult = tag.Value?.ToString();
+                }
+            }
+
+            if (isThisStage)
+            {
+                result = stageResult;
             }
         });
         listener.Start();
