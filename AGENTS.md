@@ -51,11 +51,13 @@ prompts/native-review-system.md   human-editable copy; the runtime default is th
    secret values.
 4. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
    draft skip must not mark a head as reviewed.
-5. **Coverage gate.** Every test project enforces ≥97% line coverage (coverlet
-   `Threshold=97`) on its own SUT assembly. Any code you add must be covered or explicitly
-   excluded with justification (`[ExcludeFromCodeCoverage]` is reserved for pure
-   vendor-SDK wrappers like `AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`).
-   All logic must live in covered code.
+5. **Coverage gate.** Every production-code test project enforces ≥97% line coverage
+  (coverlet `Threshold=97`) on its own SUT assembly. The `ReviewForge.Architecture.Tests`
+  project is the explicit exception: it validates assembly boundaries and covers no
+  production code, so it deliberately has no coverlet threshold. Any logic added to a
+  production-code test project must be covered or explicitly excluded with justification
+  (`[ExcludeFromCodeCoverage]` is reserved for pure vendor-SDK wrappers like
+  `AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`).
 6. **Agent sandbox.** `RepoReadTools` (agent reads) is read-only, rooted at the checkout,
    escape-proof, deny-regex for `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. The agent has
    no shell. `HashLineEditor` (used by author-commanded fix passes and optional

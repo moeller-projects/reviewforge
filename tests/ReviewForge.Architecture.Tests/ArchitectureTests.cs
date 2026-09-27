@@ -59,7 +59,9 @@ public sealed class ArchitectureTests
     public void Ports_contain_contract_interfaces_and_approved_value_types_only()
     {
         var types = Core.GetTypes()
-            .Where(type => type.Namespace == "ReviewForge.Core.Ports" && !type.IsNested)
+            .Where(type => type.Namespace is { } ns
+                && ns.StartsWith("ReviewForge.Core.Ports", StringComparison.Ordinal)
+                && !type.IsNested)
             .ToArray();
         var approvedValueTypes = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -75,7 +77,7 @@ public sealed class ArchitectureTests
         Assert.True(unexpected.Length == 0, $"Unexpected Ports types: {string.Join(", ", unexpected)}");
 
         AssertRule(Types.InAssembly(Core)
-            .That().ResideInNamespace("ReviewForge.Core.Ports")
+            .That().ResideInNamespace("ReviewForge.Core.Ports", true)
             .ShouldNot().HaveDependencyOnAny(
                 "LibGit2Sharp", "Microsoft.EntityFrameworkCore", "Microsoft.AspNetCore",
                 "Microsoft.TeamFoundationServer", "Microsoft.VisualStudio.Services", "System.Net.Http")

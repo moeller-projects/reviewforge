@@ -1,11 +1,10 @@
-using System.Net;
-
 namespace ReviewForge.Testing;
 
 /// <summary>Scripted HTTP handler shared by adapter tests.</summary>
 public sealed class StubHttpMessageHandler : HttpMessageHandler
 {
-    private readonly Queue<Func<HttpRequestMessage, HttpResponseMessage>> _Script = new();
+    private readonly object _Gate = new();
+    private readonly Queue<Func<HttpRequestMessage, int, HttpResponseMessage>> _Script = new();
 
     public StubHttpMessageHandler()
     {
@@ -15,7 +14,7 @@ public sealed class StubHttpMessageHandler : HttpMessageHandler
         => Enqueue(respond);
 
     public StubHttpMessageHandler(Func<HttpRequestMessage, int, HttpResponseMessage> respond)
-        => Enqueue(request => respond(request, Requests.Count));
+        => Enqueue(respond);
 
     public StubHttpMessageHandler(Func<HttpResponseMessage> respond)
         => Enqueue(_ => respond());
@@ -23,15 +22,26 @@ public sealed class StubHttpMessageHandler : HttpMessageHandler
     public List<HttpRequestMessage> Requests { get; } = [];
 
     public void Enqueue(Func<HttpRequestMessage, HttpResponseMessage> respond)
+        => _Script.Enqueue((request, _) => respond(request));
+
+    public void Enqueue(Func<HttpRequestMessage, int, HttpResponseMessage> respond)
         => _Script.Enqueue(respond);
 
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
-        Requests.Add(request);
-        return _Script.Count == 0
-            ? throw new InvalidOperationException("StubHttpMessageHandler: no scripted response left.")
-            : Task.FromResult(_Script.Dequeue()(request));
+        Func<HttpRequestMessage, int, HttpResponseMessage> respond;
+        int requestNumber;
+        lock (_Gate)
+        {
+            Requests.Add(request);
+            requestNumber = Requests.Count;
+            respond = _Script.Count == 0
+                ? throw new InvalidOperationException("StubHttpMessageHandler: no scripted response left.")
+                : _Script.Dequeue();
+        }
+
+        return Task.FromResult(respond(request, requestNumber));
     }
 }

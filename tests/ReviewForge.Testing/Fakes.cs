@@ -79,12 +79,11 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
     {
+        Interlocked.Increment(ref _workItemFetches);
         if (ThrowOnGetLinkedWorkItems is { } error)
         {
             throw error;
         }
-
-        Interlocked.Increment(ref _workItemFetches);
         if (WorkItemBarrier is not null && !WorkItemBarrier.SignalAndWait(TimeSpan.FromSeconds(10)))
         {
             throw new TimeoutException("work-item fetches did not overlap");
