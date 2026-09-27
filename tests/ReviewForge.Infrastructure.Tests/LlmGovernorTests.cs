@@ -10,10 +10,13 @@ namespace ReviewForge.Infrastructure.Tests;
 public class LlmGovernorTests
 {
     /// <summary>Records the governor's observed inflight count at call start; optionally
-    /// blocks on a gate and always yields so concurrent calls genuinely overlap.</summary>
+    /// blocks on a gate and always yields so concurrent calls genuinely overlap. The gate
+    /// factory runs per call; a plain gate Task is shared by every call (multiple awaiters
+    /// on one TCS task).</summary>
     private sealed class GateChatClient(
         Func<int> inflight,
         Task? gate = null,
+        Func<Task>? gateFactory = null,
         int delayMs = 0) : IChatClient
     {
         public int MaxObservedInflight { get; private set; }
@@ -26,7 +29,11 @@ public class LlmGovernorTests
                 await Task.Delay(delayMs);
             }
 
-            if (gate is { } held)
+            if (gateFactory is { } factory)
+            {
+                await factory();
+            }
+            else if (gate is { } held)
             {
                 await held;
             }
@@ -62,16 +69,48 @@ public class LlmGovernorTests
         => Assert.Throws<ArgumentOutOfRangeException>(() => new LlmGovernor(0));
 
     [Fact]
+    public async Task Dispose_releases_the_semaphore_and_is_idempotent()
+    {
+        var governor = new LlmGovernor(1);
+        governor.Dispose();
+        governor.Dispose(); // second call is a no-op, not a double-dispose fault
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            async () => await governor.AcquireAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Concurrency_cap_is_honored_under_parallel_load()
     {
         var governor = new LlmGovernor(2);
-        var inner = new GateChatClient(() => governor.Inflight, delayMs: 25);
+        // TCS-gated, not delay-gated: each call signals its entry and blocks until both
+        // are inside, so the test proves overlap deterministically instead of relying on
+        // scheduler timing to make 25 ms delays overlap.
+        var entered = 0;
+        var bothInside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inner = new GateChatClient(
+            () => governor.Inflight,
+            gateFactory: () =>
+            {
+                if (Interlocked.Increment(ref entered) == 2)
+                {
+                    bothInside.TrySetResult();
+                }
+
+                return release.Task;
+            });
         var governed = new GovernedChatClient(inner, governor, acquireTimeoutSeconds: 30);
 
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
-            governed.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")])));
+        var tasks = Enumerable.Range(0, 8)
+            .Select(_ => governed.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
+            .ToArray();
 
-        Assert.Equal(2, inner.MaxObservedInflight);
+        await bothInside.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(2, inner.MaxObservedInflight); // third call cannot enter while both slots are held
+
+        release.TrySetResult();
+        await Task.WhenAll(tasks);
         Assert.Equal(0, governor.Inflight); // all slots released
     }
 

@@ -1090,7 +1090,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         var ex = Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
 
-        Assert.Contains("WorkerCount must be at least 1", ex.Message);
+        Assert.Contains("WorkerCount must be between 1 and 64", ex.Message);
     }
 }
 

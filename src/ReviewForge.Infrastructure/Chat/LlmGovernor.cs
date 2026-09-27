@@ -6,10 +6,11 @@ namespace ReviewForge.Infrastructure.Chat;
 /// later × shards) cannot burst the provider into 429s. Slots are acquired around each
 /// HTTP call, not each run — the function-invocation loop issues one call per iteration.
 /// </summary>
-public sealed class LlmGovernor
+public sealed class LlmGovernor : IDisposable
 {
     private readonly SemaphoreSlim _Slots;
     private readonly int _Max;
+    private int _Disposed;
 
     public LlmGovernor(int maxConcurrentRequests)
     {
@@ -28,6 +29,14 @@ public sealed class LlmGovernor
     {
         await _Slots.WaitAsync(ct).ConfigureAwait(false);
         return new Slot(_Slots);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _Disposed, 1) == 0)
+        {
+            _Slots.Dispose();
+        }
     }
 
     private sealed class Slot(SemaphoreSlim slots) : IDisposable

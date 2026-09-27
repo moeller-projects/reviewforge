@@ -49,9 +49,7 @@ public sealed class GovernedChatClient(
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(acquireTimeoutSeconds));
-            var slot = await governor.AcquireAsync(timeoutCts.Token).ConfigureAwait(false);
-            ReviewForgeTelemetry.LlmGovernorWait.Record(sw.Elapsed.TotalMilliseconds);
-            return slot;
+            return await governor.AcquireAsync(timeoutCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -59,6 +57,14 @@ public sealed class GovernedChatClient(
             throw new LlmGovernorTimeoutException(
                 $"timed out after {acquireTimeoutSeconds}s waiting for an LLM concurrency slot " +
                 $"({governor.Inflight} in flight, cap {governor.MaxConcurrency})");
+        }
+        finally
+        {
+            // Every attempt that actually waited contributes a sample — including the
+            // timed-out and caller-cancelled ones, which are exactly the saturation
+            // signal. (Immediate acquisition records ~0; Timeout.TotalMilliseconds is
+            // never negative, so no zero-spam guard is needed.)
+            ReviewForgeTelemetry.LlmGovernorWait.Record(sw.Elapsed.TotalMilliseconds);
         }
     }
 }

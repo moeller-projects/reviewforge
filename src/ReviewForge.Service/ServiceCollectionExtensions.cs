@@ -127,7 +127,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ReviewForgeServiceOptions>()
             .Bind(configuration.GetSection(ReviewForgeServiceOptions.SectionName))
             .ValidateDataAnnotations()
-            .Validate(o => o.WorkerCount >= 1, "ReviewForge:WorkerCount must be at least 1")
+            .Validate(o => o.WorkerCount is >= 1 and <= 64,
+                "ReviewForge:WorkerCount must be between 1 and 64")
             .Validate(o => ReviewForgeServiceOptions.IsValidCleanRunVote(o.CleanRunVote),
                 "ReviewForge:CleanRunVote must be NoResponse | Approved | ApprovedWithSuggestions | None")
             .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
