@@ -10,9 +10,8 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// </summary>
 public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<EnrichContextStage> logger) : IReviewStage
 {
-    public const string ContextName = "crg";
-
     public string Name => "enrich-context";
+
 
     public int Order => 50;
 
@@ -37,7 +36,7 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
                 .ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(payload))
             {
-                ctx.ContextStore.Put(ContextName, payload);
+                ctx.ContextStore.Put(enricher.Name, payload);
             }
         }
         catch (Exception ex)

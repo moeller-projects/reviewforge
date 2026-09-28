@@ -8,6 +8,7 @@ using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.AutoFix.Fixers;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
@@ -136,6 +137,23 @@ public static class ServiceCollectionExtensions
                 "AutoFix:PublishMode only supports 'Suggestion' in this version (CommitOnHead/StackedBranch are reserved)")
             .ValidateOnStart();
 
+        services.AddOptions<VerifyFindingsOptions>()
+            .Bind(configuration.GetSection(VerifyFindingsOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        services.AddOptions<EnrichmentOptions>()
+            .Bind(configuration.GetSection(EnrichmentOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        // Opt-in: no registration when disabled → EnrichContextStage's null path, zero
+        // behavior change. New enrichers get their own toggle here.
+        if (configuration.GetValue<bool>($"{EnrichmentOptions.SectionName}:{nameof(EnrichmentOptions.SymbolUsageEnabled)}"))
+        {
+            services.AddSingleton<IContextEnricher, SymbolUsageEnricher>();
+        }
+
         // Deterministic fixers: one class per rule; adding a fixer = one line here + a test file.
         services.AddSingleton<IFindingFixer>(_ => new HomoglyphIdentifierFixer("homoglyph/mixed-script-identifier"));
         services.AddSingleton<IFindingFixer>(_ => new HomoglyphIdentifierFixer("homoglyph/confusable-keyword"));
@@ -210,10 +228,11 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
             sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
             sp.GetRequiredService<ILoggerFactory>(),
-            enricher: null,
+            enricher: sp.GetService<IContextEnricher>(),
             clock: sp.GetRequiredService<TimeProvider>(),
             findingFixers: sp.GetRequiredService<IFindingFixer[]>(),
-            autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>()));
+            autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>(),
+            verifyFindingsOptions: sp.GetRequiredService<IOptions<VerifyFindingsOptions>>()));
 
         // WorkerCount < 1 is rejected by the options validation above (fail-fast at startup);
         // when unset it defaults to a processor-count-derived clamp, always >= 2.

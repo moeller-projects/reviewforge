@@ -80,6 +80,22 @@ public sealed class PriorReviewContextBuilderTests
     }
 
     [Fact]
+    public void Adds_truncation_marker_when_many_rows_exceed_payload_budget()
+    {
+        var findings = Enumerable.Range(0, PriorReviewContextBuilder.MaxEntries)
+            .Select(i => Finding($"key-{i}", "rule", $"src/{i:D2}.cs", i + 1, null)
+                with { Title = new string('x', 1_000) })
+            .ToArray();
+        var prior = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, findings.Select(f => f.DedupeKey).ToArray(), findings);
+
+        var result = PriorReviewContextBuilder.Build(prior, []);
+
+        Assert.NotNull(result);
+        Assert.Contains("…[truncated]", result);
+        Assert.True(result.Length <= PriorReviewContextBuilder.MaxPayloadChars);
+    }
+
+    [Fact]
     public void Returns_null_without_prior_findings()
     {
         Assert.Null(PriorReviewContextBuilder.Build(null, []));

@@ -29,6 +29,17 @@ public sealed class ShardingOptions
     public int ShardConcurrency { get; init; } = 2;
 }
 
+/// <summary>Context enrichment (section "Enrichment"). Every enricher is opt-in; with all
+/// toggles false no IContextEnricher is registered and the pipeline is byte-identical.</summary>
+public sealed class EnrichmentOptions
+{
+    public const string SectionName = "Enrichment";
+
+    /// <summary>Precomputes a "what references the symbols this PR touches" map into the
+    /// agent's staged context. Default false — opt-in.</summary>
+    public bool SymbolUsageEnabled { get; init; }
+}
+
 /// <summary>Service options for the pipeline host.</summary>
 public sealed class ReviewForgeServiceOptions
 {
@@ -164,7 +175,8 @@ public sealed class ReviewPipelineFactory(
     IContextEnricher? enricher = null,
     TimeProvider? clock = null,
     IEnumerable<IFindingFixer>? findingFixers = null,
-    IOptions<AutoFixOptions>? autoFixOptions = null)
+    IOptions<AutoFixOptions>? autoFixOptions = null,
+    IOptions<VerifyFindingsOptions>? verifyFindingsOptions = null)
 {
     public ReviewPipeline Create()
     {
@@ -231,6 +243,12 @@ public sealed class ReviewPipelineFactory(
                 maxShards: opts.Sharding.MaxShards,
                 shardConcurrency: opts.Sharding.ShardConcurrency),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
+            // 7.1: fail-open adversarial check on the Fast tier; rejected findings never
+            // reach auto-fix or publish. Disabled = byte-identical pipeline.
+            new VerifyFindingsStage(
+                chatClientFactory,
+                verifyFindingsOptions?.Value ?? new VerifyFindingsOptions(),
+                loggerFactory.CreateLogger<VerifyFindingsStage>()),
             new AutoFixFindingsStage(
                 registry, agent, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>(),
                 store: store),

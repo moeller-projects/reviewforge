@@ -81,38 +81,33 @@ public static class TextSanitizer
     private static int IndexOfForbidden(string input)
     {
         var span = input.AsSpan();
-        var candidate = span.IndexOfAny(ForbiddenBmpSingles);
-        var variation = span.IndexOfAnyInRange(VariationSelectorLo, VariationSelectorHi);
-        if (variation >= 0 && (candidate < 0 || variation < candidate))
-        {
-            candidate = variation;
-        }
-
         for (var i = 0; i < span.Length; i++)
         {
-            if (i == candidate)
+            if (char.IsHighSurrogate(span[i]) && i + 1 < span.Length && char.IsLowSurrogate(span[i + 1]))
             {
-                return i;
-            }
+                if (IsForbiddenAstral(char.ConvertToUtf32(span[i], span[i + 1])))
+                {
+                    return i;
+                }
 
-            if (!char.IsHighSurrogate(span[i]) || i + 1 >= span.Length || !char.IsLowSurrogate(span[i + 1]))
-            {
+                i++;
                 continue;
             }
 
-            if (IsForbiddenAstral(char.ConvertToUtf32(span[i], span[i + 1])))
+            if (IsForbiddenBmp(span[i]))
             {
                 return i;
             }
-
-            i++;
         }
 
         return -1;
     }
 
     private static bool IsForbiddenBmp(char c)
-        => ForbiddenBmpSingles.Contains(c) || c is >= VariationSelectorLo and <= VariationSelectorHi;
+        => ForbiddenBmpSingles.Contains(c)
+           || c is >= VariationSelectorLo and <= VariationSelectorHi
+           || c == '\u007F'
+           || (c < ' ' && c is not '\t' and not '\r' and not '\n');
 
     private static bool IsForbiddenAstral(int codePoint)
         => codePoint is >= TagsLo and <= TagsHi

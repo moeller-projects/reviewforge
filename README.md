@@ -242,6 +242,28 @@ carry no dedupe property (invisible to triage); only the PR author's last-commen
 commands trigger; command replies are deduplicated against retry; every fix is labeled,
 and AI-drafted fixes are marked as such.
 
+## Findings verification (challenge stage, off by default)
+
+`VerifyFindings` (env overrides use `VerifyFindings__…`) adds an adversarial stage between
+validation and auto-fix: one bounded, tool-free Fast-tier request tries to *disprove* each
+accepted finding from a deterministic ±15-line file slice around its anchor. It can only
+subtract findings — never add or rewrite — and fails open: any verifier failure keeps the
+findings. Cost is one request of ≤24k prompt chars per run (~1–3% of a typical review).
+
+```json
+"VerifyFindings": {
+  "Enabled": false,       // master switch; false = byte-identical pipeline
+  "MaxFindings": 20,      // highest-severity first; the rest pass unverified
+  "ContextLines": 15,     // file context quoted around each anchor
+  "TimeoutSeconds": 60,   // shared by the request and its single retry
+  "MaxPromptChars": 24000 // hard prompt cap
+}
+```
+
+The per-rule rejection counter (`reviewforge.findings.verifier_rejected_total`) is the
+false-positive-rate metric. Deterministic `homoglyph/*` findings and trivial-diff runs skip
+the verifier entirely.
+
 ## Rulebook
 
 Reviews use embedded general, performance, security, and language rule packs. Packs
