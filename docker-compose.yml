@@ -63,7 +63,7 @@ services:
   # Start with: OTEL_EXPORTER_OTLP_ENDPOINT=http://dashboard:18889 docker compose --profile observability up -d
   # UI: http://localhost:18888 (bound to localhost only — front with a proxy for remote access)
   dashboard:
-    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest   # pin a major tag in practice (P2-18)
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:13.5   # minor-pinned; bump deliberately
     container_name: reviewforge-dashboard
     restart: unless-stopped
     profiles: ["observability"]
