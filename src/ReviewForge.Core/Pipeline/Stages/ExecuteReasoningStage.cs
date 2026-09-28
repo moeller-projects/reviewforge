@@ -142,8 +142,9 @@ public sealed class ExecuteReasoningStage(
             ctx.ContextStore,
             repoDir,
             ruleBook,
-            ctx.ChangedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            ctx.ChangedFiles.ToHashSet(RepoPath.PathComparer),
             ctx.Diff,
+            ctx.DiffText,
             ctx.ResolvedKeys,
             ct,
             ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full);
@@ -187,8 +188,9 @@ public sealed class ExecuteReasoningStage(
                     SnapshotContext(ctx.ContextStore),
                     repoDir,
                     agent.ComposeRuleBook(shard.Files, rootFiles),
-                    shard.Files.ToHashSet(StringComparer.OrdinalIgnoreCase),
+                    shard.Files.ToHashSet(RepoPath.PathComparer),
                     DiffIndex.Parse(shard.DiffText),
+                    shard.DiffText,
                     ctx.ResolvedKeys,
                     token,
                     tier);

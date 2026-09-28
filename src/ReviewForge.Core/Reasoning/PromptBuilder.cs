@@ -29,7 +29,7 @@ public static class PromptBuilder
     /// the skipped content on its own. Tests assert on this exact text.
     /// </summary>
     internal const string DiffTruncationMarker =
-        "…[diff truncated — use repo_read_file / repo_grep to inspect the full change]";
+        "…[diff truncated — use repo_file_diff for the cut files, repo_read_file for full content]";
 
     /// <summary>Delimiter pair marking every PR-author-controlled byte in the prompt.</summary>
     internal const string UntrustedBegin = "<pr-supplied-data>";
