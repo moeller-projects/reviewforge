@@ -34,6 +34,7 @@ public static class PriorReviewContextBuilder
             .OrderBy(finding => finding.FilePath ?? string.Empty, StringComparer.Ordinal)
             .ThenBy(finding => finding.Line ?? 0)
             .ThenBy(finding => finding.RuleId, StringComparer.Ordinal)
+            .ThenBy(finding => finding.DedupeKey, StringComparer.Ordinal)
             .Take(MaxEntries)
             .Select(finding => Format(finding, liveThreads))
             .ToArray();
