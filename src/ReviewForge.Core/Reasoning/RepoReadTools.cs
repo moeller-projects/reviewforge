@@ -376,14 +376,15 @@ public class RepoReadTools
                 var lineNo = 0;
                 foreach (var line in ReadLinesSafe(full))
                 {
-                    lineNo++;
-                    totalLines++;
                     cancellationToken.ThrowIfCancellationRequested();
                     if (totalLines >= _GrepMaxLines || stopwatch.ElapsedMilliseconds >= _GrepMaxMs)
                     {
                         budget = totalLines >= _GrepMaxLines ? "budget-lines" : "budget-time";
                         break;
                     }
+
+                    lineNo++;
+                    totalLines++;
 
                     if (line.Contains('\0'))
                     {
