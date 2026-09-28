@@ -50,6 +50,30 @@ public class ProcessFixVerifierTests
     }
 
     [Fact]
+    public async Task Child_process_does_not_inherit_service_environment()
+    {
+        // The verifier executes PR-controlled code; service secrets must not reach it.
+        var dir = TempDir();
+        var script = Path.Combine(dir, "check-env.sh");
+        await File.WriteAllTextAsync(script,
+            "#!/bin/sh\nif [ -n \"$REVIEWFORGE_TEST_SECRET\" ]; then echo leaked >&2; exit 1; fi\nexit 0\n");
+        var previous = Environment.GetEnvironmentVariable("REVIEWFORGE_TEST_SECRET");
+        Environment.SetEnvironmentVariable("REVIEWFORGE_TEST_SECRET", "hunter2");
+        try
+        {
+            var verifier = new ProcessFixVerifier($"sh {script}", timeoutSeconds: 30);
+            var verdict = await verifier.VerifyAsync(dir, "any.cs", CancellationToken.None);
+
+            Assert.True(verdict.Passed, verdict.Reason);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("REVIEWFORGE_TEST_SECRET", previous);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Missing_executable_propagates_start_failure()
     {
         var dir = TempDir();

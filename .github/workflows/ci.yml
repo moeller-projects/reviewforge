@@ -32,6 +32,18 @@ jobs:
       - name: Restore
         run: dotnet restore ReviewForge.slnx --locked-mode
 
+      # Dependency-vulnerability gate: fails on any known advisory in the
+      # (transitive) package graph so CVEs cannot merge silently.
+      - name: Vulnerability audit
+        shell: bash
+        run: |
+          output="$(dotnet list ReviewForge.slnx package --vulnerable --include-transitive 2>&1)"
+          echo "$output"
+          if grep -q "has the following vulnerabilities" <<<"$output"; then
+            echo "::error::known-vulnerable packages detected — see the list above"
+            exit 1
+          fi
+
       # -warnaserror: any compiler/analyzer warning fails the build.
       - name: Build
         run: dotnet build ReviewForge.slnx --no-restore --configuration Release -warnaserror

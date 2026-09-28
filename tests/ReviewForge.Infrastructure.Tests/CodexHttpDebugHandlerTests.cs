@@ -42,6 +42,25 @@ public class CodexHttpDebugHandlerTests
     }
 
     [Fact]
+    public async Task Secret_shaped_body_content_is_redacted()
+    {
+        // Bodies can carry PR source with committed tokens; the log must not keep them.
+        var output = new StringWriter();
+        var api = new StubHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
+        var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
+        var client = new HttpClient(handler);
+        var secret = new string('a', 32);
+
+        await client.PostAsync(
+            "https://chatgpt.com/backend-api/codex/responses",
+            new StringContent($"{{\"access_token\":\"{secret}\"}}", Encoding.UTF8, "application/json"));
+
+        var log = output.ToString();
+        Assert.DoesNotContain(secret, log);
+        Assert.Contains("access_token", log); // key name preserved for debugging
+    }
+
+    [Fact]
     public async Task Handles_bodyless_request_and_response_without_content_type()
     {
         var output = new StringWriter();

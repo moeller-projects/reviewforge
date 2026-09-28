@@ -13,8 +13,9 @@ namespace ReviewForge.Infrastructure.AutoFix;
 ///
 /// SECURITY: the command executes PR-author-controlled code (dotnet build runs MSBuild
 /// targets; npm test runs scripts). Enable only with a strict AutoFix author allowlist.
-/// The shipped container (Alpine, read-only rootfs, no toolchains) cannot run heavyweight
-/// verifiers.
+/// The child process gets a deny-by-default environment (PATH/HOME/TMPDIR and dotnet
+/// conveniences only) so service secrets cannot be inherited. The shipped container
+/// (Alpine, read-only rootfs, no toolchains) cannot run heavyweight verifiers.
 public sealed class ProcessFixVerifier : IFixVerifier
 {
     public const int MaxOutputBytes = 64 * 1024;
@@ -92,6 +93,22 @@ public sealed class ProcessFixVerifier : IFixVerifier
         foreach (var arg in arguments)
         {
             process.StartInfo.ArgumentList.Add(arg);
+        }
+
+        // Deny-by-default environment: the verifier executes PR-controlled code
+        // (MSBuild targets, npm scripts) and must never see service secrets
+        // (REVIEWFORGE_ADO_PAT, REVIEWFORGE_API_KEYS, OPENAI_API_KEY).
+        process.StartInfo.Environment.Clear();
+        foreach (var keep in new[]
+                 {
+                     "PATH", "HOME", "TMPDIR", "DOTNET_ROOT",
+                     "DOTNET_CLI_TELEMETRY_OPTOUT", "DOTNET_NOLOGO", "NUGET_PACKAGES",
+                 })
+        {
+            if (Environment.GetEnvironmentVariable(keep) is { } value)
+            {
+                process.StartInfo.Environment[keep] = value;
+            }
         }
 
         process.Start();

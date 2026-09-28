@@ -129,7 +129,9 @@ public sealed class ReviewWorker(
             catch (Exception ex)
             {
                 logger.LogError(ex, "run {RunId} for {Pr} failed", request.RunId, request.Pr);
-                tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message);
+                // Raw exception messages can carry internal paths/URLs — keep detail in
+                // the logs, expose a generic reason through the run-status API.
+                tracker.Set(request.RunId, request.Pr, RunState.Failed, "internal error — see run log");
                 var tags = repoTag;
                 tags.Add(ReviewForgeTelemetry.TagResult, "failed");
                 ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);

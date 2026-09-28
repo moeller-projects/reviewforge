@@ -217,15 +217,18 @@ public sealed class AutoFixStageTests : IDisposable
     }
 
     [Fact]
-    public async Task Deterministic_allowlist_can_match_display_name()
+    public async Task Display_name_alone_never_matches_the_allowlist()
     {
+        // ADO display names are user-editable and non-unique: the allowlist matches
+        // the immutable creator id only, so a spoofed display name gains nothing.
         WriteFile("script.sh", "echo $name");
         var ctx = Ctx();
         ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
 
         await Stage(Options(authors: ["pr author"])).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AppliedFixes);
+        Assert.Empty(ctx.AppliedFixes);
+        Assert.Null(ctx.AcceptedFindings[0].AppliedFix);
     }
 
     [Fact]

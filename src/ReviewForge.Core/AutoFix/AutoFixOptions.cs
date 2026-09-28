@@ -11,7 +11,7 @@ public sealed class AutoFixOptions
 
     public bool Enabled { get; init; } = false;
 
-    /// <summary>Creator ids or display names. Empty = disabled even when Enabled=true.</summary>
+    /// <summary>Immutable creator ids only — ADO display names are user-editable and never matched. Empty = disabled even when Enabled=true.</summary>
     public string[] AllowedAuthors { get; init; } = [];
 
     /// <summary>Rule ids eligible for auto-fix; intersected with the fixer registry.</summary>

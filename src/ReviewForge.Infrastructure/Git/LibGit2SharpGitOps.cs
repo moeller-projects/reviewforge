@@ -19,9 +19,14 @@ public sealed class LibGit2SharpGitOps : IGitOps
     private readonly GitOperationScheduler _Scheduler;
     private readonly bool _TargetedFetch;
 
-    public LibGit2SharpGitOps(bool targetedFetch = false, GitOperationScheduler? scheduler = null)
+    /// <summary>Host the PAT may be presented to (from Ado:OrgUrl). Null disables the check.</summary>
+    private readonly string? _CredentialHost;
+
+    public LibGit2SharpGitOps(
+        bool targetedFetch = false, GitOperationScheduler? scheduler = null, string? credentialHost = null)
     {
         _TargetedFetch = targetedFetch;
+        _CredentialHost = credentialHost;
         _Scheduler = scheduler ?? new GitOperationScheduler(
             Math.Clamp(Environment.ProcessorCount / 2, 2, 4));
     }
@@ -262,6 +267,21 @@ public sealed class LibGit2SharpGitOps : IGitOps
     {
         CredentialsProvider = pat is null
             ? null
-            : (_, _, _) => new UsernamePasswordCredentials {Username = "pat", Password = pat},
+            : (url, _, _) =>
+            {
+                // Never present the PAT to a host outside the configured organization:
+                // the clone URL comes from the pull-request source and the trust
+                // assumption is enforced here, at the credential boundary.
+                if (_CredentialHost is not null &&
+                    (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                     || uri.Scheme != Uri.UriSchemeHttps
+                     || !string.Equals(uri.Host, _CredentialHost, StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new InvalidOperationException(
+                        $"refusing to send the ADO PAT to '{url}' — expected host {_CredentialHost}");
+                }
+
+                return new UsernamePasswordCredentials {Username = "pat", Password = pat};
+            },
     };
 }

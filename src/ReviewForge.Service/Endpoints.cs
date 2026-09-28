@@ -44,6 +44,7 @@ public static class Endpoints
             .Produces<DiscoveryReport>(200);
 
         reviews.MapGet("/{runId:guid}", GetRunStatus)
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
             .WithName("GetRunStatus")
             .WithSummary("Run status — in-memory tracker first, then queue/store read-through so finalized runs stay visible after restart")
             .Produces<RunStatus>()
