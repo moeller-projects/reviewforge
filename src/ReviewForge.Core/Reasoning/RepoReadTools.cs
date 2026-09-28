@@ -402,7 +402,8 @@ public class RepoReadTools
                         }
                         if (!changed && shown < MaxReferenceResults)
                         {
-                            sb.Append(rel).Append(':').Append(lineNo).Append(": ").AppendLine(line.Trim());
+                            sb.Append(rel).Append(':').Append(lineNo).Append(": ")
+                                .AppendLine(PromptText.Clean(line.Trim()));
                             shown++;
                         }
                     }
