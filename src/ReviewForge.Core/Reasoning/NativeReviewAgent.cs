@@ -47,9 +47,22 @@ public sealed class NativeReviewAgent(
         => new RuleBookComposer().Compose(changedFiles, repoRootFiles, _Options.RuleSetsPath);
 
     public AIAgent CreateAgent(ReviewCollector collector, ContextStore contextStore, string repoDir, RuleBook? ruleBook = null)
-        => CreateAgent(collector, contextStore, repoDir, ruleBook, null, null, null, null, null, ChatTier.Full);
+        => CreateAgent(collector, contextStore, repoDir, ruleBook, null, null, null, null, ChatTier.Full);
 
     private AIAgent CreateAgent(
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        RuleBook? ruleBook,
+        TokenUsage? usage,
+        IReadOnlySet<string>? changedFiles,
+        DiffIndex? diff,
+        IReadOnlySet<string>? resolvedKeys,
+        ChatTier tier,
+        IReadOnlyList<AITool>? extraTools = null)
+        => CreateAgentWithDiff(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, null, resolvedKeys, tier, extraTools);
+
+    private AIAgent CreateAgentWithDiff(
         ReviewCollector collector,
         ContextStore contextStore,
         string repoDir,
@@ -147,7 +160,7 @@ public sealed class NativeReviewAgent(
         ChatTier tier)
     {
         var usage = new TokenUsage();
-        var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, diffText, resolvedKeys, tier);
+        var agent = CreateAgentWithDiff(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, diffText, resolvedKeys, tier);
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         var modelTag = new TagList { { "model", chatClientFactory.ModelName(tier) }, { "tier", tier.ToString().ToLowerInvariant() } };
