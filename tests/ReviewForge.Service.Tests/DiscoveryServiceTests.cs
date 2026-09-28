@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Testing;
@@ -456,11 +458,273 @@ public class DiscoveryServiceTests
 
 public class DiscoverySweepWorkerTests
 {
-    private static PullRequestCandidate Candidate(int prId)
+    private static PullRequestCandidate Candidate(int prId, bool draft = false)
         => new(
             new PrKey("o", "p", "r", prId),
-            new PullRequest(prId, "t", null, "head", "base", "url", IsDraft: false, "alice", "Alice"),
+            new PullRequest(prId, "t", null, "head", "base", "url", IsDraft: draft, "alice", "Alice"),
             "main", "alice", "Alice");
+
+    // Named CreateService: inside namespace ReviewForge.Service.Tests an unqualified `Service`
+    // binds to the parent namespace, not a method.
+    private static DiscoveryService CreateService(
+        FakePullRequestSource source, FakeFindingStore store, ReviewQueue queue, RunTracker tracker,
+        DiscoveryOptions? options = null)
+        => new(source, store, queue, tracker, new InFlightClaims(), options ?? new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions());
+
+    [Fact]
+    public async Task Faulting_candidate_is_isolated_as_a_skip_and_others_still_enqueue()
+    {
+        var source = new FaultingWorkItemsSource(faultPrId: 1)
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var service = CreateService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        // The sweep itself succeeds; the faulting candidate is a skip, never a sweep failure.
+        var faulted = Assert.Single(report.Skipped, s => s.Pr.PrId == 1);
+        Assert.StartsWith("error:", faulted.Reason, StringComparison.Ordinal);
+        Assert.Equal(new PrKey("o", "p", "r", 2), Assert.Single(report.Enqueued));
+    }
+
+    [Fact]
+    public async Task Report_ordering_is_deterministic_regardless_of_completion_order()
+    {
+        // Sweep A gates PR 2's work-item fetch behind PR 1's; sweep B swaps the gate. The
+        // completion order differs, so an order leak would surface as differing reports.
+        var reportA = await RunGatedSweepAsync(gatedPrId: 2, releasePrId: 1);
+        var reportB = await RunGatedSweepAsync(gatedPrId: 1, releasePrId: 2);
+
+        Assert.Equal(
+            reportA.Enqueued.Select(k => k.PrId).ToList(),
+            reportB.Enqueued.Select(k => k.PrId).ToList());
+        Assert.Equal(
+            reportA.Skipped.Select(s => (s.Pr.PrId, s.Reason)).ToList(),
+            reportB.Skipped.Select(s => (s.Pr.PrId, s.Reason)).ToList());
+        Assert.True(reportA.Enqueued.Select(k => k.PrId).SequenceEqual(reportA.Enqueued.Select(k => k.PrId).OrderBy(id => id)));
+    }
+
+    private static async Task<DiscoveryReport> RunGatedSweepAsync(int gatedPrId, int releasePrId)
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new GatedWorkItemsSource(async key =>
+        {
+            if (key.PrId == releasePrId)
+            {
+                release.TrySetResult();
+            }
+
+            if (key.PrId == gatedPrId)
+            {
+                await release.Task;
+            }
+        })
+        {
+            // Discovery order deliberately reversed relative to PrId, too; the draft PR is a
+            // phase-1 skip so the skipped list also has to come out of the deterministic sort.
+            OpenPullRequests = [Candidate(2), Candidate(3, draft: true), Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var service = CreateService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
+        return await service.RunSweepAsync(CancellationToken.None);
+    }
+
+    /// <summary>Throws from the work-item fetch for one PR; other PRs behave normally.</summary>
+    private sealed class FaultingWorkItemsSource(int faultPrId) : FakePullRequestSource
+    {
+        public override Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
+            => pr.PrId == faultPrId
+                ? throw new InvalidOperationException("boom")
+                : base.GetLinkedWorkItemsAsync(pr, ct);
+    }
+
+    /// <summary>Runs a per-PR hook before the work-item fetch so tests can force completion order.</summary>
+    private sealed class GatedWorkItemsSource(Func<PrKey, Task> beforeWorkItems) : FakePullRequestSource
+    {
+        public override async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
+        {
+            await beforeWorkItems(pr);
+            return await base.GetLinkedWorkItemsAsync(pr, ct);
+        }
+    }
+
+    [Fact]
+    public async Task Warmup_prefetches_mirror_for_each_accepted_enqueue_when_enabled()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(2, report.Enqueued.Count);
+        Assert.Equal(2, git.WarmupCalls.Count);
+        Assert.All(git.WarmupCalls, c =>
+        {
+            Assert.Contains($"{Path.DirectorySeparatorChar}mirror{Path.DirectorySeparatorChar}", c.Path);
+            Assert.Equal("url", c.CloneUrl);
+            Assert.Equal("base", c.Base);
+            Assert.Equal("head", c.Head);
+        });
+    }
+
+    [Fact]
+    public async Task Warmup_is_disabled_by_default_and_issues_zero_git_calls()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Empty(git.WarmupCalls);
+    }
+
+    [Fact]
+    public async Task Warmup_is_capped_per_sweep()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1), Candidate(2), Candidate(3)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true, WarmupMaxPerSweep = 2 };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal(2, git.WarmupCalls.Count);
+    }
+
+    [Fact]
+    public async Task Warmup_failure_does_not_fail_the_sweep()
+    {
+        var git = new RecordingGitOps { ThrowOnWarmup = true };
+        var pool = NewPool(git);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        // The run's own fetch remains the correctness path; the enqueue is unaffected.
+        Assert.Single(report.Enqueued);
+        Assert.Single(git.WarmupCalls);
+    }
+
+    [Fact]
+    public async Task Warmup_skips_heads_that_already_have_a_checkout()
+    {
+        var git = new RecordingGitOps();
+        var pool = NewPool(git);
+        using (var lease = await pool.AcquireAsync("r", "url", "base", "head", CancellationToken.None))
+        {
+            Assert.False(string.IsNullOrEmpty(lease.Path));
+        }
+
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)], // head "head", repository "r" — the acquired key
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
+            new InFlightClaims(), options, new RetentionOptions(), pool);
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Single(report.Enqueued);
+        Assert.Empty(git.WarmupCalls); // checkout already existed: nothing to prefetch
+    }
+
+    private static RepoCheckoutPool NewPool(RecordingGitOps git)
+        => new(git, new FakeWorkspaceFs(), Path.Combine(Path.GetTempPath(), $"rf-warmup-{Guid.NewGuid():N}"));
+
+    private sealed class RecordingGitOps : FakeGitOps
+    {
+        public List<(string Path, string CloneUrl, string Base, string Head)> WarmupCalls { get; } = [];
+        public bool ThrowOnWarmup { get; init; }
+
+        public override Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+        {
+            WarmupCalls.Add((mirrorPath, cloneUrl, baseSha, headSha));
+            return ThrowOnWarmup
+                ? throw new InvalidOperationException("warmup boom")
+                : base.WarmupMirrorAsync(mirrorPath, cloneUrl, baseSha, headSha, pat, ct);
+        }
+    }
+
+    [Fact]
+    public async Task Enqueue_throw_rolls_back_claim_and_tracker_entry()
+    {
+        // A durable queue can throw from TryEnqueue (database/I/O/constraint): the
+        // candidate must be reported as a plain skip, with no orphan claim and no
+        // permanent Queued tracker entry for a run that never entered the queue.
+        var queue = new ThrowingQueue();
+        var tracker = new RunTracker();
+        var claims = new InFlightClaims();
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [Candidate(1)],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var service = new DiscoveryService(
+            source, new FakeFindingStore(), queue, tracker,
+            claims, new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions());
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Contains(report.Skipped, s => s.Reason == "enqueue failed");
+        Assert.Empty(tracker.Snapshot()); // nothing left Running/Queued
+    }
+
+    private sealed class ThrowingQueue : IReviewQueue
+    {
+        public int Capacity => 100;
+        public int ApproximateDepth => 0;
+        public EnqueueResult TryEnqueue(ReviewRequest request) => throw new InvalidOperationException("db down");
+        public async IAsyncEnumerable<ReviewRequest> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public void Acknowledge(Guid runId) { }
+        public bool RenewClaim(Guid runId) => true;
+        public ReviewRequest? TryGetQueued(Guid runId) => null;
+    }
 
     [Fact]
     public async Task Worker_is_disabled_when_no_interval()
@@ -517,7 +781,10 @@ public class DiscoverySweepWorkerTests
     [Fact]
     public async Task Worker_logs_and_continues_when_a_sweep_fails()
     {
-        var source = new ThrowingPullRequestSource();
+        var source = new FakePullRequestSource
+        {
+            ThrowOnGetOpenPullRequests = new InvalidOperationException("sweep failed"),
+        };
         var options = new DiscoveryOptions {TargetBranches = ["main"], SweepInterval = TimeSpan.FromMilliseconds(25)};
         var worker = new DiscoverySweepWorker(
             new DiscoveryService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(), options, new RetentionOptions()),
@@ -526,14 +793,14 @@ public class DiscoverySweepWorkerTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await worker.StartAsync(cts.Token);
-        while (source.Calls == 0)
+        while (source.OpenPullRequestsFetches == 0)
         {
             await Task.Delay(10, CancellationToken.None);
         }
 
         await cts.CancelAsync();
         await worker.StopAsync(CancellationToken.None);
-        Assert.True(source.Calls > 0);
+        Assert.True(source.OpenPullRequestsFetches > 0);
     }
 
     [Fact]
@@ -576,16 +843,6 @@ public class DiscoverySweepWorkerTests
         Assert.Equal(2, store.PruneCalls.Count);
     }
 
-    private sealed class ThrowingPullRequestSource : FakePullRequestSource
-    {
-        public int Calls { get; private set; }
-
-        public override Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
-        {
-            Calls++;
-            throw new InvalidOperationException("sweep failed");
-        }
-    }
 }
 
 [Collection("ReviewForge service host")]

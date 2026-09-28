@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
@@ -33,6 +34,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
     private readonly ILogger<AutoFixFindingsStage> _Logger;
     private readonly Func<string, string[]> _LineReader;
     private readonly Func<RepoPathGuard, IReadOnlySet<string>, HashLineEditor> _EditorFactory;
+    private readonly IFindingStore? _Store;
 
     public AutoFixFindingsStage(
         FindingFixerRegistry registry,
@@ -41,7 +43,8 @@ public sealed class AutoFixFindingsStage : IReviewStage
         AutoFixOptions options,
         ILogger<AutoFixFindingsStage> logger,
         Func<string, string[]>? lineReader = null,
-        Func<RepoPathGuard, IReadOnlySet<string>, HashLineEditor>? editorFactory = null)
+        Func<RepoPathGuard, IReadOnlySet<string>, HashLineEditor>? editorFactory = null,
+        IFindingStore? store = null)
     {
         _Registry = registry;
         _Agent = agent;
@@ -50,6 +53,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         _Logger = logger;
         _LineReader = lineReader ?? File.ReadAllLines;
         _EditorFactory = editorFactory ?? ((guard, writable) => new HashLineEditor(guard, writable));
+        _Store = store;
     }
 
     public string Name => "auto-fix-findings";
@@ -123,7 +127,8 @@ public sealed class AutoFixFindingsStage : IReviewStage
     {
         // Per file: proposals collected in finding order; the process verifier applies
         // them all, verifies once, and reverts. Grouped so verification is per file.
-        var proposalsByFile = new Dictionary<string, List<(RichFinding Finding, FixProposal Proposal)>>(StringComparer.OrdinalIgnoreCase);
+        var proposalsByFile = new Dictionary<string, List<(RichFinding Finding, FixProposal Proposal)>>(RepoPath.PathComparer);
+        var guardSkipped = 0;
 
         foreach (var finding in ctx.AcceptedFindings)
         {
@@ -144,10 +149,20 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
 
             var path = RepoPath.Normalize(finding.Anchor.FilePath);
+            var resolved = guard.Resolve(path, out var guardError);
+            if (resolved is null)
+            {
+                guardSkipped++;
+                _Logger.LogWarning(
+                    "auto-fix deterministic: skipping {File} — {Reason}",
+                    path, guardError);
+                continue;
+            }
+
             string[] lines;
             try
             {
-                lines = _LineReader(Path.Combine(repoDir, path.Replace('/', Path.DirectorySeparatorChar)));
+                lines = _LineReader(resolved);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -172,6 +187,11 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
             list.Add((finding, proposal));
             setBudget(getBudget() - 1);
+        }
+        if (guardSkipped > 0)
+        {
+            ReviewForgeTelemetry.DeterministicGuardSkipped.Add(guardSkipped);
+            _Logger.LogInformation("auto-fix deterministic summary: guard_skipped={GuardSkipped}", guardSkipped);
         }
 
         if (proposalsByFile.Count == 0)
@@ -199,11 +219,11 @@ public sealed class AutoFixFindingsStage : IReviewStage
         // file's fixes on failure (attribution trade-off: one invocation per file).
         foreach (var (path, proposals) in proposalsByFile)
         {
-            ct.ThrowIfCancellationRequested();
-            var abs = Path.Combine(repoDir, path.Replace('/', Path.DirectorySeparatorChar));
+            var abs = guard.Resolve(path, out var resolveError)
+                ?? throw new InvalidOperationException($"auto-fix path resolution failed for {path}: {resolveError}");
             var snapshotBytes = File.ReadAllBytes(abs);
             var snapshotLines = _LineReader(abs);
-            var editor = _EditorFactory(guard, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { path });
+            var editor = _EditorFactory(guard, new HashSet<string>(RepoPath.PathComparer) { path });
             var appliedAny = true;
 
             try
@@ -228,7 +248,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 FixVerdict verdict;
                 if (appliedAny)
                 {
-                    verdict = await _Verifier.VerifyAsync(repoDir, path, ct).ConfigureAwait(false);
+                    verdict = await _Verifier.VerifyAsync(repoDir, [abs], ct).ConfigureAwait(false);
                 }
                 else
                 {
@@ -256,7 +276,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
             finally
             {
-                RevertFile(editor, repoDir, path, snapshotBytes);
+                RevertFile(editor, guard, repoDir, path, snapshotBytes);
             }
         }
     }
@@ -277,15 +297,26 @@ public sealed class AutoFixFindingsStage : IReviewStage
         {
             return;
         }
+        var handledThreadIds = _Store is null
+            ? new HashSet<long>()
+            : (await _Store.GetCommandedFixThreadIdsAsync(ctx.Pr, ct).ConfigureAwait(false)).ToHashSet();
+        var watermarkSkipped = 0;
 
         var replies = new List<(int ThreadId, string Text)>();
         var changedFiles = ctx.ChangedFiles
             .Select(RepoPath.Normalize)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(RepoPath.PathComparer);
+        // Audit rows are durable watermarks; a handled command must never spend fix budget twice.
 
         foreach (var command in commands.OrderBy(c => c.ThreadId))
         {
             ct.ThrowIfCancellationRequested();
+            if (handledThreadIds.Contains(command.ThreadId))
+            {
+                watermarkSkipped++;
+                replies.Add((command.ThreadId, "This fix command was already handled; not re-running."));
+                continue;
+            }
             var anchor = command.Anchor;
             var path = RepoPath.Normalize(anchor.FilePath);
 
@@ -302,10 +333,10 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     t.Status == ReviewThreadStatus.Active
                     && t.DedupeKey is not null
                     && t.Anchor is { } a
-                    && string.Equals(RepoPath.Normalize(a.FilePath), path, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(RepoPath.Normalize(a.FilePath), path, RepoPath.PathComparison)
                     && RangesOverlap(a.StartLine, a.EndLine, anchor.StartLine, anchor.EndLine))
                 || applied.Any(f =>
-                    string.Equals(f.Proposal.FilePath, path, StringComparison.OrdinalIgnoreCase)
+                    string.Equals(f.Proposal.FilePath, path, RepoPath.PathComparison)
                     && RangesOverlap(f.Proposal.StartLine, f.Proposal.EndLine, anchor.StartLine, anchor.EndLine));
             if (alreadyCovered)
             {
@@ -314,17 +345,11 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 continue;
             }
 
-            if (guard.Resolve(path, out _) is null
+            var abs = guard.Resolve(path, out _);
+            if (abs is null
                 || !changedFiles.Contains(path)
-                || (ctx.Diff?.NonReviewableFiles.ContainsKey(path) ?? false))
-            {
-                replies.Add((command.ThreadId,
-                    "this thread's file isn't part of the current diff — nothing to fix"));
-                continue;
-            }
-
-            var abs = Path.Combine(repoDir, path.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(abs))
+                || (ctx.Diff?.NonReviewableFiles.ContainsKey(path) ?? false)
+                || !File.Exists(abs))
             {
                 replies.Add((command.ThreadId,
                     "this thread's file isn't part of the current diff — nothing to fix"));
@@ -333,7 +358,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
             var snapshotBytes = File.ReadAllBytes(abs);
             var snapshotLines = _LineReader(abs);
-            var editor = _EditorFactory(guard, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { path });
+            var editor = _EditorFactory(guard, new HashSet<string>(RepoPath.PathComparer) { path });
             try
             {
                 var prompt = FixPromptBuilder.Build(command, path, anchor.StartLine, anchor.EndLine);
@@ -342,7 +367,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                         new ReviewCollector(),
                         ctx.ContextStore,
                         repoDir,
-                        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { path },
+                        new HashSet<string>(RepoPath.PathComparer) { path },
                         _Options.FixPassMaxIterations,
                         ct)
                     .ConfigureAwait(false);
@@ -362,7 +387,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
                 if (_Verifier.RequiresWorkspaceWrites)
                 {
-                    var verdict = await _Verifier.VerifyAsync(repoDir, path, ct).ConfigureAwait(false);
+                    var verdict = await _Verifier.VerifyAsync(repoDir, [abs], ct).ConfigureAwait(false);
                     if (!verdict.Passed)
                     {
                         _Logger.LogWarning(
@@ -389,11 +414,15 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
             finally
             {
-                RevertFile(editor, repoDir, path, snapshotBytes);
+                RevertFile(editor, guard, repoDir, path, snapshotBytes);
             }
         }
 
         ctx.FixCommandReplies = replies;
+        if (watermarkSkipped > 0)
+        {
+            ReviewForgeTelemetry.CommandedWatermarkSkipped.Add(watermarkSkipped);
+        }
     }
 
     private void AttachFix(RichFinding? finding, List<AppliedFix> applied, AppliedFix fix, ReviewContext ctx)
@@ -415,15 +444,27 @@ public sealed class AutoFixFindingsStage : IReviewStage
     /// <summary>Reverts the file to its pre-pass state; a failed revert fails the run
     /// (a dirty pooled checkout would poison later runs).</summary>
     private static void RevertFile(
-        HashLineEditor editor, string repoDir, string path, byte[] snapshotBytes)
+        HashLineEditor editor, RepoPathGuard guard, string repoDir, string path, byte[] snapshotBytes)
     {
-        var abs = Path.Combine(repoDir, path.Replace('/', Path.DirectorySeparatorChar));
-        var directory = Path.GetDirectoryName(abs)!;
-        var temp = Path.Combine(directory, $".{Path.GetFileName(abs)}.{Guid.NewGuid():N}.revert");
+        var resolved = guard.Resolve(path, out var resolveError)
+            ?? throw new IOException($"auto-fix revert path denied for {path}: {resolveError}");
+        var directory = Path.GetDirectoryName(resolved)
+            ?? throw new IOException($"auto-fix revert path has no directory: {path}");
+        if (new DirectoryInfo(directory).LinkTarget is not null)
+        {
+            throw new IOException($"auto-fix revert parent is a symlink: {directory}");
+        }
+
+        var temp = Path.Combine(directory, "." + Path.GetFileName(resolved) + ".rf-revert.tmp");
         try
         {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+
             File.WriteAllBytes(temp, snapshotBytes);
-            File.Move(temp, abs, overwrite: true);
+            File.Move(temp, resolved, overwrite: true);
         }
         finally
         {
@@ -433,15 +474,14 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
         }
 
-        // Exercise the editor seam after restoring raw bytes so a corrupting editor
-        // cannot silently leave a pooled checkout dirty.
         _ = editor.ReadAllLines(path);
-        if (!File.ReadAllBytes(abs).SequenceEqual(snapshotBytes))
+        if (!File.ReadAllBytes(resolved).SequenceEqual(snapshotBytes))
         {
             throw new InvalidOperationException(
                 $"auto-fix revert failed for {path}: checkout is left dirty (pooled-checkout poisoning)");
         }
     }
+
     private static string OneSentence(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

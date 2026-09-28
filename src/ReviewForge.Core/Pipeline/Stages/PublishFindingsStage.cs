@@ -28,6 +28,16 @@ public sealed class PublishFindingsStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        // Cancelled-before-first-write: a shutdown requested during reasoning must not
+        // leave a partial publish behind. From here to the end the stage finishes its
+        // dedupe-safe write set even under shutdown cancellation — findings without their
+        // summary, or a reply without its status, are worse than a slightly delayed
+        // shutdown. The AlreadyReplied/SuggestionAlreadyPosted checks make a re-run safe,
+        // but a clean run is cheaper than a recovered one. Claim guards stay live for
+        // every write; the remaining work is bounded (one HTTP round-trip per write).
+        ct.ThrowIfCancellationRequested();
+        ct = CancellationToken.None;
+
         // Mechanism B: never re-post a finding that already has a live bot thread. The ADO
         // thread properties (ReviewForge.DedupeKey) are the cross-run source of truth and
         // survive a lost/corrupt local store. Fixed/Closed threads do not suppress — a
@@ -191,6 +201,7 @@ public sealed class PublishFindingsStage(
 
             await source.PostSuggestionThreadAsync(ctx.Pr, anchor, body, ct)
                 .ConfigureAwait(false);
+            await PersistCommandAuditAsync(ctx, ct).ConfigureAwait(false);
             Interlocked.Increment(ref publishedFixCount);
             ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
             // This guard deliberately sits after the awaited suggestion write and directly
@@ -248,6 +259,17 @@ public sealed class PublishFindingsStage(
 
     private static TagList FixTags(FixOrigin origin, string rule)
         => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
+    private Task PersistCommandAuditAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        var findings = AppliedFixPersistence.BuildFinalRows(
+            ctx, key => ctx.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
+        var pr = ctx.RequirePullRequest();
+        return store.SaveRunAsync(
+            new ReviewRun(
+                ctx.RunId, ctx.Pr, pr.SourceCommitSha, ctx.Kind,
+                ctx.StartedAt, CompletedAt: null, Success: false, findings),
+            ct);
+    }
 
     private async Task EnsureHeadUnchangedAsync(ReviewContext ctx, CancellationToken ct)
     {

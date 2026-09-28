@@ -27,9 +27,39 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddReviewForge(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<ReviewQueue>();
         services.AddSingleton<RunTracker>();
         services.AddSingleton<InFlightClaims>();
+
+        // Ingest queue backing: memory channel (default) or durable SQLite rows on the store's
+        // database file (ReviewForge:QueueMode). Worker and endpoints only see IReviewQueue.
+        // Enum.TryParse accepts undefined numeric values, so definedness is checked here at
+        // compose time too — "2" must never silently become Memory and disable durability.
+        var queueModeText = configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:QueueMode");
+        if (queueModeText is not null
+            && (!Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var queueMode) || !Enum.IsDefined(queueMode)))
+        {
+            throw new InvalidOperationException(
+                $"ReviewForge:QueueMode must be one of {string.Join(" | ", Enum.GetNames<QueueMode>())} (got '{queueModeText}')");
+        }
+
+        if (Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var parsedQueueMode)
+            && parsedQueueMode == QueueMode.Sqlite)
+        {
+            services.AddSingleton<IReviewQueue>(sp =>
+            {
+                var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+                return new SqliteReviewQueue(
+                    opts.StoreConnectionString,
+                    journalMode: Enum.Parse<StoreJournalMode>(opts.Store.JournalMode, ignoreCase: true));
+            });
+        }
+        else
+        {
+            // Concrete registration is the test seam for queue-failure behavior
+            // (ReviewQueue.Complete); production traffic only resolves IReviewQueue.
+            services.AddSingleton<ReviewQueue>();
+            services.AddSingleton<IReviewQueue>(sp => sp.GetRequiredService<ReviewQueue>());
+        }
 
         // Runtime directories are created once at composition time; the per-run pipeline
         // factory must not touch the filesystem (P3-m). RunLogFileProvider uses the same
@@ -70,6 +100,8 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.OrgUrl?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true,
                 "Ado:OrgUrl must be an https:// URL — the PAT is sent to this endpoint.")
             .ValidateOnStart();
+        // Singleton deliberately: one VssConnection (and its cached typed clients) per
+        // process — see the pooling-contract remark on AdoPullRequestSource.
         services.AddSingleton<IPullRequestSource>(sp =>
             new InstrumentedPullRequestSource(
                 new AdoPullRequestSource(sp.GetRequiredService<IOptions<AdoOptions>>().Value)));
@@ -78,18 +110,40 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(ChatProviderOptions.SectionName))
             .ValidateDataAnnotations()
             .ValidateOnStart();
+        // One governor per host, shared by both model tiers: bounds concurrent provider
+        // requests process-wide (WorkerCount × iterations, later × shards). Default cap is
+        // permissive (WorkerCount × 2) — tighten from reviewforge.llm.governor.wait_ms.
+        services.AddSingleton(sp =>
+        {
+            var chat = sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
+            var service = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+            return new LlmGovernor(chat.MaxConcurrentRequests ?? service.WorkerCount * 2);
+        });
         services.AddSingleton<IChatClientFactory>(sp =>
-            new ChatClientFactory(sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value));
+            new ChatClientFactory(
+                sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value,
+                governor: sp.GetRequiredService<LlmGovernor>()));
 
         services.AddOptions<ReviewForgeServiceOptions>()
             .Bind(configuration.GetSection(ReviewForgeServiceOptions.SectionName))
             .ValidateDataAnnotations()
-            .Validate(o => o.WorkerCount >= 1, "ReviewForge:WorkerCount must be at least 1")
+            .Validate(o => o.WorkerCount is >= 1 and <= 64,
+                "ReviewForge:WorkerCount must be between 1 and 64")
             .Validate(o => ReviewForgeServiceOptions.IsValidCleanRunVote(o.CleanRunVote),
                 "ReviewForge:CleanRunVote must be NoResponse | Approved | ApprovedWithSuggestions | None")
             .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
             .Validate(o => o.Retention.Days >= 1, "ReviewForge:Retention:Days must be at least 1")
             .Validate(o => o.Retention.MinRunsPerPr >= 1, "ReviewForge:Retention:MinRunsPerPr must be at least 1")
+            .Validate(o => Enum.TryParse<StoreJournalMode>(o.Store.JournalMode, ignoreCase: true, out var jm)
+                    && Enum.IsDefined(jm),
+                "ReviewForge:Store:JournalMode must be Wal | Delete")
+            .Validate(o => Enum.TryParse<QueueMode>(o.QueueMode, ignoreCase: true, out var qm)
+                    && Enum.IsDefined(qm),
+                "ReviewForge:QueueMode must be Memory | Sqlite")
+            .Validate(o => o.Sharding.ShardMaxChars >= 1_000, "ReviewForge:Sharding:ShardMaxChars must be at least 1000")
+            .Validate(o => o.Sharding.MaxShards is >= 2 and <= 32, "ReviewForge:Sharding:MaxShards must be between 2 and 32")
+            .Validate(o => o.Sharding.ShardConcurrency >= 1 && o.Sharding.ShardConcurrency <= o.Sharding.MaxShards,
+                "ReviewForge:Sharding:ShardConcurrency must be between 1 and MaxShards")
             .ValidateOnStart();
 
         services.AddOptions<RepoReadToolsOptions>()
@@ -97,7 +151,6 @@ public static class ServiceCollectionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
-        // Suggestion-only auto-fix: off by default (Enabled=false → byte-identical pipeline).
         services.AddOptions<AutoFixOptions>()
             .Bind(configuration.GetSection(AutoFixOptions.SectionName))
             .ValidateDataAnnotations()
@@ -108,6 +161,7 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.VerificationCommand is null || o.VerificationCommand.Trim().Length > 0,
                 "AutoFix:VerificationCommand must not be whitespace")
             .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<AutoFixOptions>, VerificationCommandValidator>();
 
         // Deterministic fixers: one class per rule; adding a fixer = one line here + a test file.
         services.AddSingleton<IFindingFixer>(_ => new HomoglyphIdentifierFixer("homoglyph/mixed-script-identifier"));
@@ -135,6 +189,11 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(DiscoveryOptions.SectionName))
             .ValidateDataAnnotations()
             .Validate(o => o.MaxEnqueuesPerSweep >= 1, "Discovery:MaxEnqueuesPerSweep must be at least 1")
+            .Validate(o => o.MaxDegreeOfParallelism is >= 1 and <= 16,
+                "Discovery:MaxDegreeOfParallelism must be between 1 and 16")
+            .Validate(o => o.WarmupMaxPerSweep >= 1, "Discovery:WarmupMaxPerSweep must be at least 1")
+            .Validate(o => o.WarmupConcurrency is >= 1 and <= 8,
+                "Discovery:WarmupConcurrency must be between 1 and 8")
             .Validate(o => o.FailureBackoffBase > TimeSpan.Zero, "Discovery:FailureBackoffBase must be greater than 0")
             .Validate(o => o.FailureBackoffMax >= o.FailureBackoffBase, "Discovery:FailureBackoffMax must be at least FailureBackoffBase")
             .ValidateOnStart();
@@ -171,7 +230,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IFindingStore>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
-            return new SqliteFindingStore(opts.StoreConnectionString);
+            return new SqliteFindingStore(
+                opts.StoreConnectionString,
+                Enum.Parse<StoreJournalMode>(opts.Store.JournalMode, ignoreCase: true));
         });
 
         services.AddSingleton(sp => new ReviewPipelineFactory(

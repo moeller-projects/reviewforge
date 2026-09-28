@@ -26,8 +26,7 @@ public sealed class ValidateFindingsStage(
         var repoDir = ctx.RequireRepoDir();
         var accepted = new List<RichFinding>();
         var changedFiles = ctx.ChangedFiles
-            .Select(RepoPath.Normalize)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .ToHashSet(RepoPath.PathComparer);
 
         foreach (var finding in ctx.RequireResult().Findings)
         {

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.AutoFix;
 using ReviewForge.Infrastructure.Chat;
@@ -46,6 +47,28 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void Pull_request_source_is_registered_as_singleton()
+    {
+        var previousPat = Environment.GetEnvironmentVariable("REVIEWFORGE_ADO_PAT");
+        Environment.SetEnvironmentVariable("REVIEWFORGE_ADO_PAT", "test-pat");
+        try
+        {
+            using var provider = Build([.. ValidConfig()]);
+
+            var first = provider.GetRequiredService<IPullRequestSource>();
+            var second = provider.GetRequiredService<IPullRequestSource>();
+
+            // Pins the ADO pooling contract: one VssConnection (and its cached typed
+            // clients) per process — see the remark on AdoPullRequestSource.
+            Assert.Same(first, second);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("REVIEWFORGE_ADO_PAT", previousPat);
+        }
+    }
+
+    [Fact]
     public void Ado_org_url_over_http_is_rejected()
     {
         using var provider = Build([.. With(ValidConfig(), ("Ado:OrgUrl", "http://dev.azure.com/x"))]);
@@ -86,7 +109,132 @@ public class OptionsValidationTests
         var ex = Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
 
-        Assert.Contains("WorkerCount must be at least 1", ex.Message);
+        Assert.Contains("WorkerCount must be between 1 and 64", ex.Message);
+    }
+
+    [Fact]
+    public void Store_journal_mode_outside_wal_delete_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "Truncate"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("JournalMode must be Wal | Delete", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("ReviewForge:Store:JournalMode", "2")] // Enum.TryParse accepts undefined numerics —
+    public void Undefined_numeric_enum_values_are_rejected_at_startup(string key, string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), (key, value))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains(key.Split(':')[1], ex.Message);
+    }
+
+    [Fact]
+    public void Undefined_numeric_queue_mode_is_rejected_at_compose_time()
+    {
+        // The queue backing is selected while the service collection is composed, before
+        // ValidateOnStart runs — the compose-time check is what stops "2" from silently
+        // selecting the memory queue.
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(With(ValidConfig(), ("ReviewForge:QueueMode", "2"))
+                .ToDictionary(c => c.Item1, c => (string?)c.Item2))
+            .Build();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(config));
+        Assert.Contains("QueueMode must be one of", ex.Message);
+    }
+
+    [Fact]
+    public void Followup_model_with_mismatched_provider_prefix_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(),
+            ("Reasoning:Model", "openai-codex:gpt-5.6-luna"),
+            ("Reasoning:FollowUpModel", "openai:gpt-5-mini"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
+
+        Assert.Contains("FollowUpModel", ex.Message);
+    }
+
+    [Fact]
+    public void Followup_model_with_matching_prefix_validates()
+    {
+        using var provider = Build([.. With(ValidConfig(),
+            ("Reasoning:Model", "openai-codex:gpt-5.6-luna"),
+            ("Reasoning:FollowUpModel", "openai-codex:gpt-5.6-luna-mini"))]);
+
+        Assert.Equal("openai-codex:gpt-5.6-luna-mini",
+            provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value.FollowUpModel);
+    }
+
+    [Fact]
+    public void Absent_followup_model_validates()
+    {
+        // Regression: the prefix cross-check used to NRE when FollowUpModel was absent —
+        // the unset case is the byte-identical default and must pass validation cleanly.
+        using var provider = Build(ValidConfig());
+
+        var options = provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
+        Assert.Null(options.FollowUpModel);
+    }
+
+    [Fact]
+    public void Governor_acquire_timeout_below_one_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Reasoning:GovernorAcquireTimeoutSeconds", "0"))]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
+    }
+
+    [Fact]
+    public void Governor_max_concurrent_requests_below_one_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Reasoning:MaxConcurrentRequests", "0"))]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
+    }
+
+    [Fact]
+    public void Governor_resolves_default_cap_from_worker_count()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:WorkerCount", "3"))]);
+
+        var governor = provider.GetRequiredService<LlmGovernor>();
+
+        Assert.Equal(6, governor.MaxConcurrency); // WorkerCount × 2
+    }
+
+    [Fact]
+    public void Store_journal_mode_accepts_case_insensitive_delete()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "DELETE"))]);
+
+        Assert.Equal("DELETE", provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Store.JournalMode);
+    }
+
+    [Fact]
+    public void Invalid_queue_mode_is_rejected_at_compose_time()
+    {
+        // The queue backing is selected while the service collection is composed, so an
+        // invalid QueueMode must fail there — never fall through to the memory queue.
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(With(ValidConfig(), ("ReviewForge:QueueMode", "Bogus"))
+                .ToDictionary(c => c.Item1, c => (string?)c.Item2))
+            .Build();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(config));
+        Assert.Contains("QueueMode must be one of", ex.Message);
     }
 
     [Fact]
@@ -98,6 +246,43 @@ public class OptionsValidationTests
             () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
 
         Assert.Contains("MaxEnqueuesPerSweep must be at least 1", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("17")]
+    public void Discovery_parallelism_outside_1_to_16_is_rejected(string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Discovery:MaxDegreeOfParallelism", value))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+
+        Assert.Contains("MaxDegreeOfParallelism must be between 1 and 16", ex.Message);
+    }
+
+    [Fact]
+    public void Discovery_warmup_max_per_sweep_below_one_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Discovery:WarmupMaxPerSweep", "0"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+
+        Assert.Contains("WarmupMaxPerSweep must be at least 1", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("9")]
+    public void Discovery_warmup_concurrency_outside_1_to_8_is_rejected(string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Discovery:WarmupConcurrency", value))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
+
+        Assert.Contains("WarmupConcurrency must be between 1 and 8", ex.Message);
     }
 
     [Fact]
@@ -205,12 +390,12 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void AutoFix_verification_command_with_metacharacters_fails_at_verifier_construction()
+    public void AutoFix_verification_command_with_metacharacters_fails_at_startup_validation()
     {
         using var provider = Build([.. With(ValidConfig(), ("AutoFix:VerificationCommand", "make verify && echo hi"))]);
 
-        var ex = Assert.Throws<ArgumentException>(
-            () => provider.GetRequiredService<IFixVerifier>());
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
 
         Assert.Contains("metacharacter", ex.Message);
     }
@@ -223,5 +408,52 @@ public class OptionsValidationTests
         var verifier = provider.GetRequiredService<IFixVerifier>();
         Assert.IsType<ProcessFixVerifier>(verifier);
         Assert.True(verifier.RequiresWorkspaceWrites);
+    }
+
+    [Fact]
+    public void Sharding_defaults_resolve_disabled()
+    {
+        using var provider = Build([.. ValidConfig()]);
+
+        var options = provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+
+        Assert.False(options.Sharding.Enabled);
+        Assert.Equal(30_000, options.Sharding.ShardMaxChars);
+        Assert.Equal(8, options.Sharding.MaxShards);
+        Assert.Equal(2, options.Sharding.ShardConcurrency);
+    }
+
+    [Fact]
+    public void Sharding_concurrency_above_max_shards_is_rejected()
+    {
+        using var provider = Build(
+        [
+            .. With(ValidConfig(),
+                ("ReviewForge:Sharding:Enabled", "true"),
+                ("ReviewForge:Sharding:MaxShards", "2"),
+                ("ReviewForge:Sharding:ShardConcurrency", "3")),
+        ]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+
+        Assert.Contains("ShardConcurrency must be between 1 and MaxShards", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("ShardMaxChars", "999")]
+    [InlineData("MaxShards", "1")]
+    [InlineData("MaxShards", "33")]
+    public void Sharding_out_of_range_values_are_rejected(string key, string value)
+    {
+        using var provider = Build(
+        [
+            .. With(ValidConfig(),
+                ("ReviewForge:Sharding:Enabled", "true"),
+                ($"ReviewForge:Sharding:{key}", value)),
+        ]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
     }
 }

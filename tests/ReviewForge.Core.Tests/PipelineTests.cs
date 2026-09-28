@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
@@ -285,6 +287,211 @@ public class StageTests : IDisposable
     }
 
     [Fact]
+    public async Task Classify_consumes_overlap_refresh_when_the_response_postdates_preparation()
+    {
+        var source = new FakePullRequestSource();
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        // Response received after the clone window closed: as fresh as the refetch it
+        // replaces, so the in-flight fetch is consumed without a second round-trip.
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
+            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+            preparedAt.AddSeconds(-30))
+        {
+            CompletedAt = preparedAt.AddSeconds(1),
+        };
+
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(0, source.ThreadFetches); // the in-flight fetch was consumed
+        Assert.Single(ctx.PendingReplies);
+    }
+
+    [Fact]
+    public async Task Classify_refetches_when_the_overlap_response_predates_preparation()
+    {
+        // A response that landed BEFORE the clone finished missed comments that arrived
+        // during it — exactly what the post-clone refetch exists to catch.
+        var source = new FakePullRequestSource();
+        source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
+            [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
+            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+            preparedAt.AddSeconds(-30))
+        {
+            CompletedAt = preparedAt.AddSeconds(-1),
+        };
+
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, source.ThreadFetches);
+    }
+
+    [Fact]
+    public async Task Classify_refetches_when_the_overlap_is_complete_but_unstamped()
+    {
+        // "Already complete but no completion stamp" is unproven freshness (the stamping
+        // continuation may not have run yet) — conservatively serial.
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
+            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+            preparedAt.AddSeconds(-30)); // CompletedAt left null
+
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, source.ThreadFetches);
+    }
+
+    [Fact]
+    public async Task Classify_falls_back_to_a_serial_refetch_when_the_overlap_faulted()
+    {
+        // The overlap is an optimization, never a correctness path: a faulted overlap
+        // task must not fail the run — the serial refetch replaces it (and still surfaces
+        // its own failures, per the no-engine-fallback rule).
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        var preparedAt = DateTimeOffset.UtcNow;
+        ctx.RepoPreparedAt = preparedAt;
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
+            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("threads down")),
+            preparedAt.AddSeconds(-30));
+
+        await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, source.ThreadFetches);
+        Assert.NotNull(ctx.Threads); // serial fetch supplied the threads
+    }
+
+    [Fact]
+    public void Context_dispose_cancels_overlap_work_and_observes_late_faults()
+    {
+        // A run that fails after stage 3's kickoff must not leak the overlap tasks:
+        // disposal cancels them (via OverlapCts) and observes late faults so they never
+        // surface as unobserved-task exceptions.
+        var ctx = Ctx();
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
+            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("late fault")),
+            DateTimeOffset.UtcNow);
+        ctx.PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("late fault"));
+
+        var ex = Record.Exception(() => ctx.Dispose());
+
+        Assert.Null(ex); // late faults observed, not surfaced
+        Assert.True(ctx.OverlapCts.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task Prepare_starts_the_threads_refresh_and_enrichment_for_later_stages()
+    {
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n",
+        };
+        var source = new FakePullRequestSource();
+        source.ChangedFiles.Add(new ChangedFile("src/A.cs", ChangedFileType.Edit));
+        var ctx = Ctx(source);
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance,
+            source: source,
+            enricher: new FakeEnricher("graph")).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotNull(ctx.PendingThreadsRefresh);
+        Assert.NotNull(ctx.PendingEnrichment);
+        Assert.NotNull(ctx.RepoPreparedAt);
+        Assert.True(ctx.PendingThreadsRefresh!.StartedAt <= ctx.RepoPreparedAt);
+        Assert.Equal(1, source.ThreadFetches); // one fetch, launched by stage 3
+    }
+
+    [Fact]
+    public async Task Prepare_leaves_overlap_tasks_null_without_source_or_enricher()
+    {
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n",
+        };
+        var ctx = Ctx();
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Null(ctx.PendingThreadsRefresh);
+        Assert.Null(ctx.PendingEnrichment);
+        Assert.NotNull(ctx.RepoPreparedAt);
+    }
+
+    [Fact]
+    public async Task Prepare_captures_a_synchronously_throwing_enricher_into_the_pending_task()
+    {
+        var git = new FakeGitOps
+        {
+            RepoDir = _RepoDir,
+            Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n",
+        };
+        var ctx = Ctx();
+
+        await new PrepareRepositoryStage(
+            new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
+            NullLogger<PrepareRepositoryStage>.Instance,
+            enricher: new SyncThrowingEnricher()).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotNull(ctx.PendingEnrichment);
+        // Stage 5 applies its usual fail-safe handling to the captured task.
+        await new EnrichContextStage(
+            new SyncThrowingEnricher(), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+        Assert.Empty(ctx.ContextStore.Names);
+    }
+
+    [Fact]
+    public async Task Enrich_consumes_the_pending_task_without_calling_the_enricher_again()
+    {
+        var ctx = Ctx();
+        ctx.PendingEnrichment = Task.FromResult<string?>("graph");
+
+        // The enricher would throw if called: success proves the pending task was consumed.
+        await new EnrichContextStage(
+            new FakeEnricher(throws: true), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal("graph", ctx.ContextStore.Read("crg"));
+    }
+
+    [Fact]
+    public async Task Enrich_swallows_a_faulted_pending_task()
+    {
+        var ctx = Ctx();
+        ctx.PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("enricher down"));
+
+        await new EnrichContextStage(
+            new FakeEnricher("unused"), NullLogger<EnrichContextStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.ContextStore.Names);
+    }
+
+    private sealed class SyncThrowingEnricher : IContextEnricher
+    {
+        public Task<string?> EnrichAsync(string repoDir, string diffText, CancellationToken ct)
+            => throw new InvalidOperationException("sync boom");
+    }
+
+    [Fact]
     public async Task Enrich_stores_payload_skips_null_and_swallows_failures()
     {
         var logger = NullLogger<EnrichContextStage>.Instance;
@@ -321,6 +528,139 @@ public class StageTests : IDisposable
         Assert.True(ctx.Collector.IsKnown("known-key"));
         var prompt = script.Received[0].Last().Text;
         Assert.Contains("full code review", prompt);
+    }
+
+    [Theory]
+    [InlineData(ReviewKind.Full, ChatTier.Full)]
+    [InlineData(ReviewKind.FollowUp, ChatTier.Fast)]
+    public async Task ExecuteReasoning_runs_followups_on_the_fast_tier(ReviewKind kind, ChatTier expectedTier)
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var factory = new FakeChatClientFactory(script);
+        var ctx = Ctx();
+        ctx.Kind = kind;
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains(expectedTier, factory.RequestedTiers);
+        Assert.DoesNotContain(expectedTier == ChatTier.Fast ? ChatTier.Full : ChatTier.Fast, factory.RequestedTiers);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_addresses_the_fast_model_id_for_followups()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var factory = new FakeChatClientFactory(script, model: "strong-model", fastModel: "fast-model");
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.FollowUp;
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains(script.ReceivedOptions, o => o?.ModelId == "fast-model");
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_skips_the_agent_for_a_trivial_diff()
+    {
+        var script = new ScriptedChatClient();
+        var ctx = Ctx();
+        ctx.Kind = ReviewKind.FollowUp;
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(0, script.Calls);
+        Assert.NotNull(ctx.Result);
+        Assert.Equal("trivial diff — no agent run", ctx.Result.ReviewDepth);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_runs_the_agent_when_the_skip_is_disabled()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+
+        await new ExecuteReasoningStage(
+                new NativeReviewAgent(new FakeChatClientFactory(script)), trivialDiffSkipEnabled: false)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotEqual(0, script.Calls);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_runs_the_agent_when_threads_await_answers()
+    {
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+        ctx.PendingReplies = [new PendingReply(1, "k", "alice", "please fix")];
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotEqual(0, script.Calls);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_records_homoglyph_findings_even_when_trivial()
+    {
+        // The added (homoglyph-bearing) line lives in an excluded file: the deterministic
+        // analyzer sees the raw diff, the trivial predicate sees only reviewable files.
+        var script = new ScriptedChatClient();
+        var ctx = Ctx();
+        ctx.DiffText = """
+            diff --git a/src/gen/logo.gen.cs b/src/gen/logo.gen.cs
+            --- a/src/gen/logo.gen.cs
+            +++ b/src/gen/logo.gen.cs
+            @@ -1,0 +2,1 @@
+            +var fileNаme = value;
+            """;
+        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
+        ctx.ReviewableFiles = ["src/A.cs"];
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(0, script.Calls); // trivial: zero added lines in reviewable files
+        var finding = Assert.Single(ctx.Collector.Findings); // homoglyph finding still recorded
+        Assert.NotNull(finding.DedupeKey);
+        // Downstream stages consume ctx.Result, not the collector: the finding must survive
+        // into the synthetic trivial result or validate/publish would never see it.
+        var resultFinding = Assert.Single(ctx.Result!.Findings);
+        Assert.Equal(finding.DedupeKey, resultFinding.DedupeKey);
     }
 
     [Fact]
@@ -432,6 +772,267 @@ public class StageTests : IDisposable
         finally
         {
             Directory.Delete(findingsDir, recursive: true);
+        }
+    }
+
+    private static string ShardBlock(string file, string marker) =>
+        $"diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -0,0 +1,1 @@\n+{marker}\n";
+
+    private ReviewContext ShardedCtx(string diffText)
+    {
+        var ctx = Ctx();
+        ctx.DiffText = diffText;
+        ctx.Diff = DiffIndex.Parse(diffText);
+        return ctx;
+    }
+
+    private static ExecuteReasoningStage ShardedStage(NativeReviewAgent agent, int shardMaxChars, int maxShards = 4)
+        => new(agent, shardingEnabled: true, shardMaxChars: shardMaxChars, maxShards: maxShards, shardConcurrency: 2);
+
+    [Fact]
+    public async Task ExecuteReasoning_shards_large_diffs_and_merges_results()
+    {
+        var blockA = ShardBlock("src/A.cs", "alpha");
+        var blockB = ShardBlock("src/B.cs", "beta");
+        // Each shard signals its start and waits for the other: serial execution would
+        // deadlock and time out, so overlap is proven deterministically.
+        var client = new InterleaveChatClient();
+        var ctx = ShardedCtx(blockA + blockB);
+
+        await ShardedStage(new NativeReviewAgent(new FakeChatClientFactory(client)), blockA.Length)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.NotNull(ctx.Result);
+        Assert.Equal("agentic tool loop (2 shards)", ctx.Result!.ReviewDepth);
+        Assert.Contains("shard A ok", ctx.Result.Narrative.ReviewSummary);
+        Assert.Contains("shard B ok", ctx.Result.Narrative.ReviewSummary);
+        Assert.Empty(ctx.Collector.Findings);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_shard_findings_merge_into_the_run_collector()
+    {
+        var blockA = ShardBlock("src/A.cs", "alpha");
+        var blockB = ShardBlock("src/B.cs", "beta");
+        var client = new RecordThenDoneChatClient();
+        var findingsDir = Path.Combine(Path.GetTempPath(), "reviewforge-findings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(findingsDir);
+        try
+        {
+            var ctx = ShardedCtx(blockA + blockB);
+
+            await new ExecuteReasoningStage(
+                    new NativeReviewAgent(new FakeChatClientFactory(client)),
+                    findingsDir,
+                    shardingEnabled: true, shardMaxChars: blockA.Length, shardConcurrency: 2)
+                .ExecuteAsync(ctx, CancellationToken.None);
+
+            Assert.Equal(2, ctx.Collector.Findings.Count);
+            Assert.Contains(ctx.Collector.Findings, f => f.Anchor?.FilePath == "src/A.cs");
+            Assert.Contains(ctx.Collector.Findings, f => f.Anchor?.FilePath == "src/B.cs");
+            // Single run-scoped JSONL sink: both shard findings stream from the primary collector.
+            var file = Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl");
+            var lines = File.ReadLines(file).ToList();
+            Assert.Single(lines, l => l.Contains("src/A.cs", StringComparison.Ordinal));
+            Assert.Single(lines, l => l.Contains("src/B.cs", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(findingsDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_sharded_follow_up_runs_on_the_fast_tier()
+    {
+        var blockA = ShardBlock("src/A.cs", "alpha");
+        var blockB = ShardBlock("src/B.cs", "beta");
+        var factory = new TierRecordingFactory(new InterleaveChatClient());
+        var ctx = ShardedCtx(blockA + blockB);
+        ctx.Kind = ReviewKind.FollowUp;
+
+        await ShardedStage(new NativeReviewAgent(factory), blockA.Length).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal([ChatTier.Fast, ChatTier.Fast], factory.Tiers.OrderBy(t => t));
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_one_failing_shard_fails_the_run_and_publishes_nothing()
+    {
+        var blockA = ShardBlock("src/A.cs", "alpha");
+        var blockB = ShardBlock("src/B.cs", "beta");
+        var client = new FailShardChatClient();
+        var ctx = ShardedCtx(blockA + blockB);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ShardedStage(new NativeReviewAgent(new FakeChatClientFactory(client)), blockA.Length)
+                .ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Null(ctx.Result); // nothing downstream can publish
+        Assert.Empty(ctx.Collector.Findings);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_shard_cap_overflow_falls_back_to_the_single_agent_path()
+    {
+        var blockA = ShardBlock("src/A.cs", "alpha");
+        var blockB = ShardBlock("src/B.cs", "beta");
+        var blockC = ShardBlock("src/C.cs", "gamma");
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "legacy ok" })));
+        var ctx = ShardedCtx(blockA + blockB + blockC);
+
+        await new ExecuteReasoningStage(
+                new NativeReviewAgent(new FakeChatClientFactory(script)),
+                shardingEnabled: true, shardMaxChars: blockA.Length, maxShards: 2)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, script.Calls); // single legacy agent, not three shards
+        Assert.Equal("agentic tool loop", ctx.Result!.ReviewDepth);
+        Assert.Equal("legacy ok", ctx.Result.Narrative.ReviewSummary);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_single_shard_input_takes_the_legacy_path_even_when_enabled()
+    {
+        var blockA = ShardBlock("src/A.cs", "alpha");
+        var blockB = ShardBlock("src/B.cs", "beta");
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "ok" })));
+        var ctx = ShardedCtx(blockA + blockB);
+
+        await new ExecuteReasoningStage(
+                new NativeReviewAgent(new FakeChatClientFactory(script)),
+                shardingEnabled: true, shardMaxChars: blockA.Length + blockB.Length + 1)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, script.Calls);
+        Assert.Equal("agentic tool loop", ctx.Result!.ReviewDepth);
+    }
+
+    [Fact]
+    public async Task ExecuteReasoning_sharding_disabled_keeps_the_legacy_path()
+    {
+        var blockA = ShardBlock("src/A.cs", "alpha");
+        var blockB = ShardBlock("src/B.cs", "beta");
+        var script = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "ok" })));
+        var ctx = ShardedCtx(blockA + blockB);
+
+        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(1, script.Calls);
+    }
+
+    /// <summary>Proves shard concurrency: each shard's first model call signals its start and
+    /// waits for the other shard to start — serial execution would time out.</summary>
+    private sealed class InterleaveChatClient : IChatClient
+    {
+        private readonly TaskCompletionSource _AStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _BStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            var text = string.Join(" ", messages.SelectMany(m => m.Contents.OfType<TextContent>()).Select(c => c.Text));
+            var isA = text.Contains("src/A.cs", StringComparison.Ordinal) && !text.Contains("src/B.cs", StringComparison.Ordinal);
+            var mine = isA ? _AStarted : _BStarted;
+            var other = isA ? _BStarted : _AStarted;
+            mine.TrySetResult();
+            await other.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            return ScriptedChatClient.FunctionCalls(
+                ("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = isA ? "shard A ok" : "shard B ok" }));
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("streaming not scripted");
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>Per shard: first model call records a finding on the shard's own file, second
+    /// call finishes the review. The per-shard changed-files guard must accept each file.</summary>
+    private sealed class RecordThenDoneChatClient : IChatClient
+    {
+        private readonly ConcurrentDictionary<string, int> _Calls = new(StringComparer.Ordinal);
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            var text = string.Join(" ", messages.SelectMany(m => m.Contents.OfType<TextContent>()).Select(c => c.Text));
+            var isA = text.Contains("src/A.cs", StringComparison.Ordinal) && !text.Contains("src/B.cs", StringComparison.Ordinal);
+            var file = isA ? "src/A.cs" : "src/B.cs";
+            var turn = _Calls.AddOrUpdate(file, 1, static (_, n) => n + 1);
+            ChatResponse response = turn == 1
+                ? ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
+                {
+                    ["ruleId"] = "csharp.null-deref", ["title"] = $"{file} may be null",
+                    ["severity"] = "high", ["category"] = "bug", ["description"] = "deref",
+                    ["snippet"] = "alpha", ["filePath"] = file, ["startLine"] = 1,
+                }))
+                : ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = $"{file} ok" }));
+            return Task.FromResult(response);
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("streaming not scripted");
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class FailShardChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            var text = string.Join(" ", messages.SelectMany(m => m.Contents.OfType<TextContent>()).Select(c => c.Text));
+            if (text.Contains("src/A.cs", StringComparison.Ordinal) && !text.Contains("src/B.cs", StringComparison.Ordinal))
+            {
+                return Task.FromException<ChatResponse>(new InvalidOperationException("shard A provider down"));
+            }
+
+            return Task.FromResult(ScriptedChatClient.FunctionCalls(
+                ("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "shard B ok" })));
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("streaming not scripted");
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>Thread-safe tier recorder: the stock fake's list races under concurrent shards.</summary>
+    private sealed class TierRecordingFactory(IChatClient client) : IChatClientFactory
+    {
+        private readonly object _Gate = new();
+        public List<ChatTier> Tiers { get; } = [];
+
+        public string ModelName(ChatTier tier) => "test-model";
+
+        public IChatClient Create(ChatTier tier)
+        {
+            lock (_Gate)
+            {
+                Tiers.Add(tier);
+            }
+
+            return client;
         }
     }
 
@@ -1222,6 +1823,51 @@ public class StageTests : IDisposable
         await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Null(Assert.Single(store.Runs).LastObservedCommentAt);
+    }
+
+    [Fact]
+    public async Task Triage_threads_with_pre_cancelled_token_writes_nothing()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Result = new ReviewResult { Narrative = new ReviewNarrative(), Findings = [], Uncertainties = [] };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance)
+                .ExecuteAsync(ctx, new CancellationToken(canceled: true)));
+
+        Assert.Empty(source.Replies);
+        Assert.Empty(source.StatusChanges);
+    }
+
+    [Fact]
+    public async Task Publish_findings_with_pre_cancelled_token_writes_nothing()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var ctx = Ctx(source);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance)
+                .ExecuteAsync(ctx, new CancellationToken(canceled: true)));
+
+        Assert.Empty(source.PostedFindings);
+        Assert.Empty(source.GeneralComments);
+        Assert.Empty(source.Votes);
+        Assert.Empty(store.ThreadIdBackfills);
+        Assert.Empty(store.Runs);
+    }
+
+    [Fact]
+    public async Task Persist_run_with_pre_cancelled_token_saves_nothing()
+    {
+        var store = new FakeFindingStore();
+        var ctx = Ctx();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new PersistRunStage(store).ExecuteAsync(ctx, new CancellationToken(canceled: true)));
+
+        Assert.Empty(store.Runs);
     }
 
     [Fact]

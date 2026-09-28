@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -47,18 +48,43 @@ public class FakePullRequestSource : IPullRequestSource
     public int? ThrowOnNthPost { get; set; }
     private int _PostCount;
 
+    /// <summary>Optional exception for PR retrieval tests.</summary>
+    public Exception? ThrowOnGetPullRequest { get; set; }
+
+    /// <summary>Optional exception for discovery fetch tests.</summary>
+    public Exception? ThrowOnGetOpenPullRequests { get; set; }
+
+    /// <summary>Optional exception for linked work-item fetch tests.</summary>
+    public Exception? ThrowOnGetLinkedWorkItems { get; set; }
+
     public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
-        => Task.FromResult(PullRequestsByKey.TryGetValue(pr, out var pullRequest) ? pullRequest : Pr);
+    {
+        if (ThrowOnGetPullRequest is { } error)
+        {
+            return Task.FromException<PullRequest>(error);
+        }
+
+        return Task.FromResult(PullRequestsByKey.TryGetValue(pr, out var pullRequest) ? pullRequest : Pr);
+    }
 
     public virtual Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
         Interlocked.Increment(ref _openPullRequestsFetches);
+        if (ThrowOnGetOpenPullRequests is { } error)
+        {
+            return Task.FromException<IReadOnlyList<PullRequestCandidate>>(error);
+        }
+
         return Task.FromResult<IReadOnlyList<PullRequestCandidate>>(OpenPullRequests);
     }
 
     public virtual async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
     {
         Interlocked.Increment(ref _workItemFetches);
+        if (ThrowOnGetLinkedWorkItems is { } error)
+        {
+            throw error;
+        }
         if (WorkItemBarrier is not null && !WorkItemBarrier.SignalAndWait(TimeSpan.FromSeconds(10)))
         {
             throw new TimeoutException("work-item fetches did not overlap");
@@ -252,6 +278,12 @@ public class FakeFindingStore : IFindingStore
     public List<string> KnownKeys { get; set; } = [];
     public List<(Guid RunId, string Key, int ThreadId)> ThreadIdBackfills { get; } = [];
     public List<ReviewRun> RecentRuns { get; } = [];
+    /// <summary>Optional exception for SaveRunAsync failure tests.</summary>
+    public Exception? ThrowOnSave { get; set; }
+
+    /// <summary>Optional exception for PingAsync health-check tests.</summary>
+    public Exception? ThrowOnPing { get; set; }
+
 
     public virtual Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
     {
@@ -272,15 +304,30 @@ public class FakeFindingStore : IFindingStore
     }
 
     public virtual Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(KnownKeys);
+    public virtual Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
+        => Task.FromResult<IReadOnlySet<long>>(
+            Runs.Where(r => r.Pr == pr)
+                .SelectMany(r => r.Findings)
+                .Where(f => f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
+                .Select(f => f.DedupeKey[AppliedFix.CommandKeyPrefix.Length..])
+                .Where(s => long.TryParse(s, out _))
+                .Select(long.Parse)
+                .ToHashSet());
 
     public virtual Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {
+        if (ThrowOnSave is { } error)
+        {
+            return Task.FromException(error);
+        }
+
         Runs.RemoveAll(r => r.Id == run.Id);
         Runs.Add(run);
         RecentRuns.RemoveAll(r => r.Id == run.Id);
         RecentRuns.Add(run);
         return Task.CompletedTask;
     }
+
 
     public virtual Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct)
     {
@@ -292,9 +339,12 @@ public class FakeFindingStore : IFindingStore
         => Task.FromResult<IReadOnlyList<ReviewRun>>(
             [.. RecentRuns.Where(r => r.Pr == pr).OrderByDescending(r => r.StartedAt).Take(count)]);
 
-    public virtual Task PingAsync(CancellationToken ct) => Task.CompletedTask;
-}
+    public virtual Task<ReviewRun?> GetRunAsync(Guid runId, CancellationToken ct)
+        => Task.FromResult(Runs.FirstOrDefault(r => r.Id == runId));
 
+    public virtual Task PingAsync(CancellationToken ct)
+        => ThrowOnPing is { } error ? Task.FromException(error) : Task.CompletedTask;
+}
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>
 public class FakeGitOps : IGitOps
 {
@@ -305,6 +355,11 @@ public class FakeGitOps : IGitOps
     public string RepoDir { get; set; } = Path.Combine(Path.GetTempPath(), "reviewforge-fake-repo");
     public List<string> Checkouts { get; } = [];
     public List<(string Base, string Head)> EnsuredCommits { get; } = [];
+
+    /// <summary>Optional exception for diff retrieval tests.</summary>
+    public Exception? ThrowOnGetDiff { get; set; }
+
+    public List<(string MirrorPath, string Base, string Head)> Warmups { get; } = [];
     public TimeSpan CloneDelay { get; set; }
     public int MaxConcurrentClones => _MaxConcurrentClones;
 
@@ -352,14 +407,23 @@ public class FakeGitOps : IGitOps
         return Task.CompletedTask;
     }
 
-    public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null) => Task.FromResult(Diff);
+    public virtual Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+    {
+        lock (_Gate)
+        {
+            Warmups.Add((mirrorPath, baseSha, headSha));
+        }
+
+        return Task.CompletedTask;
+    }
+    public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
+        => ThrowOnGetDiff is { } error ? Task.FromException<string>(error) : Task.FromResult(Diff);
 }
 
 /// <summary>Fake enricher: fixed payload, null, or throwing.</summary>
 public class FakeEnricher(string? payload = null, bool throws = false) : IContextEnricher
 {
     public int Calls { get; private set; }
-
     public Task<string?> EnrichAsync(string repoDir, string diffText, CancellationToken ct)
     {
         Calls++;
@@ -372,16 +436,32 @@ public class FakeEnricher(string? payload = null, bool throws = false) : IContex
     }
 }
 
-/// <summary>Factory handing out one scripted chat client.</summary>
-public class FakeChatClientFactory(IChatClient client, string model = "test-model") : IChatClientFactory
+/// <summary>Factory handing out one scripted chat client. Records the tiers requested via
+/// <see cref="Create(ChatTier)"/> so routing tests can assert which model a run used.</summary>
+public class FakeChatClientFactory(IChatClient client, string model = "test-model", string? fastModel = null) : IChatClientFactory
 {
-    public string ModelName => model;
-    public IChatClient Create() => client;
+    /// <summary>Tier sequence passed to <see cref="Create(ChatTier)"/>, in call order.</summary>
+    public List<ChatTier> RequestedTiers { get; } = [];
+
+    public string ModelName(ChatTier tier)
+        => tier == ChatTier.Fast && fastModel is not null ? fastModel : model;
+
+    public IChatClient Create(ChatTier tier)
+    {
+        RequestedTiers.Add(tier);
+        return client;
+    }
 }
 
 /// <summary>In-memory <see cref="IWorkspaceFs"/> backed by the real filesystem (temp dirs).</summary>
 public sealed class FakeWorkspaceFs : IWorkspaceFs
 {
+    /// <summary>Optional exception for recursive size enumeration tests.</summary>
+    public Exception? ThrowOnEnumerateFilesRecursive { get; set; }
+
+    /// <summary>Optional exception for delete tests.</summary>
+    public Exception? ThrowOnDeleteDirectory { get; set; }
+
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
     public bool DirectoryExists(string path) => Directory.Exists(path);
@@ -390,7 +470,10 @@ public sealed class FakeWorkspaceFs : IWorkspaceFs
 
     public string[] EnumerateFileSystemEntries(string path) => Directory.EnumerateFileSystemEntries(path).ToArray();
 
-    public string[] EnumerateFilesRecursive(string path) => Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).ToArray();
+    public string[] EnumerateFilesRecursive(string path)
+        => ThrowOnEnumerateFilesRecursive is { } error
+            ? throw error
+            : Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).ToArray();
 
     public long GetFileLength(string path) => new FileInfo(path).Length;
 
@@ -398,5 +481,13 @@ public sealed class FakeWorkspaceFs : IWorkspaceFs
 
     public void SetLastWriteTimeUtc(string path, DateTime timestamp) => Directory.SetLastWriteTimeUtc(path, timestamp);
 
-    public void DeleteDirectory(string path, bool recursive) => Directory.Delete(path, recursive);
+    public void DeleteDirectory(string path, bool recursive)
+    {
+        if (ThrowOnDeleteDirectory is { } error)
+        {
+            throw error;
+        }
+
+        Directory.Delete(path, recursive);
+    }
 }

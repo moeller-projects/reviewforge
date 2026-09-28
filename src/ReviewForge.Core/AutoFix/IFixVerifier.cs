@@ -10,29 +10,31 @@ namespace ReviewForge.Core.AutoFix;
 public interface IFixVerifier
 {
     string Name { get; }
-
-    /// <summary>True when applying fixes to the checkout is required before verification.</summary>
     bool RequiresWorkspaceWrites { get; }
 
-    Task<FixVerdict> VerifyAsync(string repoDir, string relativeFilePath, CancellationToken ct);
+    Task<FixVerdict> VerifyAsync(string repoDir, string relativeFilePath, CancellationToken ct)
+        => VerifyAsync(repoDir, new[] { relativeFilePath }, ct);
+
+    Task<FixVerdict> VerifyAsync(
+        string repoDir, IReadOnlyList<string> editedFiles, CancellationToken ct)
+        => editedFiles.Count == 0
+            ? Task.FromResult(new FixVerdict(true, "no files to verify"))
+            : VerifyAsync(repoDir, editedFiles[0], ct);
 }
 
-/// <summary>Outcome of one file verification.</summary>
 public sealed record FixVerdict(bool Passed, string Reason);
 
-/// <summary>Default verifier: always passes, never touches the checkout. This flag is what
-/// lets the deterministic path skip disk writes entirely.</summary>
 public sealed class NullFixVerifier : IFixVerifier
 {
     public static readonly NullFixVerifier Instance = new();
-
-    private NullFixVerifier()
-    {
-    }
-
+    private NullFixVerifier() { }
     public string Name => "none";
     public bool RequiresWorkspaceWrites => false;
 
     public Task<FixVerdict> VerifyAsync(string repoDir, string relativeFilePath, CancellationToken ct)
+        => Task.FromResult(new FixVerdict(true, "no verifier configured"));
+
+    public Task<FixVerdict> VerifyAsync(
+        string repoDir, IReadOnlyList<string> editedFiles, CancellationToken ct)
         => Task.FromResult(new FixVerdict(true, "no verifier configured"));
 }

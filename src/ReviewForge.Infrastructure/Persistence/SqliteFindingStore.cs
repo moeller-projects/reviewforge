@@ -8,26 +8,27 @@ namespace ReviewForge.Infrastructure.Persistence;
 
 /// <summary>
 /// SQLite-backed finding store. Schema via EnsureCreated — no migrations needed.
-/// WAL journal mode (set once, persists in the file) plus a per-connection busy_timeout
-/// let multiple workers read and write the same database without SQLITE_BUSY failures.
+/// WAL journal mode plus a per-connection busy_timeout (both applied by
+/// <see cref="SqliteConnectionPragmasInterceptor"/> on every opened connection) let
+/// multiple workers read and write the same database without SQLITE_BUSY failures.
+/// Use <see cref="StoreJournalMode.Delete"/> on filesystems without POSIX advisory locks.
 /// </summary>
 public sealed class SqliteFindingStore : IFindingStore
 {
     private readonly DbContextOptions<FindingStoreDbContext> _Options;
 
-    public SqliteFindingStore(string connectionString)
+    public SqliteFindingStore(string connectionString, StoreJournalMode journalMode = StoreJournalMode.Wal)
     {
         _Options = new DbContextOptionsBuilder<FindingStoreDbContext>()
             .UseSqlite(connectionString)
-            .AddInterceptors(new SqliteBusyTimeoutInterceptor())
+            .AddInterceptors(new SqliteConnectionPragmasInterceptor(journalMode: journalMode))
             .Options;
 
         using var db = CreateContext();
-        db.Database.EnsureCreated();
-        db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL");
 
-        // EnsureCreated never alters existing tables. An immediate SQLite transaction
-        // serializes the check-and-alter sequence across concurrently starting instances.
+        // The shared database file may already exist with only the queue schema (durable
+        // queue mode) or be brand new. EnsureCreated() is a no-op once ANY table exists,
+        // so create the store schema explicitly whenever the Runs table is missing.
         var connection = (SqliteConnection)db.Database.GetDbConnection();
         db.Database.OpenConnection();
         try
@@ -35,6 +36,15 @@ public sealed class SqliteFindingStore : IFindingStore
             using var transaction = connection.BeginTransaction(deferred: false);
             using var cmd = connection.CreateCommand();
             cmd.Transaction = transaction;
+            cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'Runs'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = db.Database.GenerateCreateScript();
+                cmd.ExecuteNonQuery();
+            }
+
+            // EnsureCreated never alters existing tables. The immediate transaction above
+            // serializes the check-and-alter sequence across concurrently starting instances.
             cmd.CommandText =
                 "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
             var hasWatermarkColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
@@ -88,6 +98,31 @@ public sealed class SqliteFindingStore : IFindingStore
             [.. run.Findings
                 .Where(f => !f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
                 .Select(f => f.DedupeKey)],
+            [.. run.Findings.Select(f => new StoredFinding(
+                f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
+            run.LastObservedCommentAt);
+    }
+
+    /// <summary>The run row by id regardless of outcome, or null when unknown.</summary>
+    public async Task<ReviewRun?> GetRunAsync(Guid runId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var run = await db.Runs
+            .Include(r => r.Findings)
+            .FirstOrDefaultAsync(r => r.Id == runId, ct).ConfigureAwait(false);
+        if (run is null)
+        {
+            return null;
+        }
+
+        return new ReviewRun(
+            run.Id,
+            new PrKey(run.Org, run.Project, run.RepositoryId, run.PrId),
+            run.HeadSha,
+            Enum.Parse<ReviewKind>(run.Kind, ignoreCase: true),
+            run.StartedAt,
+            run.CompletedAt,
+            run.Success,
             [.. run.Findings.Select(f => new StoredFinding(
                 f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
             run.LastObservedCommentAt);
@@ -157,6 +192,25 @@ public sealed class SqliteFindingStore : IFindingStore
                 .Distinct()
                 .ToListAsync(ct)
         ];
+    }
+    public async Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var keys = await db.Findings
+            .Where(f => f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix))
+            .Where(f => db.Runs.Any(r => r.Id == f.RunId
+                                         && r.Org == pr.Org && r.Project == pr.Project
+                                         && r.RepositoryId == pr.RepositoryId && r.PrId == pr.PrId))
+            .Select(f => f.DedupeKey)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        return keys
+            .Select(key => key[AppliedFix.CommandKeyPrefix.Length..])
+            .Select(suffix => long.TryParse(suffix, out var id) ? (long?)id : null)
+            .Where(id => id is not null)
+            .Select(id => id!.Value)
+            .ToHashSet();
     }
 
     public async Task SaveRunAsync(ReviewRun run, CancellationToken ct)

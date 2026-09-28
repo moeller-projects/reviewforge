@@ -11,5 +11,6 @@
         <Project Path="tests/ReviewForge.Infrastructure.Tests/ReviewForge.Infrastructure.Tests.csproj"/>
         <Project Path="tests/ReviewForge.Service.Tests/ReviewForge.Service.Tests.csproj"/>
         <Project Path="tests/ReviewForge.Testing/ReviewForge.Testing.csproj"/>
+        <Project Path="tests/ReviewForge.Architecture.Tests/ReviewForge.Architecture.Tests.csproj"/>
     </Folder>
 </Solution>

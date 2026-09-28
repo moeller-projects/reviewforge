@@ -61,6 +61,28 @@ public sealed class LibGit2SharpGitOps : IGitOps
             return true;
         }, ct);
 
+    public async Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
+    {
+        // Same keyed lock as CloneOrOpenAsync for this mirror: warmup serializes with
+        // checkout acquisition and any concurrent warmup of the same repository, and the
+        // bare mirror is created here when this repo has never been checked out (the
+        // pre-existing warmup bug: EnsureCommitsCore opened a mirror path that did not
+        // exist yet and the failure was swallowed, making warmup a silent no-op).
+        using var gate = await _MirrorLocks.AcquireAsync(mirrorPath, ct).ConfigureAwait(false)
+                         ?? throw new InvalidOperationException("mirror lock acquisition returned no lease");
+        await _Scheduler.RunAsync(() =>
+        {
+            if (!Repository.IsValid(mirrorPath))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(mirrorPath)!);
+                Repository.Clone(cloneUrl, mirrorPath, new CloneOptions(FetchOptions(pat)) {IsBare = true});
+            }
+
+            EnsureCommitsCore(mirrorPath, cloneUrl, baseSha, headSha, pat);
+            return true;
+        }, ct).ConfigureAwait(false);
+    }
+
     public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
         => _Scheduler.RunAsync(() => GetDiffCore(repoPath, baseSha, headSha, budget), ct);
 

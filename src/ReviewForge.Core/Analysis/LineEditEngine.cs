@@ -39,6 +39,26 @@ public static class LineEditEngine
     /// <summary>As <see cref="Apply"/>, formatting error messages with the file path when given.</summary>
     internal static EditResult Apply(
         IReadOnlyList<string> lines, IReadOnlyList<LineEdit> edits, string? path, out string[] newLines)
+        => ApplyCore(lines, hashes: null, edits, path, out newLines);
+
+    /// <summary>As the path-form <see cref="Apply"/>, resolving hash-anchored edits against
+    /// caller-supplied per-line hashes (<paramref name="hashes"/>[i] is the hash of
+    /// <paramref name="lines"/>[i]) instead of recomputing one SHA-256 per line per edit.
+    /// The hash array must match <paramref name="lines"/> exactly.</summary>
+    internal static EditResult Apply(
+        IReadOnlyList<string> lines,
+        string[] hashes,
+        IReadOnlyList<LineEdit> edits,
+        string? path,
+        out string[] newLines)
+        => ApplyCore(lines, hashes, edits, path, out newLines);
+
+    private static EditResult ApplyCore(
+        IReadOnlyList<string> lines,
+        string[]? hashes,
+        IReadOnlyList<LineEdit> edits,
+        string? path,
+        out string[] newLines)
     {
         newLines = [];
         if (edits.Count == 0)
@@ -55,7 +75,7 @@ public static class LineEditEngine
         {
             var edit = edits[i];
             var replacement = SplitReplacement(edit.Replacement);
-            if (!TryResolve(lines, edit, path, out var from, out var to, out var error))
+            if (!TryResolve(lines, HashAt, edit, path, out var from, out var to, out var error))
             {
                 return new EditResult(false, error, [], null);
             }
@@ -91,10 +111,13 @@ public static class LineEditEngine
 
         newLines = [.. result];
         return new EditResult(true, null, outcomes, NewFileHash(newLines));
+
+        string HashAt(int i) => hashes?[i] ?? HashLine.Of(lines[i]);
     }
 
     private static bool TryResolve(
         IReadOnlyList<string> lines,
+        Func<int, string> hashAt,
         LineEdit edit,
         string? path,
         out int from,
@@ -110,7 +133,7 @@ public static class LineEditEngine
             var matches = new List<int>();
             for (var i = 0; i < lines.Count; i++)
             {
-                if (string.Equals(HashLine.Of(lines[i]), fromHash, StringComparison.Ordinal))
+                if (string.Equals(hashAt(i), fromHash, StringComparison.Ordinal))
                 {
                     matches.Add(i);
                 }
@@ -150,7 +173,7 @@ public static class LineEditEngine
                 var allToMatches = new List<int>();
                 for (var i = 0; i < lines.Count; i++)
                 {
-                    if (string.Equals(HashLine.Of(lines[i]), toHash, StringComparison.Ordinal))
+                    if (string.Equals(hashAt(i), toHash, StringComparison.Ordinal))
                     {
                         allToMatches.Add(i);
                     }

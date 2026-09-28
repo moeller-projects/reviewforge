@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.AI;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
@@ -39,6 +40,25 @@ public class TaskDoneGuardTests
         }
 
         Assert.NotEmpty(updates);
+    }
+
+    [Fact]
+    public async Task Done_response_is_a_fresh_instance_per_call()
+    {
+        // The function invoker aggregates loop usage into the final response's message
+        // contents. A shared static response would carry every prior run's usage into the
+        // next run's token metrics — each short-circuit must return its own response.
+        var collector = new ReviewCollector();
+        var inner = new ScriptedChatClient();
+        var guard = new TaskDoneGuardChatClient(collector, inner);
+        collector.Complete(new ReviewNarrative {ReviewSummary = "done"});
+
+        var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "a")]);
+        first.Messages[0].Contents.Add(new UsageContent(new UsageDetails {InputTokenCount = 5}));
+
+        var second = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "b")]);
+        Assert.DoesNotContain(second.Messages[0].Contents, c => c is UsageContent);
+        Assert.Contains("already marked as done", second.Text);
     }
 }
 
@@ -105,6 +125,92 @@ public class AgentLoopTests : IDisposable
 
         Assert.True(collector.Done);
         Assert.Equal("agentic tool loop", result.ReviewDepth);
+    }
+
+    [Fact]
+    public async Task Cached_input_tokens_are_emitted_to_the_cached_metric()
+    {
+        var withCached = new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [new FunctionCallContent("call-0-TaskDone", "TaskDone",
+                new Dictionary<string, object?> { ["reviewSummary"] = "ok" })]))
+        {
+            Usage = new UsageDetails
+            {
+                InputTokenCount = 100, OutputTokenCount = 5, TotalTokenCount = 105,
+                CachedInputTokenCount = 80,
+            },
+        };
+        var script = new ScriptedChatClient(withCached);
+        // Model tag scopes the listener: MeterListener measurement events are process-wide,
+        // so a parallel test's emissions on this instrument would otherwise cross-talk.
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(script, model: "cached-model"));
+        var collector = new ReviewCollector();
+
+        long cached = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Name == "reviewforge.llm.tokens.cached_total")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "model" && (string?)tag.Value == "cached-model")
+                {
+                    Interlocked.Add(ref cached, measurement);
+                }
+            }
+        });
+        listener.Start();
+
+        await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+
+        Assert.True(collector.Done);
+        Assert.Equal(80, Interlocked.Read(ref cached));
+    }
+
+    [Fact]
+    public async Task Absent_cached_token_count_emits_no_cached_metric()
+    {
+        var withUsage = new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [new FunctionCallContent("call-0-TaskDone", "TaskDone",
+                new Dictionary<string, object?> { ["reviewSummary"] = "ok" })]))
+        {
+            Usage = new UsageDetails { InputTokenCount = 12, OutputTokenCount = 7, TotalTokenCount = 19 },
+        };
+        var script = new ScriptedChatClient(withUsage);
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(script, model: "no-cached-model"));
+        var collector = new ReviewCollector();
+
+        var sawCachedMeasurement = false;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Name == "reviewforge.llm.tokens.cached_total")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "model" && (string?)tag.Value == "no-cached-model")
+                {
+                    sawCachedMeasurement = true;
+                }
+            }
+        });
+        listener.Start();
+
+        await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+
+        Assert.True(collector.Done);
+        Assert.False(sawCachedMeasurement); // unsupported provider → silence, not zero-spam
     }
 
     [Fact]

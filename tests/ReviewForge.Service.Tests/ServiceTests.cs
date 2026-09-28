@@ -31,8 +31,9 @@ public sealed class ReviewForgeServiceCollectionDefinition
 {
 }
 
-/// <summary>In-process host with fake ports; the real worker drains the queue.</summary>
-public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
+/// <summary>In-process host with fake ports; the real worker drains the queue. Unsealed so
+/// restart-scenario fixtures (durable queue) can derive and re-point the store/queue.</summary>
+public class ReviewForgeFactory : WebApplicationFactory<Program>
 {
     private bool _WithoutWorkers;
     private List<string>? _LogSink;
@@ -143,9 +144,10 @@ public sealed class ReviewForgeFactory : WebApplicationFactory<Program>
             services.AddSingleton<IGitOps>(Git);
             services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory(Chat));
             services.AddSingleton(sp => new ReviewPipelineFactory(
-                Source, Store,
+                sp.GetRequiredService<IPullRequestSource>(),
+                sp.GetRequiredService<IFindingStore>(),
                 sp.GetRequiredService<RepoCheckoutPool>(),
-                new FakeChatClientFactory(Chat),
+                sp.GetRequiredService<IChatClientFactory>(),
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
                 sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>(),
@@ -277,6 +279,34 @@ public class ServiceTests : IAsyncLifetime
         var statusResponse = await client.GetAsync(body.StatusUrl);
 
         Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Trivial_diff_run_skips_the_llm_and_publishes_a_clean_vote()
+    {
+        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        _Factory.Git.Diff = """
+            diff --git a/src/A.cs b/src/A.cs
+            --- a/src/A.cs
+            +++ b/src/A.cs
+            @@ -1,2 +1,0 @@
+            -line one
+            -line two
+            """;
+
+        var client = _Factory.CreateClient();
+        var submit = await client.PostAsJsonAsync("/reviews",
+            new {org = "o", project = "p", repositoryId = "r", prId = 42});
+        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
+
+        Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+        Assert.Equal(RunState.Completed, status.State);
+        Assert.Equal(0, _Factory.Chat.Calls); // zero LLM calls on the trivial path
+        Assert.Single(_Factory.Source.Votes);
+        Assert.Equal(ReviewerVote.NoResponse, _Factory.Source.Votes[0].Vote); // clean-run vote
+        var run = Assert.Single(_Factory.Store.Runs);
+        Assert.True(run.Success); // head is marked reviewed for the gate
     }
 
     [Fact]
@@ -738,7 +768,7 @@ public class QueueSaturationEndpointTests
     {
         using var factory = new ReviewForgeFactory().WithoutWorkers();
         using var client = factory.CreateClient();
-        var queue = factory.Services.GetRequiredService<ReviewQueue>();
+        var queue = factory.Services.GetRequiredService<IReviewQueue>();
 
         for (var i = 0; i < queue.Capacity; i++)
         {
@@ -806,7 +836,7 @@ public class DiWiringTests
             services.AddReviewForge(BuildConfig());
             using var provider = services.BuildServiceProvider();
 
-            Assert.NotNull(provider.GetRequiredService<ReviewQueue>());
+            Assert.NotNull(provider.GetRequiredService<IReviewQueue>());
             Assert.NotNull(provider.GetRequiredService<RunTracker>());
             Assert.NotNull(provider.GetRequiredService<InFlightClaims>());
             Assert.NotNull(provider.GetRequiredService<TimeProvider>());
@@ -1060,7 +1090,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         var ex = Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
 
-        Assert.Contains("WorkerCount must be at least 1", ex.Message);
+        Assert.Contains("WorkerCount must be between 1 and 64", ex.Message);
     }
 }
 

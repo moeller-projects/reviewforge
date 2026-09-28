@@ -47,7 +47,7 @@ public sealed class NativeReviewAgent(
         => new RuleBookComposer().Compose(changedFiles, repoRootFiles, _Options.RuleSetsPath);
 
     public AIAgent CreateAgent(ReviewCollector collector, ContextStore contextStore, string repoDir, RuleBook? ruleBook = null)
-        => CreateAgent(collector, contextStore, repoDir, ruleBook, null, null, null, null);
+        => CreateAgent(collector, contextStore, repoDir, ruleBook, null, null, null, null, ChatTier.Full);
 
     private AIAgent CreateAgent(
         ReviewCollector collector,
@@ -58,6 +58,7 @@ public sealed class NativeReviewAgent(
         IReadOnlySet<string>? changedFiles,
         DiffIndex? diff,
         IReadOnlySet<string>? resolvedKeys,
+        ChatTier tier,
         IReadOnlyList<AITool>? extraTools = null)
     {
         var repoTools = new RepoReadTools(
@@ -76,13 +77,13 @@ public sealed class NativeReviewAgent(
             tools.AddRange(extraTools);
         }
 
-        var tracked = CreatePipeline(collector, usage ?? new TokenUsage());
+        var tracked = CreatePipeline(collector, usage ?? new TokenUsage(), tier);
         return tracked.AsAIAgent(new ChatClientAgentOptions
         {
             Name = "reviewforge-native",
             ChatOptions = new ChatOptions
             {
-                ModelId = chatClientFactory.ModelName,
+                ModelId = chatClientFactory.ModelName(tier),
                 Instructions = SystemPromptComposer.Compose(_Options.PromptOverridePath, ruleBook),
                 Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
                 Tools = tools,
@@ -93,9 +94,9 @@ public sealed class NativeReviewAgent(
 
     /// <summary>TaskDone-guarded, function-invoking, usage-tracked client pipeline shared by
     /// the review run and the fix pass.</summary>
-    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage)
+    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier)
     {
-        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
+        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(tier));
         IChatClient invoking = new ChatClientBuilder(guarded)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = _Options.MaxIterations)
             .Build();
@@ -114,7 +115,10 @@ public sealed class NativeReviewAgent(
         CancellationToken ct)
         => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, null, ct);
 
-    public async Task<ReviewResult> RunAsync(
+    /// <summary>Runs the review agent on the full tier. Exact pre-tier-arrival signature,
+    /// preserved so already-compiled callers do not lose the method (an optional parameter
+    /// added in place would break binary compatibility).</summary>
+    public Task<ReviewResult> RunAsync(
         string userPrompt,
         ReviewCollector collector,
         ContextStore contextStore,
@@ -124,12 +128,27 @@ public sealed class NativeReviewAgent(
         DiffIndex? diff,
         IReadOnlySet<string>? resolvedKeys,
         CancellationToken ct)
+        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, resolvedKeys, ct, ChatTier.Full);
+
+    /// <summary>Runs the review agent on <paramref name="tier"/>: follow-up reviews route to
+    /// the cheaper/faster model when one is configured, full reviews to the strong model.</summary>
+    public async Task<ReviewResult> RunAsync(
+        string userPrompt,
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        RuleBook? ruleBook,
+        IReadOnlySet<string>? changedFiles,
+        DiffIndex? diff,
+        IReadOnlySet<string>? resolvedKeys,
+        CancellationToken ct,
+        ChatTier tier)
     {
         var usage = new TokenUsage();
-        var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, resolvedKeys);
+        var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, resolvedKeys, tier);
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
-        var modelTag = new TagList { { "model", chatClientFactory.ModelName } };
+        var modelTag = new TagList { { "model", chatClientFactory.ModelName(tier) }, { "tier", tier.ToString().ToLowerInvariant() } };
         ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
         if (!collector.Done)
         {
@@ -158,7 +177,8 @@ public sealed class NativeReviewAgent(
         var editor = new HashLineEditor(new RepoPathGuard(repoDir), writablePaths);
         var reviewTools = new ReviewTools(collector, contextStore);
         var usage = new TokenUsage();
-        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create());
+        // Fix passes always run on the Fast tier regardless of the run kind.
+        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(ChatTier.Fast));
         IChatClient invoking = new ChatClientBuilder(guarded)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)
             .Build();
@@ -168,7 +188,7 @@ public sealed class NativeReviewAgent(
             Name = "reviewforge-fix",
             ChatOptions = new ChatOptions
             {
-                ModelId = chatClientFactory.ModelName,
+                ModelId = chatClientFactory.ModelName(ChatTier.Fast),
                 // Always the embedded fix-pass prompt: ReviewForge:PromptOverridePath targets
                 // the REVIEW system prompt, and substituting it here would hand the fix pass
                 // a contract for tools it does not have.
@@ -189,7 +209,11 @@ public sealed class NativeReviewAgent(
             usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         if (!collector.Done)
         {
-            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, new TagList { { "model", chatClientFactory.ModelName } });
+            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, new TagList
+            {
+                { "model", chatClientFactory.ModelName(ChatTier.Fast) },
+                { "tier", "fast" },
+            });
         }
 
         return new FixPassResult(
@@ -244,6 +268,14 @@ public sealed class NativeReviewAgent(
                 ReviewForgeTelemetry.LlmTokens.Add(outputTokens, new TagList { { "token_type", "output" }, { "model", model } });
             }
 
+            // Prompt-cache measurement: emitted only when the provider reports cached
+            // input tokens — absence means "unsupported/unknown", never zero-spam.
+            var cachedTokens = response.Usage?.CachedInputTokenCount ?? 0;
+            if (cachedTokens > 0)
+            {
+                ReviewForgeTelemetry.LlmCachedTokens.Add(cachedTokens, new TagList { { "model", model } });
+            }
+
             logger?.LogDebug(
                 "llm call: iteration tokens in={InputTokens} out={OutputTokens} elapsed={ElapsedMs}ms toolCalls={ToolCallCount}",
                 response.Usage?.InputTokenCount ?? 0, response.Usage?.OutputTokenCount ?? 0,
@@ -273,6 +305,13 @@ public sealed class NativeReviewAgent(
                 foreach (var usageContent in update.Contents.OfType<UsageContent>())
                 {
                     usage.Add(usageContent.Details);
+                    var cachedTokens = usageContent.Details?.CachedInputTokenCount ?? 0;
+                    if (cachedTokens > 0)
+                    {
+                        ReviewForgeTelemetry.LlmCachedTokens.Add(
+                            cachedTokens,
+                            new TagList { { "model", options?.ModelId ?? "default" } });
+                    }
                 }
 
                 yield return update;

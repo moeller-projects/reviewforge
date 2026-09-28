@@ -22,6 +22,8 @@ public static class ReviewForgeTelemetry
     public const string TagStage = "stage";
     public const string TagResult = "result";      // completed | skipped | failed
     public const string TagReason = "reason";
+    public const string TagWarmed = "warmed";      // true when a discovery mirror warmup prefetched this head
+    public const string TagShards = "shards";      // shard count on sharded review run metrics
 
     // ---- Checkouts (existing, unchanged) ----
     public static readonly Histogram<double> CheckoutAcquireMilliseconds =
@@ -38,6 +40,8 @@ public static class ReviewForgeTelemetry
     // ---- Queue ----
     public static readonly Counter<long> QueueRejected =
         Meter.CreateCounter<long>("reviewforge.queue.rejected_total");
+    public static readonly Counter<long> QueueReclaimed =
+        Meter.CreateCounter<long>("reviewforge.queue.reclaimed_total"); // expired claim re-claimed by a worker
 
     // ---- Review run lifecycle ----
     public static readonly Counter<long> ReviewsStarted =
@@ -46,14 +50,26 @@ public static class ReviewForgeTelemetry
         Meter.CreateCounter<long>("reviewforge.reviews.completed_total");   // tags: result
     public static readonly Histogram<double> ReviewDurationMilliseconds =
         Meter.CreateHistogram<double>("reviewforge.review.duration_ms", "ms"); // tags: result
+    public static readonly Counter<long> TrivialReviews =
+        Meter.CreateCounter<long>("reviewforge.reviews.trivial_total"); // LLM skipped: zero added reviewable lines
+    public static readonly Histogram<double> ShardDurationMilliseconds =
+        Meter.CreateHistogram<double>("reviewforge.shard.duration_ms", "ms"); // per-shard agent duration
+    public static readonly Counter<long> ShardFallback =
+        Meter.CreateCounter<long>("reviewforge.shard.fallback_total"); // shard-cap overflow → legacy single-agent path
     public static readonly Histogram<double> StageDurationMilliseconds =
         Meter.CreateHistogram<double>("reviewforge.stage.duration_ms", "ms");  // tags: stage, result
 
     // ---- LLM usage ----
     public static readonly Counter<long> LlmTokens =
         Meter.CreateCounter<long>("reviewforge.llm.tokens_total", "{token}"); // tags: token_type, model
+    public static readonly Counter<long> LlmCachedTokens =
+        Meter.CreateCounter<long>("reviewforge.llm.tokens.cached_total", "{token}"); // tags: model
     public static readonly Counter<long> LlmRequests =
         Meter.CreateCounter<long>("reviewforge.llm.requests_total");           // tags: model
+    public static readonly Histogram<double> LlmGovernorWait =
+        Meter.CreateHistogram<double>("reviewforge.llm.governor.wait_ms", "ms"); // slot acquisition wait
+    public static readonly Counter<long> LlmGovernorTimeouts =
+        Meter.CreateCounter<long>("reviewforge.llm.governor.timeout_total");     // slot acquisition timed out
 
     // ---- Agent loop quality ----
     public static readonly Histogram<int> AgentIterations =
@@ -79,7 +95,11 @@ public static class ReviewForgeTelemetry
 
     // ---- Discovery ----
     public static readonly Histogram<double> DiscoverySweepDurationMilliseconds =
-        Meter.CreateHistogram<double>("reviewforge.discovery.sweep_duration_ms", "ms");
+        Meter.CreateHistogram<double>("reviewforge.discovery.sweep.duration_ms", "ms");
+    public static readonly Counter<long> DiscoveryCandidateErrors =
+        Meter.CreateCounter<long>("reviewforge.discovery.candidate_errors_total"); // faulting candidate isolated as a skip
+    public static readonly Counter<long> DiscoveryWarmup =
+        Meter.CreateCounter<long>("reviewforge.discovery.warmup.total"); // result: completed | failed
     public static readonly Counter<long> DiscoveryCandidates =
         Meter.CreateCounter<long>("reviewforge.discovery.candidates_total");
     public static readonly Counter<long> DiscoveryEnqueued =
@@ -106,6 +126,10 @@ public static class ReviewForgeTelemetry
         Meter.CreateCounter<long>("reviewforge.fixes.applied_total");    // tags: origin, rule (thread-command for /rf fix)
     public static readonly Counter<long> FixesDeclined =
         Meter.CreateCounter<long>("reviewforge.fixes.declined_total");   // tags: origin, rule
+    public static readonly Counter<long> DeterministicGuardSkipped =
+        Meter.CreateCounter<long>("reviewforge.autofix.deterministic.guard_skipped");
+    public static readonly Counter<long> CommandedWatermarkSkipped =
+        Meter.CreateCounter<long>("reviewforge.autofix.commanded.skipped_watermark");
 
     public static readonly Counter<long> ThreadsResolved =
         Meter.CreateCounter<long>("reviewforge.threads.resolved_total");
@@ -118,11 +142,16 @@ public static class ReviewForgeTelemetry
     /// </summary>
     public static void RegisterGauges(
         Func<int> queueDepth, Func<int> queueCapacity,
-        Func<int> activeClaims, Func<int> checkoutDirs)
+        Func<int> activeClaims, Func<int> checkoutDirs,
+        Func<int>? llmInflight = null)
     {
         Meter.CreateObservableGauge("reviewforge.queue.depth", queueDepth);
         Meter.CreateObservableGauge("reviewforge.queue.capacity", queueCapacity);
         Meter.CreateObservableGauge("reviewforge.claims.active", activeClaims);
         Meter.CreateObservableGauge("reviewforge.checkout.pool_size", checkoutDirs);
+        if (llmInflight is not null)
+        {
+            Meter.CreateObservableGauge("reviewforge.llm.governor.inflight", llmInflight);
+        }
     }
 }

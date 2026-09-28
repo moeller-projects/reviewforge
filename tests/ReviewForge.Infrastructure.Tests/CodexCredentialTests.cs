@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Infrastructure.Codex;
+using ReviewForge.Testing;
 using Xunit;
 
 namespace ReviewForge.Infrastructure.Tests;
@@ -52,7 +53,7 @@ public class CodexCredentialTests : IDisposable
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));
         var token = Jwt(clock.GetUtcNow().AddHours(1).ToUnixTimeSeconds());
-        var handler = new StubHandler(_ => throw new InvalidOperationException("no http expected"));
+        var handler = new StubHttpMessageHandler(_ => throw new InvalidOperationException("no http expected"));
         var credential = new CodexCredential(WriteAuth(token), handler, clock);
 
         Assert.Equal(token, await credential.GetTokenAsync(CancellationToken.None));
@@ -66,7 +67,7 @@ public class CodexCredentialTests : IDisposable
         var oldToken = Jwt(clock.GetUtcNow().AddSeconds(30).ToUnixTimeSeconds());
         var newToken = Jwt(clock.GetUtcNow().AddHours(2).ToUnixTimeSeconds());
         var path = WriteAuth(oldToken);
-        var handler = new StubHandler(_ => TokenResponse(newToken));
+        var handler = new StubHttpMessageHandler(_ => TokenResponse(newToken));
         var credential = new CodexCredential(path, handler, clock);
 
         Assert.Equal(newToken, await credential.GetTokenAsync(CancellationToken.None));
@@ -76,7 +77,7 @@ public class CodexCredentialTests : IDisposable
         var persisted = File.ReadAllText(path);
         Assert.Contains(newToken, persisted);
         Assert.Contains("refresh-2", persisted);
-        Assert.False(File.Exists(path + ".tmp")); // temp file moved, not left behind
+        Assert.False(File.Exists(path + ".tmp"));
     }
 
     [Fact]
@@ -84,14 +85,14 @@ public class CodexCredentialTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
         {
-            return; // Unix modes are meaningless on Windows (ACL-based)
+            return;
         }
 
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));
         var oldToken = Jwt(clock.GetUtcNow().AddSeconds(30).ToUnixTimeSeconds());
         var newToken = Jwt(clock.GetUtcNow().AddHours(2).ToUnixTimeSeconds());
-        var path = WriteAuth(oldToken); // written with the process umask (typically 0644)
-        var handler = new StubHandler(_ => TokenResponse(newToken));
+        var path = WriteAuth(oldToken);
+        var handler = new StubHttpMessageHandler(_ => TokenResponse(newToken));
         var credential = new CodexCredential(path, handler, clock);
 
         Assert.Equal(newToken, await credential.GetTokenAsync(CancellationToken.None));
@@ -107,11 +108,11 @@ public class CodexCredentialTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
         {
-            return; // Unix modes are meaningless on Windows (ACL-based)
+            return;
         }
 
         var path = WriteAuth(Jwt(1_800_000_000));
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead); // 0644
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
         var auth = CodexCredential.Load(path);
 
@@ -127,7 +128,7 @@ public class CodexCredentialTests : IDisposable
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));
         var token = Jwt(clock.GetUtcNow().AddHours(1).ToUnixTimeSeconds());
         var newToken = Jwt(clock.GetUtcNow().AddHours(2).ToUnixTimeSeconds());
-        var handler = new StubHandler(_ => TokenResponse(newToken));
+        var handler = new StubHttpMessageHandler(_ => TokenResponse(newToken));
         var credential = new CodexCredential(WriteAuth(token), handler, clock);
 
         Assert.Equal(newToken, await credential.ForceRefreshAsync(CancellationToken.None));
@@ -138,7 +139,7 @@ public class CodexCredentialTests : IDisposable
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));
         var token = Jwt(clock.GetUtcNow().AddSeconds(10).ToUnixTimeSeconds());
-        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
         var credential = new CodexCredential(WriteAuth(token), handler, clock);
 
         await Assert.ThrowsAsync<HttpRequestException>(() => credential.GetTokenAsync(CancellationToken.None));
@@ -149,7 +150,7 @@ public class CodexCredentialTests : IDisposable
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));
         var token = Jwt(clock.GetUtcNow().AddSeconds(10).ToUnixTimeSeconds());
-        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("null", Encoding.UTF8, "application/json"),
         });
@@ -180,19 +181,7 @@ public class CodexCredentialTests : IDisposable
         var noExp = "h." + Convert.ToBase64String("{\"sub\":\"x\"}"u8.ToArray()).TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".s";
         Assert.Null(CodexCredential.TryReadJwtExpiry(noExp));
 
-        // Unreadable tokens count as expiring — refresh is the safe default.
         Assert.True(CodexCredential.ExpiringSoon("garbage", clock));
         Assert.False(CodexCredential.ExpiringSoon(Jwt(clock.GetUtcNow().AddHours(1).ToUnixTimeSeconds()), clock));
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
-    {
-        public List<HttpRequestMessage> Requests { get; } = [];
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Requests.Add(request);
-            return Task.FromResult(respond(request));
-        }
     }
 }

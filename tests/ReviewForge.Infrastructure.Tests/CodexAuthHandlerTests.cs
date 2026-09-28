@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Infrastructure.Codex;
+using ReviewForge.Testing;
 using Xunit;
 
 namespace ReviewForge.Infrastructure.Tests;
@@ -19,7 +20,7 @@ public class CodexAuthHandlerTests : IDisposable
 
     public void Dispose() => Directory.Delete(_Dir, recursive: true);
 
-    private (HttpClient Client, StubHandler Api, StubHandler Refresh, string ValidToken, string RotatedToken) Setup(
+    private (HttpClient Client, StubHttpMessageHandler Api, StubHttpMessageHandler Refresh, string ValidToken, string RotatedToken) Setup(
         Func<string?, bool> acceptToken)
     {
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 0, 0, 0, TimeSpan.Zero));
@@ -32,7 +33,8 @@ public class CodexAuthHandlerTests : IDisposable
             tokens = new {access_token = validToken, refresh_token = "r1", account_id = "acc"},
         }));
 
-        var refresh = new StubHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        var refresh = new StubHttpMessageHandler();
+        refresh.Enqueue(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(JsonSerializer.Serialize(new
             {
@@ -40,10 +42,12 @@ public class CodexAuthHandlerTests : IDisposable
             }), Encoding.UTF8, "application/json"),
         });
 
-        var api = new StubHandler((request, _) =>
-            acceptToken(request.Headers.Authorization?.Parameter)
-                ? new HttpResponseMessage(HttpStatusCode.OK)
-                : new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        var api = new StubHttpMessageHandler();
+        Func<HttpRequestMessage, HttpResponseMessage> response = request => acceptToken(request.Headers.Authorization?.Parameter)
+            ? new HttpResponseMessage(HttpStatusCode.OK)
+            : new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        api.Enqueue(response);
+        api.Enqueue(response);
 
         var credential = new CodexCredential(path, refresh, clock);
         var handler = new CodexAuthHandler(credential) {InnerHandler = api};
@@ -78,14 +82,4 @@ public class CodexAuthHandlerTests : IDisposable
         Assert.Equal(rotatedToken, api.Requests[1].Headers.Authorization!.Parameter);
     }
 
-    private sealed class StubHandler(Func<HttpRequestMessage, int, HttpResponseMessage> respond) : HttpMessageHandler
-    {
-        public List<HttpRequestMessage> Requests { get; } = [];
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Requests.Add(request);
-            return Task.FromResult(respond(request, Requests.Count));
-        }
-    }
 }

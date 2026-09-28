@@ -305,6 +305,13 @@ public sealed class DiffIndex
     internal int RangeCount(string filePath)
         => _ChangedLines.TryGetValue(RepoPath.Normalize(filePath), out var ranges) ? ranges.Count : 0;
 
+    /// <summary>Added (new-side) line count for one file; 0 when the file carries no
+    /// reviewable text (absent, binary, mode-only, rename-only).</summary>
+    public int AddedLineCount(string filePath)
+        => _ChangedLines.TryGetValue(RepoPath.Normalize(filePath), out var ranges)
+            ? ranges.Sum(r => r.End - r.Start + 1)
+            : 0;
+
     /// <summary>True when the line is part of the PR's changed (added-side) lines.</summary>
     public bool Contains(string filePath, int line)
     {

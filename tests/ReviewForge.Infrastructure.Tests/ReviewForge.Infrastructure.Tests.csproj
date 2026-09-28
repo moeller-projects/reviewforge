@@ -4,7 +4,10 @@
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
         <Include>[ReviewForge.Infrastructure]*</Include>
-        <Threshold>97</Threshold>
+        <!-- Same per-OS policy as Core.Tests: platform-conditional branches (PATHEXT
+             resolution, Win32 process races) can only ever be covered on one OS. -->
+        <Threshold Condition="'$(OS)' == 'Windows_NT'">95</Threshold>
+        <Threshold Condition="'$(OS)' != 'Windows_NT'">97</Threshold>
         <ThresholdType>line</ThresholdType>
         <ThresholdStat>total</ThresholdStat>
     </PropertyGroup>

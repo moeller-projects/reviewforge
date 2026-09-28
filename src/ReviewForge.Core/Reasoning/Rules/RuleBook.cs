@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -34,11 +35,18 @@ public sealed class RuleBook
 
     public bool TryGetRule(string id, out Rule rule) => Rules.TryGetValue(id, out rule!);
 
+    /// <summary>
+    /// Digest of everything the composer emits: pack id/title/version and each rule's
+    /// id/title/enabled flag. (Description/category/severity shape the agent's rulebook
+    /// appendix from the same packs; the composer output must change whenever any of it
+    /// does, or the prompt cache would serve a stale appendix.)
+    /// </summary>
     private static string ComputeVersionHash(IEnumerable<RulePack> packs)
     {
         var canonical = string.Join('|', packs.OrderBy(p => p.Id, StringComparer.Ordinal)
-            .SelectMany(p => new[] {p.Id, p.Version.ToString()}
-                .Concat(p.Rules.OrderBy(r => r.Id, StringComparer.Ordinal).Select(r => r.Id))));
+            .SelectMany(p => new[] {p.Id, p.Title, p.Version.ToString(CultureInfo.InvariantCulture)}
+                .Concat(p.Rules.OrderBy(r => r.Id, StringComparer.Ordinal)
+                    .SelectMany(r => new[] {r.Id, r.Title, r.Enabled ? "1" : "0"}))));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..12];
     }
 }

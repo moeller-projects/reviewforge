@@ -9,6 +9,12 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// auto-resolve findings that no longer reproduce, flag unanswered threads for humans.
 /// Guarded by the publish claim before any external write.
 /// </summary>
+/// <remarks>Cancellation is checked once at stage entry (before the first external write)
+/// so a shutdown requested during reasoning can never produce a partially published PR.
+/// After that check the stage runs to completion on a non-cancelled token: per-thread
+/// "reply then status" is the unit that must never tear mid-shutdown, the claim guard is
+/// re-checked before every write, and the remaining work is bounded. The publish stages
+/// apply the same policy.</remarks>
 public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<TriageThreadsStage> logger) : IReviewStage
 {
     public string Name => "triage-threads";
@@ -17,6 +23,14 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        // Cancelled-before-first-write: a shutdown requested during reasoning must not
+        // leave a partial publish behind. From here to the end the stage finishes its
+        // dedupe-safe write set even under shutdown cancellation — per-thread "reply then
+        // status" is the unit that must never tear, and the AlreadyReplied checks make a
+        // re-run safe but a clean run cheaper than a recovered one. Claim guards stay live
+        // for every write; the remaining work is bounded (one HTTP round-trip per op).
+        ct.ThrowIfCancellationRequested();
+        ct = CancellationToken.None;
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before triage");
 
         var botThreads = ctx.Threads.Where(t => t.DedupeKey is not null).ToList();

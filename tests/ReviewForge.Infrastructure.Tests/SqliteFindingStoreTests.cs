@@ -42,6 +42,17 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public void Ctor_surfaces_the_open_failure_for_an_unwritable_store_path()
+    {
+        var missingDir = Path.Combine(Path.GetTempPath(), "rf-missing-" + Guid.NewGuid().ToString("N"));
+
+        // Schema ensure opens the connection eagerly: an unopenable path fails fast at
+        // construction (visible at startup via StoreHealthCheck) instead of first use.
+        Assert.Throws<SqliteException>(
+            () => new SqliteFindingStore($"Data Source={Path.Combine(missingDir, "x.db")};Pooling=False"));
+    }
+
+    [Fact]
     public async Task Empty_store_returns_null_and_no_keys()
     {
         Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
@@ -61,12 +72,99 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Wal_mode_applies_synchronous_normal_to_store_connections()
+    {
+        await _Store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
+
+        // synchronous is a per-connection pragma — unlike journal_mode it is NOT persisted
+        // in the file, so a raw connection shows the SQLite default (FULL=2). The contract
+        // is that connections going through the store's interceptor carry NORMAL(1).
+        await using var connection = new SqliteConnection(_ConnectionString);
+        await connection.OpenAsync();
+        new SqliteConnectionPragmasInterceptor(journalMode: StoreJournalMode.Wal).ApplyPragmas(connection);
+        await using var command = new SqliteCommand("PRAGMA synchronous", connection);
+        Assert.Equal(1L, Assert.IsType<long>(await command.ExecuteScalarAsync()));
+    }
+
+    [Fact]
+    public async Task Wal_mode_allows_readers_during_an_open_writer_transaction()
+    {
+        await _Store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await using var writer = new SqliteConnection(_ConnectionString);
+        await using var reader = new SqliteConnection(_ConnectionString);
+        await writer.OpenAsync();
+        await reader.OpenAsync();
+        var pragmas = new SqliteConnectionPragmasInterceptor();
+        pragmas.ApplyPragmas(writer);
+        pragmas.ApplyPragmas(reader);
+
+        // WAL: a reader must not block while another connection holds an open write
+        // transaction. In rollback-journal mode this read would wait (or SQLITE_BUSY).
+        await using (var transaction = writer.BeginTransaction())
+        {
+            await using (var write = new SqliteCommand(
+                "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, StartedAt, Success) " +
+                "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', $started, 1)", writer, transaction))
+            {
+                write.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+                write.Parameters.AddWithValue("$started", DateTimeOffset.UtcNow.ToString("O"));
+                await write.ExecuteNonQueryAsync();
+            }
+
+            await using var read = new SqliteCommand("SELECT COUNT(*) FROM Runs", reader);
+            var count = await read.ExecuteScalarAsync();
+            Assert.NotNull(count); // completed without waiting for the writer
+        }
+    }
+
+    [Fact]
+    public async Task Delete_mode_keeps_rollback_journal_with_full_synchronous()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-store-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            // Pooling=False: a pooled store connection would keep the file handle open
+            // after SaveRunAsync, and the cleanup File.Delete below fails on Windows
+            // (Linux unlinks open files). The class fixture uses the same setting.
+            var store = new SqliteFindingStore($"Data Source={dbPath};Pooling=False", StoreJournalMode.Delete);
+            await store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
+
+            await using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                await connection.OpenAsync();
+                await using (var journal = new SqliteCommand("PRAGMA journal_mode", connection))
+                {
+                    Assert.Equal("delete", Assert.IsType<string>(await journal.ExecuteScalarAsync()));
+                }
+
+                await using (var synchronous = new SqliteCommand("PRAGMA synchronous", connection))
+                {
+                    Assert.Equal(2L, Assert.IsType<long>(await synchronous.ExecuteScalarAsync()));
+                }
+
+                await connection.CloseAsync();
+            }
+        }
+        finally
+        {
+            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+            {
+                if (File.Exists(dbPath + suffix))
+                {
+                    File.Delete(dbPath + suffix);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task Interceptor_sets_busy_timeout_on_connection()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
 
-        SqliteBusyTimeoutInterceptor.ApplyBusyTimeout(connection, 5000);
+        new SqliteConnectionPragmasInterceptor().ApplyPragmas(connection);
 
         await using var command = new SqliteCommand("PRAGMA busy_timeout", connection);
         Assert.Equal(5000L, Assert.IsType<long>(await command.ExecuteScalarAsync()));
@@ -83,6 +181,69 @@ public class SqliteFindingStoreTests : IDisposable
         await Task.WhenAll(saves);
 
         Assert.NotNull(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetRunAsync_round_trips_a_completed_run_by_id()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.FollowUp, t0.AddMinutes(-5), t0, true,
+            [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42)]);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var loaded = await _Store.GetRunAsync(run.Id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(run.Id, loaded.Id);
+        Assert.Equal(Key, loaded.Pr);
+        Assert.Equal("head", loaded.HeadSha);
+        Assert.Equal(ReviewKind.FollowUp, loaded.Kind);
+        Assert.Equal(t0.AddMinutes(-5), loaded.StartedAt);
+        Assert.Equal(t0, loaded.CompletedAt);
+        Assert.True(loaded.Success);
+        var finding = Assert.Single(loaded.Findings);
+        Assert.Equal("k1", finding.DedupeKey);
+        Assert.Equal(42, finding.ThreadId);
+    }
+
+    [Fact]
+    public async Task Commanded_fix_thread_ids_include_valid_keys_for_the_requested_pr_only()
+    {
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full,
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, true,
+            [
+                new StoredFinding("thread-42", "rule", "high", "title", "f.cs", 1, null),
+                new StoredFinding("thread-not-a-number", "rule", "high", "title", "f.cs", 1, null),
+                new StoredFinding("ordinary", "rule", "high", "title", "f.cs", 1, null)
+            ]);
+        var otherPrRun = new ReviewRun(Guid.NewGuid(), Key with {PrId = 8}, "other",
+            ReviewKind.Full, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, true,
+            [new StoredFinding("thread-99", "rule", "high", "title", "f.cs", 1, null)]);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+        await _Store.SaveRunAsync(otherPrRun, CancellationToken.None);
+
+        var ids = await _Store.GetCommandedFixThreadIdsAsync(Key, CancellationToken.None);
+
+        Assert.Equal([42L], ids);
+    }
+
+    [Fact]
+    public async Task GetRunAsync_returns_null_for_unknown_run_id()
+        => Assert.Null(await _Store.GetRunAsync(Guid.NewGuid(), CancellationToken.None));
+
+    [Fact]
+    public async Task GetRunAsync_returns_unfinalized_shell_runs_too()
+    {
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full,
+            DateTimeOffset.UtcNow, CompletedAt: null, Success: false, []);
+
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        var loaded = await _Store.GetRunAsync(run.Id, CancellationToken.None);
+        Assert.NotNull(loaded);
+        Assert.Null(loaded.CompletedAt); // still running: visible, not completed
     }
 
     [Fact]

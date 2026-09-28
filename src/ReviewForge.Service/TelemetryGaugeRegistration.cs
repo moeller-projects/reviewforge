@@ -1,5 +1,7 @@
 using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
@@ -9,9 +11,10 @@ namespace ReviewForge.Service;
 /// gauge publication from singleton construction order.
 /// </summary>
 public sealed class TelemetryGaugeRegistration(
-    ReviewQueue queue,
+    IReviewQueue queue,
     InFlightClaims claims,
-    RepoCheckoutPool pool) : IHostedService
+    RepoCheckoutPool pool,
+    LlmGovernor governor) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -19,7 +22,8 @@ public sealed class TelemetryGaugeRegistration(
             () => queue.ApproximateDepth,
             () => queue.Capacity,
             () => claims.ActiveCount,
-            () => pool.CheckoutDirectoryCount());
+            () => pool.CheckoutDirectoryCount(),
+            () => governor.Inflight);
         return Task.CompletedTask;
     }
 

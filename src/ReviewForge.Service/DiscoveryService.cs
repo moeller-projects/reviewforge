@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
@@ -25,16 +27,20 @@ public sealed record DiscoveryReport(
 public sealed class DiscoveryService(
     IPullRequestSource source,
     IFindingStore store,
-    ReviewQueue queue,
+    IReviewQueue queue,
     RunTracker tracker,
     InFlightClaims claims,
     DiscoveryOptions options,
     RetentionOptions retention,
+    RepoCheckoutPool? pool = null,
     ILogger<DiscoveryService>? logger = null,
     TimeProvider? clock = null)
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     private readonly DiscoveryRules _Rules = new(options.TargetBranches, options.Creators, options.MaxEnqueuesPerSweep);
+    private readonly RepoCheckoutPool? _Pool = pool;
+    private readonly SemaphoreSlim? _WarmupGate =
+        pool is not null && options.WarmupEnabled ? new SemaphoreSlim(Math.Max(1, options.WarmupConcurrency)) : null;
     private DateTimeOffset _LastPrune = DateTimeOffset.MinValue; // sweep-throttled (P2-26)
 
     public async Task<DiscoveryReport> RunSweepAsync(CancellationToken ct)
@@ -48,6 +54,7 @@ public sealed class DiscoveryService(
         var skipped = new ConcurrentQueue<SkippedPr>();
         var interesting = 0;
         var gate = new object(); // guards the cap-check/claim/enqueue critical section
+        var warmups = _WarmupGate is null ? (List<Task>?)null : []; // mirror prefetches, awaited before the sweep returns
 
         void Skip(PrKey pr, string reason)
         {
@@ -80,112 +87,45 @@ public sealed class DiscoveryService(
             },
             async (candidate, token) =>
             {
-                var workItems = await source.GetLinkedWorkItemsAsync(candidate.Key, token);
-                var workItemDecision = DiscoveryFilter.Evaluate(candidate, workItems.Count, lastReviewedHeadSha: null, _Rules);
-                if (!workItemDecision.Interesting)
+                try
                 {
-                    Skip(candidate.Key, workItemDecision.Reason);
-                    return;
+                    await EvaluateCandidateAsync(candidate, token);
                 }
-
-                var prior = await store.GetLastCompletedRunAsync(candidate.Key, token);
-
-                // Same head as the last completed run: the head check alone would skip the PR,
-                // but new human comments since that run make it interesting again.
-                var hasNewHumanComments = false;
-                if (prior is not null
-                    && string.Equals(candidate.Pr.SourceCommitSha, prior.HeadSha, StringComparison.Ordinal))
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    var threads = await source.GetThreadsAsync(candidate.Key, token);
-                    var watermark = prior.LastObservedCommentAt ?? prior.CompletedAt;
-                    hasNewHumanComments = threads
-                        .SelectMany(t => t.Comments)
-                        .Any(c => !c.IsBot && c.PublishedAt > watermark);
-                }
-
-                var headDecision = DiscoveryFilter.Evaluate(
-                    candidate, workItems.Count, prior?.HeadSha, _Rules, hasNewHumanComments);
-                if (!headDecision.Interesting)
-                {
-                    Skip(candidate.Key, headDecision.Reason);
-                    return;
-                }
-
-                // In-flight check first (P1-12): a live run legitimately owns the PR — the
-                // cheap, correct reason ("already in flight") must win the skip attribution
-                // over "head failing", and the head-failing-backoff metric must reflect
-                // only real failures.
-                if (claims.IsClaimed(candidate.Key))
-                {
-                    Skip(candidate.Key, "review already in flight");
-                    return;
-                }
-
-                // Failure memory: a head whose recent runs all failed backs off exponentially.
-                var recentRuns = await store.GetRecentRunsAsync(candidate.Key, count: 10, token);
-                var blockedUntil = FailureBackoff.BlockedUntil(
-                    recentRuns, candidate.Pr.SourceCommitSha, _Clock.GetUtcNow(),
-                    new FailureBackoffPolicy(options.FailureBackoffBase, options.FailureBackoffMax));
-                if (blockedUntil is not null)
-                {
-                    Skip(candidate.Key, $"head failing; backoff until {blockedUntil.Value:u}");
-                    return;
-                }
-
-                Interlocked.Increment(ref interesting);
-
-                // Cap + claim + enqueue must be atomic relative to other candidates so the
-                // per-sweep cap is exact and a failed enqueue always releases its claim.
-                lock (gate)
-                {
-                    token.ThrowIfCancellationRequested();
-
-                    if (enqueued.Count >= _Rules.MaxEnqueues)
-                    {
-                        Skip(candidate.Key, "enqueue cap reached");
-                        return;
-                    }
-
-                    var runId = Guid.NewGuid();
-                    if (!claims.TryClaim(candidate.Key, runId, out _))
-                    {
-                        Skip(candidate.Key, "review already in flight");
-                        return;
-                    }
-
-                    // Track-then-enqueue (P2-25): Queued is recorded before the channel write so a
-                    // fast worker can never resurrect a finished run with a stale write.
-                    tracker.Set(runId, candidate.Key, RunState.Queued);
-                    var result = queue.TryEnqueue(new ReviewRequest(
-                        runId,
-                        candidate.Key,
-                        _Clock.GetUtcNow(),
-                        Activity.Current?.Context,
-                        candidate.Pr.SourceCommitSha));
-                    if (!result.Accepted)
-                    {
-                        tracker.Remove(runId);
-                        claims.Release(candidate.Key, runId);
-                        Skip(candidate.Key, "queue full");
-                        return;
-                    }
-
-                    ReviewForgeTelemetry.DiscoveryEnqueued.Add(1);
-                    enqueued.Enqueue(candidate.Key);
+                    // Sweeps are best-effort discovery: one faulting candidate becomes a
+                    // skip, never a sweep failure — the per-run gate remains the net.
+                    ReviewForgeTelemetry.DiscoveryCandidateErrors.Add(1);
+                    logger?.LogWarning(ex, "discovery candidate {Pr} faulted; isolated as a skip", candidate.Key);
+                    Skip(candidate.Key, $"error: {ex.GetType().Name}");
                 }
             });
 
+        // Report assembly is deterministic — completion order never leaks into the report.
         var report = new DiscoveryReport(
             candidates.Count,
             interesting,
-            [.. enqueued.OrderBy(k => k.PrId)],
-            [.. skipped]);
+            [.. enqueued.OrderBy(k => k.Org, StringComparer.Ordinal)
+                .ThenBy(k => k.Project, StringComparer.Ordinal)
+                .ThenBy(k => k.RepositoryId, StringComparer.Ordinal)
+                .ThenBy(k => k.PrId)],
+            [.. skipped.OrderBy(s => s.Pr.Org, StringComparer.Ordinal)
+                .ThenBy(s => s.Pr.Project, StringComparer.Ordinal)
+                .ThenBy(s => s.Pr.RepositoryId, StringComparer.Ordinal)
+                .ThenBy(s => s.Pr.PrId)]);
         logger?.LogInformation(
             "discovery sweep: {Candidates} candidates, {Interesting} interesting, {Enqueued} enqueued, {Skipped} skipped",
             report.Candidates, report.Interesting, report.Enqueued.Count, report.Skipped.Count);
         foreach (var skip in skipped)
         {
             logger?.LogDebug("discovery skipped {Pr}: {Reason}", skip.Pr, skip.Reason);
+        }
+
+        // Warmups are part of the sweep: the span and the sweep-duration metric cover their
+        // outcomes. Individual failures are already swallowed into skip-free telemetry above.
+        if (warmups is { Count: > 0 })
+        {
+            await Task.WhenAll(warmups).ConfigureAwait(false);
         }
 
         ReviewForgeTelemetry.DiscoverySweepDurationMilliseconds.Record(
@@ -207,6 +147,159 @@ public sealed class DiscoveryService(
         }
 
         return report;
+
+        async Task EvaluateCandidateAsync(PullRequestCandidate candidate, CancellationToken token)
+        {
+            var workItems = await source.GetLinkedWorkItemsAsync(candidate.Key, token);
+            var workItemDecision = DiscoveryFilter.Evaluate(candidate, workItems.Count, lastReviewedHeadSha: null, _Rules);
+            if (!workItemDecision.Interesting)
+            {
+                Skip(candidate.Key, workItemDecision.Reason);
+                return;
+            }
+
+            var prior = await store.GetLastCompletedRunAsync(candidate.Key, token);
+
+            // Same head as the last completed run: the head check alone would skip the PR,
+            // but new human comments since that run make it interesting again.
+            var hasNewHumanComments = false;
+            if (prior is not null
+                && string.Equals(candidate.Pr.SourceCommitSha, prior.HeadSha, StringComparison.Ordinal))
+            {
+                var threads = await source.GetThreadsAsync(candidate.Key, token);
+                var watermark = prior.LastObservedCommentAt ?? prior.CompletedAt;
+                hasNewHumanComments = threads
+                    .SelectMany(t => t.Comments)
+                    .Any(c => !c.IsBot && c.PublishedAt > watermark);
+            }
+
+            var headDecision = DiscoveryFilter.Evaluate(
+                candidate, workItems.Count, prior?.HeadSha, _Rules, hasNewHumanComments);
+            if (!headDecision.Interesting)
+            {
+                Skip(candidate.Key, headDecision.Reason);
+                return;
+            }
+
+            // In-flight check first (P1-12): a live run legitimately owns the PR — the
+            // cheap, correct reason ("already in flight") must win the skip attribution
+            // over "head failing", and the head-failing-backoff metric must reflect
+            // only real failures.
+            if (claims.IsClaimed(candidate.Key))
+            {
+                Skip(candidate.Key, "review already in flight");
+                return;
+            }
+
+            // Failure memory: a head whose recent runs all failed backs off exponentially.
+            var recentRuns = await store.GetRecentRunsAsync(candidate.Key, count: 10, token);
+            var blockedUntil = FailureBackoff.BlockedUntil(
+                recentRuns, candidate.Pr.SourceCommitSha, _Clock.GetUtcNow(),
+                new FailureBackoffPolicy(options.FailureBackoffBase, options.FailureBackoffMax));
+            if (blockedUntil is not null)
+            {
+                Skip(candidate.Key, $"head failing; backoff until {blockedUntil.Value:u}");
+                return;
+            }
+
+            Interlocked.Increment(ref interesting);
+
+            // Cap + claim + enqueue must be atomic relative to other candidates so the
+            // per-sweep cap is exact and a failed enqueue always releases its claim.
+            lock (gate)
+            {
+                token.ThrowIfCancellationRequested();
+
+                if (enqueued.Count >= _Rules.MaxEnqueues)
+                {
+                    Skip(candidate.Key, "enqueue cap reached");
+                    return;
+                }
+
+                var runId = Guid.NewGuid();
+                if (!claims.TryClaim(candidate.Key, runId, out _))
+                {
+                    Skip(candidate.Key, "review already in flight");
+                    return;
+                }
+
+                // Track-then-enqueue (P2-25): Queued is recorded before the channel write so a
+                // fast worker can never resurrect a finished run with a stale write.
+                tracker.Set(runId, candidate.Key, RunState.Queued);
+                EnqueueResult result;
+                try
+                {
+                    result = queue.TryEnqueue(new ReviewRequest(
+                        runId,
+                        candidate.Key,
+                        _Clock.GetUtcNow(),
+                        Activity.Current?.Context,
+                        candidate.Pr.SourceCommitSha));
+                }
+                catch (Exception ex)
+                {
+                    // A durable queue can throw on database/I/O/constraint failures. The
+                    // claim and tracker entry were already recorded but no queue item
+                    // exists — roll both back so the candidate is not stuck "Queued"
+                    // forever and no orphan claim blocks the PR.
+                    tracker.Remove(runId);
+                    claims.Release(candidate.Key, runId);
+                    logger?.LogWarning(ex, "enqueue for {Pr} failed; claim and tracker entry rolled back", candidate.Key);
+                    Skip(candidate.Key, "enqueue failed");
+                    return;
+                }
+                if (!result.Accepted)
+                {
+                    tracker.Remove(runId);
+                    claims.Release(candidate.Key, runId);
+                    Skip(candidate.Key, "queue full");
+                    return;
+                }
+
+                ReviewForgeTelemetry.DiscoveryEnqueued.Add(1);
+                enqueued.Enqueue(candidate.Key);
+
+                // Speculative mirror warmup: prefetch the accepted head's commits so the
+                // run's prepare-repository stage skips the origin fetch. Skipped when the
+                // checkout already exists (nothing to save) and capped per sweep.
+                if (warmups is not null
+                    && warmups.Count < options.WarmupMaxPerSweep
+                    && !_Pool!.HasCheckout(candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha))
+                {
+                    warmups.Add(WarmupMirrorAsync(candidate, token));
+                }
+            }
+        }
+
+        async Task WarmupMirrorAsync(PullRequestCandidate candidate, CancellationToken token)
+        {
+            try
+            {
+                await _WarmupGate!.WaitAsync(token).ConfigureAwait(false);
+                try
+                {
+                    await _Pool!.WarmupAsync(
+                        candidate.Key.RepositoryId,
+                        candidate.Pr.CloneUrl,
+                        candidate.Pr.TargetCommitSha,
+                        candidate.Pr.SourceCommitSha,
+                        token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _WarmupGate.Release();
+                }
+
+                _Pool.MarkWarmed(candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha);
+                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList { { ReviewForgeTelemetry.TagResult, "completed" } });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Warmup is an optimization only: the run's own fetch remains the correctness path.
+                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList { { ReviewForgeTelemetry.TagResult, "failed" } });
+                logger?.LogWarning(ex, "mirror warmup for {Pr} failed; the run's own fetch remains the correctness path", candidate.Key);
+            }
+        }
     }
 
     /// <summary>Maps a skip reason to a bounded, low-cardinality label for metrics.</summary>

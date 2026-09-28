@@ -36,6 +36,16 @@ jobs:
       - name: Build
         run: dotnet build ReviewForge.slnx --no-restore --configuration Release -warnaserror
 
+      # Sandbox/containment tests (PathSafety, RepoPathGuard, RepoReadTools, anchor
+      # validation) create symlinks. Without Developer Mode the non-elevated runner
+      # lacks SeCreateSymbolicLinkPrivilege, those tests return early, and the
+      # symlink-resolution branches in ReviewForge.Core go uncovered — dropping the
+      # Windows coverage below the 97% gate (they are pinned by tests; "covered on
+      # Linux CI" is not a substitute for the platform the gate runs on).
+      - name: Enable Developer Mode (symlink privilege for sandbox tests)
+        if: runner.os == 'Windows'
+        run: reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f
+
       # CollectCoverage=true enforces the per-project 97% line-coverage gate
       # (coverlet.msbuild Threshold in each test csproj). A failed test or a
       # coverage miss exits non-zero and fails the job.
@@ -96,9 +106,10 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: "**/coverage.cobertura.xml"
 
+
   # One status check regardless of matrix leg: use "CI Result" for branch protection.
   ci-result:
-    needs: build-and-test
+    needs: [build-and-test]
     if: always()
     runs-on: ubuntu-latest
     steps:

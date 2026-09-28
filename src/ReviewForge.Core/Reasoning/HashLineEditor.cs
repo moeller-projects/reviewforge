@@ -20,14 +20,18 @@ public class HashLineEditor
     private readonly RepoPathGuard _Guard;
     private readonly HashSet<string> _Writable;
     private readonly Dictionary<string, SessionRange> _Sessions = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string[]> _RawCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, FileSnapshot> _RawCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, byte[]> _OriginalRaw = new(StringComparer.Ordinal);
+
+    /// <summary>Per-line hash function; the test seam counts computations. Production is
+    /// always <see cref="HashLine.Of"/>.</summary>
+    internal Func<string, string> HashFunction { get; set; } = HashLine.Of;
 
     public HashLineEditor(RepoPathGuard guard, IReadOnlySet<string> writableRelativePaths)
     {
         _Guard = guard;
         _Writable = new HashSet<string>(
-            writableRelativePaths.Select(RepoPath.Normalize), StringComparer.Ordinal);
+            writableRelativePaths.Select(RepoPath.Normalize), RepoPath.PathComparer);
     }
 
     [Description("Read a file with per-line content hashes for edit anchoring.")]
@@ -43,19 +47,19 @@ public class HashLineEditor
             return $"access denied: {path}";
         }
 
-        var (raw, error) = ReadRawLines(rel, full);
+        var (raw, hashes, error) = ReadRawLines(rel, full);
         if (error is not null)
         {
             return error;
         }
 
         var lines = raw ?? throw new InvalidOperationException("ReadRawLines returned no error but no lines");
+        var lineHashes = hashes ?? throw new InvalidOperationException("ReadRawLines returned no error but no hashes");
         var start = Math.Max(1, startLine);
         var take = Math.Min(maxLines ?? MaxLines, MaxLines);
-        var hashes = lines.Select(HashLine.Of).ToArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var duplicated = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var h in hashes)
+        foreach (var h in lineHashes)
         {
             if (!seen.Add(h))
             {
@@ -67,8 +71,8 @@ public class HashLineEditor
         var emitted = 0;
         for (var i = start - 1; i < lines.Count && emitted < take; i++, emitted++)
         {
-            var marker = duplicated.Contains(hashes[i]) ? "*" : string.Empty;
-            sb.Append(i + 1).Append(' ').Append(hashes[i]).Append(marker).Append(": ")
+            var marker = duplicated.Contains(lineHashes[i]) ? "*" : string.Empty;
+            sb.Append(i + 1).Append(' ').Append(lineHashes[i]).Append(marker).Append(": ")
                 .AppendLine(HashLine.Normalize(lines[i] ?? string.Empty));
         }
 
@@ -100,7 +104,7 @@ public class HashLineEditor
             return "no edits provided";
         }
 
-        var (raw, readError) = ReadRawLines(rel, full!);
+        var (raw, hashes, readError) = ReadRawLines(rel, full!);
         if (readError is not null)
         {
             return readError;
@@ -112,7 +116,7 @@ public class HashLineEditor
         }
 
         var content = raw!.Select(HashLine.Normalize).ToArray();
-        var result = LineEditEngine.Apply(content, edits, rel, out var newLines);
+        var result = LineEditEngine.Apply(content, hashes!, edits, rel, out var newLines);
         if (!result.Success)
         {
             return result.Error!;
@@ -160,7 +164,7 @@ public class HashLineEditor
             return new EditResult(false, denyError ?? $"access denied: {relativePath}", [], null);
         }
 
-        var (raw, readError) = ReadRawLines(rel, full!);
+        var (raw, hashes, readError) = ReadRawLines(rel, full!);
         if (readError is not null)
         {
             return new EditResult(false, readError, [], null);
@@ -188,7 +192,7 @@ public class HashLineEditor
         }
 
         var edit = new LineEdit(null, null, startLine, endLine, replacement);
-        var result = LineEditEngine.Apply(content, [edit], rel, out var newLines);
+        var result = LineEditEngine.Apply(content, hashes!, [edit], rel, out var newLines);
         if (!result.Success)
         {
             return result;
@@ -218,16 +222,16 @@ public class HashLineEditor
             return;
         }
 
-        string[]? cached = null;
+        FileSnapshot? cached = null;
         _RawCache.TryGetValue(rel, out cached);
         var newLine = "\n";
-        if (cached is { Length: > 0 })
+        if (cached is { Raw.Length: > 0 })
         {
-            newLine = HashLine.DetectNewLine(cached);
+            newLine = HashLine.DetectNewLine(cached.Raw);
         }
         else if (File.Exists(full))
         {
-            var (raw, _) = ReadRawLines(rel, full!);
+            var (raw, _, _) = ReadRawLines(rel, full!);
             if (raw is { Count: > 0 })
             {
                 newLine = HashLine.DetectNewLine(raw);
@@ -254,7 +258,7 @@ public class HashLineEditor
             return null;
         }
 
-        var (raw, error) = ReadRawLines(rel, full);
+        var (raw, _, error) = ReadRawLines(rel, full);
         if (error is not null)
         {
             return null;
@@ -330,17 +334,20 @@ public class HashLineEditor
     }
 
     /// <summary>Reads raw lines WITH their terminators; binary/unreadable/missing refusal
-    /// parity with RepoReadTools.ReadFile. Caches the raw lines for byte-exact reverts.</summary>
-    private (IReadOnlyList<string>? Lines, string? Error) ReadRawLines(string rel, string full)
+    /// parity with RepoReadTools.ReadFile. Caches the raw lines (for byte-exact reverts)
+    /// together with their per-line hashes, computed once per content change and reused by
+    /// <see cref="ReadFileWithHashes"/> and edit resolution. Cache validity is byte-exact:
+    /// a fresh read whose bytes equal the snapshot reuses it; anything else recomputes.</summary>
+    private (IReadOnlyList<string>? Lines, string[]? Hashes, string? Error) ReadRawLines(string rel, string full)
     {
         if (!File.Exists(full))
         {
-            return (null, $"not found: {rel}");
+            return (null, null, $"not found: {rel}");
         }
 
         if (!EnsureStablePath(rel, full, out var pathError))
         {
-            return (null, pathError);
+            return (null, null, pathError);
         }
 
         byte[] bytes;
@@ -350,11 +357,11 @@ public class HashLineEditor
         }
         catch (IOException)
         {
-            return (null, $"unreadable: {rel}");
+            return (null, null, $"unreadable: {rel}");
         }
         catch (UnauthorizedAccessException)
         {
-            return (null, $"unreadable: {rel}");
+            return (null, null, $"unreadable: {rel}");
         }
 
         if (!_OriginalRaw.ContainsKey(rel))
@@ -367,14 +374,20 @@ public class HashLineEditor
         {
             if (bytes[i] == 0)
             {
-                return (null, "refused: binary file");
+                return (null, null, "refused: binary file");
             }
+        }
+
+        if (_RawCache.TryGetValue(rel, out var snapshot) && snapshot.Bytes.AsSpan().SequenceEqual(bytes))
+        {
+            return (snapshot.Raw, snapshot.Hashes, null);
         }
 
         var text = Encoding.UTF8.GetString(bytes);
         var lines = SplitKeepEndings(text);
-        _RawCache[rel] = lines;
-        return (lines, null);
+        var hashes = lines.Select(HashFunction).ToArray();
+        _RawCache[rel] = new FileSnapshot(bytes, lines, hashes);
+        return (lines, hashes, null);
     }
 
     private static string[] SplitKeepEndings(string text)
@@ -412,7 +425,9 @@ public class HashLineEditor
         }
 
         var dir = Path.GetDirectoryName(full)!;
-        var temp = Path.Combine(dir, ".rf-edit-" + Guid.NewGuid().ToString("N") + ".tmp");
+        // KeyedLockPool serializes writers for a checkout; deterministic sibling names are safe.
+        var temp = Path.Combine(dir, "." + Path.GetFileName(full) + ".rf-edit.tmp");
+        TryDeleteStale(temp);
         try
         {
             File.WriteAllText(temp, text);
@@ -425,10 +440,7 @@ public class HashLineEditor
         }
         finally
         {
-            if (File.Exists(temp))
-            {
-                File.Delete(temp);
-            }
+            TryDeleteStale(temp);
         }
     }
 
@@ -440,7 +452,9 @@ public class HashLineEditor
         }
 
         var dir = Path.GetDirectoryName(full)!;
-        var temp = Path.Combine(dir, ".rf-edit-" + Guid.NewGuid().ToString("N") + ".tmp");
+        // KeyedLockPool serializes writers for a checkout; deterministic sibling names are safe.
+        var temp = Path.Combine(dir, "." + Path.GetFileName(full) + ".rf-revert.tmp");
+        TryDeleteStale(temp);
         try
         {
             File.WriteAllBytes(temp, bytes);
@@ -453,12 +467,23 @@ public class HashLineEditor
         }
         finally
         {
-            if (File.Exists(temp))
-            {
-                File.Delete(temp);
-            }
+            TryDeleteStale(temp);
         }
     }
+
+    private static void TryDeleteStale(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
 
     private bool EnsureStablePath(string rel, string full, out string? error)
     {
@@ -584,4 +609,9 @@ public class HashLineEditor
     }
 
     private sealed record SessionRange(int StartLine, int EndLine);
+
+    /// <summary>One cached file read: the exact bytes observed, the raw lines split from
+    /// them, and the per-line content hashes. Bytes make cache reuse byte-exact — no
+    /// timestamp or length heuristics.</summary>
+    private sealed record FileSnapshot(byte[] Bytes, string[] Raw, string[] Hashes);
 }

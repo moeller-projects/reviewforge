@@ -127,6 +127,67 @@ public class ProcessFixVerifierTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task File_placeholder_runs_once_per_edited_file()
+    {
+        var dir = TempDir();
+        try
+        {
+            var verifier = new ProcessFixVerifier("printf {file}", timeoutSeconds: 30);
+
+            var verdict = await verifier.VerifyAsync(dir, ["one.cs", "two.cs"], CancellationToken.None);
+
+            Assert.True(verdict.Passed);
+            Assert.Equal("verified 2 file(s)", verdict.Reason);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task File_placeholder_reports_the_file_that_failed()
+    {
+        var dir = TempDir();
+        try
+        {
+            var verifier = new ProcessFixVerifier("false {file}", timeoutSeconds: 30);
+
+            var verdict = await verifier.VerifyAsync(dir, ["broken.cs"], CancellationToken.None);
+
+            Assert.False(verdict.Passed);
+            Assert.Contains("broken.cs:", verdict.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task File_placeholder_rejects_more_than_the_maximum_file_count()
+    {
+        var dir = TempDir();
+        try
+        {
+            var verifier = new ProcessFixVerifier("true {file}", timeoutSeconds: 30);
+
+            var verdict = await verifier.VerifyAsync(
+                dir,
+                Enumerable.Range(0, 33).Select(i => $"file-{i}.cs").ToArray(),
+                CancellationToken.None);
+
+            Assert.False(verdict.Passed);
+            Assert.Contains("at most 32 edited files", verdict.Reason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Bounded_output_ignores_lines_after_byte_budget()
     {

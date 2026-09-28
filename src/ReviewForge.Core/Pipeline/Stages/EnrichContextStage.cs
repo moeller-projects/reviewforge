@@ -31,7 +31,10 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
 
         try
         {
-            var payload = await enricher.EnrichAsync(repoDir, ctx.DiffText, ct);
+            // Stage 3 may already have the call in flight (started once RepoDir+DiffText
+            // existed); awaiting it here preserves the exact fail-safe contract.
+            var payload = await (ctx.PendingEnrichment ?? enricher.EnrichAsync(repoDir, ctx.DiffText, ct))
+                .ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(payload))
             {
                 ctx.ContextStore.Put(ContextName, payload);

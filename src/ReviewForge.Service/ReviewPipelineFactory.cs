@@ -11,6 +11,24 @@ using ReviewForge.Core.Workspaces;
 
 namespace ReviewForge.Service;
 
+/// <summary>Map-reduce sharding for large diffs. When enabled and the planned shard count is
+/// at least two, stage 6 runs one agent per shard concurrently and merges findings into the
+/// single run collector. Shard-cap overflow never fails a run — it falls back to the legacy
+/// truncated single-agent path (counted by reviewforge.shard.fallback_total).</summary>
+public sealed class ShardingOptions
+{
+    public bool Enabled { get; init; }
+
+    /// <summary>Cumulative diff chars per shard; a file larger than this gets a shard of its own.</summary>
+    public int ShardMaxChars { get; init; } = 30_000;
+
+    /// <summary>Shard cap. Overflow → legacy fallback, never a run failure.</summary>
+    public int MaxShards { get; init; } = 8;
+
+    /// <summary>Max concurrent shard agents (bounded by the LLM governor as well).</summary>
+    public int ShardConcurrency { get; init; } = 2;
+}
+
 /// <summary>Service options for the pipeline host.</summary>
 public sealed class ReviewForgeServiceOptions
 {
@@ -21,6 +39,10 @@ public sealed class ReviewForgeServiceOptions
 
     /// <summary>SQLite connection string for the finding store.</summary>
     public string StoreConnectionString { get; init; } = "Data Source=reviewforge.db";
+
+    /// <summary>Ingest queue backing: "Memory" (default, in-memory channel — queued runs are
+    /// lost on restart) or "Sqlite" (durable rows on the store's database file).</summary>
+    public string QueueMode { get; init; } = nameof(Service.Queue.QueueMode.Memory);
 
     /// <summary>Optional path to a system-prompt override file.</summary>
     public string? PromptOverridePath { get; init; }
@@ -69,6 +91,15 @@ public sealed class ReviewForgeServiceOptions
     /// <summary>Opt-in: exports OTel traces/metrics via OTLP. Default false (no exporter).</summary>
     public bool OtlpEnabled { get; init; }
 
+    /// <summary>Skips the LLM call when an iteration adds zero reviewable lines and has no
+    /// open threads (lockfile-only churn, deletions-only) — the run publishes a clean vote
+    /// from a synthetic result. Default true; set false to restore the pre-skip behavior.</summary>
+    public bool TrivialDiffSkipEnabled { get; init; } = true;
+
+    /// <summary>Map-reduce sharding for large diffs (v1: no merge pass). Disabled by default;
+    /// small PRs always take the exact legacy single-agent path.</summary>
+    public ShardingOptions Sharding { get; init; } = new();
+
     /// <summary>
     /// In-flight shells (runs persisted by BeginRunStage but never finalized — crash or kill
     /// between stages 75 and 100) older than this at startup are reaped and finalized as
@@ -79,6 +110,17 @@ public sealed class ReviewForgeServiceOptions
 
     /// <summary>Finding-store retention (P2-26); pruned at the discovery-sweep tail.</summary>
     public RetentionOptions Retention { get; init; } = new();
+
+    /// <summary>Finding-store storage tuning (journal mode escape hatch).</summary>
+    public StoreOptions Store { get; init; } = new();
+}
+
+/// <summary>Finding-store storage tuning.</summary>
+public sealed class StoreOptions
+{
+    /// <summary>Wal (default) | Delete. WAL requires POSIX advisory locks — keep the
+    /// database on local disk; use Delete on network filesystems.</summary>
+    public string JournalMode { get; init; } = "Wal";
 }
 
 /// <summary>Agent repo-scan budgets (P2-28): one Grep tool call aborts with a truncation
@@ -173,13 +215,27 @@ public sealed class ReviewPipelineFactory(
         [
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
-            new PrepareRepositoryStage(checkoutPool, loggerFactory.CreateLogger<PrepareRepositoryStage>(), diffBudget),
+            new PrepareRepositoryStage(
+                checkoutPool,
+                loggerFactory.CreateLogger<PrepareRepositoryStage>(),
+                diffBudget,
+                source,
+                enricher,
+                clock),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
-            new ExecuteReasoningStage(agent, findingsDir, maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile),
+            new ExecuteReasoningStage(
+                agent, findingsDir,
+                maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile,
+                trivialDiffSkipEnabled: opts.TrivialDiffSkipEnabled,
+                shardingEnabled: opts.Sharding.Enabled,
+                shardMaxChars: opts.Sharding.ShardMaxChars,
+                maxShards: opts.Sharding.MaxShards,
+                shardConcurrency: opts.Sharding.ShardConcurrency),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new AutoFixFindingsStage(
-                registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>()),
+                registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>(),
+                store: store),
             new BeginRunStage(store, clock),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
             new PublishFindingsStage(source, store, loggerFactory.CreateLogger<PublishFindingsStage>(), cleanVote),

@@ -2,11 +2,24 @@ using Microsoft.Extensions.AI;
 
 namespace ReviewForge.Core.Ports;
 
-/// <summary>Builds the model client for the configured reasoning provider.</summary>
+/// <summary>Model quality tier. <see cref="Full"/> is the strong review model;
+/// <see cref="Fast"/> is the cheaper/faster tier for follow-up reviews and fix passes.
+/// Factories alias <see cref="Fast"/> to <see cref="Full"/> when no fast model is
+/// configured — identical behavior, zero config.</summary>
+public enum ChatTier
+{
+    Full,
+    Fast,
+}
+
+/// <summary>Builds the model client for the configured reasoning provider. Callers pick a
+/// <see cref="ChatTier"/> explicitly: follow-up reviews and fix passes use
+/// <see cref="ChatTier.Fast"/> (aliasing <see cref="ChatTier.Full"/> when no fast model is
+/// configured), full reviews use <see cref="ChatTier.Full"/>.</summary>
 public interface IChatClientFactory
 {
-    /// <summary>Model id the agent should address (without any provider routing prefix).</summary>
-    string ModelName { get; }
+    /// <summary>Model id for <paramref name="tier"/> (without any provider routing prefix).</summary>
+    string ModelName(ChatTier tier);
 
-    IChatClient Create();
+    IChatClient Create(ChatTier tier);
 }

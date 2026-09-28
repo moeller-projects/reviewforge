@@ -1,4 +1,5 @@
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
@@ -21,7 +22,8 @@ public sealed class TelemetryGaugeRegistrationTests : IDisposable
     public async Task Start_registers_gauges_and_stop_completes()
     {
         var pool = new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), _Root);
-        var service = new TelemetryGaugeRegistration(new ReviewQueue(), new InFlightClaims(), pool);
+        var service = new TelemetryGaugeRegistration(
+            new ReviewQueue(), new InFlightClaims(), pool, new LlmGovernor(maxConcurrentRequests: 2));
 
         await service.StartAsync(CancellationToken.None);
         await service.StopAsync(CancellationToken.None);
