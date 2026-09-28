@@ -38,9 +38,17 @@ public class RepoReadTools
     private readonly int _MaxLines;
     private readonly int _GrepMaxMs;
     private readonly int _GrepMaxLines;
+    private readonly string? _DiffText;
+    private readonly IReadOnlySet<string> _ChangedFiles;
+    private readonly DiffIndex? _Diff;
+    private IReadOnlyList<DiffBlock>? _DiffBlocks;
 
     private string Root => _Guard.Root;
 
+    public const int MaxFileDiffChars = 20_000;
+    public const int MaxReferenceResults = 20;
+
+    /// <summary>Creates repository-scoped read and search tools.</summary>
     public RepoReadTools(
         string rootDir,
         IEnumerable<string>? denyPatterns = null,
@@ -48,7 +56,10 @@ public class RepoReadTools
         IEnumerable<string>? excludeDirs = null,
         long maxGrepFileBytes = DefaultMaxGrepFileBytes,
         int grepMaxMs = DefaultGrepMaxMs,
-        int grepMaxLines = DefaultGrepMaxLines)
+        int grepMaxLines = DefaultGrepMaxLines,
+        string? diffText = null,
+        IReadOnlySet<string>? changedFiles = null,
+        DiffIndex? diff = null)
     {
         if (grepMaxMs <= 0)
         {
@@ -66,7 +77,43 @@ public class RepoReadTools
         _MaxGrepFileBytes = maxGrepFileBytes;
         _GrepMaxMs = grepMaxMs;
         _GrepMaxLines = grepMaxLines;
+        _DiffText = diffText;
+        _ChangedFiles = changedFiles is null
+            ? new HashSet<string>(RepoPath.PathComparer)
+            : changedFiles.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
+        _Diff = diff;
     }
+
+    /// <summary>Shows the diff hunks for one changed file.</summary>
+    [Description("Show this pull request's diff hunks for one changed file (what changed, not "
+        + "just the current content). Works for deleted files, which repo_read_file cannot serve.")]
+    public string FileDiff([Description("File path relative to repo root")] string path)
+    {
+        var relative = RepoPath.Normalize(path);
+        if (_Guard.IsDenied(relative))
+        {
+            return $"access denied: {path}";
+        }
+
+        if (_Diff?.NonReviewableFiles.TryGetValue(relative, out var kind) == true)
+        {
+            return $"no text diff for '{relative}' ({kind} change)";
+        }
+
+        _DiffBlocks ??= DiffBlockSplit.Split(_DiffText ?? string.Empty, out _);
+        var block = _DiffBlocks.FirstOrDefault(b =>
+            b.File is not null && string.Equals(RepoPath.Normalize(b.File), relative, RepoPath.PathComparison));
+        if (block.File is null)
+        {
+            return $"no diff for '{path}' — not a changed file in this pull request";
+        }
+
+        var text = PromptText.Clean(block.Text);
+        return text.Length <= MaxFileDiffChars
+            ? text
+            : text[..MaxFileDiffChars] + "\n…[file diff truncated — use repo_read_file for full content]";
+    }
+
 
     [Description("List files and directories under a path in the repository.")]
     public string List([Description("Directory path relative to repo root; empty for root")] string? path = null)
