@@ -5,10 +5,24 @@ public static class ReferenceScanner
 {
     /// <summary>Returns whether an identifier is syntactically suitable for a reference scan.</summary>
     public static bool IsValidIdentifier(string identifier)
-        => identifier is not null
-           && identifier.Length is >= 2 and <= 128
-           && (char.IsLetter(identifier[0]) || identifier[0] == '_')
-           && identifier.All(c => char.IsLetterOrDigit(c) || c is '_' or '.');
+    {
+        if (identifier is null || identifier.Length is < 2 or > 128)
+        {
+            return false;
+        }
+
+        foreach (var segment in identifier.Split('.'))
+        {
+            if (segment.Length == 0
+                || (!char.IsLetter(segment[0]) && segment[0] != '_')
+                || !segment.All(c => char.IsLetterOrDigit(c) || c == '_'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
     /// <summary>Yields (1-based line number, line) where the identifier occurs on a word boundary.</summary>
     public static IEnumerable<(int LineNo, string Line)> ScanLines(
         IEnumerable<string> lines, string identifier, StringComparison comparison = StringComparison.OrdinalIgnoreCase)
