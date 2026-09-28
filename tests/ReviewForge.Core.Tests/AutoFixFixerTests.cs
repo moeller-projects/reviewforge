@@ -435,10 +435,9 @@ public class AutoFixFixerTests
         var proposal = new FixProposal("f", 1, 1, "x", "r");
         Assert.Equal(FixOrigin.Deterministic, proposal.Origin);
         Assert.Null(proposal.SourceThreadId);
-        var applied = new AppliedFix("k", proposal, "verifier");
+        var applied = new AppliedFix("k", proposal);
 
         Assert.Equal("k", applied.DedupeKey);
-        Assert.Equal("verifier", applied.VerifierName);
         var commanded = proposal with {Origin = FixOrigin.LlmCommanded, SourceThreadId = 7};
         Assert.Equal(7, commanded.SourceThreadId);
     }

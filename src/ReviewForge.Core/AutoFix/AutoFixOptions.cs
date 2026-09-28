@@ -24,11 +24,6 @@ public sealed class AutoFixOptions
     /// <summary>Hard cap of applied fixes per run, shared by both fix sources.</summary>
     [Range(1, 50)] public int MaxFixesPerRun { get; init; } = 3;
 
-    /// <summary>Optional command run in the checkout to verify fixes. Requires workspace writes.</summary>
-    public string? VerificationCommand { get; init; }
-
-    [Range(5, 1800)] public int VerificationTimeoutSeconds { get; init; } = 120;
-
     /// <summary>Author-commanded thread fixes: the PR author replies "/rf fix" on a thread.</summary>
     public bool EnableThreadFixCommands { get; init; } = false;
 
