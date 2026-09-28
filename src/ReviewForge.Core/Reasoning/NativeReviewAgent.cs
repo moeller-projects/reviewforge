@@ -83,7 +83,8 @@ public sealed class NativeReviewAgent(
         var tools = new List<AITool>
         {
             AIFunctionFactory.Create(repoTools.ReadFile), AIFunctionFactory.Create(repoTools.List),
-            AIFunctionFactory.Create(repoTools.Grep), AIFunctionFactory.Create(repoTools.FileDiff),
+            AIFunctionFactory.Create(repoTools.Grep),
+            AIFunctionFactory.Create(repoTools.FileDiff, "repo_file_diff"),
             AIFunctionFactory.Create(repoTools.FindReferences), AIFunctionFactory.Create(reviewTools.ReadContext),
             AIFunctionFactory.Create(reviewTools.GetRulebook), AIFunctionFactory.Create(reviewTools.RecordFinding),
             AIFunctionFactory.Create(reviewTools.RecordUncertainty), AIFunctionFactory.Create(reviewTools.TaskDone),
