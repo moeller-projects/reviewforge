@@ -6,6 +6,9 @@ namespace ReviewForge.Core.Ports;
 /// </summary>
 public interface IContextEnricher
 {
+    /// <summary>Name under which the enrichment payload is stored in the review context.</summary>
+    string Name => "enrichment";
+
     /// <summary>Serialized enrichment payload for the agent, or null when unavailable.</summary>
     Task<string?> EnrichAsync(string repoDir, string diffText, CancellationToken ct);
 }

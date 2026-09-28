@@ -11,7 +11,7 @@ public static class ReferenceScanner
            && identifier.All(c => char.IsLetterOrDigit(c) || c is '_' or '.');
     /// <summary>Yields (1-based line number, line) where the identifier occurs on a word boundary.</summary>
     public static IEnumerable<(int LineNo, string Line)> ScanLines(
-        IEnumerable<string> lines, string identifier, StringComparison comparison)
+        IEnumerable<string> lines, string identifier, StringComparison comparison = StringComparison.OrdinalIgnoreCase)
     {
         var lineNo = 0;
         foreach (var line in lines)
@@ -41,5 +41,5 @@ public static class ReferenceScanner
     }
 
     private static bool IsIdentifierPart(char c)
-        => char.IsLetterOrDigit(c) || c is '_' or '.';
+        => char.IsLetterOrDigit(c) || c == '_';
 }

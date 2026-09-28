@@ -1,0 +1,136 @@
+using ReviewForge.Core.Domain;
+using ReviewForge.Core.Reasoning;
+using Xunit;
+
+namespace ReviewForge.Core.Tests.ReasoningTests;
+
+public sealed class FindingsVerifierPromptTests
+{
+    private static RichFinding Finding(string key, string severity = "high")
+        => new()
+        {
+            RuleId = "security/sql-injection",
+            Title = "t",
+            Severity = severity,
+            Category = "security",
+            Description = "raw sql",
+            Anchor = new FindingAnchor("src/A.cs", 10, 12),
+            DedupeKey = key,
+        };
+
+    [Fact]
+    public void Build_embeds_claim_and_slice_per_finding()
+    {
+        var prompt = FindingsVerifierPrompt.Build(
+            [Finding("k1")], _ => ">> 10: code", 24_000);
+
+        Assert.Contains("### key: k1", prompt);
+        Assert.Contains("rule: security/sql-injection · severity: high · src/A.cs:10-12", prompt);
+        Assert.Contains("claim: raw sql", prompt);
+        Assert.Contains("<pr-supplied-data>\n>> 10: code\n</pr-supplied-data>", prompt);
+    }
+
+    [Fact]
+    public void Build_without_slice_omits_data_block()
+    {
+        var prompt = FindingsVerifierPrompt.Build([Finding("k1")], _ => null, 24_000);
+
+        Assert.Contains("### key: k1", prompt);
+        Assert.DoesNotContain("<pr-supplied-data>", prompt);
+    }
+
+    [Fact]
+    public void Build_without_anchor_omits_location()
+    {
+        var finding = Finding("k1") with {Anchor = null};
+        var prompt = FindingsVerifierPrompt.Build([finding], _ => null, 24_000);
+
+        Assert.DoesNotContain("src/A.cs", prompt);
+    }
+
+    [Fact]
+    public void Build_caps_at_max_prompt_chars()
+    {
+        var findings = Enumerable.Range(1, 50).Select(i => Finding($"key-{i}")).ToArray();
+
+        var prompt = FindingsVerifierPrompt.Build(findings, _ => new string('x', 500), 4_000);
+
+        Assert.True(prompt.Length <= 4_000 + 128); // cap plus the trailing marker line
+        Assert.Contains("…[remaining findings listed without context]", prompt);
+    }
+
+    [Fact]
+    public void Messages_contain_system_and_user_roles()
+    {
+        var messages = FindingsVerifierPrompt.Messages("verify these");
+
+        Assert.Equal(2, messages.Length);
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, messages[0].Role);
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.User, messages[1].Role);
+        Assert.Equal("verify these", messages[1].Text);
+    }
+
+    [Fact]
+    public void RetryMessages_adds_json_only_nudge()
+    {
+        var messages = FindingsVerifierPrompt.RetryMessages("verify these");
+
+        Assert.Equal(3, messages.Length);
+        Assert.Contains("ONLY the JSON array", messages[2].Text);
+    }
+}
+
+public sealed class VerdictParserTests
+{
+    [Fact]
+    public void Parse_extracts_verdicts_by_key()
+    {
+        var verdicts = VerdictParser.Parse(
+            """[{"key":"k1","verdict":"rejected","reason":"misread"},{"key":"k2","verdict":"confirmed","reason":"ok"}]""");
+
+        Assert.NotNull(verdicts);
+        Assert.True(verdicts["k1"].Rejected);
+        Assert.Equal("misread", verdicts["k1"].Reason);
+        Assert.False(verdicts["k2"].Rejected);
+    }
+
+    [Fact]
+    public void Parse_tolerates_prose_around_the_array()
+    {
+        var verdicts = VerdictParser.Parse(
+            "Here are my verdicts:\n```json\n[{\"key\":\"k1\",\"verdict\":\"rejected\"}]\n```\nDone.");
+
+        Assert.NotNull(verdicts);
+        Assert.True(verdicts["k1"].Rejected);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("no array at all")]
+    [InlineData("[{not json}]")]
+    public void Parse_unparseable_returns_null(string? text)
+    {
+        Assert.Null(VerdictParser.Parse(text));
+    }
+
+    [Fact]
+    public void Parse_ignores_entries_without_key()
+    {
+        var verdicts = VerdictParser.Parse("""[{"verdict":"rejected"},{"key":"","verdict":"rejected"},{"key":"k1","verdict":"REJECTED"}]""");
+
+        Assert.NotNull(verdicts);
+        Assert.Single(verdicts);
+        Assert.True(verdicts["k1"].Rejected); // case-insensitive verdict value
+    }
+
+    [Fact]
+    public void Parse_non_rejected_verdict_values_keep_the_finding()
+    {
+        var verdicts = VerdictParser.Parse("""[{"key":"k1","verdict":"unsure"}]""");
+
+        Assert.NotNull(verdicts);
+        Assert.False(verdicts["k1"].Rejected);
+    }
+}

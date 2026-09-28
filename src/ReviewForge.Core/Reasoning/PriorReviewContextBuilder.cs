@@ -42,6 +42,12 @@ public static class PriorReviewContextBuilder
         builder.Append(Header);
         foreach (var row in rows)
         {
+            if (row.Length > MaxPayloadChars - Header.Length - 1)
+            {
+                // A single oversized title must not hide later, smaller findings.
+                continue;
+            }
+
             if (builder.Length + 1 + row.Length <= MaxPayloadChars)
             {
                 builder.Append('\n').Append(row);
