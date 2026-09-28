@@ -2,7 +2,6 @@ using System.Diagnostics;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
-using ReviewForge.Service.Logging;
 using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
@@ -19,7 +18,6 @@ public sealed class ReviewWorker(
     InFlightClaims claims,
     IFindingStore store,
     ILogger<ReviewWorker> logger,
-    IRunLogLifecycle runLogs,
     TimeProvider? clock = null) : BackgroundService
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
@@ -46,7 +44,6 @@ public sealed class ReviewWorker(
                     "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
                     request.RunId, request.Pr, holder);
                 tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued");
-                runLogs.CloseRun(request.RunId);
                 // The request was already dequeued (claimed) from the queue; without this
                 // ack a durable row would stay claimed and be reclaimed forever.
                 queue.Acknowledge(request.RunId);
@@ -145,7 +142,6 @@ public sealed class ReviewWorker(
                 queue.Acknowledge(request.RunId);
                 ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
-                runLogs.CloseRun(request.RunId);
             }
         }
     }

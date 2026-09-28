@@ -164,7 +164,6 @@ public sealed class ReviewPipelineFactory(
     IContextEnricher? enricher = null,
     TimeProvider? clock = null,
     IEnumerable<IFindingFixer>? findingFixers = null,
-    IFixVerifier? fixVerifier = null,
     IOptions<AutoFixOptions>? autoFixOptions = null)
 {
     public ReviewPipeline Create()
@@ -193,7 +192,6 @@ public sealed class ReviewPipelineFactory(
         var fixers = findingFixers ?? [];
         var registry = new FindingFixerRegistry(fixers);
         var autoFix = autoFixOptions?.Value ?? new AutoFixOptions();
-        var verifier = fixVerifier ?? NullFixVerifier.Instance;
         var factoryLogger = loggerFactory.CreateLogger<ReviewPipelineFactory>();
         foreach (var ruleId in autoFix.AllowedRuleIds)
         {
@@ -234,7 +232,7 @@ public sealed class ReviewPipelineFactory(
                 shardConcurrency: opts.Sharding.ShardConcurrency),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
             new AutoFixFindingsStage(
-                registry, agent, verifier, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>(),
+                registry, agent, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>(),
                 store: store),
             new BeginRunStage(store, clock),
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),

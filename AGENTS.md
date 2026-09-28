@@ -21,7 +21,7 @@ src/
     Reasoning/                 NativeReviewAgent, RepoReadTools, RepoPathGuard, prompt building,
                                RuleBook + embedded rule-pack JSONs, embedded system prompts
     AutoFix/                   FindingFixerRegistry + deterministic fixers, FixPromptBuilder,
-                               AppliedFixPersistence, ProcessFixCommand
+                               AppliedFixPersistence
     Workspaces/                RepoCheckoutPool (per-head checkout leases, idle eviction)
     Pipeline/                  ReviewPipeline, Stages/ (one class per stage), CommentFormatter
     Ports/                     IPullRequestSource, IFindingStore, IGitOps, IChatClientFactory,
@@ -30,7 +30,7 @@ src/
                                Codex/ (OAuth file), Chat/ (OpenAI/Codex clients + LLM governor),
                                Persistence/ (SQLite via EF Core), Filesystem/ (IWorkspaceFs)
   ReviewForge.Service/         host: Endpoints, Queue/ (ReviewQueue + RunTracker, InFlightClaims,
-                               ClaimHeartbeat), Security/ (API-key filter), Logging/ (per-run JSONL),
+                               ClaimHeartbeat), Security/ (API-key filter),
                                hosted workers (ReviewWorker, DiscoverySweepWorker,
                                CheckoutEvictionWorker, ShellReaperService),
                                ReviewPipelineFactory (composition root), Program.cs
@@ -55,7 +55,7 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
    `Analysis/PathSafety.cs` performs symlink resolution (Directory/File.Exists, LinkTarget)
    as the agent sandbox's containment primitive. It is isolated behind PathSafety so it
    can be swapped for a port if Core is ever hosted out-of-process.
-   `Reasoning/HashLineEditor.cs` (author-commanded fix passes and optional verification)
+   `Reasoning/HashLineEditor.cs` (author-commanded fix passes)
    is under the same direct-IO exception; see rule 6 for the writable-set discipline. All
    other Core IO goes through `IWorkspaceFs` or is stage-local run-artifact IO documented
    in `<remarks>` (see the `IWorkspaceFs` scope note).
@@ -80,17 +80,16 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
   `AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`).
 6. **Agent sandbox.** `RepoReadTools` (agent reads) is read-only, rooted at the checkout,
    escape-proof, deny-regex for `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. The agent has
-   no shell. `HashLineEditor` (used by author-commanded fix passes and optional
-   verification) shares the same containment and deny rules via `RepoPathGuard` and is
+   no shell. `HashLineEditor` (used by author-commanded fix passes) shares the same
+   containment and deny rules via `RepoPathGuard` and is
    additionally limited to a per-run writable set (a single anchored file for fix passes).
-   Every fix-pass write is reverted before the stage ends. External processes
-   (verification) run only via a configured `AutoFix:VerificationCommand`, only in the
-   checkout directory, only with a wall-clock timeout, and are never invoked by the agent.
+   Every fix-pass write is reverted before the stage ends. The agent never invokes
+   external processes.
 7. **Codex auth file** is rewritten atomically (temp + move) on token rotation. Any mount
    or path you introduce must preserve that (directory mount, read-write).
-8. **Auto-fix discipline.** A fix is only published when (a) the author is allowlisted,
+8. **Auto-fix discipline.** A fix is only published when (a) the author is allowlisted and
    (b) the rule has a registered fixer or the fix was explicitly commanded by the PR
-   author via `/rf fix`, and (c) the verifier passes. Any gate failing means the finding
+   author via `/rf fix`. Any gate failing means the finding
    is published as a plain comment instead. Every fix is published as an ADO suggestion
    block — ReviewForge never writes to the PR branch, never pushes, never opens pull
    requests. AI-drafted fixes are always labeled as such. Never resolve another person's
@@ -155,8 +154,8 @@ Mounts (see `docker-compose.yml`):
 
 - named volume `reviewforge-data` → `/var/reviewforge` — `ReviewForge__WorkDir` is
   `/var/reviewforge/work`, so head checkouts live at `work/checkouts/<repository>/<head>`,
-  local mirrors at `work/mirror/<repository>`, per-run `work/findings/{runId}.jsonl` and
-  `work/logs/{runId}.jsonl`; the SQLite store is `reviewforge.db` at the volume root.
+  local mirrors at `work/mirror/<repository>`, per-run `work/findings/{runId}.jsonl`;
+  the SQLite store is `reviewforge.db` at the volume root.
   Inspect with `docker compose exec reviewforge ls /var/reviewforge/work/checkouts`;
   eviction removes idle head checkouts, not mirrors. The rootfs is read-only; only
   `/var/reviewforge`, `/home/app/.codex` and `/tmp` are writable.

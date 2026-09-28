@@ -11,13 +11,14 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// <summary>
 /// Stage 7.2 (between validate and begin-run): produces suggestion-only fixes.
 /// Pass 1 is deterministic — validated findings with a registered, eligible fixer get a
-/// pure proposal that goes straight into the applied list (with the default null verifier
-/// the deterministic path performs ZERO disk writes). Pass 2 is commanded — the PR author
-/// replied "/rf fix" on a thread, and a constrained agent pass (one-file writable set,
-/// hash-anchored edits, no findings tools) drafts the fix; its writes are always reverted
-/// before the stage ends. The shared MaxFixesPerRun budget is consumed deterministic-first.
-/// Never remove a fixed finding from AcceptedFindings — triage depends on its key staying
-/// current (fixed findings must not trigger "no longer reproduces" auto-resolve).
+/// pure proposal that goes straight into the applied list (zero disk writes). Pass 2 is
+/// commanded — the PR author replied "/rf fix" on a thread, and a constrained agent pass
+/// (one-file writable set, hash-anchored edits, no findings tools) drafts the fix; its
+/// writes are always reverted before the stage ends. The shared MaxFixesPerRun budget is
+/// consumed deterministic-first. Fixes are published as ADO suggestions — the author's
+/// accept-click is the verification step. Never remove a fixed finding from
+/// AcceptedFindings — triage depends on its key staying current (fixed findings must not
+/// trigger "no longer reproduces" auto-resolve).
 ///
 /// <remarks>
 /// Direct System.IO by design — same exception as RepoReadTools/ValidateFindingsStage
@@ -29,7 +30,6 @@ public sealed class AutoFixFindingsStage : IReviewStage
 {
     private readonly FindingFixerRegistry _Registry;
     private readonly NativeReviewAgent _Agent;
-    private readonly IFixVerifier _Verifier;
     private readonly AutoFixOptions _Options;
     private readonly ILogger<AutoFixFindingsStage> _Logger;
     private readonly Func<string, string[]> _LineReader;
@@ -39,7 +39,6 @@ public sealed class AutoFixFindingsStage : IReviewStage
     public AutoFixFindingsStage(
         FindingFixerRegistry registry,
         NativeReviewAgent agent,
-        IFixVerifier verifier,
         AutoFixOptions options,
         ILogger<AutoFixFindingsStage> logger,
         Func<string, string[]>? lineReader = null,
@@ -48,7 +47,6 @@ public sealed class AutoFixFindingsStage : IReviewStage
     {
         _Registry = registry;
         _Agent = agent;
-        _Verifier = verifier;
         _Options = options;
         _Logger = logger;
         _LineReader = lineReader ?? File.ReadAllLines;
@@ -126,8 +124,8 @@ public sealed class AutoFixFindingsStage : IReviewStage
         Action<int> setBudget,
         CancellationToken ct)
     {
-        // Per file: proposals collected in finding order; the process verifier applies
-        // them all, verifies once, and reverts. Grouped so verification is per file.
+        // Per file: proposals collected in finding order and published as suggestions —
+        // no workspace writes (human acceptance of the suggestion is the verification).
         var proposalsByFile = new Dictionary<string, List<(RichFinding Finding, FixProposal Proposal)>>(RepoPath.PathComparer);
         var guardSkipped = 0;
 
@@ -200,84 +198,13 @@ public sealed class AutoFixFindingsStage : IReviewStage
             return;
         }
 
-        if (!_Verifier.RequiresWorkspaceWrites)
-        {
-            // Default path: zero disk writes — proposals go straight to the applied list.
-            foreach (var (path, proposals) in proposalsByFile)
-            {
-                ct.ThrowIfCancellationRequested();
-                foreach (var (finding, proposal) in proposals)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    AttachFix(finding, applied, new AppliedFix(finding.DedupeKey!, proposal, _Verifier.Name), ctx);
-                }
-            }
-
-            return;
-        }
-
-        // Process verifier: apply all of a file's fixes, verify once, revert, and drop the
-        // file's fixes on failure (attribution trade-off: one invocation per file).
         foreach (var (path, proposals) in proposalsByFile)
         {
-            var abs = guard.Resolve(path, out var resolveError)
-                ?? throw new InvalidOperationException($"auto-fix path resolution failed for {path}: {resolveError}");
-            var snapshotBytes = File.ReadAllBytes(abs);
-            var snapshotLines = _LineReader(abs);
-            var editor = _EditorFactory(guard, new HashSet<string>(RepoPath.PathComparer) { path });
-            var appliedAny = true;
-
-            try
+            ct.ThrowIfCancellationRequested();
+            foreach (var (finding, proposal) in proposals)
             {
-                foreach (var (_, proposal) in proposals.OrderByDescending(p => p.Proposal.StartLine))
-                {
-                    var rangeHash = HashLine.Of(string.Join(
-                        '\n', snapshotLines.Skip(proposal.StartLine - 1)
-                            .Take(proposal.EndLine - proposal.StartLine + 1)));
-                    var result = editor.ApplyRange(
-                        path, proposal.StartLine, proposal.EndLine, proposal.Replacement, rangeHash);
-                    if (!result.Success)
-                    {
-                        _Logger.LogWarning(
-                            "auto-fix: could not apply fix to {Path}:{Start}-{End}: {Error}",
-                            path, proposal.StartLine, proposal.EndLine, result.Error);
-                        appliedAny = false;
-                        break;
-                    }
-                }
-
-                FixVerdict verdict;
-                if (appliedAny)
-                {
-                    verdict = await _Verifier.VerifyAsync(repoDir, [abs], ct).ConfigureAwait(false);
-                }
-                else
-                {
-                    verdict = new FixVerdict(false, "a fix could not be applied cleanly");
-                }
-
-                if (!verdict.Passed)
-                {
-                    _Logger.LogWarning(
-                        "auto-fix: verification failed for {Path} ({Verifier}) — dropping {Count} fix(es)",
-                        path, _Verifier.Name, proposals.Count);
-                    setBudget(getBudget() + proposals.Count);
-                    foreach (var (finding, _) in proposals)
-                    {
-                        ReviewForgeTelemetry.FixesDeclined.Add(1, FixTags(FixOrigin.Deterministic, finding.RuleId));
-                    }
-
-                    continue;
-                }
-
-                foreach (var (finding, proposal) in proposals)
-                {
-                    AttachFix(finding, applied, new AppliedFix(finding.DedupeKey!, proposal, _Verifier.Name), ctx);
-                }
-            }
-            finally
-            {
-                RevertFile(editor, guard, repoDir, path, snapshotBytes);
+                ct.ThrowIfCancellationRequested();
+                AttachFix(finding, applied, new AppliedFix(finding.DedupeKey!, proposal), ctx);
             }
         }
     }
@@ -386,21 +313,6 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     continue;
                 }
 
-                if (_Verifier.RequiresWorkspaceWrites)
-                {
-                    var verdict = await _Verifier.VerifyAsync(repoDir, [abs], ct).ConfigureAwait(false);
-                    if (!verdict.Passed)
-                    {
-                        _Logger.LogWarning(
-                            "verification failed for {Path} ({Verifier})",
-                            path, _Verifier.Name);
-                        replies.Add((command.ThreadId,
-                            "the fix failed verification — nothing was published"));
-                        ReviewForgeTelemetry.FixesDeclined.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
-                        continue;
-                    }
-                }
-
                 var rationale = OneSentence(pass.Result.Narrative.ReviewSummary);
                 var proposal = new FixProposal(
                     path,
@@ -410,7 +322,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     rationale,
                     FixOrigin.LlmCommanded,
                     command.ThreadId);
-                AttachFix(null, applied, new AppliedFix($"{AppliedFix.CommandKeyPrefix}{command.ThreadId}", proposal, _Verifier.Name), ctx);
+                AttachFix(null, applied, new AppliedFix($"{AppliedFix.CommandKeyPrefix}{command.ThreadId}", proposal), ctx);
                 setBudget(getBudget() - 1);
             }
             finally

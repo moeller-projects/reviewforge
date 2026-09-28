@@ -17,7 +17,7 @@ public class AppliedFixPersistenceTests
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            AppliedFixes = [new AppliedFix("thread-42", proposal, "none")],
+            AppliedFixes = [new AppliedFix("thread-42", proposal)],
         };
 
         var row = Assert.Single(AppliedFixPersistence.BuildFinalRows(ctx, _ => null));
@@ -35,7 +35,7 @@ public class AppliedFixPersistenceTests
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            AppliedFixes = [new AppliedFix("thread-42", proposal, "none")],
+            AppliedFixes = [new AppliedFix("thread-42", proposal)],
         };
 
         var row = Assert.Single(AppliedFixPersistence.BuildFinalRows(ctx, _ => 99));

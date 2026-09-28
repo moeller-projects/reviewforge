@@ -24,8 +24,7 @@ public class AutoFixPublishTests
                     "script.sh", 3, 3,
                     "echo \"$name\"",
                     "Quoting prevents word-splitting on the value.",
-                    FixOrigin.Deterministic),
-                "none"),
+                    FixOrigin.Deterministic)),
         };
 
     private static ReviewContext Ctx(FakePullRequestSource source)
@@ -113,7 +112,7 @@ public class AutoFixPublishTests
         var ctx = Ctx(source);
         ctx.AppliedFixes =
         [
-            new AppliedFix("thread-42", proposal, "none"),
+            new AppliedFix("thread-42", proposal),
         ];
         ctx.FixCommands = [new FixCommand(42, new ThreadAnchor("script.sh", 3, 3), null, "please quote this")];
 
@@ -146,7 +145,7 @@ public class AutoFixPublishTests
             900, null, ReviewThreadStatus.Active,
             [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)], anchor));
         var ctx = Ctx(source);
-        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal, "none")];
+        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal)];
         ctx.FixCommands = [new FixCommand(42, anchor, null, "please quote this")];
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
@@ -165,7 +164,7 @@ public class AutoFixPublishTests
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var anchor = new ThreadAnchor("script.sh", 3, 3);
         var ctx = Ctx(source);
-        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal, "none")];
+        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal)];
         ctx.FixCommands = [new FixCommand(42, anchor, null, "please quote this")];
         var guardCalls = 0;
         ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2;
@@ -229,8 +228,7 @@ public class AutoFixPublishTests
         ctx.AcceptedFindings = [Fixable()];
         ctx.AppliedFixes = [Fixable().AppliedFix!, new AppliedFix(
             "thread-42",
-            new FixProposal("a.sh", 1, 1, "x", "r", FixOrigin.LlmCommanded, 42),
-            "none")];
+            new FixProposal("a.sh", 1, 1, "x", "r", FixOrigin.LlmCommanded, 42))];
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -308,8 +306,7 @@ public class AutoFixPublishTests
         var finding = Fixable();
         finding.AppliedFix = new AppliedFix(
             "k1",
-            new FixProposal("script.sh", 3, 3, replacement, "r", FixOrigin.Deterministic),
-            "none");
+            new FixProposal("script.sh", 3, 3, replacement, "r", FixOrigin.Deterministic));
 
         var deterministic = CommentFormatter.FormatFinding(finding);
         Assert.Contains("````suggestion\nline ``` inside\n````", deterministic);

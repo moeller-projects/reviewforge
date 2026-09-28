@@ -34,18 +34,6 @@ public sealed class FindingFixerRegistryTests
         Assert.Equal(42, sourceThreadId);
     }
 
-    [Fact]
-    public async Task NullFixVerifier_always_passes_without_workspace_writes()
-    {
-        var verifier = NullFixVerifier.Instance;
-
-        Assert.Equal("none", verifier.Name);
-        Assert.False(verifier.RequiresWorkspaceWrites);
-        Assert.Equal(
-            new FixVerdict(true, "no verifier configured"),
-            await verifier.VerifyAsync("/repo", "src/file.cs", CancellationToken.None));
-    }
-
     private sealed class StubFixer(string ruleId) : IFindingFixer
     {
         public string RuleId { get; } = ruleId;
