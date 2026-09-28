@@ -244,6 +244,10 @@ with a strict author allowlist. The configured executable is checked at host sta
 the command runs without a shell; metacharacters are rejected. Use `{file}` as a whole
 argument, for example `bash -n {file}`, to verify each edited file; without `{file}`, the
 command runs once per batch. File paths are passed as `ArgumentList` entries, never shell text.
+The child process gets a deny-by-default environment (PATH/HOME/TMPDIR plus dotnet
+conveniences) so service secrets — `REVIEWFORGE_ADO_PAT`, `REVIEWFORGE_API_KEYS`,
+`OPENAI_API_KEY` — are never inherited; when verification is enabled, keep the Codex
+credential mount out of the same container (see docker-compose.yml).
 When set, fixes are applied, verified, and reverted — a verify failure drops that file's fixes
 (published as plain comments instead). A failed revert fails the run rather than leaving a
 dirty pooled checkout.
