@@ -275,6 +275,10 @@ public static class ServiceCollectionExtensions
                     $"{ApiKeyOptions.SectionName}:SubmitPermitLimit", opts.SubmitPermitLimit);
                 opts.SubmitWindowSeconds = configuration.GetValue(
                     $"{ApiKeyOptions.SectionName}:SubmitWindowSeconds", opts.SubmitWindowSeconds);
+                opts.StatusPermitLimit = configuration.GetValue(
+                    $"{ApiKeyOptions.SectionName}:StatusPermitLimit", opts.StatusPermitLimit);
+                opts.StatusWindowSeconds = configuration.GetValue(
+                    $"{ApiKeyOptions.SectionName}:StatusWindowSeconds", opts.StatusWindowSeconds);
                 var fromEnv = Environment.GetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable);
                 opts.SetEnvironmentKeys(string.IsNullOrWhiteSpace(fromEnv)
                     ? []
@@ -286,6 +290,8 @@ public static class ServiceCollectionExtensions
                 "or set Api:AllowUnauthenticatedForDevelopment=true in Development.")
             .Validate(opts => opts.SubmitPermitLimit > 0, "Api:SubmitPermitLimit must be greater than 0.")
             .Validate(opts => opts.SubmitWindowSeconds > 0, "Api:SubmitWindowSeconds must be greater than 0.")
+            .Validate(opts => opts.StatusPermitLimit > 0, "Api:StatusPermitLimit must be greater than 0.")
+            .Validate(opts => opts.StatusWindowSeconds > 0, "Api:StatusWindowSeconds must be greater than 0.")
             .ValidateOnStart();
 
         services.AddRateLimiter(limiter =>
@@ -294,14 +300,25 @@ public static class ServiceCollectionExtensions
             limiter.AddPolicy(ApiKeyOptions.SubmitPolicy, httpContext =>
             {
                 var api = httpContext.RequestServices.GetRequiredService<IOptions<ApiKeyOptions>>().Value;
-                var remotePartition = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
-                var partition = api.Keys.Length == 0
-                    ? remotePartition
-                    : httpContext.Request.Headers[ApiKeyOptions.HeaderName].FirstOrDefault() ?? remotePartition;
+                // Partition by client identity only: the presented X-Api-Key is
+                // unauthenticated input — keying on it would hand each key guess
+                // a fresh permit budget and unbounded partition cardinality.
+                var partition = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
                 return RateLimitPartition.GetFixedWindowLimiter(partition, _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = api.SubmitPermitLimit,
                     Window = TimeSpan.FromSeconds(api.SubmitWindowSeconds),
+                    QueueLimit = 0,
+                });
+            });
+            limiter.AddPolicy(ApiKeyOptions.StatusPolicy, httpContext =>
+            {
+                var api = httpContext.RequestServices.GetRequiredService<IOptions<ApiKeyOptions>>().Value;
+                var partition = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+                return RateLimitPartition.GetFixedWindowLimiter(partition, _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = api.StatusPermitLimit,
+                    Window = TimeSpan.FromSeconds(api.StatusWindowSeconds),
                     QueueLimit = 0,
                 });
             });

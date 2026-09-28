@@ -159,16 +159,27 @@ public class ApiKeyAuthTests
     }
 
     [Fact]
-    public async Task Rate_limit_partitions_per_key()
+    public async Task Rate_limit_is_not_reset_by_unauthenticated_key_values()
     {
+        // The presented X-Api-Key is unauthenticated input: distinct values must not
+        // mint fresh permit budgets — the limiter partitions by client identity.
         using var factory = new ReviewForgeFactory().WithSubmitLimit(2, 600).WithoutWorkers();
-        using var clientA = factory.CreateClient();
-        using var clientB = factory.Server.CreateClient();
+        using var client = factory.Server.CreateClient();
 
-        Assert.Equal(HttpStatusCode.Accepted, await PostReview(clientA, "test-key-1", 1));
-        Assert.Equal(HttpStatusCode.Accepted, await PostReview(clientA, "test-key-1", 2));
-        Assert.Equal(HttpStatusCode.TooManyRequests, await PostReview(clientA, "test-key-1", 3));
-        Assert.Equal(HttpStatusCode.Accepted, await PostReview(clientB, "test-key-2", 4));
+        Assert.Equal(HttpStatusCode.Unauthorized, await PostReview(client, "guess-1", 1));
+        Assert.Equal(HttpStatusCode.Unauthorized, await PostReview(client, "guess-2", 2));
+        Assert.Equal(HttpStatusCode.TooManyRequests, await PostReview(client, "guess-3", 3));
+    }
+
+    [Fact]
+    public async Task Status_endpoint_is_rate_limited()
+    {
+        using var factory = new ReviewForgeFactory().WithStatusLimit(2, 600).WithoutWorkers();
+        using var client = factory.CreateClient();
+
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync($"/reviews/{Guid.NewGuid()}")).StatusCode);
     }
 
     [Fact]

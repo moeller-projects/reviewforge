@@ -96,6 +96,14 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         return this;
     }
 
+    /// <summary>Overrides the fixed-window status-poll limit for rate-limit tests.</summary>
+    public ReviewForgeFactory WithStatusLimit(int permitLimit, int windowSeconds)
+    {
+        Environment.SetEnvironmentVariable("Api__StatusPermitLimit", permitLimit.ToString());
+        Environment.SetEnvironmentVariable("Api__StatusWindowSeconds", windowSeconds.ToString());
+        return this;
+    }
+
     /// <summary>Enables the suggestion-only auto-fix feature for end-to-end tests.</summary>
     public ReviewForgeFactory WithAutoFix(bool threadCommands = false)
     {
@@ -172,6 +180,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString",
                 ApiKeyOptions.KeysEnvironmentVariable, "Api__AllowUnauthenticatedForDevelopment",
                 "Api__SubmitPermitLimit", "Api__SubmitWindowSeconds",
+                "Api__StatusPermitLimit", "Api__StatusWindowSeconds",
                 "AutoFix__Enabled", "AutoFix__AllowedAuthors__0",
                 "AutoFix__AllowedRuleIds__0", "AutoFix__AllowedRuleIds__1",
                 "AutoFix__EnableThreadFixCommands",
