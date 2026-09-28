@@ -62,7 +62,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
                     return null;
                 }
             },
-            ct);
+            CancellationToken.None);
 
     private static string? Build(string repoDir, string diffText, CancellationToken ct)
     {
