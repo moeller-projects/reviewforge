@@ -221,8 +221,8 @@ public sealed class ReviewPipelineFactory(
             opts.MaxDiffBytesPerFile,
             opts.DiffExcludeGlobs ?? DiffBudget.Default.ExcludeGlobs);
 
-        IReviewStage[] stages =
-        [
+        var stages = new List<IReviewStage>
+        {
             new FetchPrContextStage(source, store),
             new ReviewGateStage(clock),
             new PrepareRepositoryStage(
@@ -243,12 +243,19 @@ public sealed class ReviewPipelineFactory(
                 maxShards: opts.Sharding.MaxShards,
                 shardConcurrency: opts.Sharding.ShardConcurrency),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
-            // 7.1: fail-open adversarial check on the Fast tier; rejected findings never
-            // reach auto-fix or publish. Disabled = byte-identical pipeline.
-            new VerifyFindingsStage(
+        };
+
+        var verifyOptions = verifyFindingsOptions?.Value;
+        if (verifyOptions?.Enabled == true)
+        {
+            stages.Add(new VerifyFindingsStage(
                 chatClientFactory,
-                verifyFindingsOptions?.Value ?? new VerifyFindingsOptions(),
-                loggerFactory.CreateLogger<VerifyFindingsStage>()),
+                verifyOptions,
+                loggerFactory.CreateLogger<VerifyFindingsStage>()));
+        }
+
+        stages.AddRange(
+        [
             new AutoFixFindingsStage(
                 registry, agent, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>(),
                 store: store),
@@ -256,7 +263,7 @@ public sealed class ReviewPipelineFactory(
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
             new PublishFindingsStage(source, store, loggerFactory.CreateLogger<PublishFindingsStage>(), cleanVote),
             new PersistRunStage(store, clock),
-        ];
+        ]);
 
         return new ReviewPipeline(stages, loggerFactory.CreateLogger<ReviewPipeline>());
     }
