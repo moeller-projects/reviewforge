@@ -227,7 +227,7 @@ Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__â
 ```json
 "AutoFix": {
   "Enabled": false,                 // master switch; false = byte-identical pipeline
-  "AllowedAuthors": [],             // creator ids or display names; empty = disabled
+  "AllowedAuthors": [],             // immutable creator ids only (display names never match); empty = disabled
   "AllowedRuleIds": [],             // intersected with the fixer registry
   "PublishMode": "Suggestion",      // the only supported mode (write modes are reserved)
   "MaxFixesPerRun": 3,              // shared budget, deterministic fixes first

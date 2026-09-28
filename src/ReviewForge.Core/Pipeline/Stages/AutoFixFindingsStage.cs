@@ -74,8 +74,9 @@ public sealed class AutoFixFindingsStage : IReviewStage
             return;
         }
 
-        if (!_Options.AllowedAuthors.Any(author =>
-                Matches(author, pr.CreatorId) || Matches(author, pr.CreatorName)))
+        // Gate 1 matches the immutable creator id only. ADO display names are
+        // user-editable and non-unique — they are never a security input.
+        if (!_Options.AllowedAuthors.Any(author => Matches(author, pr.CreatorId)))
         {
             _Logger.LogInformation(
                 "auto-fix: PR creator {CreatorId}/{CreatorName} is not in the author allowlist",
