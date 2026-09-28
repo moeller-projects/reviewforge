@@ -49,6 +49,8 @@ public class RepoReadTools
     public const int MaxFileDiffChars = 20_000;
     /// <summary>Maximum unchanged-file references returned by <see cref="FindReferences"/>.</summary>
     public const int MaxReferenceResults = 20;
+    /// <summary>Maximum serialized reference-search response size.</summary>
+    public const int MaxReferenceChars = 20_000;
 
     /// <summary>Creates repository-scoped read and search tools.</summary>
     public RepoReadTools(
@@ -441,7 +443,14 @@ public class RepoReadTools
             sb.AppendLine();
         }
 
-        return sb.ToString();
+        var output = sb.ToString();
+        if (output.Length <= MaxReferenceChars)
+        {
+            return output;
+        }
+
+        const string marker = "…[truncated: result-chars]\n";
+        return output[..(MaxReferenceChars - marker.Length)] + marker;
     }
 
     private static string AppendTrailers(StringBuilder sb, bool patternFallback)
