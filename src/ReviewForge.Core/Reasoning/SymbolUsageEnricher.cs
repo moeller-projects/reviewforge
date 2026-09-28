@@ -84,8 +84,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
         var results = symbols.ToDictionary(s => s, _ => new Usage(), StringComparer.Ordinal);
         var stopwatch = Stopwatch.StartNew();
         var scannedLines = 0;
-
-        foreach (var file in Enumerate(root, guard))
+        foreach (var file in Enumerate(root, guard, stopwatch, ct))
         {
             ct.ThrowIfCancellationRequested();
             if (stopwatch.ElapsedMilliseconds >= MaxScanMs || scannedLines >= MaxScanLines)
@@ -207,12 +206,18 @@ public sealed class SymbolUsageEnricher : IContextEnricher
         return changed;
     }
 
-    private static IEnumerable<FileInfo> Enumerate(string root, RepoPathGuard guard)
+    private static IEnumerable<FileInfo> Enumerate(
+        string root, RepoPathGuard guard, Stopwatch stopwatch, CancellationToken ct)
     {
         var excluded = new HashSet<string>(["bin", "obj", "node_modules", ".git", ".vs", "packages"], StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>([root]);
         while (pending.Count > 0)
         {
+            ct.ThrowIfCancellationRequested();
+            if (stopwatch.ElapsedMilliseconds >= MaxScanMs)
+            {
+                yield break;
+            }
             var current = pending.Pop();
             string[] dirs;
             FileInfo[] files;
@@ -228,6 +233,12 @@ public sealed class SymbolUsageEnricher : IContextEnricher
 
             foreach (var directory in dirs)
             {
+                ct.ThrowIfCancellationRequested();
+                if (stopwatch.ElapsedMilliseconds >= MaxScanMs)
+                {
+                    yield break;
+                }
+
                 if (!excluded.Contains(Path.GetFileName(directory))
                     && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
                 {
@@ -237,6 +248,12 @@ public sealed class SymbolUsageEnricher : IContextEnricher
 
             foreach (var file in files)
             {
+                ct.ThrowIfCancellationRequested();
+                if (stopwatch.ElapsedMilliseconds >= MaxScanMs)
+                {
+                    yield break;
+                }
+
                 var relative = Path.GetRelativePath(root, file.FullName).Replace('\\', '/');
                 if (!guard.IsDenied(relative) && PathContainment.IsContained(root, file.FullName))
                 {
