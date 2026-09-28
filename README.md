@@ -195,8 +195,6 @@ fail-fast at startup. PAT and API keys come from the environment only.
 - `ReviewForge:OtlpEnabled` — opt-in switch enabling OTLP export without an env endpoint;
   the standard `OTEL_EXPORTER_OTLP_*` variables alone also turn export on (per-signal
   variants included). Never hardcode an endpoint in configuration.
-- `ReviewForge:RunLogs:Enabled` / `MinLevel` — per-run JSONL log files under
-  `{WorkDir}/logs/{runId}.jsonl` (enabled, Information by default).
 - `RepoReadTools:GrepMaxMs` / `GrepMaxLines` — aggregate wall-clock (default 10 s) and
   line (default 200k) budgets for one agent Grep call; the call aborts with a truncation
   marker when either is hit.
@@ -310,9 +308,8 @@ Signals and where they land:
   failures, discovery sweeps, enrichment failures, checkout evictions.
 - **Logs** — structured, with per-run scope properties `RunId`/`PrId`/`Org`/`Project`/
   `RepositoryId`/`HeadSha`/`Stage` (OBS-2); the OTLP log exporter is env-driven like the
-  other signals (`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or the common endpoint);
-  additionally a per-run JSONL file under `{WorkDir}/logs/{runId}.jsonl` via
-  `ReviewForge:RunLogs` (local, independent of any exporter).
+  other signals (`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or the common endpoint).
+  Per-run correlation: filter console/OTLP output by the `RunId` log scope.
 
 Backends:
 

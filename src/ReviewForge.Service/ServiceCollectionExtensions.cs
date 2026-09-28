@@ -14,7 +14,6 @@ using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Filesystem;
 using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
-using ReviewForge.Service.Logging;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
 
@@ -61,33 +60,11 @@ public static class ServiceCollectionExtensions
         }
 
         // Runtime directories are created once at composition time; the per-run pipeline
-        // factory must not touch the filesystem (P3-m). RunLogFileProvider uses the same
-        // work dir resolution below.
+        // factory must not touch the filesystem (P3-m).
         var workDir = configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:WorkDir")
                       ?? Path.Combine(Path.GetTempPath(), "reviewforge");
         Directory.CreateDirectory(workDir);
         Directory.CreateDirectory(Path.Combine(workDir, "findings"));
-
-        var runLogsEnabled = configuration.GetValue<bool?>(
-            $"{ReviewForgeServiceOptions.SectionName}:RunLogs:Enabled") ?? true;
-        if (runLogsEnabled)
-        {
-            // One instance: the logging provider and the worker's lifecycle hook are the same
-            // object (P2-31 — no ambient static).
-            var runLogProvider = new RunLogFileProvider(
-                workDir,
-                new RunLogOptions
-                {
-                    MinLevel = configuration.GetValue<LogLevel?>(
-                        $"{ReviewForgeServiceOptions.SectionName}:RunLogs:MinLevel") ?? LogLevel.Information,
-                });
-            services.AddSingleton<IRunLogLifecycle>(runLogProvider);
-            services.AddLogging(logging => logging.AddProvider(runLogProvider));
-        }
-        else
-        {
-            services.AddSingleton<IRunLogLifecycle, NoopRunLogLifecycle>();
-        }
 
         // Validated options (P3-d): DataAnnotations + rule checks, fail-fast at startup and on
         // first IOptions<T>.Value access — README's "typed options with validation, fail-fast"
