@@ -1,4 +1,5 @@
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
@@ -27,5 +28,11 @@ public sealed class FetchPrContextStage(IPullRequestSource source, IFindingStore
         ctx.Threads = await threadsTask;
         ctx.CurrentUser = await userTask;
         ctx.PriorRun = await priorRunTask;
+        // Prior findings are bot-authored, not PR-supplied; read_context's <pr-supplied-data>
+        // wrapping is belt-and-suspenders and deliberately reused here.
+        if (PriorReviewContextBuilder.Build(ctx.PriorRun, ctx.Threads) is { } memory)
+        {
+            ctx.ContextStore.Put(PriorReviewContextBuilder.ContextName, memory);
+        }
     }
 }
