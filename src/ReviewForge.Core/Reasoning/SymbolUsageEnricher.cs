@@ -50,16 +50,19 @@ public sealed class SymbolUsageEnricher : IContextEnricher
 
     /// <inheritdoc />
     public Task<string?> EnrichAsync(string repoDir, string diffText, CancellationToken ct)
-    {
-        try
-        {
-            return Task.FromResult(Build(repoDir, diffText, ct));
-        }
-        catch
-        {
-            return Task.FromResult<string?>(null);
-        }
-    }
+        => Task.Run(
+            () =>
+            {
+                try
+                {
+                    return Build(repoDir, diffText, ct);
+                }
+                catch
+                {
+                    return null;
+                }
+            },
+            ct);
 
     private static string? Build(string repoDir, string diffText, CancellationToken ct)
     {
