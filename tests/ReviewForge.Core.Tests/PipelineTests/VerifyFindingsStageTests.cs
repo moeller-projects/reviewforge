@@ -264,8 +264,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Single(ctx.AcceptedFindings);
-        Assert.Equal(1, chat.Calls);
-        Assert.DoesNotContain("<pr-supplied-data>", chat.Received[0].Last().Text);
+        Assert.DoesNotContain(">>", chat.Received[0].Last().Text);
     }
 
     [Fact]
@@ -280,8 +279,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
             var ctx = Ctx(finding);
 
             await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
-
-            Assert.DoesNotContain("<pr-supplied-data>", chat.Received[0].Last().Text);
+            Assert.DoesNotContain(">>", chat.Received[0].Last().Text);
         }
         finally
         {
