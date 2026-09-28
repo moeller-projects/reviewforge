@@ -131,6 +131,19 @@ public sealed class NativeReviewAgent(
         CancellationToken ct)
         => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, null, null, ct);
 
+    /// <summary>Binary-compatible full-tier overload retained for existing hosts.</summary>
+    public Task<ReviewResult> RunAsync(
+        string userPrompt,
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        RuleBook? ruleBook,
+        IReadOnlySet<string>? changedFiles,
+        DiffIndex? diff,
+        IReadOnlySet<string>? resolvedKeys,
+        CancellationToken ct)
+        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, null, resolvedKeys, ct, ChatTier.Full);
+
     /// <summary>Runs the review agent on the full tier.</summary>
     public Task<ReviewResult> RunAsync(
         string userPrompt,
