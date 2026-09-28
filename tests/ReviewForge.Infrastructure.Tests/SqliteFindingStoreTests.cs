@@ -42,6 +42,17 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public void Ctor_surfaces_the_open_failure_for_an_unwritable_store_path()
+    {
+        var missingDir = Path.Combine(Path.GetTempPath(), "rf-missing-" + Guid.NewGuid().ToString("N"));
+
+        // Schema ensure opens the connection eagerly: an unopenable path fails fast at
+        // construction (visible at startup via StoreHealthCheck) instead of first use.
+        Assert.Throws<SqliteException>(
+            () => new SqliteFindingStore($"Data Source={Path.Combine(missingDir, "x.db")};Pooling=False"));
+    }
+
+    [Fact]
     public async Task Empty_store_returns_null_and_no_keys()
     {
         Assert.Null(await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None));

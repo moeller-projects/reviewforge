@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -385,6 +386,15 @@ public class ChatClientFactoryTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void Validate_with_blank_model_yields_nothing_for_required_to_report()
+    {
+        // [Required] reports a missing Model; the cross-check has nothing to add.
+        var options = new ChatProviderOptions {Provider = "openai", Model = " "};
+
+        Assert.Empty(options.Validate(new ValidationContext(options)));
     }
 
     private sealed class CaptureRequestHandler : HttpMessageHandler

@@ -155,4 +155,24 @@ public class CodexHttpDebugHandlerTests
             Environment.SetEnvironmentVariable(CodexHttpDebugHandler.MaxBytesEnvironmentVariable, previous);
         }
     }
+
+    [Fact]
+    public void Truncate_shrinks_by_characters_until_the_byte_budget_fits()
+    {
+        var handler = new CodexHttpDebugHandler(maxBodyBytes: 4);
+
+        // "é" costs 2 UTF-8 bytes: the initial char-count guess overshoots the byte
+        // budget and the loop steps down one character at a time.
+        Assert.Equal("éé... [truncated 4 bytes]", handler.Truncate("éééé"));
+    }
+
+    [Fact]
+    public void Truncate_never_splits_a_surrogate_pair()
+    {
+        var handler = new CodexHttpDebugHandler(maxBodyBytes: 4);
+
+        // "a😀b": the byte loop stops on the high surrogate of 😀; the pair check
+        // backs off so the emoji is not cut in half.
+        Assert.Equal("a... [truncated 5 bytes]", handler.Truncate("a😀b"));
+    }
 }

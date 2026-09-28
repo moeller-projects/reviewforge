@@ -50,4 +50,27 @@ public sealed class VerificationCommandValidatorTests
 
         Assert.True(result.Succeeded);
     }
+
+    [Fact]
+    public void Exists_finds_an_executable_by_exact_name_on_the_path()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "rf-path-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var name = OperatingSystem.IsWindows() ? "rf-marker.cmd" : "rf-marker";
+        File.WriteAllText(Path.Combine(dir, name), OperatingSystem.IsWindows() ? "@echo off" : "#!/bin/sh");
+
+        var original = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", dir + Path.PathSeparator + original);
+
+            Assert.True(ExecutableResolver.Exists(name));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", original);
+            File.Delete(Path.Combine(dir, name));
+            Directory.Delete(dir);
+        }
+    }
 }

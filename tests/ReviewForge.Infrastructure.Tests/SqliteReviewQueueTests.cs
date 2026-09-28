@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -199,6 +200,25 @@ public sealed class SqliteReviewQueueTests : IDisposable
         queue.Acknowledge(claimed.RunId);
         Assert.Equal(0, queue.ApproximateDepth);
         Assert.Null(queue.TryGetQueued(request.RunId));
+    }
+
+    [Fact]
+    public void Capacity_exposes_the_constructor_value()
+    {
+        var queue = NewQueue(_DbPath, capacity: 7);
+
+        Assert.Equal(7, queue.Capacity);
+    }
+
+    [Fact]
+    public void Ctor_throws_when_the_database_directory_does_not_exist()
+    {
+        var missing = Path.Combine(
+            Path.GetTempPath(), "rf-missing-" + Guid.NewGuid().ToString("N"), "queue.db");
+
+        // EnsureSchema → Open surfaces the SQLite open error; the failed connection is
+        // disposed inside Open, never leaked.
+        Assert.Throws<SqliteException>(() => new SqliteReviewQueue($"Data Source={missing};Pooling=False"));
     }
 
     /// <summary>Claims exactly one row, tolerating the poll interval when the queue is empty.</summary>

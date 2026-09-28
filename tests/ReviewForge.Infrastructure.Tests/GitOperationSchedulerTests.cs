@@ -159,6 +159,21 @@ public class GitOperationSchedulerTests
     }
 
     [Fact]
+    public async Task RunAsync_work_that_throws_operation_canceled_with_cancelled_token_cancels()
+    {
+        using var scheduler = new GitOperationScheduler(1);
+        using var cts = new CancellationTokenSource();
+        var task = scheduler.RunAsync<bool>(() =>
+        {
+            cts.Cancel(); // the item observes its own cancellation and bails out
+            cts.Token.ThrowIfCancellationRequested();
+            return true;
+        }, cts.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+    }
+
+    [Fact]
     public void Dispose_rejects_new_work()
     {
         var scheduler = new GitOperationScheduler(1);
