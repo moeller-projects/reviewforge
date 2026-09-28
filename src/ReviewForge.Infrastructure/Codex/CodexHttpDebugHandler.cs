@@ -1,13 +1,15 @@
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ReviewForge.Infrastructure.Codex;
 
 /// <summary>
 /// Opt-in wire logger for diagnosing Responses API requests. Bodies are truncated
-/// (default 4 KiB, override with <see cref="MaxBytesEnvironmentVariable"/>) and sensitive
-/// headers are redacted. Never enabled in Production: ChatClientFactory refuses to attach
-/// it there. Enable with <c>REVIEWFORGE_DEBUG_CODEX_HTTP=1</c>.
+/// (default 4 KiB, override with <see cref="MaxBytesEnvironmentVariable"/>), sensitive
+/// headers are redacted, and common secret shapes in bodies are blanked (bodies can
+/// carry PR source code with committed tokens). Never enabled in Production:
+/// ChatClientFactory refuses to attach it there. Enable with <c>REVIEWFORGE_DEBUG_CODEX_HTTP=1</c>.
 /// </summary>
 public sealed class CodexHttpDebugHandler : DelegatingHandler
 {
@@ -19,6 +21,12 @@ public sealed class CodexHttpDebugHandler : DelegatingHandler
     {
         "Authorization", "Proxy-Authorization", "chatgpt-account-id", "OpenAI-Beta", "Cookie", "Set-Cookie",
     };
+
+    // Common secret shapes in request/response bodies: keyword + separator + 20+ token chars.
+    private static readonly Regex SecretShape = new(
+        """(pat|token|secret|key|password)(["'\s:=]+)[A-Za-z0-9+/=_-]{20,}""",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        TimeSpan.FromSeconds(1));
 
     private readonly TextWriter _Output;
     private readonly int _MaxBodyBytes;
@@ -42,7 +50,7 @@ public sealed class CodexHttpDebugHandler : DelegatingHandler
 
         await _Output.WriteLineAsync($"[codex-http] request {request.Method} {request.RequestUri}");
         await _Output.WriteLineAsync($"[codex-http] request headers {SafeHeaders(request.Headers)}");
-        await _Output.WriteLineAsync($"[codex-http] request body {Truncate(requestBody)}");
+        await _Output.WriteLineAsync($"[codex-http] request body {Truncate(Redact(requestBody))}");
 
         var response = await base.SendAsync(request, cancellationToken);
         var responseContentType = response.Content?.Headers.ContentType?.ToString();
@@ -52,7 +60,7 @@ public sealed class CodexHttpDebugHandler : DelegatingHandler
 
         await _Output.WriteLineAsync($"[codex-http] response {(int)response.StatusCode} {response.ReasonPhrase}");
         await _Output.WriteLineAsync($"[codex-http] response headers {SafeHeaders(response.Headers)}");
-        await _Output.WriteLineAsync($"[codex-http] response body {Truncate(responseBody)}");
+        await _Output.WriteLineAsync($"[codex-http] response body {Truncate(Redact(responseBody))}");
 
         response.Content = new StringContent(responseBody);
         if (responseContentType is not null)
@@ -62,6 +70,13 @@ public sealed class CodexHttpDebugHandler : DelegatingHandler
 
         return response;
     }
+
+    /// <summary>
+    /// Bodies can carry source code with committed secrets; blank common token shapes
+    /// (e.g. <c>"access_token": "…"</c>, <c>pat=…</c>) before they hit the log.
+    /// </summary>
+    internal static string Redact(string body)
+        => SecretShape.Replace(body, m => $"{m.Groups[1].Value}{m.Groups[2].Value}[redacted]");
 
     internal string Truncate(string body)
     {
