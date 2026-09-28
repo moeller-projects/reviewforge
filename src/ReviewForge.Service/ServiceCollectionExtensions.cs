@@ -202,7 +202,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IGitOps>(sp =>
             new LibGit2SharpGitOps(
                 sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.TargetedFetchEnabled,
-                sp.GetRequiredService<GitOperationScheduler>()));
+                sp.GetRequiredService<GitOperationScheduler>(),
+                // The PAT may only be presented to the configured org's host.
+                credentialHost: new Uri(sp.GetRequiredService<IOptions<AdoOptions>>().Value.OrgUrl).Host));
         // Register the scheduler for disposal with the host.
         services.AddSingleton(sp => (IDisposable)sp.GetRequiredService<GitOperationScheduler>());
         services.AddSingleton<IWorkspaceFs, FileSystemWorkspaceFs>();
