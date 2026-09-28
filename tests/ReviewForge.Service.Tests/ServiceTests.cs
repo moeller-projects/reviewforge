@@ -407,7 +407,8 @@ public class ServiceTests : IAsyncLifetime
         }
 
         Assert.Equal(RunState.Failed, tracker.Get(first)?.State);
-        Assert.Contains("git exploded", tracker.Get(first)!.Detail);
+        // Raw exception messages stay in the logs; the tracker exposes a generic reason.
+        Assert.Equal("internal error — see run log", tracker.Get(first)!.Detail);
         Assert.Equal(RunState.Failed, tracker.Get(second)?.State); // poison message did not kill the worker
 
         await cts.CancelAsync();
