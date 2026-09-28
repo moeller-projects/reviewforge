@@ -25,10 +25,11 @@ public static class FindingsVerifierPrompt
         inflated. When unsure, confirm — rejection must be justified from the quoted code.
         """;
 
-    /// <summary>Builds the user prompt: one section per finding with its cleaned claim and a
-    /// numbered file slice (anchor lines marked "&gt;&gt;"). Slices are dropped once
-    /// <paramref name="maxPromptChars"/> is reached — remaining findings are listed without
-    /// context, and the verifier's per-finding fail-open keeps them.</summary>
+    /// <summary>Builds the user prompt: one section per finding with its complete cleaned
+    /// claim payload inside the untrusted-data boundary. Numbered file slices (anchor lines
+    /// marked "&gt;&gt;") are dropped once <paramref name="maxPromptChars"/> is reached —
+    /// remaining findings are still listed without context, and the verifier's per-finding
+    /// fail-open keeps anything the budget cannot list.</summary>
     public static string Build(
         IReadOnlyList<RichFinding> candidates,
         Func<FindingAnchor, string?> slice,
@@ -38,28 +39,48 @@ public static class FindingsVerifierPrompt
         sb.AppendLine("Verify each claimed finding against its quoted code context.");
         foreach (var finding in candidates)
         {
-            var section = new StringBuilder();
-            section.Append("### key: ").AppendLine(finding.DedupeKey);
-            section.Append("rule: ").Append(finding.RuleId)
-                .Append(" · severity: ").Append(finding.Severity);
+            var metadata = new StringBuilder();
+            metadata.Append("key: ").AppendLine(PromptText.Clean(finding.DedupeKey));
+            metadata.Append("rule: ").Append(PromptText.Clean(finding.RuleId))
+                .Append(" · severity: ").Append(PromptText.Clean(finding.Severity));
             if (finding.Anchor is { } anchor)
             {
-                section.Append(" · ").Append(anchor.FilePath)
+                metadata.Append(" · ").Append(PromptText.Clean(anchor.FilePath))
                     .Append(':').Append(anchor.StartLine).Append('-').Append(anchor.EndLine);
             }
 
-            section.AppendLine();
-            section.Append("claim: ").AppendLine(PromptText.Clean(finding.Description));
+            metadata.AppendLine();
+            metadata.Append("claim: ").AppendLine(PromptText.Clean(finding.Description));
+
+            var withSlice = new StringBuilder();
+            withSlice.Append("### ").Append(PromptText.Clean(finding.DedupeKey)).AppendLine();
+            withSlice.AppendLine("<pr-supplied-data>");
+            withSlice.Append(metadata);
             if (finding.Anchor is { } a && slice(a) is { } fileSlice)
             {
-                section.AppendLine("<pr-supplied-data>");
-                section.AppendLine(fileSlice);
-                section.AppendLine("</pr-supplied-data>");
+                withSlice.AppendLine(fileSlice);
+            }
+
+            withSlice.AppendLine("</pr-supplied-data>");
+            var section = withSlice;
+            if (sb.Length + section.Length > maxPromptChars)
+            {
+                var fallback = new StringBuilder();
+                fallback.Append("### ").Append(PromptText.Clean(finding.DedupeKey)).AppendLine();
+                fallback.AppendLine("<pr-supplied-data>");
+                fallback.AppendLine(metadata.ToString());
+                fallback.AppendLine("</pr-supplied-data>");
+                section = fallback;
             }
 
             if (sb.Length + section.Length > maxPromptChars)
             {
-                sb.AppendLine("…[remaining findings listed without context]");
+                var omitted = "…[remaining findings omitted by prompt budget — kept by per-finding fail-open]\n";
+                if (sb.Length + omitted.Length <= maxPromptChars)
+                {
+                    sb.Append(omitted);
+                }
+
                 break;
             }
 
