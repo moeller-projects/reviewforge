@@ -16,6 +16,9 @@ public sealed class ReferenceScannerTests
     [InlineData("x")]
     [InlineData("123Foo")]
     [InlineData("Foo-")]
+    [InlineData("Foo.")]
+    [InlineData(".Foo")]
+    [InlineData("Foo..Bar")]
     [InlineData("")]
     public void IsValidIdentifier_rejects_invalid_shapes(string identifier)
         => Assert.False(ReferenceScanner.IsValidIdentifier(identifier));
