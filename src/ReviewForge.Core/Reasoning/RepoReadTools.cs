@@ -45,7 +45,9 @@ public class RepoReadTools
 
     private string Root => _Guard.Root;
 
+    /// <summary>Maximum characters returned by <see cref="FileDiff"/>.</summary>
     public const int MaxFileDiffChars = 20_000;
+    /// <summary>Maximum unchanged-file references returned by <see cref="FindReferences"/>.</summary>
     public const int MaxReferenceResults = 20;
 
     /// <summary>Creates repository-scoped read and search tools.</summary>
@@ -333,6 +335,111 @@ public class RepoReadTools
         }
 
         return AppendTrailers(sb, patternFallback);
+    }
+
+    /// <summary>Finds usages of an identifier across unchanged repository files.</summary>
+    [Description("Find usages of an identifier across the repository's unchanged files. Use "
+        + "BEFORE claiming code is unused, unreferenced, or signature-mismatched. Files changed "
+        + "in this PR are excluded — inspect them with repo_file_diff / repo_read_file.")]
+    public string FindReferences(
+        [Description("Identifier to find (e.g. ParseConfig or Config.Parse)")] string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        if (!ReferenceScanner.IsValidIdentifier(identifier))
+        {
+            return "invalid identifier";
+        }
+
+        var sb = new StringBuilder();
+        var shown = 0;
+        var total = 0;
+        var changedHits = 0;
+        var totalLines = 0;
+        string? budget = null;
+        var (rootReal, rootLinks) = _Guard.ResolveRoot();
+        var stopwatch = Stopwatch.StartNew();
+        foreach (var file in EnumerateSearchableFiles(Root, "*"))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var full = file.FullName;
+            var rel = RepoPath.Normalize(Path.GetRelativePath(Root, full).Replace('\\', '/'));
+            if (_Guard.IsDenied(rel)
+                || (file.LinkTarget is not null && _Guard.IsResolvedDenied(full, rootReal, rootLinks))
+                || file.Length > _MaxGrepFileBytes)
+            {
+                continue;
+            }
+
+            var changed = _ChangedFiles.Contains(rel);
+            try
+            {
+                var lineNo = 0;
+                foreach (var line in ReadLinesSafe(full))
+                {
+                    lineNo++;
+                    totalLines++;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (totalLines >= _GrepMaxLines || stopwatch.ElapsedMilliseconds >= _GrepMaxMs)
+                    {
+                        budget = totalLines >= _GrepMaxLines ? "budget-lines" : "budget-time";
+                        break;
+                    }
+
+                    if (line.Contains('\0'))
+                    {
+                        break;
+                    }
+
+                    foreach (var _ in ReferenceScanner.ScanLines([line], identifier, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (changed)
+                        {
+                            changedHits++;
+                        }
+                        else
+                        {
+                            total++;
+                        }
+                        if (!changed && shown < MaxReferenceResults)
+                        {
+                            sb.Append(rel).Append(':').Append(lineNo).Append(": ").AppendLine(line.Trim());
+                            shown++;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // File vanished or became unreadable during the scan.
+            }
+
+            if (budget is not null)
+            {
+                break;
+            }
+        }
+
+        if (total == 0 && changedHits == 0 && budget is null)
+        {
+            return "no references";
+        }
+
+        if (budget is not null)
+        {
+            sb.AppendLine($"…[truncated: {budget}]");
+        }
+
+        if (total > 0 || changedHits > 0)
+        {
+            sb.Append(total).Append(", showing first ").Append(MaxReferenceResults).Append(" references");
+            if (changedHits > 0)
+            {
+                sb.Append(" (+").Append(changedHits).Append(" in PR-changed files)");
+            }
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
     }
 
     private static string AppendTrailers(StringBuilder sb, bool patternFallback)
