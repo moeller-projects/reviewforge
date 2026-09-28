@@ -185,7 +185,6 @@ public sealed class SymbolUsageEnricher : IContextEnricher
                 }
             }
         }
-
         return symbols;
     }
 
@@ -194,10 +193,15 @@ public sealed class SymbolUsageEnricher : IContextEnricher
         var changed = new HashSet<string>(RepoPath.PathComparer);
         foreach (var line in diffText.Split('\n'))
         {
-            if (line.StartsWith("+++ b/", StringComparison.Ordinal))
+            if (!line.StartsWith("+++", StringComparison.Ordinal)
+                || !DiffPathParser.TryReadToken(line[3..].TrimStart(), out var token, out _)
+                || !DiffPathParser.TryDecodeToken(token, out var decoded)
+                || !DiffPathParser.TryStripBPrefix(decoded, out var relative))
             {
-                changed.Add(RepoPath.Normalize(line[6..].TrimEnd('\r')));
+                continue;
             }
+
+            changed.Add(RepoPath.Normalize(relative.TrimEnd('\r')));
         }
 
         return changed;
