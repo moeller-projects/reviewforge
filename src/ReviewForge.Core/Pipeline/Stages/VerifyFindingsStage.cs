@@ -63,11 +63,11 @@ public sealed class VerifyFindingsStage(
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
 
-        var client = chatClientFactory.Create(ChatTier.Fast); // governor already applied by the factory
         IReadOnlyDictionary<string, FindingsVerifierPrompt.Verdict> verdicts;
         var stopwatch = Stopwatch.StartNew();
         try
         {
+            var client = chatClientFactory.Create(ChatTier.Fast); // governor already applied by the factory
             var response = await client.GetResponseAsync(
                 FindingsVerifierPrompt.Messages(prompt), cancellationToken: timeout.Token).ConfigureAwait(false);
             verdicts = VerdictParser.Parse(response.Text) ?? await Retry(client, prompt, timeout.Token).ConfigureAwait(false);
