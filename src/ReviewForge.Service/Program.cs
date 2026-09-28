@@ -43,6 +43,13 @@ app.Logger.LogInformation(
     otlpMetricsEnabled,
     otlpMetricsEnabled ? metricOtlpEndpoint ?? commonOtlpEndpoint ?? "(SDK default)" : "(none)");
 app.UseRateLimiter();
+app.Use(async (ctx, next) =>
+{
+    // Defense-in-depth for a JSON API that browsers can be pointed at.
+    ctx.Response.Headers.XContentTypeOptions = "nosniff";
+    ctx.Response.Headers.CacheControl = "no-store";
+    await next();
+});
 app.MapHealthChecks("/health");
 app.MapHealthChecks("/alive", new HealthCheckOptions {Predicate = _ => false});
 app.MapReviewForgeEndpoints();
