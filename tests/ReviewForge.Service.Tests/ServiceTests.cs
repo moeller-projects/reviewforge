@@ -164,7 +164,6 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                     new BashUnquotedVarsFixer(), new BashSetEMissingFixer(),
                     new PythonMutableDefaultArgFixer(), new DockerAddToCopyFixer(),
                 ],
-                fixVerifier: NullFixVerifier.Instance,
                 autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>()));
         });
     }
@@ -756,7 +755,7 @@ public class ServiceTests : IAsyncLifetime
         Assert.Contains("```suggestion", factory.Source.PostedFindingBodies[0]);
         Assert.Empty(factory.Source.PostedSuggestions);
         Assert.Contains(factory.Source.GeneralComments, c => c.Contains("> **Auto-fixes:** 1 suggestion(s) posted"));
-        // Null verifier: zero checkout writes — the file on disk is untouched.
+        // Zero-write deterministic path — the file on disk is untouched.
         Assert.Equal("echo $name", File.ReadAllLines(scriptPath)[1]);
         // The store carries the applied-fix record forward.
         var run = Assert.Single(factory.Store.Runs);
@@ -765,7 +764,6 @@ public class ServiceTests : IAsyncLifetime
         Assert.NotNull(persisted);
         Assert.Equal("script.sh", persisted!.Proposal.FilePath);
         Assert.Equal(FixOrigin.Deterministic, persisted.Proposal.Origin);
-        Assert.Equal("none", persisted.VerifierName);
     }
 }
 }

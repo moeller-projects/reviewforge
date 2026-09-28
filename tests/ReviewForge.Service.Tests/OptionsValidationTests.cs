@@ -5,7 +5,6 @@ using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Ado;
-using ReviewForge.Infrastructure.AutoFix;
 using ReviewForge.Infrastructure.Chat;
 using Xunit;
 
@@ -330,7 +329,7 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void AutoFix_defaults_resolve_and_use_the_null_verifier()
+    public void AutoFix_defaults_resolve()
     {
         using var provider = Build([.. ValidConfig()]);
 
@@ -338,9 +337,6 @@ public class OptionsValidationTests
         Assert.False(options.Enabled);
         Assert.Empty(options.AllowedAuthors);
         Assert.Equal("Suggestion", options.PublishMode);
-        var verifier = provider.GetRequiredService<IFixVerifier>();
-        Assert.Same(NullFixVerifier.Instance, verifier);
-        Assert.False(verifier.RequiresWorkspaceWrites);
     }
 
     [Fact]
@@ -376,38 +372,6 @@ public class OptionsValidationTests
 
         Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
-    }
-
-    [Fact]
-    public void AutoFix_whitespace_verification_command_is_rejected()
-    {
-        using var provider = Build([.. With(ValidConfig(), ("AutoFix:VerificationCommand", "   "))]);
-
-        var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
-
-        Assert.Contains("VerificationCommand must not be whitespace", ex.Message);
-    }
-
-    [Fact]
-    public void AutoFix_verification_command_with_metacharacters_fails_at_startup_validation()
-    {
-        using var provider = Build([.. With(ValidConfig(), ("AutoFix:VerificationCommand", "make verify && echo hi"))]);
-
-        var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
-
-        Assert.Contains("metacharacter", ex.Message);
-    }
-
-    [Fact]
-    public void AutoFix_verification_command_builds_the_process_verifier()
-    {
-        using var provider = Build([.. With(ValidConfig(), ("AutoFix:VerificationCommand", "make verify"))]);
-
-        var verifier = provider.GetRequiredService<IFixVerifier>();
-        Assert.IsType<ProcessFixVerifier>(verifier);
-        Assert.True(verifier.RequiresWorkspaceWrites);
     }
 
     [Fact]

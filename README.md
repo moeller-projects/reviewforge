@@ -216,8 +216,8 @@ Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__�
 - **Deterministic** — a validated finding whose rule has a registered, enabled fixer
   (v1: `homoglyph/mixed-script-identifier`, `homoglyph/confusable-keyword`,
   `bash.unquoted-vars`, `bash.set-e-missing`, `py.mutable-default-arg`,
-  `docker.add-vs-copy`) gets a pure-C# proposal. With the default (null) verifier this
-  path performs **zero checkout writes**.
+  `docker.add-vs-copy`) gets a pure-C# proposal. This path performs **zero checkout
+  writes**.
 - **Commanded** — the PR author replies `/rf fix` on any thread (human, bot, or a
   ReviewForge finding). Only commands from the PR author, newer than the last completed
   run's comment watermark, on active file-anchored threads trigger a constrained agent
@@ -231,26 +231,12 @@ Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__�
   "AllowedRuleIds": [],             // intersected with the fixer registry
   "PublishMode": "Suggestion",      // the only supported mode (write modes are reserved)
   "MaxFixesPerRun": 3,              // shared budget, deterministic fixes first
-  "VerificationCommand": null,      // optional per-file verification (see below)
-  "VerificationTimeoutSeconds": 120,
   "EnableThreadFixCommands": false, // the '/rf fix' thread command
   "FixPassMaxIterations": 8         // iteration cap for one commanded fix pass
 }
 ```
 
-**Verification trust boundary.** `AutoFix:VerificationCommand` runs in the checkout and
-executes **PR-author-controlled code** (MSBuild targets, npm scripts, …): enable it only
-with a strict author allowlist. The configured executable is checked at host startup and
-the command runs without a shell; metacharacters are rejected. Use `{file}` as a whole
-argument, for example `bash -n {file}`, to verify each edited file; without `{file}`, the
-command runs once per batch. File paths are passed as `ArgumentList` entries, never shell text.
-The child process gets a deny-by-default environment (PATH/HOME/TMPDIR plus dotnet
-conveniences) so service secrets — `REVIEWFORGE_ADO_PAT`, `REVIEWFORGE_API_KEYS`,
-`OPENAI_API_KEY` — are never inherited; when verification is enabled, keep the Codex
-credential mount out of the same container (see docker-compose.yml).
-When set, fixes are applied, verified, and reverted — a verify failure drops that file's fixes
-(published as plain comments instead). A failed revert fails the run rather than leaving a
-dirty pooled checkout.
+Fixes are published as suggestions; human acceptance is the verification step.
 
 Safety properties pinned by tests: fixed findings stay in the accepted set (their keys
 stay current, so triage never auto-resolves their threads); commanded suggestion threads
