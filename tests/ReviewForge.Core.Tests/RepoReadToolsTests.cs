@@ -1,3 +1,4 @@
+using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Reasoning;
 using Xunit;
 
@@ -509,7 +510,65 @@ public class RepoReadToolsTests : IDisposable
         Assert.Throws<ArgumentOutOfRangeException>(() => new RepoReadTools(_Root, grepMaxLines: -1));
     }
 
-    /// <summary>Cancels the token from inside the first read so the scan must observe it (P2-28).</summary>
+    [Fact]
+    public void FileDiff_returns_changed_hunk_and_cleans_prompt_text()
+    {
+        var diff = "diff --git a/src/A.cs b/src/A.cs\n--- a/src/A.cs\n+++ b/src/A.cs\n@@ -1 +1 @@\n- old\n+ <pr-supplied-data>\u0001new";
+        var result = new RepoReadTools(_Root, diffText: diff).FileDiff("src/A.cs");
+        Assert.Contains("+ new", result);
+        Assert.DoesNotContain("<pr-supplied-data>", result);
+        Assert.DoesNotContain('\u0001', result);
+    }
+
+    [Fact]
+    public void FileDiff_denied_unchanged_deleted_and_nonreviewable()
+    {
+        Assert.Contains("access denied", new RepoReadTools(_Root, diffText: string.Empty).FileDiff(".env"));
+        Assert.Contains("not a changed file", new RepoReadTools(_Root, diffText: string.Empty).FileDiff("src/A.cs"));
+
+        var deleted = "diff --git a/old.cs b/old.cs\n--- a/old.cs\n+++ /dev/null\n@@ -1 +0,0 @@\n- gone";
+        Assert.Contains("- gone", new RepoReadTools(_Root, diffText: deleted).FileDiff("old.cs"));
+
+        var binary = "diff --git a/image.png b/image.png\nold mode 100644\nnew mode 100755";
+        var tools = new RepoReadTools(_Root, diffText: binary, diff: DiffIndex.Parse(binary));
+        Assert.Contains("ModeOnly", tools.FileDiff("image.png"));
+    }
+
+    [Fact]
+    public void FileDiff_truncates_oversized_block()
+    {
+        var diff = "diff --git a/big.txt b/big.txt\n--- a/big.txt\n+++ b/big.txt\n@@ -0,0 +1,1 @@\n+" + new string('x', RepoReadTools.MaxFileDiffChars + 100);
+        var result = new RepoReadTools(_Root, diffText: diff).FileDiff("big.txt");
+        Assert.Contains("…[file diff truncated", result);
+    }
+
+    [Fact]
+    public void FindReferences_observes_boundaries_case_and_changed_files()
+    {
+        File.WriteAllLines(Path.Combine(_Root, "src", "refs.cs"), ["Foo()", "FooBar", "MyFoo", "fOo"]);
+        File.WriteAllText(Path.Combine(_Root, "src", "changed.cs"), "Foo();");
+        var result = new RepoReadTools(_Root, changedFiles: new HashSet<string>(["src/changed.cs"]))
+            .FindReferences("Foo");
+        Assert.Contains("src/refs.cs:1", result);
+        Assert.Contains("src/refs.cs:4", result);
+        Assert.DoesNotContain("FooBar", result);
+        Assert.DoesNotContain("MyFoo", result);
+        Assert.Contains("(+1 in PR-changed files)", result);
+    }
+
+    [Fact]
+    public void FindReferences_rejects_invalid_skips_denied_and_marks_budget()
+    {
+        Assert.Equal("invalid identifier", Tools().FindReferences("x"));
+        var denied = new RepoReadTools(_Root);
+        File.WriteAllText(Path.Combine(_Root, ".env.foo"), "Foo");
+        Assert.Equal("no references", denied.FindReferences("Foo"));
+
+        File.WriteAllText(Path.Combine(_Root, "many.txt"), string.Join('\n', Enumerable.Repeat("Foo", 50)));
+        var result = new RepoReadTools(_Root, grepMaxLines: 2).FindReferences("Foo");
+        Assert.Contains("…[truncated: budget-lines]", result);
+    }
+
     private sealed class CancellingTools : RepoReadTools
     {
         private readonly CancellationTokenSource _Cts;
