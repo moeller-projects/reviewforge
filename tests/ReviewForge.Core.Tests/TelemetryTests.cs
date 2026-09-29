@@ -13,7 +13,6 @@ public sealed class TelemetryTests
     public void RegisterGauges_reports_live_delegate_values()
     {
         var depth = 0;
-        ReviewForgeTelemetry.RegisterGauges(() => depth, () => 100, () => 7, () => 2);
 
         var readings = new Dictionary<string, long>();
         using var listener = new MeterListener();
@@ -22,6 +21,7 @@ public sealed class TelemetryTests
             readings[instrument.Name] = measurement);
         listener.Start();
 
+        ReviewForgeTelemetry.RegisterGauges(() => depth, () => 100, () => 7, () => 2);
         listener.RecordObservableInstruments();
         Assert.Equal(0, readings["reviewforge.queue.depth"]);
         Assert.Equal(100, readings["reviewforge.queue.capacity"]);
