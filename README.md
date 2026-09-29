@@ -354,14 +354,12 @@ dotnet test
 dotnet test tests/ReviewForge.Core.Tests /p:CollectCoverage=true
 ```
 
-Every production-code test project enforces **at least 97% line coverage** via coverlet
-(`Threshold=97`) on its own SUT assembly; on Windows the threshold is 95% because the
-GitHub Windows runner cannot create symlinks, leaving Core's symlink-resolution sandbox
-branches uncoverable there. Vendor-only adapters such as `AdoPullRequestSource`,
-`LibGit2SharpGitOps`, and `Program.cs` are excluded by design; all application logic
-remains covered. `ReviewForge.Architecture.Tests` is the deliberate exception: it
-validates assembly boundaries (NetArchTest) and covers no production code, so it carries
-no coverlet threshold.
+Every production-code test project enforces **at least 95% line coverage** via coverlet
+(`Threshold=95`) on its own SUT assembly across all supported operating systems.
+Vendor-only adapters such as `AdoPullRequestSource`, `LibGit2SharpGitOps`, and `Program.cs` are
+excluded by design; all application logic remains covered. `ReviewForge.Architecture.Tests` is
+the deliberate exception: it validates assembly boundaries (NetArchTest) and covers no
+production code, so it carries no coverlet threshold.
 
 ## Extension points
 

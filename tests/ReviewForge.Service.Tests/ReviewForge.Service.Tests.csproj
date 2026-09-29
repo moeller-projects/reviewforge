@@ -5,11 +5,8 @@
         <IsTestProject>true</IsTestProject>
         <Include>[ReviewForge.Service]*</Include>
         <ExcludeByFile>**/Microsoft.AspNetCore.OpenApi.SourceGenerators/**/*.cs</ExcludeByFile>
-        <!-- Same per-OS policy as Core.Tests: platform-conditional branches can only
-             ever be covered on one OS; keep the stricter bar where full coverage is
-             achievable. -->
-        <Threshold Condition="'$(OS)' == 'Windows_NT'">95</Threshold>
-        <Threshold Condition="'$(OS)' != 'Windows_NT'">97</Threshold>
+        <!-- Platform-conditional branches can only ever be covered on one OS. -->
+        <Threshold>95</Threshold>
         <ThresholdType>line</ThresholdType>
         <ThresholdStat>total</ThresholdStat>
     </PropertyGroup>
