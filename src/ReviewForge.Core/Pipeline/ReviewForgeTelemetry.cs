@@ -121,6 +121,15 @@ public static class ReviewForgeTelemetry
     public static readonly Counter<long> FindingsPosted =
         Meter.CreateCounter<long>("reviewforge.findings.posted_total");    // tags: kind = inline|general
 
+    // ---- Findings verifier (fail-open challenge stage) ----
+    /// <summary>Findings removed by the verifier; per-rule rate is the FP metric — tags: rule.</summary>
+    public static readonly Counter<long> FindingsVerifierRejected =
+        Meter.CreateCounter<long>("reviewforge.findings.verifier_rejected_total");   // tags: rule
+    public static readonly Counter<long> FindingsVerifierFailures =
+        Meter.CreateCounter<long>("reviewforge.findings.verifier_failures_total");  // tags: reason
+    public static readonly Histogram<double> FindingsVerifierDurationMilliseconds =
+        Meter.CreateHistogram<double>("reviewforge.findings.verifier_duration_ms", "ms");
+
     // ---- Auto-fix ----
     public static readonly Counter<long> FixesApplied =
         Meter.CreateCounter<long>("reviewforge.fixes.applied_total");    // tags: origin, rule (thread-command for /rf fix)

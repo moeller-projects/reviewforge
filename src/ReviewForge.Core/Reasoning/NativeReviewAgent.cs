@@ -60,15 +60,32 @@ public sealed class NativeReviewAgent(
         IReadOnlySet<string>? resolvedKeys,
         ChatTier tier,
         IReadOnlyList<AITool>? extraTools = null)
+        => CreateAgentWithDiff(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, null, resolvedKeys, tier, extraTools);
+
+    private AIAgent CreateAgentWithDiff(
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        RuleBook? ruleBook,
+        TokenUsage? usage,
+        IReadOnlySet<string>? changedFiles,
+        DiffIndex? diff,
+        string? diffText,
+        IReadOnlySet<string>? resolvedKeys,
+        ChatTier tier,
+        IReadOnlyList<AITool>? extraTools = null)
     {
         var repoTools = new RepoReadTools(
             repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
-            grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines);
+            grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines,
+            diffText: diffText, changedFiles: changedFiles, diff: diff);
         var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff, resolvedKeys: resolvedKeys);
         var tools = new List<AITool>
         {
             AIFunctionFactory.Create(repoTools.ReadFile), AIFunctionFactory.Create(repoTools.List),
-            AIFunctionFactory.Create(repoTools.Grep), AIFunctionFactory.Create(reviewTools.ReadContext),
+            AIFunctionFactory.Create(repoTools.Grep),
+            AIFunctionFactory.Create(repoTools.FileDiff, "repo_file_diff"),
+            AIFunctionFactory.Create(repoTools.FindReferences), AIFunctionFactory.Create(reviewTools.ReadContext),
             AIFunctionFactory.Create(reviewTools.GetRulebook), AIFunctionFactory.Create(reviewTools.RecordFinding),
             AIFunctionFactory.Create(reviewTools.RecordUncertainty), AIFunctionFactory.Create(reviewTools.TaskDone),
         };
@@ -104,7 +121,7 @@ public sealed class NativeReviewAgent(
     }
 
     public Task<ReviewResult> RunAsync(string userPrompt, ReviewCollector collector, ContextStore contextStore, string repoDir, CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, null, null, null, null, ct);
+        => RunAsync(userPrompt, collector, contextStore, repoDir, null, null, null, null, null, ct);
 
     public Task<ReviewResult> RunAsync(
         string userPrompt,
@@ -113,11 +130,9 @@ public sealed class NativeReviewAgent(
         string repoDir,
         RuleBook? ruleBook,
         CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, null, ct);
+        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, null, null, ct);
 
-    /// <summary>Runs the review agent on the full tier. Exact pre-tier-arrival signature,
-    /// preserved so already-compiled callers do not lose the method (an optional parameter
-    /// added in place would break binary compatibility).</summary>
+    /// <summary>Binary-compatible full-tier overload retained for existing hosts.</summary>
     public Task<ReviewResult> RunAsync(
         string userPrompt,
         ReviewCollector collector,
@@ -128,10 +143,23 @@ public sealed class NativeReviewAgent(
         DiffIndex? diff,
         IReadOnlySet<string>? resolvedKeys,
         CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, resolvedKeys, ct, ChatTier.Full);
+        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, null, resolvedKeys, ct, ChatTier.Full);
 
-    /// <summary>Runs the review agent on <paramref name="tier"/>: follow-up reviews route to
-    /// the cheaper/faster model when one is configured, full reviews to the strong model.</summary>
+    /// <summary>Runs the review agent on the full tier.</summary>
+    public Task<ReviewResult> RunAsync(
+        string userPrompt,
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        RuleBook? ruleBook,
+        IReadOnlySet<string>? changedFiles,
+        DiffIndex? diff,
+        string? diffText,
+        IReadOnlySet<string>? resolvedKeys,
+        CancellationToken ct)
+        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, diffText, resolvedKeys, ct, ChatTier.Full);
+
+    /// <summary>Runs the review agent on the selected model tier.</summary>
     public async Task<ReviewResult> RunAsync(
         string userPrompt,
         ReviewCollector collector,
@@ -140,12 +168,13 @@ public sealed class NativeReviewAgent(
         RuleBook? ruleBook,
         IReadOnlySet<string>? changedFiles,
         DiffIndex? diff,
+        string? diffText,
         IReadOnlySet<string>? resolvedKeys,
         CancellationToken ct,
         ChatTier tier)
     {
         var usage = new TokenUsage();
-        var agent = CreateAgent(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, resolvedKeys, tier);
+        var agent = CreateAgentWithDiff(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, diffText, resolvedKeys, tier);
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         var modelTag = new TagList { { "model", chatClientFactory.ModelName(tier) }, { "tier", tier.ToString().ToLowerInvariant() } };

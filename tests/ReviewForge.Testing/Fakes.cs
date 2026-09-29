@@ -423,6 +423,9 @@ public class FakeGitOps : IGitOps
 /// <summary>Fake enricher: fixed payload, null, or throwing.</summary>
 public class FakeEnricher(string? payload = null, bool throws = false) : IContextEnricher
 {
+    // Preserve the historical CRG staging key for this legacy test double; new enrichers
+    // use their own explicit Name.
+    public string Name => "crg";
     public int Calls { get; private set; }
     public Task<string?> EnrichAsync(string repoDir, string diffText, CancellationToken ct)
     {

@@ -81,38 +81,52 @@ public static class TextSanitizer
     private static int IndexOfForbidden(string input)
     {
         var span = input.AsSpan();
-        var candidate = span.IndexOfAny(ForbiddenBmpSingles);
-        var variation = span.IndexOfAnyInRange(VariationSelectorLo, VariationSelectorHi);
-        if (variation >= 0 && (candidate < 0 || variation < candidate))
-        {
-            candidate = variation;
-        }
+        var firstBmp = MinIndex(
+            span.IndexOfAny(ForbiddenBmpSingles),
+            span.IndexOfAnyInRange('\0', '\b'),
+            span.IndexOfAnyInRange('\u000B', '\u000C'),
+            span.IndexOfAnyInRange('\u000E', '\u001F'),
+            span.IndexOf('\u007F'),
+            span.IndexOfAnyInRange(VariationSelectorLo, VariationSelectorHi));
 
         for (var i = 0; i < span.Length; i++)
         {
-            if (i == candidate)
+            if (i == firstBmp)
             {
                 return i;
             }
 
-            if (!char.IsHighSurrogate(span[i]) || i + 1 >= span.Length || !char.IsLowSurrogate(span[i + 1]))
+            if (char.IsHighSurrogate(span[i]) && i + 1 < span.Length && char.IsLowSurrogate(span[i + 1]))
             {
-                continue;
-            }
+                if (IsForbiddenAstral(char.ConvertToUtf32(span[i], span[i + 1])))
+                {
+                    return i;
+                }
 
-            if (IsForbiddenAstral(char.ConvertToUtf32(span[i], span[i + 1])))
-            {
-                return i;
+                i++;
             }
-
-            i++;
         }
 
         return -1;
     }
 
+    private static int MinIndex(int a, int b, int c, int d, int e, int f)
+    {
+        var result = -1;
+        if (a >= 0) result = a;
+        if (b >= 0 && (result < 0 || b < result)) result = b;
+        if (c >= 0 && (result < 0 || c < result)) result = c;
+        if (d >= 0 && (result < 0 || d < result)) result = d;
+        if (e >= 0 && (result < 0 || e < result)) result = e;
+        if (f >= 0 && (result < 0 || f < result)) result = f;
+        return result;
+    }
+
     private static bool IsForbiddenBmp(char c)
-        => ForbiddenBmpSingles.Contains(c) || c is >= VariationSelectorLo and <= VariationSelectorHi;
+        => ForbiddenBmpSingles.Contains(c)
+           || c is >= VariationSelectorLo and <= VariationSelectorHi
+           || c == '\u007F'
+           || (c < ' ' && c is not '\t' and not '\r' and not '\n');
 
     private static bool IsForbiddenAstral(int codePoint)
         => codePoint is >= TagsLo and <= TagsHi

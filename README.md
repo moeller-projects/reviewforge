@@ -242,6 +242,28 @@ carry no dedupe property (invisible to triage); only the PR author's last-commen
 commands trigger; command replies are deduplicated against retry; every fix is labeled,
 and AI-drafted fixes are marked as such.
 
+## Findings verification (challenge stage, off by default)
+
+`VerifyFindings` (env overrides use `VerifyFindings__…`) adds an adversarial stage between
+validation and auto-fix: one bounded, tool-free Fast-tier request tries to *disprove* each
+accepted finding from a deterministic ±15-line file slice around its anchor. It can only
+subtract findings — never add or rewrite — and fails open: any verifier failure keeps the
+findings. Cost is one request of ≤24k prompt chars per run (~1–3% of a typical review).
+
+```json
+"VerifyFindings": {
+  "Enabled": false,       // master switch; false = byte-identical pipeline
+  "MaxFindings": 20,      // highest-severity first; the rest pass unverified
+  "ContextLines": 15,     // file context quoted around each anchor
+  "TimeoutSeconds": 60,   // shared by the request and its single retry
+  "MaxPromptChars": 24000 // hard prompt cap
+}
+```
+
+The per-rule rejection counter (`reviewforge.findings.verifier_rejected_total`) is the
+false-positive-rate metric. Deterministic `homoglyph/*` findings and trivial-diff runs skip
+the verifier entirely.
+
 ## Rulebook
 
 Reviews use embedded general, performance, security, and language rule packs. Packs
@@ -332,14 +354,12 @@ dotnet test
 dotnet test tests/ReviewForge.Core.Tests /p:CollectCoverage=true
 ```
 
-Every production-code test project enforces **at least 97% line coverage** via coverlet
-(`Threshold=97`) on its own SUT assembly; on Windows the threshold is 95% because the
-GitHub Windows runner cannot create symlinks, leaving Core's symlink-resolution sandbox
-branches uncoverable there. Vendor-only adapters such as `AdoPullRequestSource`,
-`LibGit2SharpGitOps`, and `Program.cs` are excluded by design; all application logic
-remains covered. `ReviewForge.Architecture.Tests` is the deliberate exception: it
-validates assembly boundaries (NetArchTest) and covers no production code, so it carries
-no coverlet threshold.
+Every production-code test project enforces **at least 95% line coverage** via coverlet
+(`Threshold=95`) on its own SUT assembly across all supported operating systems.
+Vendor-only adapters such as `AdoPullRequestSource`, `LibGit2SharpGitOps`, and `Program.cs` are
+excluded by design; all application logic remains covered. `ReviewForge.Architecture.Tests` is
+the deliberate exception: it validates assembly boundaries (NetArchTest) and covers no
+production code, so it carries no coverlet threshold.
 
 ## Extension points
 

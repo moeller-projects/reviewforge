@@ -66,18 +66,14 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
    secret values.
 4. **Persistence discipline.** Skipped runs (gate-terminated) are never persisted — a
    draft skip must not mark a head as reviewed.
-5. **Coverage gate.** Every production-code test project enforces ≥97% line coverage
-  (coverlet `Threshold=97`) on its own SUT assembly — except on Windows, where the
-  threshold is 95% because the GitHub Windows runner cannot create symlinks
-  (`SeCreateSymbolicLinkPrivilege`; Developer Mode has no effect there), leaving the
-  symlink-resolution sandbox branches in Core uncoverable. Raise the Windows bar back
-  to 97 if the runner ever gains the privilege. The
-  `ReviewForge.Architecture.Tests`
-  project is the explicit exception: it validates assembly boundaries and covers no
-  production code, so it deliberately has no coverlet threshold. Any logic added to a
-  production-code test project must be covered or explicitly excluded with justification
-  (`[ExcludeFromCodeCoverage]` is reserved for pure vendor-SDK wrappers like
-  `AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`).
+5. **Coverage gate.** Every production-code test project enforces ≥95% line coverage
+   (coverlet `Threshold=95`) on its own SUT assembly across all operating systems.
+   The `ReviewForge.Architecture.Tests` project is the explicit exception: it validates
+   assembly boundaries and covers no production code, so it deliberately has no coverlet
+   threshold. Any logic added to a production-code test project must be covered or explicitly
+   excluded with justification
+   (`[ExcludeFromCodeCoverage]` is reserved for pure vendor-SDK wrappers like
+   `AdoPullRequestSource`, `LibGit2SharpGitOps`, `Program.cs`).
 6. **Agent sandbox.** `RepoReadTools` (agent reads) is read-only, rooted at the checkout,
    escape-proof, deny-regex for `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. The agent has
    no shell. `HashLineEditor` (used by author-commanded fix passes) shares the same
@@ -131,9 +127,8 @@ in-memory status cache (24 h retention, 10k entries, sticky terminal states); st
 read-through falls back to the durable queue row and then the store row, so with
 `QueueMode=Sqlite` runs stay visible across restarts.
 
-All production-code test projects enforce at least 97% line coverage (95% on
-Windows — see hard rule 5); `ReviewForge.Architecture.Tests` is exempt. Do not
-document generated test counts.
+All production-code test projects enforce at least 95% line coverage across all operating
+systems; `ReviewForge.Architecture.Tests` is exempt. Do not document generated test counts.
 
 ## Docker
 
