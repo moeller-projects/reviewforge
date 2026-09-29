@@ -70,7 +70,7 @@ public sealed class FindingsVerifierPromptTests
 
         Assert.True(prompt.Length <= 4_000);
         Assert.Contains("### key-2", prompt);
-        Assert.DoesNotContain("remaining findings listed without context", prompt);
+        Assert.Equal(1, prompt.Split(new string('x', 3_000), StringSplitOptions.None).Length - 1);
     }
 
     [Fact]
