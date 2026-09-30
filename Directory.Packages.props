@@ -8,7 +8,7 @@
     <PackageVersion Include="System.CommandLine" Version="2.0.12" />
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.21.0" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.10.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
     <PackageVersion Include="Microsoft.TeamFoundationServer.Client" Version="20.278.0-preview" />
