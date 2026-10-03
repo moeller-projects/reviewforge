@@ -54,9 +54,15 @@ public static class CommentFormatter
         return sb.ToString();
     }
 
-    /// <summary>Deterministic fix: the finding body with an applicable suggestion block.</summary>
+    /// <summary>Deterministic fix: the finding body with an applicable suggestion block — or,
+    /// when the fix was committed and pushed (CommitOnHead), the commit announcement.</summary>
     public static string FormatFixedFinding(RichFinding finding, AutoFix.AppliedFix fix)
     {
+        if (fix.CommitSha is not null)
+        {
+            return FormatCommittedFix(finding, fix);
+        }
+
         var sb = new StringBuilder();
         Line(sb, BotPreamble);
         sb.Append('\n');
@@ -74,6 +80,33 @@ public static class CommentFormatter
         Line(sb, fence);
         return sb.ToString();
     }
+
+    /// <summary>Committed fix (CommitOnHead): the finding body announcing the pushed commit
+    /// instead of an applicable suggestion.</summary>
+    public static string FormatCommittedFix(RichFinding finding, AutoFix.AppliedFix fix)
+    {
+        var sb = new StringBuilder();
+        Line(sb, BotPreamble);
+        sb.Append('\n');
+        Line(sb, $"### 🔧 {finding.Title}");
+        sb.Append('\n');
+        Line(sb, $"**Severity:** `{finding.Severity}` · **Rule:** `{finding.RuleId}` · **Category:** `{finding.Category}`");
+        sb.Append('\n');
+        Line(sb, finding.Description.Trim());
+        sb.Append('\n');
+        Line(sb, $"**{CommittedFixLine(fix.CommitSha!, fix.CommitSubject ?? string.Empty)}** — {fix.Proposal.Rationale}");
+        return sb.ToString();
+    }
+
+    /// <summary>The stable "Fixed in {sha7} — {subject}" sentence; shared by the commit stage's
+    /// queued replies and the publish stage's crash reconciliation so retry-dedupe text matches.</summary>
+    public static string CommittedFixLine(string commitSha, string commitSubject)
+        => $"Fixed in {commitSha[..Math.Min(7, commitSha.Length)]} — {commitSubject}";
+
+    /// <summary>Reply for a pushed fix when no finding is at hand (crash reconciliation) —
+    /// same text a fresh run would have produced, so exactly-once dedupe holds.</summary>
+    public static string FormatCommittedFixReply(string commitSha, string commitSubject)
+        => WithBotPreamble($"🔧 {CommittedFixLine(commitSha, commitSubject)}");
 
     /// <summary>Commanded fix: no finding exists — quote the answered thread and label the draft.</summary>
     public static string FormatFixedFinding(AutoFix.FixProposal fix, string threadExcerpt)

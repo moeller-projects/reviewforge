@@ -81,7 +81,8 @@ public static class Endpoints
         // fast worker can never overwrite a fresh RunTracker write with a stale one
         // (P2-25). Roll back the tracker entry if the queue rejects.
         tracker.Set(runId, pr, RunState.Queued);
-        var result = queue.TryEnqueue(new ReviewRequest(runId, pr, clock.GetUtcNow()));
+        var result = queue.TryEnqueue(new ReviewRequest(
+            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual));
         if (!result.Accepted)
         {
             tracker.Remove(runId);

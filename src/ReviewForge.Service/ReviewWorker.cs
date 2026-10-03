@@ -62,6 +62,7 @@ public sealed class ReviewWorker(
                 {
                     PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
                     EnqueueContext = request.EnqueueContext,
+                    Trigger = request.Trigger,
                 };
 
                 // Keep the reservation alive for the whole run so a review that outlives the

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
@@ -29,6 +30,54 @@ public class DiscoveryServiceTests
         FakePullRequestSource source, FakeFindingStore store, ReviewQueue queue, RunTracker tracker,
         DiscoveryOptions? options = null, InFlightClaims? claims = null)
         => new(source, store, queue, tracker, claims ?? new InFlightClaims(), options ?? new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions());
+
+    [Fact]
+    public async Task Sweep_skips_bot_authored_commit_on_warmed_mirror()
+    {
+        var candidate = Candidate(22, headSha: "bot-head");
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
+        };
+        var root = Path.Combine(Path.GetTempPath(), "reviewforge-discovery-loop-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var git = new FakeGitOps
+            {
+                HeadInfo = new TipCommitInfo(
+                    "reviewforge@example.com",
+                    "fix(src): quote variable\n\nReviewForge-Run: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n"),
+            };
+            var pool = new RepoCheckoutPool(git, new FakeWorkspaceFs(), root);
+            Directory.CreateDirectory(pool.MirrorPath(candidate.Key.RepositoryId));
+            var service = new DiscoveryService(
+                source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(),
+                new DiscoveryOptions { TargetBranches = ["main"] },
+                new RetentionOptions(),
+                pool,
+                NullLogger<DiscoveryService>.Instance,
+                TimeProvider.System,
+                new AutoFixOptions
+                {
+                    Enabled = true,
+                    PublishMode = AutoFixOptions.ModeCommitOnHead,
+                    CommitAuthorEmail = "reviewforge@example.com",
+                });
+
+            var report = await service.RunSweepAsync(CancellationToken.None);
+
+            Assert.Empty(report.Enqueued);
+            Assert.Contains(report.Skipped, item => item.Pr == candidate.Key && item.Reason == "bot-authored head");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
 
     [Fact]
     public async Task Sweep_skips_draft_branch_and_creator_but_enqueues_survivor()

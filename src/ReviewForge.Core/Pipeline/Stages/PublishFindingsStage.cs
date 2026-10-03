@@ -17,7 +17,8 @@ public sealed class PublishFindingsStage(
     IPullRequestSource source,
     IFindingStore store,
     ILogger<PublishFindingsStage> logger,
-    ReviewerVote? cleanVote = ReviewerVote.NoResponse) : IReviewStage
+    ReviewerVote? cleanVote = ReviewerVote.NoResponse,
+    AutoFixOptions? autoFix = null) : IReviewStage
 {
     /// <summary>Bounded concurrency for ADO writes; each finding is one HTTP round-trip.</summary>
     public const int MaxConcurrentPosts = 4;
@@ -37,6 +38,29 @@ public sealed class PublishFindingsStage(
         // every write; the remaining work is bounded (one HTTP round-trip per write).
         ct.ThrowIfCancellationRequested();
         ct = CancellationToken.None;
+
+        var pushedFixRowIds = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        // CommitOnHead reconciliation FIRST: pushed-fix rows from PRIOR runs (crash orphans —
+        // the push landed but its replies never did) get their "Fixed in {sha}" replies now,
+        // constructed entirely from the durable record. Rows of THIS run flow through the
+        // normal paths below and are marked replied as each reply lands.
+        if (autoFix is { IsCommitOnHead: true })
+        {
+            // Reconciliation is a publish write path too: validate the run's reviewed head
+            // (or its own pushed head) before any orphan reply is attempted.
+            await EnsureHeadUnchangedAsync(ctx, ct).ConfigureAwait(false);
+            foreach (var fix in await store.GetUnrepliedPushedFixesAsync(ctx.Pr, ct).ConfigureAwait(false))
+            {
+                if (fix.RunId == ctx.RunId)
+                {
+                    pushedFixRowIds[fix.DedupeKey] = fix.Id;
+                    continue;
+                }
+
+                await ReconcilePushedFixAsync(ctx, fix, ct).ConfigureAwait(false);
+            }
+        }
 
         // Mechanism B: never re-post a finding that already has a live bot thread. The ADO
         // thread properties (ReviewForge.DedupeKey) are the cross-run source of truth and
@@ -67,7 +91,8 @@ public sealed class PublishFindingsStage(
                         && f.DedupeKey is not null
                         && liveThreadKeys.Contains(f.DedupeKey)
                         && !regressedThreadIds.ContainsKey(f.DedupeKey))
-            .Select(f => (ThreadId: ctx.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
+            .Select(f => (Key: f.DedupeKey!,
+                          ThreadId: ctx.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
                           Body: CommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
             .ToList();
 
@@ -127,6 +152,13 @@ public sealed class PublishFindingsStage(
                         ReviewForgeTelemetry.FixesApplied.Add(
                             1, FixTags(applied.Proposal.Origin, finding.RuleId));
                     }
+                    if (finding.AppliedFix?.CommitSha is not null
+                        && pushedFixRowIds.TryGetValue(finding.DedupeKey!, out var inlineRowId))
+                    {
+                        // The commit announcement WAS the finding body — the row is replied.
+                        await store.MarkPushedFixRepliedAsync(inlineRowId, ct).ConfigureAwait(false);
+                    }
+
                     // Mechanism A: durable per-finding record immediately after the post, so a
                     // crash before finalize never loses the fact that this finding was posted.
                     await store.SetThreadIdAsync(ctx.RunId, finding.DedupeKey!, threadId, ct).ConfigureAwait(false);
@@ -145,10 +177,27 @@ public sealed class PublishFindingsStage(
                 try
                 {
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "during publish");
-                    await source.PostGeneralCommentAsync(
-                            ctx.Pr, CommentFormatter.FormatFinding(finding), finding.DedupeKey, ct)
+                    var body = CommentFormatter.FormatFinding(finding);
+                    var committedRowId = finding.AppliedFix?.CommitSha is not null
+                                         && finding.DedupeKey is { } key
+                                         && pushedFixRowIds.TryGetValue(key, out var rowId)
+                        ? rowId
+                        : (int?)null;
+                    if (committedRowId is { } existingRowId
+                        && await AlreadyPostedGeneralAsync(ctx, finding.DedupeKey!, body, ct).ConfigureAwait(false))
+                    {
+                        await store.MarkPushedFixRepliedAsync(existingRowId, ct).ConfigureAwait(false);
+                        return;
+                    }
+
+                    PublishGuardChecks.ThrowIfClaimLost(ctx, "before general finding");
+                    await source.PostGeneralCommentAsync(ctx.Pr, body, finding.DedupeKey, ct)
                         .ConfigureAwait(false);
                     ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "general" } });
+                    if (committedRowId is { } postedRowId)
+                    {
+                        await store.MarkPushedFixRepliedAsync(postedRowId, ct).ConfigureAwait(false);
+                    }
                 }
                 finally
                 {
@@ -164,13 +213,19 @@ public sealed class PublishFindingsStage(
         await EnsureHeadUnchangedAsync(ctx, ct).ConfigureAwait(false);
 
         // Live-thread fixed findings: reply with the fix body (never suppressed, never
-        // re-posted as a new thread).
-        foreach (var (threadId, body) in liveFixedReplies)
+        // re-posted as a new thread). Committed fixes (CommitOnHead) mark their pushed-fix
+        // row replied — including the already-posted skip path (exactly-once convergence).
+        foreach (var (key, threadId, body) in liveFixedReplies)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix reply on thread {threadId}");
             if (await AlreadyRepliedAsync(ctx, threadId, body, ct).ConfigureAwait(false))
             {
                 logger.LogInformation("thread {ThreadId}: fix reply already posted by a previous attempt — skipping", threadId);
+                if (pushedFixRowIds.TryGetValue(key, out var skippedRowId))
+                {
+                    await store.MarkPushedFixRepliedAsync(skippedRowId, ct).ConfigureAwait(false);
+                }
+
                 continue;
             }
 
@@ -178,11 +233,17 @@ public sealed class PublishFindingsStage(
             ReviewForgeTelemetry.ThreadsReplied.Add(1);
             ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.Deterministic, "existing-thread"));
             Interlocked.Increment(ref publishedFixCount);
+            if (pushedFixRowIds.TryGetValue(key, out var rowId))
+            {
+                await store.MarkPushedFixRepliedAsync(rowId, ct).ConfigureAwait(false);
+            }
         }
 
         // Commanded fixes: a new suggestion thread WITHOUT a dedupe property (invisible
         // to triage and publish suppression), plus a link reply on the command thread.
-        foreach (var fix in ctx.AppliedFixes.Where(f => f.Proposal.SourceThreadId is not null))
+        // CommitOnHead: committed commanded fixes skip this entirely — stage 7.7 queued a
+        // "Fixed in {sha}" reply instead of a suggestion.
+        foreach (var fix in ctx.AppliedFixes.Where(f => f.Proposal.SourceThreadId is not null && f.CommitSha is null))
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before fix suggestion");
             var commandThreadId = fix.Proposal.SourceThreadId!.Value;
@@ -213,21 +274,35 @@ public sealed class PublishFindingsStage(
             ReviewForgeTelemetry.ThreadsReplied.Add(1);
         }
 
-        // Replies the auto-fix stage queued (declines, verifier failures, exhausted budget).
+        // Replies the auto-fix stage queued (declines, verifier failures, exhausted budget)
+        // and, in CommitOnHead mode, stage 7.7's "Fixed in {sha}" replies. A reply that has a
+        // pushed-fix row ("thread-{id}" key) marks it replied — including the already-posted
+        // skip path (exactly-once convergence).
         foreach (var (threadId, text) in ctx.FixCommandReplies)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix command reply on thread {threadId}");
             var body = CommentFormatter.WithBotPreamble(text);
+            var markedRowId = pushedFixRowIds.TryGetValue($"{AppliedFix.CommandKeyPrefix}{threadId}", out var commandRowId)
+                ? commandRowId
+                : (int?)null;
             if (await AlreadyRepliedAsync(ctx, threadId, body, ct).ConfigureAwait(false))
             {
                 logger.LogInformation("thread {ThreadId}: fix reply already posted by a previous attempt — skipping", threadId);
+                if (markedRowId is { } skippedRowId)
+                {
+                    await store.MarkPushedFixRepliedAsync(skippedRowId, ct).ConfigureAwait(false);
+                }
+
                 continue;
             }
 
             await source.ReplyToThreadAsync(ctx.Pr, threadId, body, ct).ConfigureAwait(false);
             ReviewForgeTelemetry.ThreadsReplied.Add(1);
+            if (markedRowId is { } rowId)
+            {
+                await store.MarkPushedFixRepliedAsync(rowId, ct).ConfigureAwait(false);
+            }
         }
-
         ctx.PostedThreadIds = posted;
 
         // Summary must post AFTER findings (readers of the PR see findings first).
@@ -257,6 +332,59 @@ public sealed class PublishFindingsStage(
         }
     }
 
+    /// <summary>
+    /// Crash-after-push recovery: a pushed-fix row from a PRIOR run whose reply never landed.
+    /// The reply is constructed entirely from the durable record (SHA + subject; the live
+    /// thread via the ReviewForge.DedupeKey thread property, or the stored command thread).
+    /// The text matches what the crashed run would have posted, so the AlreadyReplied check
+    /// converges to exactly-once even when the crash hit between reply and mark-replied.
+    /// </summary>
+    private async Task ReconcilePushedFixAsync(ReviewContext ctx, PushedFix fix, CancellationToken ct)
+    {
+        var body = CommentFormatter.FormatCommittedFixReply(fix.CommitSha, fix.CommitSubject);
+        var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
+        var liveThreadId = threads
+            .FirstOrDefault(t =>
+                (t.Status is ReviewThreadStatus.Active or ReviewThreadStatus.Pending)
+                && (t.Id == fix.ThreadId || t.DedupeKey == fix.DedupeKey))
+            ?.Id;
+
+        if (liveThreadId is null)
+        {
+            // A closed/missing thread cannot receive a reply. Its general-comment fallback
+            // carries the dedupe key, so a crash between post and mark converges.
+            PublishGuardChecks.ThrowIfClaimLost(ctx, "before reconciled fix comment");
+            if (await AlreadyPostedGeneralAsync(ctx, fix.DedupeKey, body, ct).ConfigureAwait(false))
+            {
+                await store.MarkPushedFixRepliedAsync(fix.Id, ct).ConfigureAwait(false);
+                return;
+            }
+
+            PublishGuardChecks.ThrowIfClaimLost(ctx, "before reconciled fix comment");
+            await source.PostGeneralCommentAsync(ctx.Pr, body, fix.DedupeKey, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            PublishGuardChecks.ThrowIfClaimLost(ctx, $"before reconciled fix reply on thread {liveThreadId}");
+            if (await AlreadyRepliedAsync(ctx, liveThreadId.Value, body, ct).ConfigureAwait(false))
+            {
+                logger.LogInformation(
+                    "pushed fix {Key}: reply already posted by the crashed run — marking replied", fix.DedupeKey);
+                await store.MarkPushedFixRepliedAsync(fix.Id, ct).ConfigureAwait(false);
+                return;
+            }
+
+            PublishGuardChecks.ThrowIfClaimLost(ctx, $"before reconciled fix reply on thread {liveThreadId}");
+            await source.ReplyToThreadAsync(ctx.Pr, liveThreadId.Value, body, ct).ConfigureAwait(false);
+            ReviewForgeTelemetry.ThreadsReplied.Add(1);
+        }
+
+        await store.MarkPushedFixRepliedAsync(fix.Id, ct).ConfigureAwait(false);
+        ReviewForgeTelemetry.AutoFixReconciledReplies.Add(1);
+        logger.LogInformation(
+            "pushed fix {Key} ({Sha}): reconciled missing reply from run {RunId}",
+            fix.DedupeKey, fix.CommitSha, fix.RunId);
+    }
     private static TagList FixTags(FixOrigin origin, string rule)
         => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
     private Task PersistCommandAuditAsync(ReviewContext ctx, CancellationToken ct)
@@ -274,7 +402,9 @@ public sealed class PublishFindingsStage(
     private async Task EnsureHeadUnchangedAsync(ReviewContext ctx, CancellationToken ct)
     {
         var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
-        var reviewed = ctx.RequirePullRequest().SourceCommitSha;
+        // CommitOnHead: the run's own push (stage 7.7) is the one legal head movement —
+        // publish happens against the pushed head. Any movement BEYOND it still fails the run.
+        var reviewed = ctx.PushedHeadSha ?? ctx.RequirePullRequest().SourceCommitSha;
         if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogWarning("PR head changed during run ({Reviewed} → {Current}); aborting before publication",
@@ -293,6 +423,16 @@ public sealed class PublishFindingsStage(
             && thread.Comments.FirstOrDefault() is {IsBot: true} first
             && string.Equals(first.Text.Trim(), body.Trim(), StringComparison.Ordinal));
     }
+    private async Task<bool> AlreadyPostedGeneralAsync(
+        ReviewContext ctx, string dedupeKey, string text, CancellationToken ct)
+    {
+        var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
+        return threads.Any(t =>
+            t.DedupeKey == dedupeKey
+            && t.LastComment is { IsBot: true } last
+            && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal));
+    }
+
 
     /// <summary>
     /// Re-fetch the thread immediately before replying: a previous attempt or a

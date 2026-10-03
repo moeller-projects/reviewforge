@@ -350,17 +350,72 @@ public class OptionsValidationTests
         Assert.Contains("AllowedAuthors must be non-empty", ex.Message);
     }
 
-    [Theory]
-    [InlineData("CommitOnHead")]
-    [InlineData("StackedBranch")]
-    public void AutoFix_reserved_publish_modes_are_rejected(string mode)
+    [Fact]
+    public void AutoFix_reserved_publish_mode_is_rejected()
     {
-        using var provider = Build([.. With(ValidConfig(), ("AutoFix:PublishMode", mode))]);
+        using var provider = Build([.. With(ValidConfig(), ("AutoFix:PublishMode", "StackedBranch"))]);
 
         var ex = Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
 
-        Assert.Contains("only supports 'Suggestion'", ex.Message);
+        Assert.Contains("Suggestion' or 'CommitOnHead", ex.Message);
+    }
+
+    [Fact]
+    public void AutoFix_commit_on_head_requires_commit_identity_when_enabled()
+    {
+        using var provider = Build([.. With(
+            ValidConfig(),
+            ("AutoFix:Enabled", "true"),
+            ("AutoFix:AllowedAuthors:0", "creator-1"),
+            ("AutoFix:PublishMode", "CommitOnHead"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
+
+        Assert.Contains("AutoFix:CommitAuthorName and AutoFix:CommitAuthorEmail are required", ex.Message);
+    }
+
+    [Fact]
+    public void AutoFix_commit_on_head_with_identity_is_valid()
+    {
+        using var provider = Build([.. With(
+            ValidConfig(),
+            ("AutoFix:Enabled", "true"),
+            ("AutoFix:AllowedAuthors:0", "creator-1"),
+            ("AutoFix:PublishMode", "CommitOnHead"),
+            ("AutoFix:CommitAuthorName", "reviewforge[bot]"),
+            ("AutoFix:CommitAuthorEmail", "reviewforge@example.com"))]);
+
+        var options = provider.GetRequiredService<IOptions<AutoFixOptions>>().Value;
+
+        Assert.True(options.IsCommitOnHead);
+    }
+
+    [Fact]
+    public void AutoFix_disabled_commit_on_head_is_inert_without_identity()
+    {
+        using var provider = Build([.. With(
+            ValidConfig(),
+            ("AutoFix:PublishMode", "CommitOnHead"))]);
+
+        var options = provider.GetRequiredService<IOptions<AutoFixOptions>>().Value;
+
+        Assert.False(options.Enabled);
+        Assert.False(options.IsCommitOnHead);
+    }
+
+    [Theory]
+    [InlineData("bogus")]
+    [InlineData("Stacked")]
+    public void AutoFix_unknown_commit_granularity_is_rejected(string granularity)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("AutoFix:CommitGranularity", granularity))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
+
+        Assert.Contains("CommitGranularity must be 'PerFix' or 'Single'", ex.Message);
     }
 
     [Theory]

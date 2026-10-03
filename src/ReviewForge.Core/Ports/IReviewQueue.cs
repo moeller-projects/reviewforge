@@ -3,13 +3,24 @@ using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Ports;
 
+/// <summary>How a run entered the queue. Pre-migration durable rows (null column) read as
+/// <see cref="Manual"/> — safe: no code existed to create a bot-authored head before the
+/// loop guard shipped, so the worst case of misclassification is one redundant review of a
+/// human head.</summary>
+public enum EnqueueTrigger
+{
+    Manual,
+    Discovery,
+}
+
 /// <summary>A review run waiting in the ingest queue.</summary>
 public sealed record ReviewRequest(
     Guid RunId,
     PrKey Pr,
     DateTimeOffset EnqueuedAt,
     ActivityContext? EnqueueContext = null,
-    string? HeadSha = null);
+    string? HeadSha = null,
+    EnqueueTrigger Trigger = EnqueueTrigger.Manual);
 
 public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 

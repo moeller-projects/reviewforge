@@ -2,6 +2,22 @@ using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Ports;
 
+/// <summary>Durable record of one fix whose commit was pushed to the PR source branch
+/// (CommitOnHead mode). Persisted by the commit stage immediately after a successful push —
+/// BEFORE any reply is attempted — so a crash between push and replies is reconciled by a
+/// later run from this record alone. <see cref="Id"/> is store-assigned (0 on save);
+/// <see cref="RunId"/>, <see cref="ReplyPosted"/> and <see cref="CreatedAt"/> are likewise
+/// store-owned on save.</summary>
+public sealed record PushedFix(
+    int Id,
+    Guid RunId,
+    string DedupeKey,          // finding key, or "thread-{ThreadId}" for commanded fixes
+    string CommitSha,
+    string CommitSubject,
+    int? ThreadId,             // resolved live thread when known (commanded fixes)
+    bool ReplyPosted,
+    DateTimeOffset CreatedAt);
+
 /// <summary>FP-keyed finding store: run history and posted findings per PR.</summary>
 public interface IFindingStore
 {
@@ -41,6 +57,18 @@ public interface IFindingStore
     /// with them. Returns the number of runs pruned.
     /// </summary>
     Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct);
+
+    /// <summary>Persists the pushed-fix records of a run. Called by the commit stage
+    /// immediately after a successful push, before the publish stage runs.</summary>
+    Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct);
+
+    /// <summary>Pushed fixes of this PR whose "Fixed in {sha}" reply has not been posted yet
+    /// (crash orphans of prior runs plus the current run's fresh rows).</summary>
+    Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct);
+
+    /// <summary>Marks one pushed-fix row as replied (exactly-once convergence with the
+    /// reply-text dedupe check).</summary>
+    Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct);
 
     /// <summary>Connectivity probe for health checks; must not depend on any PR-scoped data.</summary>
     Task PingAsync(CancellationToken ct);

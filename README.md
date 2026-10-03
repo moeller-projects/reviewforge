@@ -36,7 +36,7 @@ tests/
 
 ## The review pipeline
 
-10 numbered stages plus two inserts (7.2 auto-fix, 7.5 begin-run); every stage is a class in
+10 numbered stages plus three inserts (7.2 auto-fix, 7.5 begin-run, 7.7 commit-fixes); every stage is a class in
 `Core/Pipeline/Stages/` and a failed stage fails the run.
 
 | #  | Stage              | What it does                                                                                                                                               |
@@ -48,8 +48,9 @@ tests/
 | 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                      |
 | 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files |
 | 7  | validate-findings  | re-anchors via snippet (AnchorResolver), downgrades unverifiable/out-of-diff anchors to general comments                                                   |
-| 7.2| auto-fix-findings  | suggestion-only fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; with the default null verifier the deterministic path performs **zero** checkout writes |
+| 7.2| auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; published as suggestions (default) or committed by stage 7.7 (`AutoFix:PublishMode=CommitOnHead`) |
 | 7.5| begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService |
+| 7.7| commit-fixes       | CommitOnHead only (no-op otherwise): commits the materialized fixes in the run's private checkout, pushes fast-forward-only to the PR source branch (claim check + head pin + server-side CAS), persists pushed_fixes rows before any reply |
 | 8  | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
 | 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `ReviewForge:CleanRunVote` (default NoResponse) |
 | 10 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
@@ -203,38 +204,52 @@ fail-fast at startup. PAT and API keys come from the environment only.
   with a marker. `ReviewForge:DiffExcludeGlobs` replaces the default exclusion set
   (lockfiles, generated code) when set.
 
-## Auto-fix (suggestion-only, off by default)
+## Auto-fix (off by default)
 
-Every fix ReviewForge produces is an ADO ` ```suggestion ` block the PR author applies
-with one click. ReviewForge **never** writes to the PR branch, never pushes, and never
-opens pull requests; the PAT keeps comment-only permissions.
+In the default **Suggestion** mode every fix ReviewForge produces is an ADO ` ```suggestion `
+block the PR author applies with one click; the pipeline performs zero checkout writes and
+the PAT keeps comment-only permissions. In **CommitOnHead** mode
+(`AutoFix:PublishMode=CommitOnHead`) accepted fixes are committed in a run-scoped private
+checkout and pushed fast-forward-only to the PR source branch (stage 7.7: claim re-check
+immediately before push, remote-tip pin, server-side compare-and-swap — never a force-push).
+CommitOnHead additionally requires the PAT to have **Contribute** on the target repos, and a
+branch-policy rejection fails the run visibly (a configuration fact, not a transient error).
+ReviewForge never rebases, never force-pushes, and never opens pull requests.
 
 Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__…`):
 
 - **Deterministic** — a validated finding whose rule has a registered, enabled fixer
   (v1: `homoglyph/mixed-script-identifier`, `homoglyph/confusable-keyword`,
   `bash.unquoted-vars`, `bash.set-e-missing`, `py.mutable-default-arg`,
-  `docker.add-vs-copy`) gets a pure-C# proposal. This path performs **zero checkout
-  writes**.
+  `docker.add-vs-copy`) gets a pure-C# proposal. Suggestion mode performs **zero checkout
+  writes**; CommitOnHead materializes accepted fixes in a run-scoped private checkout.
 - **Commanded** — the PR author replies `/rf fix` on any thread (human, bot, or a
   ReviewForge finding). Only commands from the PR author, newer than the last completed
   run's comment watermark, on active file-anchored threads trigger a constrained agent
   fix pass: hash-anchored line edits, a one-file writable set, no shell, no findings
-  tools. Its writes are applied, captured, and reverted before the stage ends.
+  tools. Suggestion-mode writes are reverted before the stage ends; CommitOnHead retains
+  accepted edits only in its private checkout.
 
 ```json
 "AutoFix": {
   "Enabled": false,                 // master switch; false = byte-identical pipeline
   "AllowedAuthors": [],             // immutable creator ids only (display names never match); empty = disabled
   "AllowedRuleIds": [],             // intersected with the fixer registry
-  "PublishMode": "Suggestion",      // the only supported mode (write modes are reserved)
+  "PublishMode": "Suggestion",      // "Suggestion" (default) | "CommitOnHead"; StackedBranch remains reserved
+  "CommitGranularity": "PerFix",    // CommitOnHead: "PerFix" = one commit per file (same-file fixes coalesce) | "Single" = one commit per run
+  "CommitAuthorName": null,         // required when enabled in CommitOnHead mode
+  "CommitAuthorEmail": null,        // required when enabled; also the loop-guard author reference
   "MaxFixesPerRun": 3,              // shared budget, deterministic fixes first
   "EnableThreadFixCommands": false, // the '/rf fix' thread command
   "FixPassMaxIterations": 8         // iteration cap for one commanded fix pass
 }
 ```
-
-Fixes are published as suggestions; human acceptance is the verification step.
+In Suggestion mode fixes are published as suggestions; human acceptance is the verification
+step. In CommitOnHead mode the push is the run's point of no return: pushed-fix rows are
+persisted before any reply, and a later run's publish stage reconciles missing
+"Fixed in {sha}" replies after a crash. The bot's own commits never re-trigger automation:
+discovery suppresses heads whose exact `ReviewForge-Run:` trailer and author email both match
+(manual `POST /reviews` still reviews them).
 
 Safety properties pinned by tests: fixed findings stay in the accepted set (their keys
 stay current, so triage never auto-resolves their threads); commanded suggestion threads
@@ -315,8 +330,10 @@ queue rejects submissions immediately with HTTP 503 (and discovery records a `qu
 skip). Queue depth is exported as `reviewforge.queue.depth`, and rejected enqueues as
 `reviewforge.queue.rejected_total`. Each review holds its per-head checkout lease until the
 run finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
-`MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts
-but never mirrors, and skips checkouts currently held by a review.
+`MaxCheckoutsPerRepo`, `SweepInterval`, and `PrivateMaxAgeMinutes` (default 60). Pooled
+head checkouts are evicted by age/capacity but never mirrors; private run checkouts are
+reaped at startup if left by a crash and periodically after the configured age. Both paths
+skip checkouts currently held by a review.
 
 ## Observability model
 

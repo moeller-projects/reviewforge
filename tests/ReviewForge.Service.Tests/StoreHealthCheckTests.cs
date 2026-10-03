@@ -46,6 +46,9 @@ public class StoreHealthCheckTests
         public Task<IReadOnlyList<ReviewRun>> GetStaleShellsAsync(DateTimeOffset olderThan, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
         public Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct) => Task.FromResult(0);
         public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<PushedFix>>([]);
+        public Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct) => Task.CompletedTask;
     }
 
 }

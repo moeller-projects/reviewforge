@@ -176,7 +176,9 @@ public sealed class ReviewPipelineFactory(
     TimeProvider? clock = null,
     IEnumerable<IFindingFixer>? findingFixers = null,
     IOptions<AutoFixOptions>? autoFixOptions = null,
-    IOptions<VerifyFindingsOptions>? verifyFindingsOptions = null)
+    IOptions<VerifyFindingsOptions>? verifyFindingsOptions = null,
+    IGitOps? gitOps = null,
+    string? pushPat = null)
 {
     public ReviewPipeline Create()
     {
@@ -231,7 +233,11 @@ public sealed class ReviewPipelineFactory(
                 diffBudget,
                 source,
                 enricher,
-                clock),
+                clock,
+                // Private run-scoped checkout iff CommitOnHead is active; with Enabled=false
+                // the pipeline stays byte-identical — pooled checkout included.
+                checkoutMode: autoFix.IsCommitOnHead ? CheckoutMode.Private : CheckoutMode.Pooled,
+                autoFix: autoFix),
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(
@@ -260,8 +266,25 @@ public sealed class ReviewPipelineFactory(
                 registry, agent, autoFix, loggerFactory.CreateLogger<AutoFixFindingsStage>(),
                 store: store),
             new BeginRunStage(store, clock),
+        ]);
+
+        // Stage 7.7: registered whenever the git write surface is available; it no-ops unless
+        // CommitOnHead is active. CommitOnHead without IGitOps is a composition error — fail fast.
+        if (gitOps is not null)
+        {
+            stages.Add(new CommitFixesStage(
+                gitOps, store, autoFix, loggerFactory.CreateLogger<CommitFixesStage>(), pushPat));
+        }
+        else if (autoFix.IsCommitOnHead)
+        {
+            throw new InvalidOperationException("IGitOps is required when AutoFix:PublishMode is CommitOnHead");
+        }
+
+        stages.AddRange(
+        [
             new TriageThreadsStage(source, loggerFactory.CreateLogger<TriageThreadsStage>()),
-            new PublishFindingsStage(source, store, loggerFactory.CreateLogger<PublishFindingsStage>(), cleanVote),
+            new PublishFindingsStage(
+                source, store, loggerFactory.CreateLogger<PublishFindingsStage>(), cleanVote, autoFix),
             new PersistRunStage(store, clock),
         ]);
 

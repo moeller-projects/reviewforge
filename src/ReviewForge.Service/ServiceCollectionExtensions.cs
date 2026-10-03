@@ -133,9 +133,16 @@ public static class ServiceCollectionExtensions
             .ValidateDataAnnotations()
             .Validate(o => !o.Enabled || o.AllowedAuthors.Length > 0,
                 "AutoFix:AllowedAuthors must be non-empty when AutoFix:Enabled is true")
-            .Validate(o => o.PublishMode == "Suggestion",
-                "AutoFix:PublishMode only supports 'Suggestion' in this version (CommitOnHead/StackedBranch are reserved)")
+            .Validate(o => o.PublishMode is AutoFixOptions.ModeSuggestion or AutoFixOptions.ModeCommitOnHead,
+                "AutoFix:PublishMode must be 'Suggestion' or 'CommitOnHead' (StackedBranch remains reserved)")
+            .Validate(o => !o.IsCommitOnHead
+                           || (!string.IsNullOrWhiteSpace(o.CommitAuthorName) && !string.IsNullOrWhiteSpace(o.CommitAuthorEmail)),
+                "AutoFix:CommitAuthorName and AutoFix:CommitAuthorEmail are required when AutoFix:PublishMode is CommitOnHead")
+            .Validate(o => o.CommitGranularity is AutoFixOptions.GranularityPerFix or AutoFixOptions.GranularitySingle,
+                "AutoFix:CommitGranularity must be 'PerFix' or 'Single'")
             .ValidateOnStart();
+        // Value registration for consumers that take the options object directly.
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<AutoFixOptions>>().Value);
 
         services.AddOptions<VerifyFindingsOptions>()
             .Bind(configuration.GetSection(VerifyFindingsOptions.SectionName))
@@ -196,7 +203,8 @@ public static class ServiceCollectionExtensions
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
             var git = sp.GetRequiredService<IGitOps>();
             return new RepoCheckoutPool(git, sp.GetRequiredService<IWorkspaceFs>(), opts.WorkDir,
-                sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat);
+                sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat,
+                logger: sp.GetRequiredService<ILogger<RepoCheckoutPool>>());
         });
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Retention);
@@ -232,7 +240,9 @@ public static class ServiceCollectionExtensions
             clock: sp.GetRequiredService<TimeProvider>(),
             findingFixers: sp.GetRequiredService<IFindingFixer[]>(),
             autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>(),
-            verifyFindingsOptions: sp.GetRequiredService<IOptions<VerifyFindingsOptions>>()));
+            verifyFindingsOptions: sp.GetRequiredService<IOptions<VerifyFindingsOptions>>(),
+            gitOps: sp.GetRequiredService<IGitOps>(),
+            pushPat: sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat));
 
         // WorkerCount < 1 is rejected by the options validation above (fail-fast at startup);
         // when unset it defaults to a processor-count-derived clamp, always >= 2.

@@ -23,6 +23,7 @@ public static class ReviewForgeTelemetry
     public const string TagResult = "result";      // completed | skipped | failed
     public const string TagReason = "reason";
     public const string TagWarmed = "warmed";      // true when a discovery mirror warmup prefetched this head
+    public const string TagKind = "kind";          // pooled | private (checkout metrics)
     public const string TagShards = "shards";      // shard count on sharded review run metrics
 
     // ---- Checkouts (existing, unchanged) ----
@@ -139,6 +140,31 @@ public static class ReviewForgeTelemetry
         Meter.CreateCounter<long>("reviewforge.autofix.deterministic.guard_skipped");
     public static readonly Counter<long> CommandedWatermarkSkipped =
         Meter.CreateCounter<long>("reviewforge.autofix.commanded.skipped_watermark");
+
+    // ---- Auto-fix CommitOnHead write path ----
+    /// <summary>Commits created by stage 7.7 — tags: granularity.</summary>
+    public static readonly Counter<long> AutoFixCommits =
+        Meter.CreateCounter<long>("reviewforge.autofix.commits_total");
+    public static readonly Counter<long> AutoFixPushes =
+        Meter.CreateCounter<long>("reviewforge.autofix.pushes_total");
+    /// <summary>Push failures — tags: reason = pin | rejected.</summary>
+    public static readonly Counter<long> AutoFixPushFailures =
+        Meter.CreateCounter<long>("reviewforge.autofix.push_failures_total");
+    /// <summary>Fixes whose tree application failed (drift/unreadable) — tags: rule.</summary>
+    public static readonly Counter<long> AutoFixApplyFailed =
+        Meter.CreateCounter<long>("reviewforge.autofix.apply_failed_total");
+    /// <summary>Fixes published as suggestions instead of commits — tags:
+    /// reason = no_source_ref | commit_failed | all_degraded.</summary>
+    public static readonly Counter<long> AutoFixDegradedToSuggestion =
+        Meter.CreateCounter<long>("reviewforge.autofix.degraded_to_suggestion_total");
+    /// <summary>Crash-recovery replies posted by a later run's publish reconciliation.</summary>
+    public static readonly Counter<long> AutoFixReconciledReplies =
+        Meter.CreateCounter<long>("reviewforge.autofix.reconciled_replies_total");
+
+    // ---- Loop guard ----
+    /// <summary>Bot-authored heads suppressed — tags: source = gate | discovery.</summary>
+    public static readonly Counter<long> LoopGuardSkips =
+        Meter.CreateCounter<long>("reviewforge.loopguard.skips_total");
 
     public static readonly Counter<long> ThreadsResolved =
         Meter.CreateCounter<long>("reviewforge.threads.resolved_total");

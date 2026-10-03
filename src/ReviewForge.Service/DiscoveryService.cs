@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
@@ -34,7 +35,8 @@ public sealed class DiscoveryService(
     RetentionOptions retention,
     RepoCheckoutPool? pool = null,
     ILogger<DiscoveryService>? logger = null,
-    TimeProvider? clock = null)
+    TimeProvider? clock = null,
+    AutoFixOptions? autoFix = null)
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     private readonly DiscoveryRules _Rules = new(options.TargetBranches, options.Creators, options.MaxEnqueuesPerSweep);
@@ -202,6 +204,22 @@ public sealed class DiscoveryService(
                 return;
             }
 
+            // Loop guard (defense in depth, best-effort): a head that is verifiably
+            // bot-authored needs no enqueue at all. The mirror may not have the commit —
+            // the gate in prepare-repository remains the correctness path.
+            if (autoFix is not null && _Pool is not null)
+            {
+                var headInfo = await _Pool.GetMirrorCommitInfoAsync(
+                    candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha, token);
+                if (headInfo is not null && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
+                {
+                    ReviewForgeTelemetry.LoopGuardSkips.Add(
+                        1, new TagList { { "source", "discovery" } });
+                    Skip(candidate.Key, "bot-authored head");
+                    return;
+                }
+            }
+
             Interlocked.Increment(ref interesting);
 
             // Cap + claim + enqueue must be atomic relative to other candidates so the
@@ -234,7 +252,8 @@ public sealed class DiscoveryService(
                         candidate.Key,
                         _Clock.GetUtcNow(),
                         Activity.Current?.Context,
-                        candidate.Pr.SourceCommitSha));
+                        candidate.Pr.SourceCommitSha,
+                        EnqueueTrigger.Discovery));
                 }
                 catch (Exception ex)
                 {

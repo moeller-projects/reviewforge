@@ -26,6 +26,9 @@ public interface IWorkspaceFs
 
     DateTime GetLastWriteTimeUtc(string path);
 
+    /// <summary>Directory creation time (age signal for private-checkout reaping).</summary>
+    DateTime GetCreationTimeUtc(string path);
+
     void SetLastWriteTimeUtc(string path, DateTime timestamp);
 
     void DeleteDirectory(string path, bool recursive);

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
@@ -448,6 +449,8 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             return _Inner.EnumerateFilesRecursive(path);
         }
 
+        public DateTime GetCreationTimeUtc(string path) => _Inner.GetCreationTimeUtc(path);
+
         public long GetFileLength(string path) => _Inner.GetFileLength(path);
         public DateTime GetLastWriteTimeUtc(string path) => _Inner.GetLastWriteTimeUtc(path);
         public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
@@ -577,6 +580,91 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     }
 
     [Fact]
+    public async Task AcquirePrivate_uses_run_scoped_path_and_disposal_deletes_it()
+    {
+        var pool = Pool(new TestGitOps());
+        var runId = Guid.NewGuid();
+        var checkout = await pool.AcquirePrivateAsync(
+            runId, "repo", "url", "base", "head", CancellationToken.None);
+
+        Assert.Equal(pool.PrivatePath(runId), checkout.Path);
+        Assert.True(Directory.Exists(checkout.Path));
+        Assert.True(Directory.Exists(Path.Combine(checkout.Path, ".git")));
+
+        checkout.Dispose();
+
+        Assert.False(Directory.Exists(checkout.Path));
+    }
+
+
+    [Fact]
+    public async Task Private_disposal_delete_failure_is_nonfatal_and_sweep_reaps_the_orphan()
+    {
+        var fs = new FakeWorkspaceFs { ThrowOnDeleteDirectory = new IOException("locked") };
+        var pool = new RepoCheckoutPool(
+            new TestGitOps(), fs, _Root, logger: NullLogger<RepoCheckoutPool>.Instance);
+        var checkout = await pool.AcquirePrivateAsync(
+            Guid.NewGuid(), "repo", "url", "base", "head", CancellationToken.None);
+        var path = checkout.Path;
+
+        checkout.Dispose();
+
+        Assert.True(Directory.Exists(path));
+        fs.ThrowOnDeleteDirectory = null;
+        Directory.SetCreationTimeUtc(path, DateTime.UtcNow.AddHours(-2));
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { PrivateMaxAgeMinutes = 60 }, TimeProvider.System);
+
+        Assert.Equal(1, report.Deleted);
+        Assert.False(Directory.Exists(path));
+    }
+    [Fact]
+    public async Task Private_eviction_requires_age_and_a_free_run_lock()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pool = Pool(new TestGitOps());
+        var oldRun = Guid.NewGuid();
+        var youngRun = Guid.NewGuid();
+        var oldPath = pool.PrivatePath(oldRun);
+        var youngPath = pool.PrivatePath(youngRun);
+        Directory.CreateDirectory(oldPath);
+        Directory.CreateDirectory(youngPath);
+        File.WriteAllText(Path.Combine(oldPath, "file"), "old");
+        File.WriteAllText(Path.Combine(youngPath, "file"), "young");
+        Directory.SetCreationTimeUtc(oldPath, now.AddHours(-2).UtcDateTime);
+        Directory.SetCreationTimeUtc(youngPath, now.UtcDateTime);
+        var live = await pool.AcquirePrivateAsync(
+            Guid.NewGuid(), "repo", "url", "base", "head", CancellationToken.None);
+        Directory.SetCreationTimeUtc(live.Path, now.AddHours(-2).UtcDateTime);
+
+        var report = pool.Evict(
+            new CheckoutEvictionOptions { PrivateMaxAgeMinutes = 60 },
+            new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now));
+
+        Assert.Equal(3, report.Scanned);
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal(1, report.SkippedInUse);
+        Assert.False(Directory.Exists(oldPath));
+        Assert.True(Directory.Exists(youngPath));
+        Assert.True(Directory.Exists(live.Path));
+        live.Dispose();
+    }
+
+    [Fact]
+    public void Startup_recovery_deletes_orphaned_private_checkouts()
+    {
+        var pool = Pool(new TestGitOps());
+        var orphan = pool.PrivatePath(Guid.NewGuid());
+        Directory.CreateDirectory(orphan);
+        File.WriteAllText(Path.Combine(orphan, "file"), "orphan");
+
+        var deleted = pool.ReapOrphanedPrivateCheckouts();
+
+        Assert.Equal(1, deleted);
+        Assert.False(Directory.Exists(orphan));
+    }
+
+    [Fact]
     public void Evict_returns_empty_when_disabled_or_checkout_root_missing()
     {
         var pool = Pool(new TestGitOps());
@@ -606,7 +694,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         public List<(string Base, string Head)> EnsuredCommits { get; } = [];
         public List<string> Calls { get; } = [];
 
-        public async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
+        public async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct, string? mirrorPath = null)
         {
             lock (_Gate)
             {
@@ -702,5 +790,21 @@ public sealed class RepoCheckoutPoolTests : IDisposable
                 ? Task.FromException(new IOException("warmup failed"))
                 : Task.CompletedTask;
         }
+
+        public Task<string> CommitAsync(
+            string repoPath, string message, string authorName, string authorEmail,
+            IReadOnlyList<string>? paths, CancellationToken ct)
+            => Task.FromResult("test-sha");
+
+        public Task PushAsync(
+            string repoPath, string cloneUrl, string remoteBranch, string expectedRemoteTipSha, string? pat, CancellationToken ct)
+            => Task.CompletedTask;
+
+        public Task<string?> GetRemoteTipAsync(
+            string repoPath, string cloneUrl, string remoteBranch, string? pat, CancellationToken ct)
+            => Task.FromResult<string?>(null);
+
+        public Task<TipCommitInfo?> GetCommitInfoAsync(string repoPath, string commitSha, CancellationToken ct)
+            => Task.FromResult<TipCommitInfo?>(null);
     }
 }

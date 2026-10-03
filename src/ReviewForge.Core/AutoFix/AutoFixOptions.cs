@@ -2,9 +2,9 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ReviewForge.Core.AutoFix;
 
-/// <summary>Configuration for the suggestion-only auto-fix feature (section "AutoFix").
-/// Everything is off by default: with <see cref="Enabled"/> false the pipeline is
-/// byte-identical to a run without the feature.</summary>
+/// <summary>Configuration for the auto-fix feature (section "AutoFix"). Suggestion mode
+/// is the default; with <see cref="Enabled"/> false the pipeline is byte-identical to a run
+/// without the feature.</summary>
 public sealed class AutoFixOptions
 {
     public const string SectionName = "AutoFix";
@@ -17,9 +17,31 @@ public sealed class AutoFixOptions
     /// <summary>Rule ids eligible for auto-fix; intersected with the fixer registry.</summary>
     public string[] AllowedRuleIds { get; init; } = [];
 
-    /// <summary>Only "Suggestion" is supported in this version; other values fail startup.
-    /// CommitOnHead / StackedBranch are reserved for the deferred write modes.</summary>
+    /// <summary>"Suggestion" (default) | "CommitOnHead". "StackedBranch" remains reserved.
+    /// With <see cref="Enabled"/> false the pipeline is byte-identical regardless of this
+    /// value — the mode is inert until the feature itself is on.</summary>
     public string PublishMode { get; init; } = "Suggestion";
+
+    /// <summary>Commit granularity in CommitOnHead mode. "PerFix" (default) = one commit per
+    /// file-group: fixes touching the same file ALWAYS coalesce into that file's commit
+    /// (staging is path-scoped; intra-file separation is impossible). "Single" = one commit
+    /// per run. This is the contract — there is no intra-file granularity.</summary>
+    public string CommitGranularity { get; init; } = "PerFix";
+
+    /// <summary>Commit identity. Required when Enabled && PublishMode=CommitOnHead; the email is
+    /// also the loop-guard author reference (a discovery-triggered run on a head whose exact
+    /// run trailer + this author email match is suppressed).</summary>
+    public string? CommitAuthorName { get; init; }      // e.g. "reviewforge[bot]"
+    public string? CommitAuthorEmail { get; init; }     // e.g. "reviewforge@contoso.com"
+
+    /// <summary>True when CommitOnHead publication is active for this run's pipeline.</summary>
+    public bool IsCommitOnHead
+        => Enabled && string.Equals(PublishMode, ModeCommitOnHead, StringComparison.Ordinal);
+
+    public const string ModeSuggestion = "Suggestion";
+    public const string ModeCommitOnHead = "CommitOnHead";
+    public const string GranularityPerFix = "PerFix";
+    public const string GranularitySingle = "Single";
 
     /// <summary>Hard cap of applied fixes per run, shared by both fix sources.</summary>
     [Range(1, 50)] public int MaxFixesPerRun { get; init; } = 3;

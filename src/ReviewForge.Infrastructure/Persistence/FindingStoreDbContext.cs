@@ -40,10 +40,30 @@ public sealed class FindingEntity
     public string? AppliedFixJson { get; set; }
 }
 
+/// <summary>Durable pushed-fix record (CommitOnHead): written by the commit stage immediately
+/// after a successful push, before any reply is attempted — the crash-after-push recovery
+/// source. Rows are pruned with their run row.</summary>
+public sealed class PushedFixEntity
+{
+    public int Id { get; set; }
+    public Guid RunId { get; set; }
+    public required string Org { get; set; }
+    public required string Project { get; set; }
+    public required string RepositoryId { get; set; }
+    public int PrId { get; set; }
+    public required string DedupeKey { get; set; }   // finding key or "thread-{id}"
+    public required string CommitSha { get; set; }
+    public required string CommitSubject { get; set; }
+    public int? ThreadId { get; set; }               // resolved live thread when known
+    public bool ReplyPosted { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 public sealed class FindingStoreDbContext(DbContextOptions<FindingStoreDbContext> options) : DbContext(options)
 {
     public DbSet<RunEntity> Runs => Set<RunEntity>();
     public DbSet<FindingEntity> Findings => Set<FindingEntity>();
+    public DbSet<PushedFixEntity> PushedFixes => Set<PushedFixEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -59,6 +79,12 @@ public sealed class FindingStoreDbContext(DbContextOptions<FindingStoreDbContext
         {
             e.HasKey(f => f.Id);
             e.HasIndex(f => f.DedupeKey);
+        });
+
+        modelBuilder.Entity<PushedFixEntity>(e =>
+        {
+            e.HasKey(p => p.Id);
+            e.HasIndex(p => new {p.Org, p.Project, p.RepositoryId, p.PrId});
         });
     }
 }

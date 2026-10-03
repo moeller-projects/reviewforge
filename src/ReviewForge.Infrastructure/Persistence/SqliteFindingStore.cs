@@ -63,6 +63,29 @@ public sealed class SqliteFindingStore : IFindingStore
                 cmd.ExecuteNonQuery();
             }
 
+            // PushedFixes is post-EnsureCreated schema: fresh databases get it from the
+            // generated create script above; pre-existing databases get this guarded
+            // CREATE TABLE IF NOT EXISTS (same PRAGMA/serialization discipline as the
+            // column ALTERs). Keep in sync with the EF model for PushedFixEntity.
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'PushedFixes'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText =
+                    "CREATE TABLE IF NOT EXISTS \"PushedFixes\" (" +
+                    "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_PushedFixes\" PRIMARY KEY AUTOINCREMENT, " +
+                    "\"RunId\" TEXT NOT NULL, " +
+                    "\"Org\" TEXT NOT NULL, \"Project\" TEXT NOT NULL, \"RepositoryId\" TEXT NOT NULL, " +
+                    "\"PrId\" INTEGER NOT NULL, " +
+                    "\"DedupeKey\" TEXT NOT NULL, \"CommitSha\" TEXT NOT NULL, \"CommitSubject\" TEXT NOT NULL, " +
+                    "\"ThreadId\" INTEGER NULL, " +
+                    "\"ReplyPosted\" INTEGER NOT NULL, " +
+                    "\"CreatedAt\" TEXT NOT NULL);" +
+                    "CREATE INDEX IF NOT EXISTS \"IX_PushedFixes_Org_Project_RepositoryId_PrId\" " +
+                    "ON \"PushedFixes\" (\"Org\", \"Project\", \"RepositoryId\", \"PrId\");";
+                cmd.ExecuteNonQuery();
+            }
+
             transaction.Commit();
         }
         finally
@@ -101,6 +124,52 @@ public sealed class SqliteFindingStore : IFindingStore
             [.. run.Findings.Select(f => new StoredFinding(
                 f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
             run.LastObservedCommentAt);
+    }
+
+    public async Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        foreach (var fix in fixes)
+        {
+            db.PushedFixes.Add(new PushedFixEntity
+            {
+                RunId = runId,
+                Org = pr.Org,
+                Project = pr.Project,
+                RepositoryId = pr.RepositoryId,
+                PrId = pr.PrId,
+                DedupeKey = fix.DedupeKey,
+                CommitSha = fix.CommitSha,
+                CommitSubject = fix.CommitSubject,
+                ThreadId = fix.ThreadId,
+                ReplyPosted = false,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var rows = await db.PushedFixes
+            .Where(p => p.Org == pr.Org && p.Project == pr.Project && p.RepositoryId == pr.RepositoryId
+                        && p.PrId == pr.PrId && !p.ReplyPosted)
+            .OrderBy(p => p.Id)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        return [.. rows.Select(p => new PushedFix(
+            p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.ReplyPosted, p.CreatedAt))];
+    }
+
+    public async Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.PushedFixes
+            .Where(p => p.Id == pushedFixId)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReplyPosted, true), ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>The run row by id regardless of outcome, or null when unknown.</summary>
@@ -366,6 +435,14 @@ public sealed class SqliteFindingStore : IFindingStore
                 deleteFindings.CommandText = PrunableRunsCte + "DELETE FROM Findings WHERE RunId IN (SELECT Id FROM Prunable)";
                 AddPruneParameters(deleteFindings, olderThan, minRunsPerPr);
                 await deleteFindings.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            await using (var deletePushedFixes = connection.CreateCommand())
+            {
+                deletePushedFixes.Transaction = tx;
+                deletePushedFixes.CommandText = PrunableRunsCte + "DELETE FROM PushedFixes WHERE RunId IN (SELECT Id FROM Prunable)";
+                AddPruneParameters(deletePushedFixes, olderThan, minRunsPerPr);
+                await deletePushedFixes.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
 
             var pruned = 0;

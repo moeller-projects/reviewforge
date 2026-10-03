@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Persistence;
 using Xunit;
 
@@ -474,6 +475,51 @@ public class SqliteFindingStoreTests : IDisposable
         var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.Equal(watermark, last!.LastObservedCommentAt);
         Assert.Equal(["k1"], last.FindingKeys);
+    }
+
+    [Fact]
+    public async Task Pushed_fixes_round_trip_and_mark_replied()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var run = Run("head", now);
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+        await _Store.SavePushedFixesAsync(
+            Key,
+            run.Id,
+            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", 42, false, now)],
+            CancellationToken.None);
+
+        var saved = Assert.Single(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+        Assert.True(saved.Id > 0);
+        Assert.Equal(run.Id, saved.RunId);
+        Assert.Equal("k1", saved.DedupeKey);
+        Assert.Equal("abcdef123456", saved.CommitSha);
+        Assert.Equal(42, saved.ThreadId);
+        Assert.False(saved.ReplyPosted);
+
+        await _Store.MarkPushedFixRepliedAsync(saved.Id, CancellationToken.None);
+
+        Assert.Empty(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Prune_deletes_pushed_fixes_with_their_run()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var oldRun = Run("old", now.AddDays(-10), success: false, "old-key");
+        var latestRun = Run("latest", now, success: true, "latest-key");
+        await _Store.SaveRunAsync(oldRun, CancellationToken.None);
+        await _Store.SaveRunAsync(latestRun, CancellationToken.None);
+        await _Store.SavePushedFixesAsync(
+            Key,
+            oldRun.Id,
+            [new PushedFix(0, oldRun.Id, "old-key", "deadbeef", "fix: old", null, false, now.AddDays(-10))],
+            CancellationToken.None);
+
+        var pruned = await _Store.PruneAsync(now.AddDays(-1), minRunsPerPr: 1, CancellationToken.None);
+
+        Assert.Equal(1, pruned);
+        Assert.Empty(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
     }
 
     [Fact]

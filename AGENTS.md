@@ -79,17 +79,26 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
    no shell. `HashLineEditor` (used by author-commanded fix passes) shares the same
    containment and deny rules via `RepoPathGuard` and is
    additionally limited to a per-run writable set (a single anchored file for fix passes).
-   Every fix-pass write is reverted before the stage ends. The agent never invokes
-   external processes.
+   `HashLineEditor` writes are reverted in Suggestion mode. In CommitOnHead mode
+   (`AutoFix:PublishMode`), accepted fixes are NOT reverted — they are committed by stage
+   7.7. CommitOnHead runs use a private run-scoped checkout
+   (`RepoCheckoutPool.AcquirePrivateAsync`); the pooled per-head checkout never sees writes.
+   The writable-set, containment, deny-regex and hash-anchor disciplines are unchanged.
+   The agent never invokes external processes.
 7. **Codex auth file** is rewritten atomically (temp + move) on token rotation. Any mount
    or path you introduce must preserve that (directory mount, read-write).
 8. **Auto-fix discipline.** A fix is only published when (a) the author is allowlisted and
    (b) the rule has a registered fixer or the fix was explicitly commanded by the PR
    author via `/rf fix`. Any gate failing means the finding
-   is published as a plain comment instead. Every fix is published as an ADO suggestion
-   block — ReviewForge never writes to the PR branch, never pushes, never opens pull
-   requests. AI-drafted fixes are always labeled as such. Never resolve another person's
-   thread. Never leave a pooled checkout dirty.
+   is published as a plain comment instead. In Suggestion mode every fix is published as an
+   ADO suggestion block. In CommitOnHead mode (`AutoFix:PublishMode`) fixes are committed in
+   the run's private checkout and pushed fast-forward-only to the PR source branch, and then
+   only when (c) the run holds its PR claim immediately before push, the remote branch tip
+   equals the pinned head at the pre-read, and the push itself is a fast-forward-only
+   compare-and-swap (stage 7.7). Pushed outcomes are persisted before any reply is attempted
+   (pushed_fixes), and a later run reconciles missing replies. ReviewForge never force-pushes,
+   never rebases, never opens pull requests. AI-drafted fixes are always labeled as such.
+   Never resolve another person's thread. Never leave a pooled checkout dirty.
 
 ## Conventions
 

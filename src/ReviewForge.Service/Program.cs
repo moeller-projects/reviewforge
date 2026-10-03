@@ -2,8 +2,8 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Console;
 using OpenTelemetry.Logs;
+using ReviewForge.Core.Workspaces;
 using ReviewForge.Service;
-using ReviewForge.Service.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddConsole(options => options.FormatterName = CompactConsoleFormatter.FormatterName);
@@ -31,6 +31,17 @@ builder.Services.AddOpenApi(ApiDocsRegistration.Configure);
 
 var app = builder.Build();
 
+// Startup recovery for run-scoped private checkouts: at process start no private checkout
+// can be live (leases are process-lifetime), so everything under {root}/private is orphaned
+// by construction. Runs before the hosted workers start.
+{
+    var pool = app.Services.GetRequiredService<RepoCheckoutPool>();
+    var reaped = pool.ReapOrphanedPrivateCheckouts();
+    if (reaped > 0)
+    {
+        app.Logger.LogInformation("startup recovery reaped {Count} orphaned private checkout(s)", reaped);
+    }
+}
 
 app.Logger.LogInformation(
     "OTLP logs exporter enabled: {LogsEnabled}; endpoint: {LogsEndpoint}; " +

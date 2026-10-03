@@ -654,7 +654,7 @@ public class ServiceTests : IAsyncLifetime
 
     private sealed class ExplosiveGitOps(string repoDir) : FakeGitOps
     {
-        public override Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
+        public override Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct, string? mirrorPath = null)
             => Task.FromResult(repoDir);
 
         public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)

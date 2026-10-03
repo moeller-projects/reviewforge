@@ -18,7 +18,7 @@ public class FakePullRequestSource : IPullRequestSource
     public int WorkItemFetches => _workItemFetches;
     public PullRequest Pr { get; set; } = new(
         1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false,
-        CreatorId: "creator-1", CreatorName: "PR Author");
+        CreatorId: "creator-1", CreatorName: "PR Author", SourceRefName: "refs/heads/feature/test");
     public Dictionary<PrKey, PullRequest> PullRequestsByKey { get; } = [];
     public List<WorkItem> WorkItems { get; set; } = [];
     public List<ChangedFile> ChangedFiles { get; set; } = [];
@@ -344,6 +344,35 @@ public class FakeFindingStore : IFindingStore
 
     public virtual Task PingAsync(CancellationToken ct)
         => ThrowOnPing is { } error ? Task.FromException(error) : Task.CompletedTask;
+
+    /// <summary>Pushed-fix rows saved via <see cref="SavePushedFixesAsync"/> (Id assigned
+    /// sequentially from 1); <see cref="MarkPushedFixRepliedAsync"/> flips ReplyPosted.</summary>
+    public List<PushedFix> PushedFixes { get; } = [];
+    private int _NextPushedFixId = 1;
+
+    public virtual Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct)
+    {
+        foreach (var fix in fixes)
+        {
+            PushedFixes.Add(fix with {Id = _NextPushedFixId++, RunId = runId, ReplyPosted = false});
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public virtual Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<PushedFix>>([.. PushedFixes.Where(f => !f.ReplyPosted)]);
+
+    public virtual Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct)
+    {
+        var index = PushedFixes.FindIndex(f => f.Id == pushedFixId);
+        if (index >= 0)
+        {
+            PushedFixes[index] = PushedFixes[index] with {ReplyPosted = true};
+        }
+
+        return Task.CompletedTask;
+    }
 }
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>
 public class FakeGitOps : IGitOps
@@ -363,7 +392,76 @@ public class FakeGitOps : IGitOps
     public TimeSpan CloneDelay { get; set; }
     public int MaxConcurrentClones => _MaxConcurrentClones;
 
-    public virtual async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
+    // ---- Write surface (CommitOnHead) ----
+
+    /// <summary>Recorded commits: message + staged paths (null = whole worktree).</summary>
+    public List<(string Message, IReadOnlyList<string>? Paths)> Commits { get; } = [];
+
+    /// <summary>Recorded pushes: branch + expected tip the caller pinned.</summary>
+    public List<(string Branch, string ExpectedTip)> Pushes { get; } = [];
+
+    /// <summary>Mutable remote tip read by <see cref="GetRemoteTipAsync"/> and validated by
+    /// <see cref="PushAsync"/>; tests flip it to trigger the pin failure.</summary>
+    public string? RemoteTip { get; set; } = "head-sha";
+
+    /// <summary>Commit info served by <see cref="GetCommitInfoAsync"/> (loop-guard tests).</summary>
+    public TipCommitInfo? HeadInfo { get; set; }
+
+    /// <summary>Optional exception for commit failure tests.</summary>
+    public Exception? ThrowOnCommit { get; set; }
+
+    /// <summary>Optional exception for push failure tests.</summary>
+    public Exception? ThrowOnPush { get; set; }
+
+    private int _CommitCount;
+
+    public virtual Task<string> CommitAsync(
+        string repoPath, string message, string authorName, string authorEmail,
+        IReadOnlyList<string>? paths, CancellationToken ct)
+    {
+        if (ThrowOnCommit is { } error)
+        {
+            return Task.FromException<string>(error);
+        }
+
+        lock (_Gate)
+        {
+            Commits.Add((message, paths));
+            return Task.FromResult($"fake-{++_CommitCount:D40}");
+        }
+    }
+
+    public virtual Task PushAsync(
+        string repoPath, string cloneUrl, string remoteBranch, string expectedRemoteTipSha, string? pat, CancellationToken ct)
+    {
+        if (ThrowOnPush is { } error)
+        {
+            return Task.FromException(error);
+        }
+
+        lock (_Gate)
+        {
+            if (!string.Equals(RemoteTip, expectedRemoteTipSha, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ReviewForge.Core.Pipeline.PrHeadChangedException(
+                    expectedRemoteTipSha, RemoteTip ?? "(branch missing on remote)");
+            }
+
+            Pushes.Add((remoteBranch, expectedRemoteTipSha));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public virtual Task<string?> GetRemoteTipAsync(
+        string repoPath, string cloneUrl, string remoteBranch, string? pat, CancellationToken ct)
+        => Task.FromResult(RemoteTip);
+
+    public virtual Task<TipCommitInfo?> GetCommitInfoAsync(string repoPath, string commitSha, CancellationToken ct)
+        => Task.FromResult(HeadInfo);
+
+    public virtual async Task<string> CloneOrOpenAsync(
+        string cloneUrl, string workDir, string? pat, CancellationToken ct, string? mirrorPath = null)
     {
         Directory.CreateDirectory(workDir);
         var active = Interlocked.Increment(ref _ActiveClones);
@@ -481,6 +579,8 @@ public sealed class FakeWorkspaceFs : IWorkspaceFs
     public long GetFileLength(string path) => new FileInfo(path).Length;
 
     public DateTime GetLastWriteTimeUtc(string path) => Directory.GetLastWriteTimeUtc(path);
+
+    public DateTime GetCreationTimeUtc(string path) => Directory.GetCreationTimeUtc(path);
 
     public void SetLastWriteTimeUtc(string path, DateTime timestamp) => Directory.SetLastWriteTimeUtc(path, timestamp);
 

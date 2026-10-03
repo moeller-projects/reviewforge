@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
+
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline;
@@ -15,6 +17,11 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public PrKey Pr { get; } = pr;
     public Guid RunId { get; } = runId ?? Guid.NewGuid();
     public DateTimeOffset StartedAt { get; } = startedAt;
+
+    /// <summary>How the run entered the queue (from the dequeued <see cref="ReviewRequest"/>).
+    /// The loop guard suppresses discovery-triggered runs on bot-authored heads only.</summary>
+    public EnqueueTrigger Trigger { get; set; } = EnqueueTrigger.Manual;
+
 
     // Stage 1 — fetch
     public PullRequest? PullRequest { get; set; }
@@ -68,6 +75,10 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     /// freshness predicate on <see cref="PendingThreadsRefresh"/>.</summary>
     public DateTimeOffset? RepoPreparedAt { get; set; }
 
+    /// <summary>Head-commit author/message read from the local checkout by stage 3 (loop-guard
+    /// input); null when the commit info could not be read — the guard treats that as "proceed".</summary>
+    public TipCommitInfo? HeadCommitInfo { get; set; }
+
     /// <summary>Enrichment call stage 3 starts once RepoDir+DiffText exist; stage 5 awaits it
     /// with the same fail-safe handling as a call it made itself.</summary>
     public Task<string?>? PendingEnrichment { get; set; }
@@ -86,6 +97,11 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     // Stage 7.2 — auto-fix: suggestion fixes that passed all gates (deterministic + commanded)
     public IReadOnlyList<AutoFix.AppliedFix> AppliedFixes { get; set; } = [];
+
+    /// <summary>Set by stage 7.7 after a successful CommitOnHead push: the new PR head created
+    /// by THIS run. Publish's head-unchanged check accepts it as the expected head — the run's
+    /// own push is the one legal head movement; anything beyond it still fails the run.</summary>
+    public string? PushedHeadSha { get; set; }
     public IReadOnlyList<AutoFix.FixCommand> FixCommands { get; set; } = [];
 
     /// <summary>Replies queued by the auto-fix stage, posted by the publish stage (declines,
