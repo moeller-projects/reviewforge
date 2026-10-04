@@ -254,7 +254,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         => at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
 
     private static DateTimeOffset ParseStamp(string stamp)
-        => new(DateTime.ParseExact(stamp, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), TimeSpan.Zero);
+        => DateTimeOffset.Parse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).ToUniversalTime();
 
     private static string? TraceParentOf(ActivityContext? context)
     {

@@ -438,6 +438,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 HeadSha = run.HeadSha,
                 Kind = run.Kind.ToString(),
                 Pipeline = run.Pipeline,
+                StartedAt = run.StartedAt,
                 CompletedAt = run.CompletedAt,
                 LastObservedCommentAt = run.LastObservedCommentAt,
                 Success = run.Success,
