@@ -143,7 +143,10 @@ set. Enable writes only after reviewing triage and evidence-downgrade metrics.
 `AllowedCommenters` limits who may drive edits; empty means PR creator only. Other human
 comments can still be triaged and answered. `/rf resolve` on an active PR thread queues an
 author-commanded resolve run. Discovery-triggered resolve runs require
-`Resolve:DiscoveryEnabled=true` and comments newer than the last completed resolve watermark.
+`Resolve:DiscoveryEnabled=true` and comments newer than the last completed resolve watermark —
+with one exception: a thread whose previous resolution was deferred (budget exhausted) is
+re-queued even when no comment is newer than the watermark, and the run's watermark is cleared
+so the deferred retry is actually collected.
 Both resolution and review runs share the per-PR claim, so they cannot write concurrently.
 
 ## Dev loop: Aspire vs Docker Compose
