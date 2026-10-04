@@ -174,7 +174,7 @@ public sealed class AutoFixStageCommitTests : IDisposable
     }
 
     [Fact]
-    public async Task Persistent_drift_degrades_the_fix_to_suggestion()
+    public async Task Persistent_drift_fails_the_run_instead_of_degrading_to_suggestion()
     {
         var abs = WriteFile("script.sh", "echo $name");
         var before = File.ReadAllBytes(abs);
@@ -182,17 +182,18 @@ public sealed class AutoFixStageCommitTests : IDisposable
         var ctx = Ctx();
         ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
 
-        await Stage(
+        // CommitOnHead never silently falls back from the requested commit/push to a
+        // suggestion: a fix that cannot be materialized fails the stage (and the run).
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Stage(
                 Options(),
                 editorFactory: (guard, writable) =>
                 {
                     editor = new FlakyApplyEditor(guard, writable, failures: int.MaxValue);
                     return editor;
                 })
-            .ExecuteAsync(ctx, CancellationToken.None);
+            .ExecuteAsync(ctx, CancellationToken.None));
 
-        var fix = Assert.Single(ctx.AppliedFixes); // still published — as a suggestion
-        Assert.False(fix.AppliedToTree);
+        Assert.Contains("bash.unquoted-vars", ex.Message);
         Assert.Equal(2, editor!.Calls); // initial + exactly one retry
         Assert.Equal(before, File.ReadAllBytes(abs));
     }

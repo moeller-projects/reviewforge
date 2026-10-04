@@ -221,9 +221,11 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
     /// <summary>CommitOnHead deterministic materialization: applies each proposal to the
     /// private checkout via the editor's drift-guarded range API. Hash drift → re-read,
-    /// re-propose through the fixer, retry once → still failing: that fix degrades to
-    /// suggestion-mode publication (AppliedToTree stays false); the run continues. One editor
-    /// per run; the writable set is proposal files ∩ changed-file manifest.</summary>
+    /// re-propose through the fixer, retry once → still failing: the run FAILS — CommitOnHead
+    /// never silently falls back from the requested commit/push to suggestion publication.
+    /// (Proposals for files outside the changed-file manifest still degrade to suggestion:
+    /// there is nothing committable to apply.) One editor per run; the writable set is
+    /// proposal files ∩ changed-file manifest.</summary>
     private void ApplyProposalsToTree(
         ReviewContext ctx,
         RepoPathGuard guard,
@@ -288,11 +290,15 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
                 if (!result.Success)
                 {
-                    RecordApplyFailure(finding, path, result.Error ?? "apply failed");
+                    // No silent fallback in CommitOnHead: the author asked for a committed
+                    // fix; a fix that cannot be materialized fails the run visibly.
+                    ReviewForgeTelemetry.AutoFixApplyFailed.Add(
+                        1, new TagList { { "rule", finding.RuleId } });
+                    throw new InvalidOperationException(
+                        $"auto-fix commit: could not materialize the fix for rule {finding.RuleId} on {path} — {result.Error ?? "apply failed"}");
                 }
 
                 var fix = new AppliedFix(finding.DedupeKey!, appliedProposal) {AppliedToTree = result.Success};
-                AttachFix(finding, applied, fix, ctx);
             }
         }
     }
