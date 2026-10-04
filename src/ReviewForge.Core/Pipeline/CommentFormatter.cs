@@ -94,19 +94,22 @@ public static class CommentFormatter
         sb.Append('\n');
         Line(sb, finding.Description.Trim());
         sb.Append('\n');
-        Line(sb, $"**{CommittedFixLine(fix.CommitSha!, fix.CommitSubject ?? string.Empty)}** — {fix.Proposal.Rationale}");
+        Line(sb, $"**{CommittedFixLine(fix.CommitSha!, fix.CommitSubject ?? string.Empty, fix.Proposal.Origin == AutoFix.FixOrigin.LlmCommanded)}** — {fix.Proposal.Rationale}");
         return sb.ToString();
     }
 
     /// <summary>The stable "Fixed in {sha7} — {subject}" sentence; shared by the commit stage's
-    /// queued replies and the publish stage's crash reconciliation so retry-dedupe text matches.</summary>
-    public static string CommittedFixLine(string commitSha, string commitSubject)
-        => $"Fixed in {commitSha[..Math.Min(7, commitSha.Length)]} — {commitSubject}";
+    /// queued replies and the publish stage's crash reconciliation so retry-dedupe text matches.
+    /// AI-drafted changes (LlmCommanded fix passes, resolve resolutions) always carry the
+    /// AI-generated label.</summary>
+    public static string CommittedFixLine(string commitSha, string commitSubject, bool aiDrafted = false)
+        => $"Fixed in {commitSha[..Math.Min(7, commitSha.Length)]} — {commitSubject}"
+           + (aiDrafted ? " (AI-generated — verify before accepting)" : string.Empty);
 
     /// <summary>Reply for a pushed fix when no finding is at hand (crash reconciliation) —
     /// same text a fresh run would have produced, so exactly-once dedupe holds.</summary>
-    public static string FormatCommittedFixReply(string commitSha, string commitSubject)
-        => WithBotPreamble($"🔧 {CommittedFixLine(commitSha, commitSubject)}");
+    public static string FormatCommittedFixReply(string commitSha, string commitSubject, bool aiDrafted = false)
+        => WithBotPreamble($"🔧 {CommittedFixLine(commitSha, commitSubject, aiDrafted)}");
 
     /// <summary>Commanded fix: no finding exists — quote the answered thread and label the draft.</summary>
     public static string FormatFixedFinding(AutoFix.FixProposal fix, string threadExcerpt)

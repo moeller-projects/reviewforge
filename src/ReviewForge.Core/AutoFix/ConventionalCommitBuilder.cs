@@ -15,6 +15,10 @@ public static class ConventionalCommitBuilder
 {
     public const string RunTrailerName = "ReviewForge-Run";
     public const string ThreadTrailerName = "ReviewForge-Thread";
+    /// <summary>Trailer marking a commit that contains AI-drafted changes (LlmCommanded fix
+    /// passes and resolve resolutions are always agent-drafted). Required labeling for any
+    /// AI-authored change the service publishes.</summary>
+    public const string AiDraftedTrailerName = "ReviewForge-AI-Drafted";
 
     /// <summary>One fix's contribution to a commit: the applied fix plus its originating
     /// finding (null for commanded thread fixes, which have no finding).</summary>
@@ -54,6 +58,11 @@ public static class ConventionalCommitBuilder
             sb.Append(ThreadTrailerName).Append(": ").Append(threadId!.Value).Append('\n');
         }
 
+        if (fixes.Any(f => f.Fix.Proposal.Origin == FixOrigin.LlmCommanded))
+        {
+            sb.Append(AiDraftedTrailerName).Append(": true\n");
+        }
+
         return sb.ToString();
     }
 
@@ -84,6 +93,8 @@ public static class ConventionalCommitBuilder
         foreach (var id in ids) sb.Append("Refs: !").Append(prId).Append(" thread ").Append(id).Append('\n');
         sb.Append(RunTrailerName).Append(": ").Append(runId.ToString("D")).Append('\n');
         foreach (var id in ids) sb.Append(ThreadTrailerName).Append(": ").Append(id).Append('\n');
+        // Resolve resolutions are always agent-drafted — the AI label is unconditional.
+        sb.Append(AiDraftedTrailerName).Append(": true\n");
         return sb.ToString();
     }
 

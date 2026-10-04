@@ -81,6 +81,31 @@ public sealed class ConventionalCommitBuilderTests
         Assert.StartsWith("fix(src): address review thread #7", message);
     }
 
+    [Fact]
+    public void Build_labels_commanded_fix_commits_as_ai_drafted()
+    {
+        var message = ConventionalCommitBuilder.Build(RunId, [Input(Fix("src/a.sh", threadId: 7))]);
+
+        Assert.Contains($"{ConventionalCommitBuilder.AiDraftedTrailerName}: true\n", message);
+    }
+
+    [Fact]
+    public void Build_omits_ai_label_for_deterministic_only_commits()
+    {
+        var message = ConventionalCommitBuilder.Build(RunId, [Input(Fix("src/a.sh"), Finding("title"))]);
+
+        Assert.DoesNotContain(ConventionalCommitBuilder.AiDraftedTrailerName, message);
+    }
+
+    [Fact]
+    public void BuildResolve_always_labels_agent_drafted_resolutions()
+    {
+        var message = ConventionalCommitBuilder.BuildResolve(
+            RunId, 12, 7, "bug", "src/a.cs", "null guard", "A.cs:10");
+
+        Assert.Contains($"{ConventionalCommitBuilder.AiDraftedTrailerName}: true\n", message);
+    }
+
     [Theory]
     [InlineData("src/util/helper.sh", "src")]       // top-level directory
     [InlineData("deploy.sh", "deploy")]             // repo-root file: extension-less name

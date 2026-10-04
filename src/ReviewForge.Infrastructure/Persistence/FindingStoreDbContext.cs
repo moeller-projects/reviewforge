@@ -75,6 +75,8 @@ public sealed class PushedFixEntity
     public int? ThreadId { get; set; }               // resolved live thread when known
     /// <summary>False while the row is a pre-push intent; true once the push succeeded.</summary>
     public bool Pushed { get; set; }
+    /// <summary>AI-authored change — reconciliation replies must carry the AI-generated label.</summary>
+    public bool AiDrafted { get; set; }
     public bool ReplyPosted { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }

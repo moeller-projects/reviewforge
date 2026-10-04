@@ -284,10 +284,12 @@ public sealed class CommitFixesStageTests
         Assert.StartsWith("Fixed in ", text);
         Assert.Contains(fix.CommitSha![..7], text);
         Assert.Contains(fix.CommitSubject!, text);
+        Assert.Contains("AI-generated", text);
         var row = Assert.Single(store.PushedFixes);
         Assert.Equal(42, row.ThreadId);
         Assert.Equal("thread-42", row.DedupeKey);
         Assert.Equal(fix.CommitSha, row.CommitSha);
+        Assert.True(row.AiDrafted);
     }
 
     [Fact]

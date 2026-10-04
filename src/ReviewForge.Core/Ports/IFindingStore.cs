@@ -19,6 +19,7 @@ public sealed record PushedFix(
     string CommitSubject,
     int? ThreadId,             // resolved live thread when known (commanded fixes)
     bool Pushed,               // false = push intent only; true = push confirmed on the remote
+    bool AiDrafted,            // AI-authored change — replies must carry the AI-generated label
     bool ReplyPosted,
     DateTimeOffset CreatedAt);
  

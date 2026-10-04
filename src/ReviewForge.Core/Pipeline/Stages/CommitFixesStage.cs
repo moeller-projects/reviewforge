@@ -157,6 +157,7 @@ public sealed class CommitFixesStage(
                 c.Subject,
                 ParseCommandThreadId(f.DedupeKey),
                 Pushed: false,
+                AiDrafted: f.Proposal.Origin == FixOrigin.LlmCommanded,
                 ReplyPosted: false,
                 CreatedAt: default)))
             .ToArray();
@@ -203,7 +204,8 @@ public sealed class CommitFixesStage(
             .SelectMany(c => c.Fixes)
             .Where(f => f.Proposal.SourceThreadId is not null)
             .Select(f => (f.Proposal.SourceThreadId!.Value,
-                CommentFormatter.CommittedFixLine(f.CommitSha!, f.CommitSubject ?? string.Empty)))
+                CommentFormatter.CommittedFixLine(
+                    f.CommitSha!, f.CommitSubject ?? string.Empty, f.Proposal.Origin == FixOrigin.LlmCommanded)))
             .ToArray();
         if (commandReplies.Length > 0)
         {

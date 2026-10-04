@@ -231,7 +231,7 @@ public class AutoFixPublishTests
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
             1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", 7,
-            Pushed: true, ReplyPosted: false, DateTimeOffset.UtcNow));
+            Pushed: true, AiDrafted: true, ReplyPosted: false, DateTimeOffset.UtcNow));
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
@@ -240,7 +240,7 @@ public class AutoFixPublishTests
 
         var reply = Assert.Single(source.Replies);
         Assert.Equal(7, reply.ThreadId);
-        Assert.Contains("Fixed in abcdef1 — fix(src): quote variable", reply.Text);
+        Assert.Contains("Fixed in abcdef1 — fix(src): quote variable (AI-generated — verify before accepting)", reply.Text);
         Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
     }
 
@@ -248,7 +248,7 @@ public class AutoFixPublishTests
     public async Task CommitOnHead_reconciliation_recognizes_reply_posted_before_crash()
     {
         var source = new FakePullRequestSource();
-        var body = CommentFormatter.FormatCommittedFixReply("abcdef123456", "fix(src): quote variable");
+        var body = CommentFormatter.FormatCommittedFixReply("abcdef123456", "fix(src): quote variable", aiDrafted: true);
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
             [
                 new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow),
@@ -258,7 +258,7 @@ public class AutoFixPublishTests
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
             1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", 7,
-            Pushed: true, ReplyPosted: false, DateTimeOffset.UtcNow));
+            Pushed: true, AiDrafted: true, ReplyPosted: false, DateTimeOffset.UtcNow));
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
@@ -283,7 +283,7 @@ public class AutoFixPublishTests
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
             1, ctx.RunId, "k1", "abcdef123456", "fix(src): quote variable", null,
-            Pushed: true, ReplyPosted: false, DateTimeOffset.UtcNow));
+            Pushed: true, AiDrafted: false, ReplyPosted: false, DateTimeOffset.UtcNow));
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,

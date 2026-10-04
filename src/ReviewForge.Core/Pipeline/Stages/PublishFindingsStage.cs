@@ -341,7 +341,7 @@ public sealed class PublishFindingsStage(
     /// </summary>
     private async Task ReconcilePushedFixAsync(ReviewContext ctx, PushedFix fix, CancellationToken ct)
     {
-        var body = CommentFormatter.FormatCommittedFixReply(fix.CommitSha, fix.CommitSubject);
+        var body = CommentFormatter.FormatCommittedFixReply(fix.CommitSha, fix.CommitSubject, fix.AiDrafted);
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
         var liveThreadId = threads
             .FirstOrDefault(t =>

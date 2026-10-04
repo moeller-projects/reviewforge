@@ -97,6 +97,17 @@ public sealed class SqliteFindingStore : IFindingStore
                 cmd.ExecuteNonQuery();
             }
 
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('PushedFixes') WHERE name = 'AiDrafted'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE PushedFixes ADD COLUMN AiDrafted INTEGER NOT NULL DEFAULT 0";
+                cmd.ExecuteNonQuery();
+                // Commanded (thread-keyed) fixes of earlier builds were always AI-drafted.
+                cmd.CommandText = "UPDATE PushedFixes SET AiDrafted = 1 WHERE DedupeKey LIKE 'thread-%'";
+                cmd.ExecuteNonQuery();
+            }
+
             transaction.Commit();
         }
         finally
@@ -154,6 +165,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 CommitSubject = fix.CommitSubject,
                 ThreadId = fix.ThreadId,
                 Pushed = false,
+                AiDrafted = fix.AiDrafted,
                 ReplyPosted = false,
                 CreatedAt = DateTimeOffset.UtcNow,
             });
@@ -192,7 +204,7 @@ public sealed class SqliteFindingStore : IFindingStore
             .ToListAsync(ct)
             .ConfigureAwait(false);
         return [.. rows.Select(p => new PushedFix(
-            p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.Pushed, p.ReplyPosted, p.CreatedAt))];
+            p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.Pushed, p.AiDrafted, p.ReplyPosted, p.CreatedAt))];
     }
 
     public async Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct)

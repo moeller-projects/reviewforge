@@ -486,7 +486,7 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SavePushedFixesAsync(
             Key,
             run.Id,
-            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", 42, Pushed: false, ReplyPosted: false, now)],
+            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", 42, Pushed: false, AiDrafted: false, ReplyPosted: false, now)],
             CancellationToken.None);
 
         // Push-intent rows are invisible to reply reconciliation until confirmed.
@@ -517,7 +517,7 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SavePushedFixesAsync(
             Key,
             run.Id,
-            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", null, Pushed: false, ReplyPosted: false, now)],
+            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", null, Pushed: false, AiDrafted: false, ReplyPosted: false, now)],
             CancellationToken.None);
 
         await _Store.AbandonPushedFixesAsync(Key, run.Id, CancellationToken.None);
@@ -531,7 +531,7 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SavePushedFixesAsync(
             Key,
             run.Id,
-            [new PushedFix(0, run.Id, "k2", "abcdef123456", "fix(src): change", null, Pushed: false, ReplyPosted: false, now)],
+            [new PushedFix(0, run.Id, "k2", "abcdef123456", "fix(src): change", null, Pushed: false, AiDrafted: false, ReplyPosted: false, now)],
             CancellationToken.None);
         await _Store.ConfirmPushedFixesAsync(Key, run.Id, CancellationToken.None);
         await _Store.AbandonPushedFixesAsync(Key, run.Id, CancellationToken.None);
@@ -549,7 +549,7 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SavePushedFixesAsync(
             Key,
             oldRun.Id,
-            [new PushedFix(0, oldRun.Id, "old-key", "deadbeef", "fix: old", null, false, false, now.AddDays(-10))],
+            [new PushedFix(0, oldRun.Id, "old-key", "deadbeef", "fix: old", null, false, false, false, now.AddDays(-10))],
             CancellationToken.None);
 
         var pruned = await _Store.PruneAsync(now.AddDays(-1), minRunsPerPr: 1, CancellationToken.None);
