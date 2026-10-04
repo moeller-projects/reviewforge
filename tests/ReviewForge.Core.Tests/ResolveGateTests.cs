@@ -42,6 +42,39 @@ public sealed class ResolveGateTests
     }
 
     [Fact]
+    public void Evaluate_ignores_new_comments_on_closed_or_fixed_threads()
+    {
+        // The collector excludes these threads; the gate must not continue for them either,
+        // or the run persists a no-work completion instead of terminating here.
+        var thread = new ReviewThread(1, null, ReviewThreadStatus.Fixed, [Human("creator", Watermark.AddDays(1))]);
+        Assert.Equal(ResolveGateDecision.NoNewComments, ResolveGate.Evaluate(Pr(), [thread], Watermark, true));
+    }
+
+    [Fact]
+    public void Evaluate_ignores_threads_whose_last_comment_is_the_bots()
+    {
+        var thread = new ReviewThread(1, null, ReviewThreadStatus.Active,
+        [
+            Human("creator", Watermark.AddDays(1)),
+            new ThreadComment("bot", "bot", true, "answer", Watermark.AddDays(2)),
+        ]);
+        Assert.Equal(ResolveGateDecision.NoNewComments, ResolveGate.Evaluate(Pr(), [thread], Watermark, true));
+    }
+
+    [Fact]
+    public void Evaluate_retries_deferred_bot_last_threads()
+    {
+        var thread = new ReviewThread(1, null, ReviewThreadStatus.Active,
+        [
+            Human("creator", Watermark.AddDays(-1)),
+            new ThreadComment("bot", "bot", true, "answer", Watermark),
+        ]);
+        Assert.Equal(
+            ResolveGateDecision.Continue,
+            ResolveGate.Evaluate(Pr(), [thread], Watermark, true, deferredThreadIds: new HashSet<int> { 1 }));
+    }
+
+    [Fact]
     public async Task Stage_rejects_a_stale_requested_head_before_loading_watermark()
     {
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)

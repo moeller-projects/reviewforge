@@ -22,12 +22,15 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
             .Where(thread => thread.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
                              && thread.Comments.Any(comment => !comment.IsBot))
             .Select(thread => thread.Id).ToHashSet();
-        var hasDeferredActions = priorActions.Any(action =>
-            action.Outcome == ResolutionOutcome.Deferred && activeThreads.Contains(action.ThreadId));
-        ctx.ResolveWatermark = apiManual || hasDeferredActions
+        var deferredThreadIds = priorActions
+            .Where(action => action.Outcome == ResolutionOutcome.Deferred && activeThreads.Contains(action.ThreadId))
+            .Select(action => action.ThreadId)
+            .ToHashSet();
+        ctx.ResolveWatermark = apiManual || deferredThreadIds.Count > 0
             ? null
             : lastResolveRun?.LastObservedCommentAt ?? lastResolveRun?.CompletedAt;
-        var decision = ResolveGate.Evaluate(pr, ctx.Threads, ctx.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId));
+        var decision = ResolveGate.Evaluate(
+            pr, ctx.Threads, ctx.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds);
         if (decision != ResolveGateDecision.Continue)
         {
             logger?.LogInformation("resolve gate terminated run: {Decision}", decision);
