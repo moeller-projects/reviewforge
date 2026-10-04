@@ -44,7 +44,7 @@ public class ReviewWorkerTests
             Claims = new InFlightClaims(Clock, Ttl);
             Store = store ?? new FakeFindingStore();
             Source = source ?? new FakePullRequestSource();
-            var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = _WorkDir, CleanRunVote = cleanVote});
+            var options = Options.Create(new ReviewOptions {CleanRunVote = cleanVote});
             Factory = new ReviewPipelineFactory(
                 Source,
                 Store,
@@ -53,6 +53,7 @@ public class ReviewWorkerTests
                     ScriptedChatClient.FunctionCalls(
                         ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new WorkspaceOptions {WorkDir = _WorkDir}),
                 Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
             Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock, resolveService);
@@ -410,7 +411,7 @@ public class ReviewWorkerTests
         var root = Path.Combine(Path.GetTempPath(), "reviewforge-nofs-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = root});
+            var options = Options.Create(new ReviewOptions());
             var factory = new ReviewPipelineFactory(
                 new FakePullRequestSource(),
                 new FakeFindingStore(),
@@ -420,6 +421,7 @@ public class ReviewWorkerTests
                         ScriptedChatClient.FunctionCalls(
                             ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new WorkspaceOptions {WorkDir = root}),
                 Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 

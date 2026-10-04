@@ -6,8 +6,8 @@ public sealed class CheckoutEvictionOptions
     public TimeSpan MaxAge { get; init; } = TimeSpan.FromDays(3);
 
     /// <summary>Age in minutes after which a run-scoped private checkout ({root}/private/{runId})
-    /// is reaped when its run lock is free. Comfortably beyond the longest run plus the
-    /// stale-shell window; configuration key is Checkout:PrivateMaxAgeMinutes.</summary>
+    /// is reaped when its run lock is free. Configuration key:
+    /// <c>Workspace:Checkout:PrivateMaxAgeMinutes</c>.</summary>
     public int PrivateMaxAgeMinutes { get; init; } = 60;
     public int MaxCheckoutsPerRepo { get; init; } = 10;
     public TimeSpan SweepInterval { get; init; } = TimeSpan.FromHours(1);

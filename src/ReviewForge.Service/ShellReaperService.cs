@@ -23,7 +23,7 @@ namespace ReviewForge.Service;
 /// </remarks>
 public sealed class ShellReaperService(
     IFindingStore store,
-    IOptions<ReviewForgeServiceOptions> options,
+    IOptions<HostOptions> options,
     ILogger<ShellReaperService> logger,
     TimeProvider clock) : BackgroundService
 {

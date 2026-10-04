@@ -42,7 +42,7 @@ tests/
   ReviewForge.{Core,Infrastructure,Service}.Tests/
   ReviewForge.Architecture.Tests/  assembly-boundary tests; no coverlet gate by design
 prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prompt; the review
-                               prompt override is ReviewForge:PromptOverridePath, and the embedded
+                               prompt override is Review:PromptOverridePath, and the embedded
                                default lives in src/ReviewForge.Core/Reasoning/Prompts/
 ```
 
@@ -114,9 +114,9 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
 - `Directory.Build.props`: `net10.0`, nullable enable, implicit usings, `LangVersion=latest`.
   Experimental APIs suppressed centrally (`MAAI001`, `OPENAI001`, `MEAI001`).
 - Options are typed records/classes with DataAnnotations, validated fail-fast at startup.
-  Config sections: `Ado`, `Reasoning`, `ReviewForge`, `Api`, `ApiDocs`, `AutoFix`, `Resolve`,
-  `Discovery`, `RepoReadTools`. Env overrides use double underscore,
-  e.g. `ReviewForge__MaxIterations=50`.
+  Config sections: `Ado`, `Reasoning`, `Review`, `Workspace`, `Persistence`, `Git`, `Host`, `Api`,
+  `ApiDocs`, `AutoFix`, `Resolve`, `VerifyFindings`, `Enrichment`, `Discovery`, `RepoReadTools`.
+  Environment overrides use double underscore, e.g. `Review__MaxIterations=50`.
 - Tests: xUnit, no mocking framework — hand-written fakes live in `ReviewForge.Testing`.
   Service tests run the real host in-process via `WebApplicationFactory<Program>` with
   fakes swapped in DI. `ScriptedChatClient` scripts the agent loop's tool calls.
@@ -139,7 +139,7 @@ dotnet run --project src/ReviewForge.Service        # serves http://localhost:50
 Service endpoints: `POST /reviews` and opt-in `POST /resolutions` → 202 `{runId, statusUrl}`
 (400 validation, 401 bad key, 409 PR already in flight, 429 rate-limited, 503 queue full) ·
 `GET /reviews/{runId}` · `POST /reviews/discover` · `GET /health` (store-backed) · `GET /alive` (liveness). The
-ingest queue has a fixed capacity of 100; `ReviewForge:WorkerCount` sets the workers
+ingest queue has a fixed capacity of 100; `Host:WorkerCount` sets the workers
 (default processorCount/2 clamped 2–8, validated 1–64). `RunTracker` is a bounded
 in-memory status cache (24 h retention, 10k entries, sticky terminal states); status
 read-through falls back to the durable queue row and then the store row, so with
@@ -165,7 +165,7 @@ registry pull (locally built `reviewforge:latest`; CI pushes only `sha-<commit>`
 
 Mounts (see `docker-compose.yml`):
 
-- named volume `reviewforge-data` → `/var/reviewforge` — `ReviewForge__WorkDir` is
+- named volume `reviewforge-data` → `/var/reviewforge` — `Workspace__WorkDir` is
   `/var/reviewforge/work`, so head checkouts live at `work/checkouts/<repository>/<head>`,
   local mirrors at `work/mirror/<repository>`, per-run `work/findings/{runId}.jsonl`;
   the SQLite store is `reviewforge.db` at the volume root.
@@ -182,7 +182,7 @@ Container listens on 8080; compose maps host 5080 → 8080 to match the CLI defa
 
 - New PR host (GitHub/GitLab): `IPullRequestSource` — pipeline untouched.
 - New reasoning provider: `IChatClientFactory` (see `ChatClientFactory`).
-- Prompt tuning: `ReviewForge:PromptOverridePath` → markdown file; default is the embedded
+- Prompt tuning: `Review:PromptOverridePath` → markdown file; default is the embedded
   resource `ReviewForge.Core.Reasoning.Prompts.native-review-system.md`.
 - Finding identity: `DedupeKey` = ruleId + file + normalized snippet (no line numbers —
   shift-proof across force-pushes). Bot threads carry the key in ADO thread properties.

@@ -49,6 +49,6 @@ public sealed class AutoFixOptions
     /// <summary>Author-commanded thread fixes: the PR author replies "/rf fix" on a thread.</summary>
     public bool EnableThreadFixCommands { get; init; } = false;
 
-    /// <summary>Iteration cap for a single fix pass (the review pass uses ReviewForge:MaxIterations).</summary>
+    /// <summary>Iteration cap for a single fix pass (the review pass uses Review:MaxIterations).</summary>
     [Range(2, 30)] public int FixPassMaxIterations { get; init; } = 8;
 }

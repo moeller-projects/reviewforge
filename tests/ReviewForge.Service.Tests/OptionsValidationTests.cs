@@ -27,7 +27,7 @@ public class OptionsValidationTests
         ("Ado:Project", "Your.Project"),
         ("Reasoning:Provider", "openai"),
         ("Reasoning:Model", "gpt-5"),
-        ("ReviewForge:WorkDir", Path.Combine(Path.GetTempPath(), "reviewforge-optval-" + Guid.NewGuid().ToString("N"))),
+        ("Workspace:WorkDir", Path.Combine(Path.GetTempPath(), "reviewforge-optval-" + Guid.NewGuid().ToString("N"))),
     ];
 
     private static (string, string)[] With(ICollection<(string, string)> baseConfig, params (string Key, string Value)[] overrides)
@@ -40,9 +40,30 @@ public class OptionsValidationTests
 
         Assert.NotNull(provider.GetRequiredService<IOptions<AdoOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
-        Assert.NotNull(provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+        Assert.NotNull(provider.GetRequiredService<IOptions<WorkspaceOptions>>().Value);
+        Assert.NotNull(provider.GetRequiredService<IOptions<PersistenceOptions>>().Value);
+        Assert.NotNull(provider.GetRequiredService<IOptions<ReviewOptions>>().Value);
+        Assert.NotNull(provider.GetRequiredService<IOptions<GitOptions>>().Value);
+        Assert.NotNull(provider.GetRequiredService<IOptions<HostOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<ApiDocsOptions>>().Value);
+    }
+
+    [Fact]
+    public void Legacy_reviewforge_section_is_not_an_alias()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:CleanRunVote", "Approved"))]);
+
+        Assert.Equal("NoResponse", provider.GetRequiredService<IOptions<ReviewOptions>>().Value.CleanRunVote);
+    }
+
+    [Fact]
+    public void Workspace_section_binds_work_directory()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), "reviewforge-workspace-" + Guid.NewGuid().ToString("N"));
+        using var provider = Build([.. With(ValidConfig(), ("Workspace:WorkDir", workDir))]);
+
+        Assert.Equal(workDir, provider.GetRequiredService<IOptions<WorkspaceOptions>>().Value.WorkDir);
     }
 
     [Fact]
@@ -103,10 +124,10 @@ public class OptionsValidationTests
     [Fact]
     public void Worker_count_below_one_is_rejected()
     {
-        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:WorkerCount", "0"))]);
+        using var provider = Build([.. With(ValidConfig(), ("Host:WorkerCount", "0"))]);
 
         var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+            () => provider.GetRequiredService<IOptions<HostOptions>>().Value);
 
         Assert.Contains("WorkerCount must be between 1 and 64", ex.Message);
     }
@@ -114,22 +135,22 @@ public class OptionsValidationTests
     [Fact]
     public void Store_journal_mode_outside_wal_delete_is_rejected()
     {
-        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "Truncate"))]);
+        using var provider = Build([.. With(ValidConfig(), ("Persistence:JournalMode", "Truncate"))]);
 
         var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+            () => provider.GetRequiredService<IOptions<PersistenceOptions>>().Value);
 
         Assert.Contains("JournalMode must be Wal | Delete", ex.Message);
     }
 
     [Theory]
-    [InlineData("ReviewForge:Store:JournalMode", "2")] // Enum.TryParse accepts undefined numerics —
+    [InlineData("Persistence:JournalMode", "2")] // Enum.TryParse accepts undefined numerics —
     public void Undefined_numeric_enum_values_are_rejected_at_startup(string key, string value)
     {
         using var provider = Build([.. With(ValidConfig(), (key, value))]);
 
         var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+            () => provider.GetRequiredService<IOptions<PersistenceOptions>>().Value);
 
         Assert.Contains(key.Split(':')[1], ex.Message);
     }
@@ -142,7 +163,7 @@ public class OptionsValidationTests
         // selecting the memory queue.
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(With(ValidConfig(), ("ReviewForge:QueueMode", "2"))
+            .AddInMemoryCollection(With(ValidConfig(), ("Persistence:QueueMode", "2"))
                 .ToDictionary(c => c.Item1, c => (string?)c.Item2))
             .Build();
 
@@ -206,7 +227,7 @@ public class OptionsValidationTests
     [Fact]
     public void Governor_resolves_default_cap_from_worker_count()
     {
-        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:WorkerCount", "3"))]);
+        using var provider = Build([.. With(ValidConfig(), ("Host:WorkerCount", "3"))]);
 
         var governor = provider.GetRequiredService<LlmGovernor>();
 
@@ -214,11 +235,24 @@ public class OptionsValidationTests
     }
 
     [Fact]
+    public void Git_section_binds_concurrency_and_targeted_fetch()
+    {
+        using var provider = Build([.. With(
+            ValidConfig(),
+            ("Git:MaxConcurrency", "3"),
+            ("Git:TargetedFetchEnabled", "true"))]);
+
+        var options = provider.GetRequiredService<IOptions<GitOptions>>().Value;
+        Assert.Equal(3, options.MaxConcurrency);
+        Assert.True(options.TargetedFetchEnabled);
+    }
+
+    [Fact]
     public void Store_journal_mode_accepts_case_insensitive_delete()
     {
-        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:Store:JournalMode", "DELETE"))]);
+        using var provider = Build([.. With(ValidConfig(), ("Persistence:JournalMode", "DELETE"))]);
 
-        Assert.Equal("DELETE", provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Store.JournalMode);
+        Assert.Equal("DELETE", provider.GetRequiredService<IOptions<PersistenceOptions>>().Value.JournalMode);
     }
 
     [Fact]
@@ -228,7 +262,7 @@ public class OptionsValidationTests
         // invalid QueueMode must fail there — never fall through to the memory queue.
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(With(ValidConfig(), ("ReviewForge:QueueMode", "Bogus"))
+            .AddInMemoryCollection(With(ValidConfig(), ("Persistence:QueueMode", "Bogus"))
                 .ToDictionary(c => c.Item1, c => (string?)c.Item2))
             .Build();
 
@@ -287,10 +321,10 @@ public class OptionsValidationTests
     [Fact]
     public void Invalid_clean_run_vote_is_rejected_at_options_validation()
     {
-        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:CleanRunVote", "Bogus"))]);
+        using var provider = Build([.. With(ValidConfig(), ("Review:CleanRunVote", "Bogus"))]);
 
         var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+            () => provider.GetRequiredService<IOptions<ReviewOptions>>().Value);
 
         Assert.Contains("CleanRunVote", ex.Message);
     }
@@ -303,9 +337,9 @@ public class OptionsValidationTests
     [InlineData("approved")]
     public void Valid_clean_run_votes_pass_options_validation(string value)
     {
-        using var provider = Build([.. With(ValidConfig(), ("ReviewForge:CleanRunVote", value))]);
+        using var provider = Build([.. With(ValidConfig(), ("Review:CleanRunVote", value))]);
 
-        Assert.Equal(value, provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.CleanRunVote);
+        Assert.Equal(value, provider.GetRequiredService<IOptions<ReviewOptions>>().Value.CleanRunVote);
     }
 
     [Fact]
@@ -434,7 +468,7 @@ public class OptionsValidationTests
     {
         using var provider = Build([.. ValidConfig()]);
 
-        var options = provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+        var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
 
         Assert.False(options.Sharding.Enabled);
         Assert.Equal(30_000, options.Sharding.ShardMaxChars);
@@ -448,13 +482,13 @@ public class OptionsValidationTests
         using var provider = Build(
         [
             .. With(ValidConfig(),
-                ("ReviewForge:Sharding:Enabled", "true"),
-                ("ReviewForge:Sharding:MaxShards", "2"),
-                ("ReviewForge:Sharding:ShardConcurrency", "3")),
+                ("Review:Sharding:Enabled", "true"),
+                ("Review:Sharding:MaxShards", "2"),
+                ("Review:Sharding:ShardConcurrency", "3")),
         ]);
 
         var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+            () => provider.GetRequiredService<IOptions<ReviewOptions>>().Value);
 
         Assert.Contains("ShardConcurrency must be between 1 and MaxShards", ex.Message);
     }
@@ -468,12 +502,12 @@ public class OptionsValidationTests
         using var provider = Build(
         [
             .. With(ValidConfig(),
-                ("ReviewForge:Sharding:Enabled", "true"),
-                ($"ReviewForge:Sharding:{key}", value)),
+                ("Review:Sharding:Enabled", "true"),
+                ($"Review:Sharding:{key}", value)),
         ]);
 
         Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+            () => provider.GetRequiredService<IOptions<ReviewOptions>>().Value);
     }
     [Fact]
     public void Resolve_enabled_without_allowed_authors_is_rejected()

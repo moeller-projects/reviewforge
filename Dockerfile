@@ -39,8 +39,8 @@ RUN mkdir -p /var/reviewforge/work /home/app/.codex \
 ENV ASPNETCORE_URLS=http://+:8080 \
     DOTNET_RUNNING_IN_CONTAINER=true \
     DOTNET_NOLOGO=1 \
-    ReviewForge__WorkDir=/var/reviewforge/work \
-    ReviewForge__StoreConnectionString="Data Source=/var/reviewforge/reviewforge.db"
+    Workspace__WorkDir=/var/reviewforge/work \
+    Persistence__StoreConnectionString="Data Source=/var/reviewforge/reviewforge.db"
 
 USER app
 WORKDIR /app

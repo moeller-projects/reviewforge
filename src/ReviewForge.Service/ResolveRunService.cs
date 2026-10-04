@@ -23,7 +23,7 @@ public sealed class ResolveRunService(
     IProcessRunner processRunner,
     AutoFixOptions autoFix,
     IOptions<ResolveOptions> resolveOptions,
-    IOptions<ReviewForgeServiceOptions> serviceOptions,
+    IOptions<ReviewOptions> reviewOptions,
     IOptions<RepoReadToolsOptions> repoToolsOptions,
     ILoggerFactory loggerFactory,
     TimeProvider clock,
@@ -33,16 +33,16 @@ public sealed class ResolveRunService(
     {
         var opts = resolveOptions.Value;
         if (!opts.Enabled) throw new InvalidOperationException("resolve pipeline is disabled");
-        var service = serviceOptions.Value;
+        var review = reviewOptions.Value;
         var tools = repoToolsOptions.Value;
         var agent = new NativeReviewAgent(chatClientFactory, new AgentOptions
         {
-            MaxContextTokens = service.MaxContextTokens,
-            MaxIterations = service.MaxIterations,
-            PromptOverridePath = service.PromptOverridePath,
-            RuleSetsPath = service.RuleSetsPath,
-            Effort = service.ReasoningEffort,
-            DebugLogging = service.AgentDebugLogging,
+            MaxContextTokens = review.MaxContextTokens,
+            MaxIterations = review.MaxIterations,
+            PromptOverridePath = review.PromptOverridePath,
+            RuleSetsPath = review.RuleSetsPath,
+            Effort = review.ReasoningEffort,
+            DebugLogging = review.AgentDebugLogging,
             GrepMaxMs = tools.GrepMaxMs,
             GrepMaxLines = tools.GrepMaxLines,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());

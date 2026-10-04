@@ -44,9 +44,9 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Ado__Project", "test");
         Environment.SetEnvironmentVariable("Reasoning__Provider", "openai");
         Environment.SetEnvironmentVariable("Reasoning__Model", "test-model");
-        Environment.SetEnvironmentVariable("ReviewForge__WorkDir", WorkDir);
-        Environment.SetEnvironmentVariable("ReviewForge__WorkerCount", "2");
-        Environment.SetEnvironmentVariable("ReviewForge__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
+        Environment.SetEnvironmentVariable("Workspace__WorkDir", WorkDir);
+        Environment.SetEnvironmentVariable("Host__WorkerCount", "2");
+        Environment.SetEnvironmentVariable("Persistence__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
         Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, "test-key-1,test-key-2");
     }
 
@@ -155,7 +155,8 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 sp.GetRequiredService<IFindingStore>(),
                 sp.GetRequiredService<RepoCheckoutPool>(),
                 sp.GetRequiredService<IChatClientFactory>(),
-                sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
+                sp.GetRequiredService<IOptions<ReviewOptions>>(),
+                sp.GetRequiredService<IOptions<WorkspaceOptions>>(),
                 sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 findingFixers:
@@ -175,7 +176,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             foreach (var key in new[]
             {
                 "Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model",
-                "ReviewForge__WorkDir", "ReviewForge__WorkerCount", "ReviewForge__StoreConnectionString",
+                "Workspace__WorkDir", "Host__WorkerCount", "Persistence__StoreConnectionString",
                 ApiKeyOptions.KeysEnvironmentVariable, "Api__AllowUnauthenticatedForDevelopment",
                 "Api__SubmitPermitLimit", "Api__SubmitWindowSeconds",
                 "Api__StatusPermitLimit", "Api__StatusWindowSeconds",
@@ -235,6 +236,19 @@ public class ServiceTests : IAsyncLifetime
     {
         var response = await _Factory.CreateClient().GetAsync("/health");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Environment_options_override_TOML_configuration()
+    {
+        var response = await _Factory.CreateClient().GetAsync("/alive");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var workspace = _Factory.Services.GetRequiredService<IOptions<WorkspaceOptions>>().Value;
+        Assert.Equal(_Factory.WorkDir, workspace.WorkDir);
+        var host = _Factory.Services.GetRequiredService<IOptions<HostOptions>>().Value;
+        Assert.Equal(2, host.WorkerCount);
+        Assert.True(_Factory.Services.GetRequiredService<IOptions<GitOptions>>().Value.TargetedFetchEnabled);
     }
 
     [Fact]
@@ -378,14 +392,16 @@ public class ServiceTests : IAsyncLifetime
         var tracker = new RunTracker();
         var standaloneWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-failing-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(standaloneWorkDir);
-        var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = standaloneWorkDir});
+        var reviewOptions = Options.Create(new ReviewOptions());
+        var workspaceOptions = Options.Create(new WorkspaceOptions {WorkDir = standaloneWorkDir});
         var failingGit = new ExplosiveGitOps(standaloneWorkDir);
         var failingFactory = new ReviewPipelineFactory(
             _Factory.Source, _Factory.Store,
             new RepoCheckoutPool(failingGit, new FakeWorkspaceFs(), standaloneWorkDir),
             new FakeChatClientFactory(_Factory.Chat),
-            options,
-                Options.Create(new RepoReadToolsOptions()),
+            reviewOptions,
+            workspaceOptions,
+            Options.Create(new RepoReadToolsOptions()),
             LoggerFactory.Create(b => { }));
         var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
             _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
@@ -803,8 +819,8 @@ public class DiWiringTests
             ["Ado:Project"] = "test",
             ["Reasoning:Provider"] = "openai",
             ["Reasoning:Model"] = "m",
-            ["ReviewForge:WorkDir"] = Path.Combine(Path.GetTempPath(), "rf-di-" + Guid.NewGuid().ToString("N")),
-            ["ReviewForge:StoreConnectionString"] = $"Data Source={Path.Combine(Path.GetTempPath(), "rf-di-" + Guid.NewGuid().ToString("N") + ".db")}",
+            ["Workspace:WorkDir"] = Path.Combine(Path.GetTempPath(), "rf-di-" + Guid.NewGuid().ToString("N")),
+            ["Persistence:StoreConnectionString"] = $"Data Source={Path.Combine(Path.GetTempPath(), "rf-di-" + Guid.NewGuid().ToString("N") + ".db")}",
         };
         if (extra is not null)
         {
@@ -877,7 +893,7 @@ public class DiWiringTests
         {
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddReviewForge(BuildConfig(new Dictionary<string, string?> {["ReviewForge:WorkerCount"] = "3"}));
+            services.AddReviewForge(BuildConfig(new Dictionary<string, string?> {["Host:WorkerCount"] = "3"}));
             using var provider = services.BuildServiceProvider();
 
             Assert.Equal(3, provider.GetServices<IHostedService>().OfType<ReviewWorker>().Count());
@@ -893,11 +909,11 @@ public class DiWiringTests
             services.AddLogging();
             services.AddReviewForge(BuildConfig(new Dictionary<string, string?>
             {
-                ["ReviewForge:ReasoningEffort"] = "High",
+                ["Review:ReasoningEffort"] = "High",
             }));
             using var provider = services.BuildServiceProvider();
 
-            var options = provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+            var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
             Assert.Equal(ReasoningEffort.High, options.ReasoningEffort);
         });
     }
@@ -912,7 +928,7 @@ public class DiWiringTests
             services.AddReviewForge(BuildConfig());
             using var provider = services.BuildServiceProvider();
 
-            var options = provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+            var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
             Assert.Null(options.ReasoningEffort);
         });
     }
@@ -935,16 +951,17 @@ public class DiWiringTests
     {
         WithPat(() =>
         {
-            var options = Options.Create(new ReviewForgeServiceOptions
+            var reviewOptions = Options.Create(new ReviewOptions {CleanRunVote = "Bogus"});
+            var workspaceOptions = Options.Create(new WorkspaceOptions
             {
                 WorkDir = Path.Combine(Path.GetTempPath(), "rf-clean-" + Guid.NewGuid().ToString("N")),
-                CleanRunVote = "Bogus",
             });
             var factory = new ReviewPipelineFactory(
                 new FakePullRequestSource(), new FakeFindingStore(),
                 new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath()),
                 new FakeChatClientFactory(new ScriptedChatClient()),
-                options,
+                reviewOptions,
+                workspaceOptions,
                 Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 
@@ -1088,14 +1105,14 @@ public class ApiDocsEnabledTests : IAsyncLifetime
                 ["Ado:Project"] = "test",
                 ["Reasoning:Provider"] = "openai",
                 ["Reasoning:Model"] = "test-model",
-                ["ReviewForge:WorkerCount"] = "0",
+                ["Host:WorkerCount"] = "0",
             })
             .Build();
         services.AddReviewForge(configuration);
         using var provider = services.BuildServiceProvider();
 
         var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
+            () => provider.GetRequiredService<IOptions<HostOptions>>().Value);
 
         Assert.Contains("WorkerCount must be between 1 and 64", ex.Message);
     }
@@ -1110,7 +1127,7 @@ public class OtlpEnabledTests : IAsyncLifetime
     // the constructor and clear it on dispose, since env vars are process-wide.
     public OtlpEnabledTests()
     {
-        Environment.SetEnvironmentVariable("ReviewForge__OtlpEnabled", "true");
+        Environment.SetEnvironmentVariable("Host__OtlpEnabled", "true");
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -1118,7 +1135,7 @@ public class OtlpEnabledTests : IAsyncLifetime
     public Task DisposeAsync()
     {
         _Factory.Dispose();
-        Environment.SetEnvironmentVariable("ReviewForge__OtlpEnabled", null);
+        Environment.SetEnvironmentVariable("Host__OtlpEnabled", null);
         return Task.CompletedTask;
     }
 

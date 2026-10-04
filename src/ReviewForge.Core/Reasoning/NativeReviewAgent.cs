@@ -285,7 +285,7 @@ public sealed class NativeReviewAgent(
             ChatOptions = new ChatOptions
             {
                 ModelId = chatClientFactory.ModelName(ChatTier.Fast),
-                // Always the embedded fix-pass prompt: ReviewForge:PromptOverridePath targets
+                // Always the embedded fix-pass prompt: Review:PromptOverridePath targets
                 // the REVIEW system prompt, and substituting it here would hand the fix pass
                 // a contract for tools it does not have.
                 Instructions = SystemPromptComposer.ComposeFixPass(),

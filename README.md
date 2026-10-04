@@ -52,7 +52,7 @@ tests/
 | 7.5| begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService |
 | 7.7| commit-fixes       | CommitOnHead only (no-op otherwise): commits the materialized fixes in the run's private checkout, pushes fast-forward-only to the PR source branch (claim check + head pin + server-side CAS), persists pushed_fixes rows before any reply |
 | 8  | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
-| 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `ReviewForge:CleanRunVote` (default NoResponse) |
+| 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `Review:CleanRunVote` (default NoResponse) |
 | 10 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
 
 ## Run it
@@ -83,7 +83,7 @@ key, 409 when a review for the same PR is already in flight (the conflicting run
 the body), 429 over the submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`,
 default 10/60s), 503 when the bounded queue is full ·
 `GET /reviews/{runId}` (status: the bounded in-memory tracker first, then queued-row and
-store read-through — with `ReviewForge:QueueMode=Sqlite` queued and finalized runs stay
+store read-through — with `Persistence:QueueMode=Sqlite` queued and finalized runs stay
 visible across host restarts; with the default `Memory` mode in-flight status is lost on
 restart) · `POST /resolutions` (opt-in autonomous comment resolution) · `POST /reviews/discover` ·
 `GET /health` (store-backed, unauthenticated) · `GET /alive` (liveness, unauthenticated). Rate limiting runs before API-key auth (auth is
@@ -190,25 +190,26 @@ are configured, because the docs describe the `/reviews*` surface:
 
 ## Configuration
 
-`src/ReviewForge.Service/appsettings.toml` — typed options with DataAnnotations validation,
-fail-fast at startup. `appsettings.{Environment}.toml` can override environment-specific
+`src/ReviewForge.Service/config.toml` — typed options with DataAnnotations validation,
+fail-fast at startup. `config.{Environment}.toml` can override environment-specific
 settings and reloads on change. Environment variables and command-line arguments take
-precedence. PAT and API keys come from the environment only.
+precedence. This is a breaking migration from `ReviewForge:*` / `ReviewForge__*`; update
+deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `Host` sections.
 
-- `ReviewForge:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
+- `Review:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
   `Medium`, `High`, `ExtraHigh`). Omit it (or leave unset) to keep the provider default. The
   Codex endpoint may ignore or restrict effort per model — verify against the deployed model.
-- `ReviewForge:Store:JournalMode` — `Wal` (default) or `Delete`. WAL lets readers proceed
+- `Persistence:JournalMode` — `Wal` (default) or `Delete`. WAL lets readers proceed
   during writes and tolerates a power loss losing only the last transaction — safe for this
-  dedupe/audit store. WAL requires POSIX advisory locks: keep `StoreConnectionString` on a
+  dedupe/audit store. WAL requires POSIX advisory locks: keep `Persistence:StoreConnectionString` on a
   local disk (the shipped container volume is fine); on network filesystems use `Delete`.
-- `ReviewForge:QueueMode` — `Memory` (default, in-memory channel) or `Sqlite` (durable rows on
+- `Persistence:QueueMode` — `Memory` (default, in-memory channel) or `Sqlite` (durable rows on
   the store's database file). Sqlite mode survives host restarts: queued runs are re-claimed
   after the claim TTL, `GET /reviews/{runId}` reads through the queue row (`Queued`) and the
   store row (`Completed`/`Failed`), and expired claims are counted by
   `reviewforge.queue.reclaimed_total`. In-flight PR claims remain in-memory for now — a
   restarted run is re-acquired idempotently at dequeue.
-- `ReviewForge:Sharding` — map-reduce sharding for large diffs. `Enabled` (default `false`)
+- `Review:Sharding` — map-reduce sharding for large diffs. `Enabled` (default `false`)
   turns it on; when the planned shard count is at least two, stage 6 runs one agent per
   shard concurrently and merges findings into the single run collector. `ShardMaxChars`
   (default 30000) is the cumulative diff budget per shard — a file larger than the budget
@@ -226,41 +227,41 @@ precedence. PAT and API keys come from the environment only.
   startup validation. Unset (default) aliases the Fast tier to the full model — identical
   behavior, zero config. Token metrics carry a `model` tag, so per-tier cost splits out
   without new series.
-- `ReviewForge:TrivialDiffSkipEnabled` — default true. Iterations whose post-exclusion diff
+- `Review:TrivialDiffSkipEnabled` — default true. Iterations whose post-exclusion diff
   adds zero reviewable lines (lockfile-only churn, deletions-only) with no open threads get
   a clean vote without an LLM call; counted by `reviewforge.reviews.trivial_total`. The
   deterministic homoglyph analyzer still runs. Set false to restore the always-run behavior.
 - `Reasoning:MaxConcurrentRequests` / `Reasoning:GovernorAcquireTimeoutSeconds` — the
   process-wide LLM governor bounds concurrent provider HTTP requests (across both model
   tiers) so `WorkerCount × iterations` cannot burst the provider into 429s. Unset cap
-  defaults to `ReviewForge:WorkerCount × 2`; an acquisition timeout fails the run with a
+  defaults to `Host:WorkerCount × 2`; an acquisition timeout fails the run with a
   visible `LlmGovernorTimeoutException` (counted by `reviewforge.llm.governor.timeout_total`).
   Watch `reviewforge.llm.governor.wait_ms` before tightening the cap.
-- `ReviewForge:WorkerCount` — concurrent queue workers (validated 1–64; unset defaults to
+- `Host:WorkerCount` — concurrent queue workers (validated 1–64; unset defaults to
   `processorCount/2` clamped to 2–8).
-- `ReviewForge:CleanRunVote` — reviewer vote on clean runs (no findings, all AC met, no
+- `Review:CleanRunVote` — reviewer vote on clean runs (no findings, all AC met, no
   unanswered threads): `NoResponse` (default) | `Approved` | `ApprovedWithSuggestions` |
   `None` (leave the vote untouched).
-- `ReviewForge:StaleShellMinutes` — 10 by default. At startup, in-flight run shells
+- `Host:StaleShellMinutes` — 10 by default. At startup, in-flight run shells
   (persisted by begin-run, never finalized — a crash between stages 7.5 and 10) older than
   this are reaped and finalized as failures so a crashed head can be re-reviewed after a
   bounded window.
-- `ReviewForge:Retention:Days` / `MinRunsPerPr` — 30 / 5. Old store runs are pruned at the
+- `Persistence:Retention:Days` / `MinRunsPerPr` — 30 / 5. Old store runs are pruned at the
   discovery-sweep tail (at most hourly); the latest completed run and the last
   `MinRunsPerPr` runs of a PR are always kept.
-- `ReviewForge:GitMaxConcurrency` — dedicated LibGit2Sharp operation scheduler bound
+- `Git:MaxConcurrency` — dedicated LibGit2Sharp operation scheduler bound
   (unset defaults to `processorCount/2` clamped to 2–4).
-- `ReviewForge:TargetedFetchEnabled` — default true; targeted/partial fetches into the
+- `Git:TargetedFetchEnabled` — default true; targeted/partial fetches into the
   shared mirror so prepare-repository skips full origin fetches.
-- `ReviewForge:OtlpEnabled` — opt-in switch enabling OTLP export without an env endpoint;
+- `Host:OtlpEnabled` — opt-in switch enabling OTLP export without an env endpoint;
   the standard `OTEL_EXPORTER_OTLP_*` variables alone also turn export on (per-signal
   variants included). Never hardcode an endpoint in configuration.
 - `RepoReadTools:GrepMaxMs` / `GrepMaxLines` — aggregate wall-clock (default 10 s) and
   line (default 200k) budgets for one agent Grep call; the call aborts with a truncation
   marker when either is hit.
-- Diff budgets: `ReviewForge:MaxDiffChars` (200k) / `MaxDiffCharsPerFile` (40k) and
+- Diff budgets: `Review:MaxDiffChars` (200k) / `MaxDiffCharsPerFile` (40k) and
   `MaxDiffBytes` (4 MiB) / `MaxDiffBytesPerFile` (256 KiB); oversized diffs are truncated
-  with a marker. `ReviewForge:DiffExcludeGlobs` replaces the default exclusion set
+  with a marker. `Review:DiffExcludeGlobs` replaces the default exclusion set
   (lockfiles, generated code) when set.
 
 ## Auto-fix (off by default)
@@ -342,7 +343,7 @@ the verifier entirely.
 
 Reviews use embedded general, performance, security, and language rule packs. Packs
 activate from changed-file extensions, path patterns, or repository root marker files.
-Set `ReviewForge:RuleSetsPath` to a directory of JSON packs to replace or extend embedded
+Set `Review:RuleSetsPath` to a directory of JSON packs to replace or extend embedded
 packs. Repeated override files for the same pack are processed in filename order, with
 later rules replacing earlier rules by ID; extension packs must use unique rule IDs.
 Findings must use an active rule id. Use `general.other` for a verified issue that has no
@@ -383,12 +384,12 @@ sweep enqueue is only a candidate; the gate decides whether a run actually proce
 
 ## Runtime concurrency and checkout storage
 
-`ReviewForge:WorkerCount` controls the number of concurrent queue workers (default
+`Host:WorkerCount` controls the number of concurrent queue workers (default
 `processorCount/2` clamped to 2–8). The ingest queue has a fixed capacity of 100; a full
 queue rejects submissions immediately with HTTP 503 (and discovery records a `queue full`
 skip). Queue depth is exported as `reviewforge.queue.depth`, and rejected enqueues as
 `reviewforge.queue.rejected_total`. Each review holds its per-head checkout lease until the
-run finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
+run finishes. `Workspace:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
 `MaxCheckoutsPerRepo`, `SweepInterval`, and `PrivateMaxAgeMinutes` (default 60). Pooled
 head checkouts are evicted by age/capacity but never mirrors; private run checkouts are
 reaped at startup if left by a crash and periodically after the configured age. Both paths
@@ -442,7 +443,7 @@ production code, so it carries no coverlet threshold.
 - **New PR host** (GitHub, GitLab): implement `IPullRequestSource` — pipeline untouched.
 - **New reasoning provider**: implement `IChatClientFactory` (see `ChatClientFactory`).
 - **Enrichment (CRG/MCP)**: implement `IContextEnricher`, register in DI — fail-safe contract.
-- **Prompt tuning**: `ReviewForge:PromptOverridePath` points at a markdown file; the embedded
+- **Prompt tuning**: `Review:PromptOverridePath` points at a markdown file; the embedded
   default lives in `src/ReviewForge.Core/Reasoning/Prompts/native-review-system.md`.
 - **Finding identity**: `DedupeKey` = ruleId + file + normalized snippet (no line numbers —
   shift-proof across force-pushes). Bot threads carry the key in ADO thread Properties.

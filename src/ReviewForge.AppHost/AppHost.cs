@@ -19,9 +19,9 @@ builder.AddProject<Projects.ReviewForge_Service>("reviewforge")
     .WithHttpHealthCheck("/health")
     .WithHttpHealthCheck("/alive")
     .WithExternalHttpEndpoints()
-    .WithEnvironment("ReviewForge__WorkDir", reviewforgeWorkDir)
+    .WithEnvironment("Workspace__WorkDir", reviewforgeWorkDir)
     .WithEnvironment(
-        "ReviewForge__StoreConnectionString",
+        "Persistence__StoreConnectionString",
         $"Data Source={Path.Combine(reviewforgeWorkDir, "reviewforge.db")}")
     .WithEnvironment("REVIEWFORGE_ADO_PAT", adoPat)
     .WithEnvironment("OPENAI_API_KEY", openAiKey)
@@ -29,6 +29,6 @@ builder.AddProject<Projects.ReviewForge_Service>("reviewforge")
     // Make the env-driven OTLP contract explicit and greppable. Aspire injects
     // OTEL_EXPORTER_OTLP_ENDPOINT for hosted projects automatically; this assertion
     // documents intent — do NOT set the endpoint here.
-    .WithEnvironment("ReviewForge__AgentDebugLogging", "false");
+    .WithEnvironment("Review__AgentDebugLogging", "false");
 
 builder.Build().Run();

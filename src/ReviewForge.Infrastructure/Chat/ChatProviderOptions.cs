@@ -29,7 +29,7 @@ public sealed class ChatProviderOptions : IValidatableObject
 
     /// <summary>
     /// Process-wide cap on concurrent provider HTTP requests (across both model tiers).
-    /// Null (default) resolves to ReviewForge:WorkerCount × 2 — permissive on purpose;
+    /// Null (default) resolves to Host:WorkerCount × 2 — permissive on purpose;
     /// tighten from the reviewforge.llm.governor.wait_ms histogram.
     /// </summary>
     [Range(1, 10_000)]

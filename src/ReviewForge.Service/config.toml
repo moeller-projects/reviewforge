@@ -9,31 +9,37 @@ Provider = "openai-codex"
 Model = "openai-codex:gpt-5.6-luna"
 GovernorAcquireTimeoutSeconds = 300
 
-[ReviewForge]
+[Workspace]
 WorkDir = "./work"
-StoreConnectionString = "Data Source=./work/reviewforge.db"
-QueueMode = "Memory"
-MaxContextTokens = 150000
-MaxIterations = 30
-WorkerCount = 4
-TargetedFetchEnabled = true
-AgentDebugLogging = false
-TrivialDiffSkipEnabled = true
 
-[ReviewForge.Store]
-JournalMode = "Wal"
-
-[ReviewForge.Checkout]
+[Workspace.Checkout]
 Enabled = true
 MaxAge = "3.00:00:00"
 MaxCheckoutsPerRepo = 10
 SweepInterval = "01:00:00"
 
-[ReviewForge.Sharding]
+[Persistence]
+StoreConnectionString = "Data Source=./work/reviewforge.db"
+QueueMode = "Memory"
+JournalMode = "Wal"
+
+[Review]
+MaxContextTokens = 150000
+MaxIterations = 30
+AgentDebugLogging = false
+TrivialDiffSkipEnabled = true
+
+[Review.Sharding]
 Enabled = false
 ShardMaxChars = 30000
 MaxShards = 8
 ShardConcurrency = 2
+
+[Git]
+TargetedFetchEnabled = true
+
+[Host]
+WorkerCount = 4
 
 [ApiDocs]
 Enabled = false

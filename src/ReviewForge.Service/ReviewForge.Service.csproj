@@ -24,7 +24,7 @@
         <PackageReference Include="Scalar.AspNetCore"/>
     </ItemGroup>
     <ItemGroup>
-        <None Update="appsettings*.toml"
+        <None Update="config*.toml"
               CopyToOutputDirectory="PreserveNewest"
               CopyToPublishDirectory="PreserveNewest"/>
     </ItemGroup>

@@ -34,7 +34,7 @@ public class ShellReaperServiceTests
 
             var reaper = new ShellReaperService(
                 store,
-                Options.Create(new ReviewForgeServiceOptions {StaleShellMinutes = 10}),
+                Options.Create(new HostOptions {StaleShellMinutes = 10}),
                 NullLogger<ShellReaperService>.Instance,
                 clock);
             await reaper.ReapOnceAsync();
@@ -75,7 +75,7 @@ public class ShellReaperServiceTests
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 9, 17, 12, 0, 0, TimeSpan.Zero));
         var reaper = new ShellReaperService(
             store,
-            Options.Create(new ReviewForgeServiceOptions {StaleShellMinutes = 10}),
+            Options.Create(new HostOptions {StaleShellMinutes = 10}),
             NullLogger<ShellReaperService>.Instance,
             clock);
         await reaper.ReapOnceAsync();

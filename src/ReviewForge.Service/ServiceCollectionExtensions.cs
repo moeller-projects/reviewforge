@@ -31,15 +31,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<InFlightClaims>();
 
         // Ingest queue backing: memory channel (default) or durable SQLite rows on the store's
-        // database file (ReviewForge:QueueMode). Worker and endpoints only see IReviewQueue.
+        // database file (Persistence:QueueMode). Worker and endpoints only see IReviewQueue.
         // Enum.TryParse accepts undefined numeric values, so definedness is checked here at
         // compose time too — "2" must never silently become Memory and disable durability.
-        var queueModeText = configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:QueueMode");
+        var queueModeText = configuration.GetValue<string>($"{PersistenceOptions.SectionName}:QueueMode");
         if (queueModeText is not null
             && (!Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var queueMode) || !Enum.IsDefined(queueMode)))
         {
             throw new InvalidOperationException(
-                $"ReviewForge:QueueMode must be one of {string.Join(" | ", Enum.GetNames<QueueMode>())} (got '{queueModeText}')");
+                $"Persistence:QueueMode must be one of {string.Join(" | ", Enum.GetNames<QueueMode>())} (got '{queueModeText}')");
         }
 
         if (Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var parsedQueueMode)
@@ -47,10 +47,10 @@ public static class ServiceCollectionExtensions
         {
             services.AddSingleton<IReviewQueue>(sp =>
             {
-                var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+                var opts = sp.GetRequiredService<IOptions<PersistenceOptions>>().Value;
                 return new SqliteReviewQueue(
                     opts.StoreConnectionString,
-                    journalMode: Enum.Parse<StoreJournalMode>(opts.Store.JournalMode, ignoreCase: true));
+                    journalMode: Enum.Parse<StoreJournalMode>(opts.JournalMode, ignoreCase: true));
             });
         }
         else
@@ -63,7 +63,7 @@ public static class ServiceCollectionExtensions
 
         // Runtime directories are created once at composition time; the per-run pipeline
         // factory must not touch the filesystem (P3-m).
-        var workDir = configuration.GetValue<string>($"{ReviewForgeServiceOptions.SectionName}:WorkDir")
+        var workDir = configuration.GetValue<string>($"{WorkspaceOptions.SectionName}:WorkDir")
                       ?? Path.Combine(Path.GetTempPath(), "reviewforge");
         Directory.CreateDirectory(workDir);
         Directory.CreateDirectory(Path.Combine(workDir, "findings"));
@@ -94,34 +94,48 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp =>
         {
             var chat = sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
-            var service = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
-            return new LlmGovernor(chat.MaxConcurrentRequests ?? service.WorkerCount * 2);
+            var host = sp.GetRequiredService<IOptions<HostOptions>>().Value;
+            return new LlmGovernor(chat.MaxConcurrentRequests ?? host.WorkerCount * 2);
         });
         services.AddSingleton<IChatClientFactory>(sp =>
             new ChatClientFactory(
                 sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value,
                 governor: sp.GetRequiredService<LlmGovernor>()));
 
-        services.AddOptions<ReviewForgeServiceOptions>()
-            .Bind(configuration.GetSection(ReviewForgeServiceOptions.SectionName))
+        services.AddOptions<WorkspaceOptions>()
+            .Bind(configuration.GetSection(WorkspaceOptions.SectionName))
             .ValidateDataAnnotations()
-            .Validate(o => o.WorkerCount is >= 1 and <= 64,
-                "ReviewForge:WorkerCount must be between 1 and 64")
-            .Validate(o => ReviewForgeServiceOptions.IsValidCleanRunVote(o.CleanRunVote),
-                "ReviewForge:CleanRunVote must be NoResponse | Approved | ApprovedWithSuggestions | None")
-            .Validate(o => o.StaleShellMinutes > 0, "ReviewForge:StaleShellMinutes must be greater than 0")
-            .Validate(o => o.Retention.Days >= 1, "ReviewForge:Retention:Days must be at least 1")
-            .Validate(o => o.Retention.MinRunsPerPr >= 1, "ReviewForge:Retention:MinRunsPerPr must be at least 1")
-            .Validate(o => Enum.TryParse<StoreJournalMode>(o.Store.JournalMode, ignoreCase: true, out var jm)
+            .ValidateOnStart();
+        services.AddOptions<PersistenceOptions>()
+            .Bind(configuration.GetSection(PersistenceOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(o => Enum.TryParse<StoreJournalMode>(o.JournalMode, ignoreCase: true, out var jm)
                     && Enum.IsDefined(jm),
-                "ReviewForge:Store:JournalMode must be Wal | Delete")
+                "Persistence:JournalMode must be Wal | Delete")
             .Validate(o => Enum.TryParse<QueueMode>(o.QueueMode, ignoreCase: true, out var qm)
                     && Enum.IsDefined(qm),
-                "ReviewForge:QueueMode must be Memory | Sqlite")
-            .Validate(o => o.Sharding.ShardMaxChars >= 1_000, "ReviewForge:Sharding:ShardMaxChars must be at least 1000")
-            .Validate(o => o.Sharding.MaxShards is >= 2 and <= 32, "ReviewForge:Sharding:MaxShards must be between 2 and 32")
+                "Persistence:QueueMode must be Memory | Sqlite")
+            .Validate(o => o.Retention.Days >= 1, "Persistence:Retention:Days must be at least 1")
+            .Validate(o => o.Retention.MinRunsPerPr >= 1, "Persistence:Retention:MinRunsPerPr must be at least 1")
+            .ValidateOnStart();
+        services.AddOptions<ReviewOptions>()
+            .Bind(configuration.GetSection(ReviewOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(o => ReviewOptions.IsValidCleanRunVote(o.CleanRunVote),
+                "Review:CleanRunVote must be NoResponse | Approved | ApprovedWithSuggestions | None")
+            .Validate(o => o.Sharding.ShardMaxChars >= 1_000, "Review:Sharding:ShardMaxChars must be at least 1000")
+            .Validate(o => o.Sharding.MaxShards is >= 2 and <= 32, "Review:Sharding:MaxShards must be between 2 and 32")
             .Validate(o => o.Sharding.ShardConcurrency >= 1 && o.Sharding.ShardConcurrency <= o.Sharding.MaxShards,
-                "ReviewForge:Sharding:ShardConcurrency must be between 1 and MaxShards")
+                "Review:Sharding:ShardConcurrency must be between 1 and MaxShards")
+            .ValidateOnStart();
+        services.AddOptions<GitOptions>()
+            .Bind(configuration.GetSection(GitOptions.SectionName))
+            .ValidateOnStart();
+        services.AddOptions<HostOptions>()
+            .Bind(configuration.GetSection(HostOptions.SectionName))
+            .Validate(o => o.WorkerCount is >= 1 and <= 64,
+                "Host:WorkerCount must be between 1 and 64")
+            .Validate(o => o.StaleShellMinutes > 0, "Host:StaleShellMinutes must be greater than 0")
             .ValidateOnStart();
         services.AddOptions<ResolveOptions>()
             .Bind(configuration.GetSection(ResolveOptions.SectionName))
@@ -205,10 +219,10 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.FailureBackoffMax >= o.FailureBackoffBase, "Discovery:FailureBackoffMax must be at least FailureBackoffBase")
             .ValidateOnStart();
         services.AddSingleton(sp => new GitOperationScheduler(
-            sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.GitMaxConcurrency));
+            sp.GetRequiredService<IOptions<GitOptions>>().Value.MaxConcurrency));
         services.AddSingleton<IGitOps>(sp =>
             new LibGit2SharpGitOps(
-                sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.TargetedFetchEnabled,
+                sp.GetRequiredService<IOptions<GitOptions>>().Value.TargetedFetchEnabled,
                 sp.GetRequiredService<GitOperationScheduler>(),
                 // The PAT may only be presented to the configured org's host.
                 credentialHost: new Uri(sp.GetRequiredService<IOptions<AdoOptions>>().Value.OrgUrl).Host));
@@ -218,14 +232,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton(sp =>
         {
-            var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+            var opts = sp.GetRequiredService<IOptions<WorkspaceOptions>>().Value;
             var git = sp.GetRequiredService<IGitOps>();
             return new RepoCheckoutPool(git, sp.GetRequiredService<IWorkspaceFs>(), opts.WorkDir,
                 sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat,
                 logger: sp.GetRequiredService<ILogger<RepoCheckoutPool>>());
         });
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
-        services.AddSingleton(sp => sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value.Retention);
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<PersistenceOptions>>().Value.Retention);
         services.AddSingleton<DiscoveryService>();
 
         var discovery = configuration.GetSection(DiscoveryOptions.SectionName).Get<DiscoveryOptions>() ?? new DiscoveryOptions();
@@ -240,10 +254,10 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IFindingStore>(sp =>
         {
-            var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
+            var opts = sp.GetRequiredService<IOptions<PersistenceOptions>>().Value;
             return new SqliteFindingStore(
                 opts.StoreConnectionString,
-                Enum.Parse<StoreJournalMode>(opts.Store.JournalMode, ignoreCase: true));
+                Enum.Parse<StoreJournalMode>(opts.JournalMode, ignoreCase: true));
         });
 
         services.AddSingleton(sp => new ReviewPipelineFactory(
@@ -251,7 +265,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IFindingStore>(),
             sp.GetRequiredService<RepoCheckoutPool>(),
             sp.GetRequiredService<IChatClientFactory>(),
-            sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
+            sp.GetRequiredService<IOptions<ReviewOptions>>(),
+            sp.GetRequiredService<IOptions<WorkspaceOptions>>(),
             sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
             sp.GetRequiredService<ILoggerFactory>(),
             enricher: sp.GetService<IContextEnricher>(),
@@ -272,7 +287,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IProcessRunner>(),
                 sp.GetRequiredService<AutoFixOptions>(),
                 sp.GetRequiredService<IOptions<ResolveOptions>>(),
-                sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
+                sp.GetRequiredService<IOptions<ReviewOptions>>(),
                 sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<TimeProvider>(),
@@ -281,7 +296,7 @@ public static class ServiceCollectionExtensions
 
         // WorkerCount < 1 is rejected by the options validation above (fail-fast at startup);
         // when unset it defaults to a processor-count-derived clamp, always >= 2.
-        var workerCount = configuration.GetValue<int?>($"{ReviewForgeServiceOptions.SectionName}:WorkerCount")
+        var workerCount = configuration.GetValue<int?>($"{HostOptions.SectionName}:WorkerCount")
                           ?? Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
 
         for (var i = 0; i < workerCount; i++)
@@ -364,7 +379,7 @@ public static class ServiceCollectionExtensions
         // them via docker-compose / the container environment. Never bind exporter options
         // to appsettings — a committed endpoint breaks both environments.
         var explicitOtlpEnabled =
-            configuration.GetValue<bool?>($"{ReviewForgeServiceOptions.SectionName}:OtlpEnabled") is true;
+            configuration.GetValue<bool?>($"{HostOptions.SectionName}:OtlpEnabled") is true;
         var commonOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
         var tracesOtlpEnabled = ShouldEnableOtlpExporter(
             explicitOtlpEnabled,

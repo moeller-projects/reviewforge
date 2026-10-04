@@ -10,7 +10,7 @@ using Xunit;
 
 namespace ReviewForge.Service.Tests;
 
-/// <summary>Durable-queue (ReviewForge:QueueMode=Sqlite) behavior across host restarts: a
+/// <summary>Durable-queue (Persistence:QueueMode=Sqlite) behavior across host restarts: a
 /// queued run survives, status reads through the queue row on a fresh tracker, the run
 /// completes on a new host, and finalized status reads through the store afterwards.
 /// Sequential hosts share one store/queue database file.</summary>
@@ -27,7 +27,7 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
 
     public Task DisposeAsync()
     {
-        Environment.SetEnvironmentVariable("ReviewForge__QueueMode", null);
+        Environment.SetEnvironmentVariable("Persistence__QueueMode", null);
         if (Directory.Exists(_SharedDir))
         {
             Directory.Delete(_SharedDir, recursive: true);
@@ -89,11 +89,11 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
         public RestartFactory(string sharedDir, bool withoutWorkers)
         {
             _SharedDir = sharedDir;
-            Environment.SetEnvironmentVariable("ReviewForge__WorkDir", sharedDir);
+            Environment.SetEnvironmentVariable("Workspace__WorkDir", sharedDir);
             Environment.SetEnvironmentVariable(
-                "ReviewForge__StoreConnectionString",
+                "Persistence__StoreConnectionString",
                 $"Data Source={Path.Combine(sharedDir, "restart.db")};Pooling=False");
-            Environment.SetEnvironmentVariable("ReviewForge__QueueMode", "Sqlite");
+            Environment.SetEnvironmentVariable("Persistence__QueueMode", "Sqlite");
             if (withoutWorkers)
             {
                 WithoutWorkers();
@@ -116,7 +116,7 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
             base.Dispose(disposing);
             if (disposing)
             {
-                Environment.SetEnvironmentVariable("ReviewForge__QueueMode", null);
+                Environment.SetEnvironmentVariable("Persistence__QueueMode", null);
             }
         }
     }
