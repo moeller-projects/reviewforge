@@ -82,8 +82,8 @@ public static class ConventionalCommitBuilder
         var scopeText = segments.Length > 1 ? segments[0] : Path.GetFileNameWithoutExtension(segments[0]);
         var scope = new string(scopeText.ToLowerInvariant().Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' ? c : '-').ToArray()).Trim('-', '.');
         var prefix = scope.Length == 0 ? $"{type}: " : $"{type}({scope}): ";
-        var subject = prefix + OneLine(rationale);
-        if (subject.Length > MaxSubjectLength) subject = subject[..MaxSubjectLength].TrimEnd();
+        var subject = StripTrailingPeriod(prefix + OneLine(rationale));
+        if (subject.Length > MaxSubjectLength) subject = StripTrailingPeriod(subject[..MaxSubjectLength].TrimEnd());
         var sb = new StringBuilder(subject).Append("\n\n");
         AppendWrapped(sb, $"- resolve thread #{threadId} in `{OneLine(filePath)}` — {OneLine(rationale)}");
         if (!string.IsNullOrWhiteSpace(evidence)) AppendWrapped(sb, $"- Evidence: {OneLine(evidence)}");
@@ -108,9 +108,14 @@ public static class ConventionalCommitBuilder
         var scope = Scope(fixes);
         var description = Description(fixes);
         var prefix = scope is null ? $"{type}: " : $"{type}({scope}): ";
-        var subject = prefix + description;
-        return subject.Length <= MaxSubjectLength ? subject : subject[..MaxSubjectLength];
+        var subject = StripTrailingPeriod(prefix + description);
+        return subject.Length <= MaxSubjectLength ? subject : StripTrailingPeriod(subject[..MaxSubjectLength].TrimEnd());
     }
+
+    /// <summary>Conventional Commit subjects never end with a period — strip trailing dots
+    /// after truncation as well (a length cut can expose one).</summary>
+    private static string StripTrailingPeriod(string subject)
+        => subject.TrimEnd().TrimEnd('.');
 
     /// <summary>Mixed sets: severity ranks first; ties prefer bug/security, then performance,
     /// style, and docs. A security fix must never ship under a "style" type. Commanded fixes

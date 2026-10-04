@@ -121,6 +121,23 @@ public sealed class ConventionalCommitBuilderTests
         Assert.DoesNotContain(message.Split('\n'), line => line.StartsWith("X-Injected", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Build_strips_a_trailing_period_from_the_finding_title()
+    {
+        var message = ConventionalCommitBuilder.Build(RunId, [Input(Fix("src/a.sh"), Finding("Fix timeout."))]);
+
+        Assert.StartsWith("fix(src): fix timeout\n", message);
+    }
+
+    [Fact]
+    public void BuildResolve_strips_a_trailing_period_from_the_rationale()
+    {
+        var message = ConventionalCommitBuilder.BuildResolve(
+            RunId, 12, 7, "bug", "src/a.cs", "Add null guard.", "A.cs:10");
+
+        Assert.StartsWith("fix(src): Add null guard\n", message);
+    }
+
     [Theory]
     [InlineData("src/util/helper.sh", "src")]       // top-level directory
     [InlineData("deploy.sh", "deploy")]             // repo-root file: extension-less name
