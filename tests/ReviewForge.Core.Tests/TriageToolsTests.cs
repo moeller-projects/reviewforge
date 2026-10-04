@@ -16,6 +16,18 @@ public sealed class TriageToolsTests
         Assert.Empty(collector.ThreadVerdicts);
     }
 
+    [Fact]
+    public void RecordVerdict_rejects_threads_outside_the_current_batch()
+    {
+        var collector = new ReviewCollector();
+        var tools = new TriageTools(collector, [1, 2]);
+
+        Assert.Contains("not part of this triage batch", tools.RecordVerdict(3, "Actionable", "src/a.cs:1", "high"));
+        Assert.Empty(collector.ThreadVerdicts);
+        Assert.StartsWith("recorded verdict", tools.RecordVerdict(2, "Actionable", "src/a.cs:1", "high"));
+        Assert.Single(collector.ThreadVerdicts);
+    }
+
     [Theory]
     [InlineData("", "verdict is required")]
     [InlineData("unknown", "verdict must be")]

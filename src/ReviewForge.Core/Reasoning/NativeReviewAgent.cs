@@ -187,7 +187,9 @@ public sealed class NativeReviewAgent(
         return collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", ruleBook?.VersionHash);
     }
 
-    /// <summary>Runs the read-only full-tier resolve-comment triage pass.</summary>
+    /// <summary>Runs the read-only full-tier resolve-comment triage pass.
+    /// <paramref name="allowedThreadIds"/> confines verdict recording to the current batch's
+    /// threads — a verdict for a thread the model was never shown is rejected.</summary>
     public async Task<IReadOnlyList<ThreadVerdict>> RunTriageAsync(
         string userPrompt,
         ReviewCollector collector,
@@ -196,6 +198,7 @@ public sealed class NativeReviewAgent(
         IReadOnlySet<string>? changedFiles,
         DiffIndex? diff,
         string? diffText,
+        IReadOnlySet<long>? allowedThreadIds,
         CancellationToken ct)
     {
         var usage = new TokenUsage();
@@ -204,7 +207,7 @@ public sealed class NativeReviewAgent(
             grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines,
             diffText: diffText, changedFiles: changedFiles, diff: diff);
         var reviewTools = new ReviewTools(collector, contextStore);
-        var triageTools = new TriageTools(collector);
+        var triageTools = new TriageTools(collector, allowedThreadIds);
         var tools = new List<AITool>
         {
             AIFunctionFactory.Create(repoTools.ReadFile),

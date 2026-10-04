@@ -19,12 +19,16 @@ public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize =
         var all = new List<ThreadVerdict>();
         foreach (var batch in comments.Chunk(batchSize))
         {
+            var batchIds = batch.Select(c => (long)c.ThreadId).ToHashSet();
             var verdicts = await agent.RunTriageAsync(
                 ResolvePromptBuilder.BuildTriagePrompt(batch, ctx.WorkItems),
                 ctx.Collector = new ReviewCollector(), ctx.ContextStore,
                 ctx.RequireRepoDir(), ctx.ChangedFiles.ToHashSet(RepoPath.PathComparer),
-                ctx.Diff, ctx.DiffText, ct).ConfigureAwait(false);
-            all.AddRange(verdicts);
+                ctx.Diff, ctx.DiffText, batchIds, ct).ConfigureAwait(false);
+            // Belt and suspenders: the tool rejects out-of-batch verdicts already; a verdict
+            // that still slips through (custom agent) is dropped here, never pre-answering a
+            // thread the model was not shown.
+            all.AddRange(verdicts.Where(v => batchIds.Contains(v.ThreadId)));
         }
         var validIds = comments.Select(c => c.ThreadId).ToHashSet();
         var unknownVerdicts = all.Count(verdict => !validIds.Contains(verdict.ThreadId));
