@@ -403,9 +403,10 @@ public sealed class AutoFixFindingsStage : IReviewStage
             try
             {
                 var prompt = FixPromptBuilder.Build(command, path, anchor.StartLine, anchor.EndLine);
+                var collector = new ReviewCollector();
                 var pass = await _Agent.RunWithEditToolsAsync(
                         prompt,
-                        new ReviewCollector(),
+                        collector,
                         ctx.ContextStore,
                         repoDir,
                         new HashSet<string>(RepoPath.PathComparer) { path },
@@ -423,6 +424,19 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     // failed the edit); reply politely and move on.
                     replies.Add((command.ThreadId,
                         "I couldn't derive a safe fix for this — please clarify or adjust manually."));
+                    continue;
+                }
+
+                if (!collector.Done)
+                {
+                    // The pass edited the file but never completed task_done (iteration cap
+                    // mid-work). Partial agent work is never published: revert the edit
+                    // (keepEdits stays false) and treat the pass as failed.
+                    _Logger.LogWarning(
+                        "fix pass for thread {ThreadId}: discarding edits — task_done missing (iteration cap reached)",
+                        command.ThreadId);
+                    replies.Add((command.ThreadId,
+                        "The fix pass did not complete, so no change was published. Reply /rf fix to retry."));
                     continue;
                 }
 

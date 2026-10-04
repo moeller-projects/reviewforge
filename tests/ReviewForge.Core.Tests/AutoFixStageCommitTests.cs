@@ -254,4 +254,38 @@ public sealed class AutoFixStageCommitTests : IDisposable
         Assert.Single(ctx.FixCommandReplies);
         Assert.Equal(before, File.ReadAllBytes(abs));
     }
+
+    [Fact]
+    public async Task Commanded_pass_without_task_done_reverts_and_replies()
+    {
+        var ctx = CommandCtx("echo $name");
+        var abs = Path.Combine(_Root, "script.sh");
+        var before = File.ReadAllBytes(abs);
+        var hash = HashLine.Of(File.ReadAllLines(abs)[0]);
+        // The agent edits the file but the script ends before task_done: partial agent work
+        // must never be kept for the commit.
+        var chat = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls((
+                "EditFile",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = "script.sh",
+                    ["edits"] = new List<object>
+                    {
+                        new Dictionary<string, object?>
+                        {
+                            ["fromHash"] = hash, ["toHash"] = null,
+                            ["fromLine"] = null, ["toLine"] = null,
+                            ["replacement"] = "echo \"$name\"",
+                        },
+                    },
+                })));
+
+        await Stage(Options(commands: true), chat: chat).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AppliedFixes);
+        var reply = Assert.Single(ctx.FixCommandReplies);
+        Assert.Contains("did not complete", reply.Text);
+        Assert.Equal(before, File.ReadAllBytes(abs)); // partial edit reverted
+    }
 }
