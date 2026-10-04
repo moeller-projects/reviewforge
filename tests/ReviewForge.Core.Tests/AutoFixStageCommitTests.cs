@@ -78,11 +78,11 @@ public sealed class AutoFixStageCommitTests : IDisposable
             editorFactory: editorFactory);
     }
 
-    private static AutoFixOptions Options(bool commands = false)
+    private static AutoFixOptions Options(bool commands = false, string[]? authors = null)
         => new()
         {
             Enabled = true,
-            AllowedAuthors = ["creator-1"],
+            AllowedAuthors = authors ?? ["creator-1"],
             AllowedRuleIds = ["bash.unquoted-vars"],
             PublishMode = AutoFixOptions.ModeCommitOnHead,
             CommitAuthorName = "reviewforge[bot]",
@@ -287,5 +287,19 @@ public sealed class AutoFixStageCommitTests : IDisposable
         var reply = Assert.Single(ctx.FixCommandReplies);
         Assert.Contains("did not complete", reply.Text);
         Assert.Equal(before, File.ReadAllBytes(abs)); // partial edit reverted
+    }
+
+    [Fact]
+    public async Task Gate_rejected_command_gets_a_rejection_reply()
+    {
+        var ctx = CommandCtx("echo $name");
+
+        await Stage(Options(commands: true, authors: ["someone-else"]), chat: new ScriptedChatClient())
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.AppliedFixes);
+        var reply = Assert.Single(ctx.FixCommandReplies);
+        Assert.Equal(42, reply.ThreadId);
+        Assert.Contains("not enabled", reply.Text);
     }
 }

@@ -72,6 +72,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         if (_Options.AllowedAuthors.Length == 0)
         {
             _Logger.LogInformation("auto-fix: disabled — AutoFix:AllowedAuthors is empty");
+            ReplyToRejectedCommands(ctx, "auto-fix is disabled on this service — the /rf fix command was not run.");
             return;
         }
 
@@ -82,6 +83,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             _Logger.LogInformation(
                 "auto-fix: PR creator {CreatorId}/{CreatorName} is not in the author allowlist",
                 pr.CreatorId, pr.CreatorName);
+            ReplyToRejectedCommands(ctx, "auto-fix is not enabled for this pull request author — the /rf fix command was not run.");
             return;
         }
 
@@ -115,6 +117,31 @@ public sealed class AutoFixFindingsStage : IReviewStage
         }
 
         ctx.AppliedFixes = applied;
+    }
+
+    /// <summary>Gate failure must not silently drop author commands: every scanned /rf fix
+    /// command gets a plain rejection reply on its thread (a failed gate is published as a
+    /// comment, never dropped). No audit rows are written — the gate did no work — so the
+    /// comment watermark alone keeps this exactly-once.</summary>
+    private void ReplyToRejectedCommands(ReviewContext ctx, string reason)
+    {
+        if (!_Options.EnableThreadFixCommands)
+        {
+            return;
+        }
+
+        var commands = FixCommandDetector.Scan(
+            ctx.Threads, ctx.RequirePullRequest().CreatorId, ctx.PriorRun?.LastObservedCommentAt);
+        ctx.FixCommands = commands;
+        if (commands.Count == 0)
+        {
+            return;
+        }
+
+        ctx.FixCommandReplies =
+        [
+            .. commands.OrderBy(c => c.ThreadId).Select(c => (c.ThreadId, reason)),
+        ];
     }
 
     private async Task RunDeterministicPassAsync(
