@@ -4,13 +4,13 @@
     "net10.0": {
       "Microsoft.Agents.AI": {
         "type": "Direct",
-        "requested": "[1.21.0, )",
-        "resolved": "1.21.0",
-        "contentHash": "uzfyObaUtObJo1VFvV+DA0WI4T16RwPhVkbkhSFpY3gomEKizmmVeZVyuwPwJ85fANalmjrnAqb37b/SCBPFtA==",
+        "requested": "[1.23.0, )",
+        "resolved": "1.23.0",
+        "contentHash": "C24TjE7wrlbSYgtOVU8Hnym9hVGH0NmRhe4Duz8xxsjqtJuwODjT0+exZkCP2FVqkMsYEzlQN165EtBodycnJw==",
         "dependencies": {
-          "Microsoft.Agents.AI.Abstractions": "1.21.0",
+          "Microsoft.Agents.AI.Abstractions": "1.23.0",
           "Microsoft.Extensions.AI": "10.10.0",
-          "Microsoft.Extensions.AI.Abstractions": "10.10.0",
+          "Microsoft.Extensions.AI.Abstractions": "10.10.1",
           "Microsoft.Extensions.AI.Evaluation": "10.10.0",
           "Microsoft.Extensions.Compliance.Abstractions": "10.10.0",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.12",
@@ -49,16 +49,16 @@
       },
       "Microsoft.Agents.AI.Abstractions": {
         "type": "Transitive",
-        "resolved": "1.21.0",
-        "contentHash": "ukIDpnpLml5jhv4c+kkPfyd6IxcfBp8mG2OT88noq0qqr6+gfciHZSmk7cIw7RZesWLFfBrMwfhfQJVSFP6ASg==",
+        "resolved": "1.23.0",
+        "contentHash": "buEDdiD+KtMyOQ50kqptkn7rjsGk46gOxeG8hRH//Y+O8LB8yZCb7qjnvFD6y/PhzK7SrVKLyaP+wu09fOFqPg==",
         "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "10.10.0"
+          "Microsoft.Extensions.AI.Abstractions": "10.10.1"
         }
       },
       "Microsoft.Extensions.AI.Abstractions": {
         "type": "Transitive",
-        "resolved": "10.10.0",
-        "contentHash": "frBHj2ckpevA+KdDLikxv8oxGPrJiyTvaiblYp+vtVEt0q6J73XP5m2SICm86nFK6rl+L1GCKxIy4S5Lb3p2kQ=="
+        "resolved": "10.10.1",
+        "contentHash": "Kz6ezQfRb9x2TkIWyaXkVAfpvyoAlEDfC59klPrdr2XD5WM4HNw+PREAZ+Fo43GPldtX+E0i1aYzMFQ/zXYMLg=="
       },
       "Microsoft.Extensions.AI.Evaluation": {
         "type": "Transitive",
