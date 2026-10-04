@@ -37,14 +37,14 @@ public sealed class ReplyCommentsStage(
                 && thread.Comments.LastOrDefault() is { IsBot: true } last
                 && string.Equals(last.Text, body, StringComparison.Ordinal))
             {
-                if (setFixedStatus && action.Outcome == ResolutionOutcome.Fixed)
+                if (MayMarkFixed(threads, action))
                     await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
                 ReviewForgeTelemetry.ResolveRepliesDeduped.Add(1, new TagList { { "outcome", action.Outcome.ToString().ToLowerInvariant() } });
                 await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
                 continue;
             }
             await source.ReplyToThreadAsync(ctx.Pr, action.ThreadId, body, ct).ConfigureAwait(false);
-            if (setFixedStatus && action.Outcome == ResolutionOutcome.Fixed)
+            if (MayMarkFixed(threads, action))
                 await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
             await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
             ReviewForgeTelemetry.ResolveRepliesPosted.Add(1, new TagList { { "outcome", action.Outcome.ToString().ToLowerInvariant() } });
@@ -73,6 +73,15 @@ public sealed class ReplyCommentsStage(
         }
         logger?.LogInformation("resolve replies posted: {Count}", replies);
     }
+
+    /// <summary>Fixed-status writes close the thread for every participant — allowed only on
+    /// the bot's own finding threads (dedupe-key stamped), only for Fixed outcomes, and only
+    /// when the operator opted in. A human-authored thread is never resolved by the bot.</summary>
+    private bool MayMarkFixed(IReadOnlyDictionary<int, ReviewThread> threads, ResolveAction action)
+        => setFixedStatus
+           && action.Outcome == ResolutionOutcome.Fixed
+           && threads.TryGetValue(action.ThreadId, out var thread)
+           && thread.DedupeKey is not null;
 
     private static string FormatOutcome(ReviewContext ctx, ResolveAction action, IReadOnlyDictionary<int, AppliedResolution> applied)
     {

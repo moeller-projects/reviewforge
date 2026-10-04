@@ -189,12 +189,31 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             "abcdef123", false, DateTimeOffset.UtcNow, body);
         await store.SaveResolveActionsAsync(Key, run, [action], CancellationToken.None);
         var ctx = Context(run);
-        ctx.Threads = [new ReviewThread(1, null, ReviewThreadStatus.Active,
+        ctx.Threads = [new ReviewThread(1, "k1", ReviewThreadStatus.Active,
             [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])];
 
         await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
         Assert.Empty(source.Replies);
         Assert.Contains((1, ReviewThreadStatus.Fixed), source.StatusChanges);
+        Assert.True(store.ResolveActions[0].ReplyPosted);
+    }
+
+    [Fact]
+    public async Task Reply_never_marks_a_human_authored_thread_fixed()
+    {
+        var source = new FakePullRequestSource(); var store = new FakeFindingStore(); var run = Guid.NewGuid();
+        var body = CommentFormatter.WithBotPreamble("Fixed in abcdef1 — fix: update. applied");
+        var action = new ResolveAction(0, run, 1, TriageVerdict.Actionable, ResolutionOutcome.Fixed,
+            "abcdef123", false, DateTimeOffset.UtcNow, body);
+        await store.SaveResolveActionsAsync(Key, run, [action], CancellationToken.None);
+        var ctx = Context(run);
+        // Human-authored thread (no bot dedupe key): a Fixed outcome must not close it.
+        ctx.Threads = [new ReviewThread(1, null, ReviewThreadStatus.Active,
+            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])];
+
+        await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.DoesNotContain(source.StatusChanges, change => change.Item1 == 1);
         Assert.True(store.ResolveActions[0].ReplyPosted);
     }
 

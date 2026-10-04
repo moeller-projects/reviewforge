@@ -48,7 +48,7 @@ public sealed class ResolvePipelineTests : IDisposable
         var runId = Guid.NewGuid();
         var ctx = Context(runId);
         ctx.ResolvableComments = [Comment(7)];
-        ctx.Threads = [new ReviewThread(7, null, ReviewThreadStatus.Active,
+        ctx.Threads = [new ReviewThread(7, "k7", ReviewThreadStatus.Active,
             [new ThreadComment("human", "Human", false, "Please update this", DateTimeOffset.UtcNow)],
             new ThreadAnchor("src/A.cs", 1, 1))];
         ctx.ChangedFileManifest = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
@@ -94,7 +94,7 @@ public sealed class ResolvePipelineTests : IDisposable
         await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(source.Replies);
-        Assert.Contains((7, ReviewThreadStatus.Fixed), source.StatusChanges);
+        Assert.DoesNotContain(source.StatusChanges, change => change.Item1 == 7);
         Assert.True(Assert.Single(store.ResolveActions).ReplyPosted);
     }
 
