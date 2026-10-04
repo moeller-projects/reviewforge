@@ -230,6 +230,21 @@ public sealed class CommitFixesStageTests
     }
 
     [Fact]
+    public async Task Lost_claim_during_tip_read_fails_without_pushing()
+    {
+        var git = new FakeGitOps();
+        var ctx = Ctx(fixes: Fix("k1", "src/a.sh"));
+        var calls = 0;
+        ctx.PublishGuard = () => ++calls < 3; // holds "before commit"/"before push", lost "at push"
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(git.Commits);
+        Assert.Empty(git.Pushes);
+    }
+
+    [Fact]
     public async Task Missing_remote_branch_at_the_pin_fails_with_head_changed()
     {
         var git = new FakeGitOps {RemoteTip = null};

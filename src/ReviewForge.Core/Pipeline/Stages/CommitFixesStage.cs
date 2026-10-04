@@ -141,6 +141,10 @@ public sealed class CommitFixesStage(
             throw new PrHeadChangedException(pr.SourceCommitSha, tip ?? "(branch missing on remote)");
         }
 
+        // The claim can be lost during the asynchronous tip read above; re-check it at the
+        // irreversible boundary itself, directly before the push.
+        PublishGuardChecks.ThrowIfClaimLost(ctx, "at push");
+
         try
         {
             await git.PushAsync(repoDir, pr.CloneUrl, branch, pr.SourceCommitSha, pat, ct).ConfigureAwait(false);

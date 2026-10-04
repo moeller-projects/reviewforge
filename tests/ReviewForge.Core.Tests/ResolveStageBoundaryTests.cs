@@ -143,6 +143,23 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     }
 
     [Fact]
+    public async Task Commit_push_rejects_claim_loss_at_the_push_boundary()
+    {
+        var store = new FakeFindingStore(); var git = new FakeGitOps();
+        var ctx = Context(); ctx.ResolvableComments = [Comment(1)]; ctx.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
+        ctx.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
+        var calls = 0;
+        ctx.PublishGuard = () => ++calls < 2; // holds "before resolve commit", lost "at resolve push"
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(git.Commits);
+        Assert.Empty(git.Pushes);
+        var audit = Assert.Single(store.ResolveActions);
+        Assert.Equal(ResolutionOutcome.PushFailed, audit.Outcome);
+    }
+
+    [Fact]
     public async Task Commit_failure_persists_unpublished_outcome_before_failing()
     {
         var store = new FakeFindingStore();

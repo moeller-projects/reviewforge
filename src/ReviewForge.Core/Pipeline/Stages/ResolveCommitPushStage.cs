@@ -79,6 +79,9 @@ public sealed class ResolveCommitPushStage(
             var tip = await git.GetRemoteTipAsync(ctx.RequireRepoDir(), pr.CloneUrl, branch, pat, ct).ConfigureAwait(false);
             if (!string.Equals(tip, pr.SourceCommitSha, StringComparison.OrdinalIgnoreCase))
                 throw new PrHeadChangedException(pr.SourceCommitSha, tip ?? "<missing>");
+            // The claim can be lost during the commit loop and the asynchronous tip read
+            // above; re-check it at the irreversible boundary itself, directly before push.
+            PublishGuardChecks.ThrowIfClaimLost(ctx, "at resolve push");
             await git.PushAsync(ctx.RequireRepoDir(), pr.CloneUrl, branch, pr.SourceCommitSha, pat, ct).ConfigureAwait(false);
         }
         catch (PrHeadChangedException)
