@@ -18,9 +18,9 @@ public sealed class RepoPathGuard
         @"\.pem$", @"\.key$", @"\.pfx$", @"\.p12$", @"\.snk$",
         @"(^|/)id_(rsa|dsa|ecdsa|ed25519)$",
         @"(^|/)\.kube/config$|(^|/|\.)kubeconfig$",
-        @"(^|/)\.aws/",                     // AWS credentials & config
+        @"(^|/)\.aws/", // AWS credentials & config
         @"(^|/)\.npmrc$", @"(^|/)\.pypirc$", // registry tokens
-        @"(^|/)appsettings\.[^/]+\.json$",  // environment-specific settings (base appsettings.json stays readable)
+        @"(^|/)appsettings\.[^/]+\.(json|toml)$", // environment-specific settings (base appsettings files stay readable)
         @"secrets", @"credentials",
     ];
 
@@ -32,7 +32,7 @@ public sealed class RepoPathGuard
         _Deny =
         [
             .. (denyPatterns ?? DefaultDenyPatterns)
-                .Select(p => new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Compiled))
+            .Select(p => new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Compiled))
         ];
     }
 

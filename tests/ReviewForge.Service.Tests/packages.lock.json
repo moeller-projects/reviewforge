@@ -82,15 +82,6 @@
         "resolved": "2.0.324",
         "contentHash": "5YZVGNuO9nYFQfzRQGPGY9fdpSsABwlF2jSaZ7ydxCfjvt5Krbj/eHbXkvvgAQzp4lkjvgDrlAuuI4KTmqhDlA=="
       },
-      "LukasMoeller.Configuration.Toml": {
-        "type": "Transitive",
-        "resolved": "1.0.0",
-        "contentHash": "XbY/T/m7bxIvwYLMJWL8xajyRX7ab0IjcD4Uo9xExkxCLhRXzVz7l4q7wWjCfqxXG1Ky8Km7O+1JqMDKxGSlIQ==",
-        "dependencies": {
-          "Microsoft.Extensions.Configuration.FileExtensions": "10.0.0",
-          "Tomlyn": "2.10.1"
-        }
-      },
       "Microsoft.Agents.AI.Abstractions": {
         "type": "Transitive",
         "resolved": "1.23.0",
@@ -874,6 +865,16 @@
         "contentHash": "BL3eMVRnkWWS9zbz6n0H+iDVJ9ZK7hDeiuASnHlsFvwZYTJtDuBFRRVIaH//s4VlF0baOGvCeenXbobE1JLLiQ==",
         "dependencies": {
           "LibGit2Sharp.NativeBinaries": "[2.0.324]"
+        }
+      },
+      "LukasMoeller.Configuration.Toml": {
+        "type": "CentralTransitive",
+        "requested": "[1.0.0, )",
+        "resolved": "1.0.0",
+        "contentHash": "XbY/T/m7bxIvwYLMJWL8xajyRX7ab0IjcD4Uo9xExkxCLhRXzVz7l4q7wWjCfqxXG1Ky8Km7O+1JqMDKxGSlIQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Configuration.FileExtensions": "10.0.0",
+          "Tomlyn": "2.10.1"
         }
       },
       "Microsoft.Agents.AI": {

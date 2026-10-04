@@ -190,8 +190,10 @@ are configured, because the docs describe the `/reviews*` surface:
 
 ## Configuration
 
-`src/ReviewForge.Service/appsettings.json` — typed options with DataAnnotations validation,
-fail-fast at startup. PAT and API keys come from the environment only.
+`src/ReviewForge.Service/appsettings.toml` — typed options with DataAnnotations validation,
+fail-fast at startup. `appsettings.{Environment}.toml` can override environment-specific
+settings and reloads on change. Environment variables and command-line arguments take
+precedence. PAT and API keys come from the environment only.
 
 - `ReviewForge:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
   `Medium`, `High`, `ExtraHigh`). Omit it (or leave unset) to keep the provider default. The

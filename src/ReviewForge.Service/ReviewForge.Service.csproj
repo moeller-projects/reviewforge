@@ -23,5 +23,10 @@
         <PackageReference Include="Microsoft.AspNetCore.OpenApi"/>
         <PackageReference Include="Scalar.AspNetCore"/>
     </ItemGroup>
+    <ItemGroup>
+        <None Update="appsettings*.toml"
+              CopyToOutputDirectory="PreserveNewest"
+              CopyToPublishDirectory="PreserveNewest"/>
+    </ItemGroup>
 
 </Project>

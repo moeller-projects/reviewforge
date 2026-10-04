@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using LukasMoeller.Configuration.Toml;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Console;
 using OpenTelemetry.Logs;
@@ -6,6 +7,14 @@ using ReviewForge.Core.Workspaces;
 using ReviewForge.Service;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddTomlFile("config.toml", optional: true, reloadOnChange: true);
+builder.Configuration.AddTomlFile(
+    $"config.{builder.Environment.EnvironmentName}.toml",
+    optional: true,
+    reloadOnChange: true);
+// Reapply higher-precedence providers after TOML; CreateBuilder registered them before this file.
+builder.Configuration.AddEnvironmentVariables();
+builder.Configuration.AddCommandLine(args);
 builder.Logging.AddConsole(options => options.FormatterName = CompactConsoleFormatter.FormatterName);
 builder.Logging.AddConsoleFormatter<CompactConsoleFormatter, ConsoleFormatterOptions>();
 var commonOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
