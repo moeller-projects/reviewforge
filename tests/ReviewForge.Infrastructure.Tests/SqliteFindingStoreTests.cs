@@ -105,8 +105,8 @@ public class SqliteFindingStoreTests : IDisposable
         await using (var transaction = writer.BeginTransaction())
         {
             await using (var write = new SqliteCommand(
-                "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, StartedAt, Success) " +
-                "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', $started, 1)", writer, transaction))
+                "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, Pipeline, StartedAt, Success) " +
+                "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', 'Review', $started, 1)", writer, transaction))
             {
                 write.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
                 write.Parameters.AddWithValue("$started", DateTimeOffset.UtcNow.ToString("O"));
