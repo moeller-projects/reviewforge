@@ -326,6 +326,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 }
 
                 var fix = new AppliedFix(finding.DedupeKey!, appliedProposal) {AppliedToTree = result.Success};
+                AttachFix(finding, applied, fix, ctx);
             }
         }
     }
@@ -454,7 +455,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     continue;
                 }
 
-                if (!collector.Done)
+                if (_Options.IsCommitOnHead && !collector.Done)
                 {
                     // The pass edited the file but never completed task_done (iteration cap
                     // mid-work). Partial agent work is never published: revert the edit

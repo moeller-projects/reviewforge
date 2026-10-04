@@ -18,6 +18,15 @@ public static class ResolveGate
         if (pr.IsDraft) return ResolveGateDecision.Draft;
         if (!authorAllowed) return ResolveGateDecision.AuthorNotAllowed;
         if (!threads.SelectMany(t => t.Comments).Any(c => !c.IsBot)) return ResolveGateDecision.NoComments;
+        // A previously deferred thread must be retried even when its human comments
+        // predate the completed-run watermark.
+        if (deferredThreadIds is not null && threads.Any(t =>
+                deferredThreadIds.Contains(t.Id)
+                && t.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
+                && t.Comments.Any(c => !c.IsBot)))
+        {
+            return ResolveGateDecision.Continue;
+        }
         var eligible = threads
             .Where(t => t.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed))
             .Where(t =>
