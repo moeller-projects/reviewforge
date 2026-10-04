@@ -20,7 +20,7 @@ public sealed class TriageToolsTests
     public void RecordVerdict_rejects_threads_outside_the_current_batch()
     {
         var collector = new ReviewCollector();
-        var tools = new TriageTools(collector, [1, 2]);
+        var tools = new TriageTools(collector, new HashSet<long> { 1, 2 });
 
         Assert.Contains("not part of this triage batch", tools.RecordVerdict(3, "Actionable", "src/a.cs:1", "high"));
         Assert.Empty(collector.ThreadVerdicts);

@@ -7,7 +7,9 @@ namespace ReviewForge.Infrastructure.Process;
 /// <summary>Runs argv directly through <see cref="System.Diagnostics.Process"/>.</summary>
 public sealed class ProcessRunner : IProcessRunner
 {
-    public const int MaxOutputCharacters = 64 * 1024;
+    /// <summary>Combined stdout+stderr cap in UTF-8 BYTES (the port promises 64 KiB; a
+    /// char-counted cap would let non-ASCII output retain up to 4x that).</summary>
+    public const int MaxOutputBytes = 64 * 1024;
 
     /// <summary>Operational variables a build tool legitimately needs. The child process runs
     /// repository-controlled build hooks on the PR checkout, so it must NOT inherit the
@@ -78,7 +80,7 @@ public sealed class ProcessRunner : IProcessRunner
             throw new InvalidOperationException($"Unable to start process '{argv[0]}'.");
         }
 
-        var outputBudget = new OutputBudget(MaxOutputCharacters);
+        var outputBudget = new OutputBudget(MaxOutputBytes);
         var stdout = CaptureAsync(process.StandardOutput, outputBudget);
         var stderr = CaptureAsync(process.StandardError, outputBudget);
         using var timeoutCts = new CancellationTokenSource(timeout);

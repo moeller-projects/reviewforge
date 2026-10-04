@@ -250,7 +250,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
 
         await new NativeReviewAgent(new FakeChatClientFactory(chat)).RunTriageAsync(
             "triage", new ReviewCollector(), new ContextStore(), _root,
-            new HashSet<string>(), null, null, [1], CancellationToken.None);
+            new HashSet<string>(), null, null, new HashSet<long> { 1 }, CancellationToken.None);
 
         var tools = chat.ReceivedOptions.First()?.Tools?.Select(tool => tool.Name).ToArray() ?? [];
         Assert.Contains("RecordVerdict", tools);
