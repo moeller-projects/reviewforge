@@ -270,6 +270,36 @@ public class AutoFixPublishTests
     }
 
     [Fact]
+    public async Task CommitOnHead_reconciliation_recognizes_finding_body_announcement()
+    {
+        // Crash window: the run posted the FULL committed-finding body (which embeds the
+        // "Fixed in {sha7}" line) but died before marking the row. Reconciliation must
+        // recognize that announcement instead of posting a second "Fixed in …" comment.
+        var source = new FakePullRequestSource();
+        var announcement =
+            $"### 🔧 title\n**{CommentFormatter.CommittedFixLine("abcdef123456", "fix(src): quote variable")}** — rationale";
+        source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
+            [
+                new ThreadComment("b", "bot", true, announcement, DateTimeOffset.UtcNow),
+                new ThreadComment("h", "human", false, "thanks", DateTimeOffset.UtcNow.AddMinutes(1)),
+            ]));
+        var ctx = Ctx(source);
+        var store = new FakeFindingStore();
+        store.PushedFixes.Add(new PushedFix(
+            1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", null,
+            Pushed: true, AiDrafted: false, ReplyPosted: false, DateTimeOffset.UtcNow));
+
+        await new PublishFindingsStage(
+                source, store, NullLogger<PublishFindingsStage>.Instance,
+                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies);
+        Assert.DoesNotContain(source.GeneralComments, text => text.Contains("Fixed in abcdef1", StringComparison.Ordinal));
+        Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
+    }
+
+    [Fact]
     public async Task Committed_general_finding_marks_row_replied_after_post()
     {
         var source = new FakePullRequestSource();

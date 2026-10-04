@@ -336,12 +336,15 @@ public sealed class PublishFindingsStage(
     /// Crash-after-push recovery: a pushed-fix row from a PRIOR run whose reply never landed.
     /// The reply is constructed entirely from the durable record (SHA + subject; the live
     /// thread via the ReviewForge.DedupeKey thread property, or the stored command thread).
-    /// The text matches what the crashed run would have posted, so the AlreadyReplied check
-    /// converges to exactly-once even when the crash hit between reply and mark-replied.
+    /// Dedupe recognizes BOTH announcement forms the crashed run may have used — the short
+    /// "Fixed in {sha7}" reply and the full committed-finding body (which embeds the same
+    /// line) — so a crash between the original announcement and mark-replied converges
+    /// without posting a second, duplicate comment.
     /// </summary>
     private async Task ReconcilePushedFixAsync(ReviewContext ctx, PushedFix fix, CancellationToken ct)
     {
         var body = CommentFormatter.FormatCommittedFixReply(fix.CommitSha, fix.CommitSubject, fix.AiDrafted);
+        var marker = CommentFormatter.CommittedFixLine(fix.CommitSha, fix.CommitSubject, fix.AiDrafted);
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
         var liveThreadId = threads
             .FirstOrDefault(t =>
@@ -354,7 +357,7 @@ public sealed class PublishFindingsStage(
             // A closed/missing thread cannot receive a reply. Its general-comment fallback
             // carries the dedupe key, so a crash between post and mark converges.
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before reconciled fix comment");
-            if (await AlreadyPostedGeneralAsync(ctx, fix.DedupeKey, body, ct).ConfigureAwait(false))
+            if (threads.Any(t => t.DedupeKey == fix.DedupeKey && AnnouncementExists(t, body, marker)))
             {
                 await store.MarkPushedFixRepliedAsync(fix.Id, ct).ConfigureAwait(false);
                 return;
@@ -366,10 +369,10 @@ public sealed class PublishFindingsStage(
         else
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before reconciled fix reply on thread {liveThreadId}");
-            if (await AlreadyRepliedAsync(ctx, liveThreadId.Value, body, ct).ConfigureAwait(false))
+            if (AnnouncementExists(threads.First(t => t.Id == liveThreadId.Value), body, marker))
             {
                 logger.LogInformation(
-                    "pushed fix {Key}: reply already posted by the crashed run — marking replied", fix.DedupeKey);
+                    "pushed fix {Key}: announcement already posted by the crashed run — marking replied", fix.DedupeKey);
                 await store.MarkPushedFixRepliedAsync(fix.Id, ct).ConfigureAwait(false);
                 return;
             }
@@ -385,6 +388,14 @@ public sealed class PublishFindingsStage(
             "pushed fix {Key} ({Sha}): reconciled missing reply from run {RunId}",
             fix.DedupeKey, fix.CommitSha, fix.RunId);
     }
+
+    /// <summary>True when any bot comment on the thread is either the short reconciliation
+    /// reply or the full committed-finding body — both embed the "Fixed in {sha7}" marker.</summary>
+    private static bool AnnouncementExists(ReviewThread thread, string body, string marker)
+        => thread.Comments.Any(c =>
+            c.IsBot
+            && (string.Equals(c.Text.Trim(), body.Trim(), StringComparison.Ordinal)
+                || c.Text.Contains(marker, StringComparison.Ordinal)));
     private static TagList FixTags(FixOrigin origin, string rule)
         => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
     private Task PersistCommandAuditAsync(ReviewContext ctx, CancellationToken ct)
