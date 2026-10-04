@@ -59,6 +59,21 @@ public sealed class CollectCommentsStageTests
     }
 
     [Fact]
+    public async Task Execute_propagates_a_failed_threads_refresh_instead_of_refetching()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Context(source);
+        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
+            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("ado down")),
+            Now);
+
+        // No silent fallback to a second fetch: the provider failure fails the run visibly.
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System)
+                .ExecuteAsync(ctx, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Execute_uses_explicit_allowed_commenters_instead_of_author_only()
     {
         var source = new FakePullRequestSource();

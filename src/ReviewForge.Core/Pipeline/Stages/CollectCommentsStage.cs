@@ -56,11 +56,12 @@ public sealed class CollectCommentsStage(
         if (ctx.PendingThreadsRefresh is { } refresh)
         {
             var wasInFlight = !refresh.Task.IsCompleted;
-            IReadOnlyList<ReviewThread>? overlapped = null;
-            try { overlapped = await refresh.Task.ConfigureAwait(false); }
-            catch (Exception) when (!ct.IsCancellationRequested) { }
+            // No silent fallback: a failed overlap refresh fails the run. Refetching after a
+            // discarded provider failure would hide the original error and let a failed
+            // stage report success.
+            var overlapped = await refresh.Task.ConfigureAwait(false);
             var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : (DateTimeOffset?)null);
-            if (overlapped is not null && completedAt is { } receivedAt
+            if (completedAt is { } receivedAt
                 && ctx.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
                 return overlapped;
         }
