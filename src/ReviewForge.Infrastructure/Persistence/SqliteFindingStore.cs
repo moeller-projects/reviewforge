@@ -87,6 +87,21 @@ public sealed class SqliteFindingStore : IFindingStore
                 cmd.ExecuteNonQuery();
             }
 
+            // Databases created before CommitOnHead have no PushedFixes table at all —
+            // GenerateCreateScript only runs for brand-new databases.
+            cmd.CommandText =
+                "CREATE TABLE IF NOT EXISTS \"PushedFixes\" (" +
+                "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_PushedFixes\" PRIMARY KEY AUTOINCREMENT, " +
+                "\"RunId\" TEXT NOT NULL, \"Org\" TEXT NOT NULL, \"Project\" TEXT NOT NULL, " +
+                "\"RepositoryId\" TEXT NOT NULL, \"PrId\" INTEGER NOT NULL, " +
+                "\"DedupeKey\" TEXT NOT NULL, \"CommitSha\" TEXT NOT NULL, \"CommitSubject\" TEXT NOT NULL, " +
+                "\"ThreadId\" INTEGER NULL, \"Pushed\" INTEGER NOT NULL DEFAULT 1, " +
+                "\"AiDrafted\" INTEGER NOT NULL DEFAULT 0, \"ReplyPosted\" INTEGER NOT NULL, " +
+                "\"CreatedAt\" TEXT NOT NULL); " +
+                "CREATE INDEX IF NOT EXISTS \"IX_PushedFixes_Org_Project_RepositoryId_PrId\" ON " +
+                "\"PushedFixes\" (\"Org\", \"Project\", \"RepositoryId\", \"PrId\");";
+            cmd.ExecuteNonQuery();
+
             cmd.CommandText =
                 "SELECT COUNT(*) FROM pragma_table_info('PushedFixes') WHERE name = 'Pushed'";
             if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)

@@ -604,6 +604,54 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Constructor_creates_pushed_fixes_table_for_existing_databases()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "reviewforge-legacy-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            // A database created before CommitOnHead: Runs + Findings only, no PushedFixes.
+            using (var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE Runs (
+                        Id TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                        RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, HeadSha TEXT NOT NULL,
+                        Kind TEXT NOT NULL, StartedAt TEXT NOT NULL, CompletedAt TEXT NULL, Success INTEGER NOT NULL);
+                    CREATE TABLE Findings (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT, RunId TEXT NOT NULL, DedupeKey TEXT NOT NULL,
+                        RuleId TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
+                        FilePath TEXT NULL, Line INTEGER NULL, ThreadId INTEGER NULL);
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var store = new SqliteFindingStore($"Data Source={dbPath};Pooling=False");
+            var run = Run("head", DateTimeOffset.UtcNow);
+            await store.SaveRunAsync(run, CancellationToken.None);
+            await store.SavePushedFixesAsync(
+                Key,
+                run.Id,
+                [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", null, Pushed: false, AiDrafted: false, ReplyPosted: false, DateTimeOffset.UtcNow)],
+                CancellationToken.None);
+            await store.ConfirmPushedFixesAsync(Key, run.Id, CancellationToken.None);
+
+            Assert.Single(await store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+        }
+        finally
+        {
+            foreach (var suffix in new[] {"", "-wal", "-shm"})
+            {
+                if (File.Exists(dbPath + suffix))
+                {
+                    File.Delete(dbPath + suffix);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task Legacy_row_without_watermark_returns_null_watermark()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);
