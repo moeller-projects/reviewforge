@@ -68,22 +68,30 @@ public sealed class LibGit2SharpGitOps : IGitOps
             return repo.Commit(message, signature, signature).Sha;
         }, ct);
 
-    public async Task PushAsync(
+    public Task PushAsync(
         string repoPath, string cloneUrl, string remoteBranch, string expectedRemoteTipSha, string? pat, CancellationToken ct)
-    {
-        // Pre-read for error precision only; correctness comes from the server rejecting a
-        // non-fast-forward ref update (the refspec carries no force flag anywhere).
-        var tip = await GetRemoteTipAsync(repoPath, cloneUrl, remoteBranch, pat, ct).ConfigureAwait(false);
-        if (!string.Equals(tip, expectedRemoteTipSha, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new PrHeadChangedException(expectedRemoteTipSha, tip ?? "(branch missing on remote)");
-        }
-
-        await _Scheduler.RunAsync(() =>
+        => _Scheduler.RunAsync(() =>
         {
             using var repo = new Repository(repoPath);
             var remote = AuthoritativeRemote(repo, cloneUrl);
             var localRef = $"refs/heads/{remoteBranch}";
+
+            // Compare-and-swap: re-read the authoritative tip IMMEDIATELY before the ref
+            // update, inside the same scheduled action. A plain non-force refspec only
+            // requires the remote tip to be an ANCESTOR of the pushed commit — after a
+            // force-reset to an ancestor of the pinned head the update would still
+            // fast-forward and silently overwrite the reset. libgit2 has no
+            // force-with-lease, so tip-equality re-validation at the update plus the
+            // server-side non-fast-forward rejection is the strongest available CAS. The
+            // refspec carries no force flag anywhere.
+            var tip = repo.Network.ListReferences(remote, Credentials(pat))
+                .FirstOrDefault(reference => string.Equals(reference.CanonicalName, localRef, StringComparison.Ordinal))
+                ?.TargetIdentifier;
+            if (!string.Equals(tip, expectedRemoteTipSha, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PrHeadChangedException(expectedRemoteTipSha, tip ?? "(branch missing on remote)");
+            }
+
             // The checkout HEAD is detached; the push refspec needs a local ref for the new tip.
             repo.Refs.Add(localRef, repo.Head.Tip?.Id ?? throw new InvalidOperationException("no HEAD commit to push"), allowOverwrite: true);
             try
@@ -99,8 +107,7 @@ public sealed class LibGit2SharpGitOps : IGitOps
             }
 
             return true;
-        }, ct).ConfigureAwait(false);
-    }
+        }, ct);
 
     public Task<string?> GetRemoteTipAsync(
         string repoPath, string cloneUrl, string remoteBranch, string? pat, CancellationToken ct)

@@ -52,11 +52,13 @@ public interface IGitOps
 
     /// <summary>Fast-forward-only push of HEAD to refs/heads/{remoteBranch} on the authoritative
     /// remote (<paramref name="cloneUrl"/>) with compare-and-swap semantics: the ref update is
-    /// rejected unless its current value is <paramref name="expectedRemoteTipSha"/>. Performs a
-    /// pre-read of the remote tip to throw <see cref="PrHeadChangedException"/> on movement; a
-    /// movement between pre-read and ref update is caught by the server's non-fast-forward
-    /// rejection and surfaced as-is. Never forces. The checkout's own "origin" is never pushed
-    /// to — it may be a local mirror.</summary>
+    /// rejected unless its current value EQUALS <paramref name="expectedRemoteTipSha"/> — a plain
+    /// non-fast-forward check is insufficient (a force-reset to an ancestor of the pinned head
+    /// would still fast-forward). The implementation re-reads the remote tip immediately before
+    /// the ref update and throws <see cref="PrHeadChangedException"/> on any movement; a movement
+    /// inside that final window is caught by the server's non-fast-forward rejection and surfaced
+    /// as-is. Never forces. The checkout's own "origin" is never pushed to — it may be a local
+    /// mirror.</summary>
     Task PushAsync(
         string repoPath, string cloneUrl, string remoteBranch, string expectedRemoteTipSha, string? pat, CancellationToken ct);
 
