@@ -257,7 +257,7 @@ public class ServiceTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         var conflict = await response.Content.ReadFromJsonAsync<ConflictResponse>();
-        Assert.Equal("a review for this pull request is already in flight", conflict?.Error);
+        Assert.Equal("a run for this pull request is already in flight", conflict?.Error);
         Assert.Equal(holder, conflict?.RunId);
     }
 

@@ -19,7 +19,7 @@ public sealed class ResolvePlannerTests
         var plan = ResolvePlanner.Plan(comments, verdicts, ["src/A.cs", "src/B.cs"], 10, 10);
 
         Assert.Equal([3, 8, 12], plan.Fixes.SelectMany(f => f.ThreadIds));
-        var cluster = Assert.Single(plan.Fixes.Where(f => f.CandidateFiles.SequenceEqual(["src/A.cs"])));
+        var cluster = Assert.Single(plan.Fixes, f => f.CandidateFiles.SequenceEqual(["src/A.cs"]));
         Assert.Equal([3, 8], cluster.ThreadIds);
         Assert.Contains("Thread #3: first", cluster.RequestText);
         Assert.Contains("Thread #8: another", cluster.RequestText);
@@ -34,8 +34,8 @@ public sealed class ResolvePlannerTests
 
         var plan = ResolvePlanner.Plan(comments, verdicts, ["a.cs", "b.cs"], 1, 10);
 
-        Assert.Equal([1], plan.Fixes.SelectMany(f => f.ThreadIds));
-        Assert.Equal((2, "thread budget"), Assert.Single(plan.Deferred));
+        Assert.Equal([2], plan.Fixes.SelectMany(f => f.ThreadIds).ToArray());
+        Assert.Equal((1, "thread budget"), Assert.Single(plan.Deferred));
     }
 
     [Fact]

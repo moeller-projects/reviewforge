@@ -32,9 +32,10 @@ public sealed class ResolveCommitPushStage(
                 ctx.ResolutionOutcomes = ctx.ResolutionOutcomes.ToDictionary(
                     item => item.Key,
                     item => item.Value == ResolutionOutcome.Fixed ? ResolutionOutcome.OutOfScope : item.Value);
+                var details = ctx.ResolutionDetails.ToDictionary(pair => pair.Key, pair => pair.Value);
                 foreach (var item in applied)
-                    foreach (var threadId in item.ThreadIds)
-                        ctx.ResolutionDetails[threadId] = "The fix could not be committed because this pull request has no source branch reference.";
+                    details[item.ThreadId] = "The fix could not be committed because this pull request has no source branch reference.";
+                ctx.ResolutionDetails = details;
                 ctx.AppliedResolutions = [];
                 logger?.LogWarning("resolve push unavailable: source ref is missing or not a branch for {Pr}", ctx.Pr);
             }

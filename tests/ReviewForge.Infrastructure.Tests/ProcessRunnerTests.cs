@@ -57,7 +57,7 @@ public sealed class ProcessRunnerTests
 
     private static IReadOnlyList<string> OutputAndFailureCommand() =>
         OperatingSystem.IsWindows()
-            ? ["cmd.exe", "/d", "/s", "/c", "<nul set /p=standard-output & <nul set /p=standard-error 1>&2 & exit /b 7"]
+            ? ["cmd.exe", "/d", "/s", "/c", "<nul set /p=standard-output&1>&2 <nul set /p=standard-error&exit /b 7"]
             : ["/bin/sh", "-c", "printf 'standard-output'; printf 'standard-error' >&2; exit 7"];
 
     private static IReadOnlyList<string> LargeOutputCommand() =>

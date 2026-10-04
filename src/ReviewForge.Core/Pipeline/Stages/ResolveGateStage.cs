@@ -28,6 +28,10 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
             ? null
             : lastResolveRun?.LastObservedCommentAt ?? lastResolveRun?.CompletedAt;
         var decision = ResolveGate.Evaluate(pr, ctx.Threads, ctx.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId));
-        if (decision != ResolveGateDecision.Continue) ctx.Terminate(decision.ToString());
+        if (decision != ResolveGateDecision.Continue)
+        {
+            logger?.LogInformation("resolve gate terminated run: {Decision}", decision);
+            ctx.Terminate(decision.ToString());
+        }
     }
 }

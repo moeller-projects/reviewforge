@@ -22,7 +22,7 @@ public sealed class CollectCommentsStageTests
         ];
         var ctx = Context(source);
 
-        await new CollectCommentsStage(source, new FakeFindingStore(), [], TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
         var comments = ctx.ResolvableComments;
         Assert.Equal([1, 2, 3], comments.Select(c => c.ThreadId));
@@ -52,7 +52,7 @@ public sealed class CollectCommentsStageTests
         var ctx = Context(source);
         ctx.ResolveWatermark = Now;
 
-        await new CollectCommentsStage(source, new FakeFindingStore(), [], TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
         var only = Assert.Single(ctx.ResolvableComments);
         Assert.Equal(7, only.ThreadId);
@@ -66,9 +66,10 @@ public sealed class CollectCommentsStageTests
         var ctx = Context(source);
  
 
-        await new CollectCommentsStage(source, new FakeFindingStore(), ["reviewer"], TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
-        Assert.Equal("reviewer", Assert.Single(ctx.ResolvableComments).RequesterId);
-        Assert.True(ctx.ResolvableComments.Single().CommenterAllowed);
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(["reviewer"]), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
+        Assert.Equal(["reviewer", "creator"], ctx.ResolvableComments.Select(comment => comment.RequesterId));
+        Assert.True(ctx.ResolvableComments[0].CommenterAllowed);
+        Assert.False(ctx.ResolvableComments[1].CommenterAllowed);
     }
 
     [Fact]
@@ -87,7 +88,7 @@ public sealed class CollectCommentsStageTests
                 null, true, Now.AddMinutes(2))], CancellationToken.None);
         var ctx = new ReviewContext(pr, Now) { PullRequest = source.Pr };
 
-        await new CollectCommentsStage(source, store, [], TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
+        await new CollectCommentsStage(source, store, new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
         var only = Assert.Single(ctx.ResolvableComments);
         Assert.Equal(2, only.ThreadId);
@@ -115,7 +116,7 @@ public sealed class CollectCommentsStageTests
         var ctx = Context(source);
         ctx.ResolveWatermark = Now;
 
-        await new CollectCommentsStage(source, store, [], TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
+        await new CollectCommentsStage(source, store, new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(9, Assert.Single(ctx.ResolvableComments).ThreadId);
     }

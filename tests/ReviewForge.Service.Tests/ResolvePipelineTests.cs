@@ -1,3 +1,4 @@
+using Xunit;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;

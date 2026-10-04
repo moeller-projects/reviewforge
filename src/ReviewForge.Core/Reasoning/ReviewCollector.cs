@@ -13,6 +13,7 @@ public sealed class ReviewCollector
     private static readonly JsonSerializerOptions JsonOptions = new() {WriteIndented = false};
 
     private readonly List<RichFinding> _Findings = [];
+    private readonly List<ReviewUncertainty> _Uncertainties = [];
     private readonly object _Gate = new();
     private readonly TextWriter? _Jsonl;
     private readonly HashSet<string> _KnownKeys;

@@ -1,4 +1,5 @@
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Testing;
@@ -50,7 +51,7 @@ public sealed class ResolveGateTests
         };
 
         await Assert.ThrowsAsync<PrHeadChangedException>(() =>
-            new ResolveGateStage(new FakeFindingStore(), ["creator"], "requested", null)
+            new ResolveGateStage(new FakeFindingStore(), new HashSet<string>(["creator"]), "requested", null)
                 .ExecuteAsync(ctx, CancellationToken.None));
     }
 

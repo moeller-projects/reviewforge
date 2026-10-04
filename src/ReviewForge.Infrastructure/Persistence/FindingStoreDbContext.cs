@@ -52,6 +52,7 @@ public sealed class ResolveActionEntity
     public required string Outcome { get; set; }
     public string? CommitSha { get; set; }
     public bool ReplyPosted { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
     public string? ReplyText { get; set; }
 }
 

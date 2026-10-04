@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 using System.Diagnostics;
 using System.Text;
 using ReviewForge.Core.Domain;

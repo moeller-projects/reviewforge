@@ -14,6 +14,7 @@ using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Filesystem;
 using ReviewForge.Infrastructure.Process;
+using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
