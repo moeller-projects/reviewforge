@@ -29,6 +29,19 @@ public sealed class PlanFixesStageTests
         Assert.Equal("anchored file is not in the pull-request changed-file manifest", ctx.ResolutionDetails[3]);
     }
 
+    [Fact]
+    public async Task Execute_demotes_actionable_verdicts_on_deny_listed_paths()
+    {
+        var ctx = Context(Comment(4, ".env"));
+        ctx.ThreadVerdicts = [Verdict(4, TriageVerdict.Actionable)];
+
+        await new PlanFixesStage(10, 10).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(ctx.ResolvePlan!.Fixes);
+        Assert.Equal(ResolutionOutcome.OutOfScope, ctx.ResolutionOutcomes[4]);
+        Assert.Equal("anchored file is denied by the checkout path policy", ctx.ResolutionDetails[4]);
+    }
+
     [Theory]
     [InlineData(TriageVerdict.NonIssue, ResolutionOutcome.NonIssue)]
     [InlineData(TriageVerdict.Question, ResolutionOutcome.Question)]
@@ -63,15 +76,16 @@ public sealed class PlanFixesStageTests
         => new(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
         {
             PullRequest = new PullRequest(1, "title", null, "head", "base", "clone", false, "creator", "Creator"),
+            RepoDir = Path.GetTempPath(),
             ResolvableComments = comments,
             ChangedFileManifest = [
                 new ChangedFile("src/a.cs", ChangedFileType.Edit),
-                new ChangedFile("src/b.cs", ChangedFileType.Edit)]
+                new ChangedFile("src/b.cs", ChangedFileType.Edit),
+                new ChangedFile(".env", ChangedFileType.Edit)]
         };
 
     private static ResolvableComment Comment(int id, string? file, bool allowed = true)
         => new(id, file is null ? null : new ThreadAnchor(file, 1, 1), "requester", "Requester", [], $"request-{id}", allowed);
-
     private static ThreadVerdict Verdict(int id, TriageVerdict verdict)
         => new(id, verdict, "src/a.cs:1", "high");
 }

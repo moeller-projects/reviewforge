@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
@@ -13,6 +14,9 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
     {
         var comments = ctx.ResolvableComments.ToDictionary(c => c.ThreadId);
         var changed = ctx.ChangedFiles.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
+        // The writable plan must respect the same deny policy as the editor: an anchored
+        // comment on .env/.git/secrets must be rejected HERE, not fail the agent pass later.
+        var guard = new RepoPathGuard(ctx.RequireRepoDir());
         var verdicts = new List<ThreadVerdict>(ctx.ThreadVerdicts.Count);
         var outcomes = new Dictionary<int, ResolutionOutcome>();
         var details = new Dictionary<int, string>();
@@ -31,13 +35,16 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
                 verdicts.Add(verdict);
                 continue;
             }
-            if (!comment.CommenterAllowed || comment.Anchor is null || !changed.Contains(RepoPath.Normalize(comment.Anchor.FilePath)))
+            var anchorPath = comment.Anchor is null ? null : RepoPath.Normalize(comment.Anchor.FilePath);
+            var rejection =
+                !comment.CommenterAllowed ? "commenter is not authorized to request edits"
+                : anchorPath is null ? "comment has no safe file anchor"
+                : !changed.Contains(anchorPath) ? "anchored file is not in the pull-request changed-file manifest"
+                : guard.IsDenied(anchorPath) ? "anchored file is denied by the checkout path policy"
+                : null;
+            if (rejection is not null)
             {
-                details[verdict.ThreadId] = !comment.CommenterAllowed
-                    ? "commenter is not authorized to request edits"
-                    : comment.Anchor is null
-                        ? "comment has no safe file anchor"
-                        : "anchored file is not in the pull-request changed-file manifest";
+                details[verdict.ThreadId] = rejection;
                 outcomes[verdict.ThreadId] = ResolutionOutcome.OutOfScope;
                 verdicts.Add(verdict with { Verdict = TriageVerdict.OutOfScope });
                 continue;
