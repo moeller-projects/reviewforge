@@ -836,6 +836,28 @@ public class SystemPromptComposerTests
     }
 
     [Fact]
+    public void Compose_remains_usable_after_cache_capacity_is_exceeded()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            for (var i = 0; i < 65; i++)
+            {
+                var prompt = $"prompt-{i}";
+                var path = Path.Combine(directory, $"{i}.md");
+                File.WriteAllText(path, prompt);
+
+                Assert.Equal(prompt, SystemPromptComposer.Compose(path));
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ComposeFixPass_memoizes_and_follows_override_edits()
     {
         var embedded = SystemPromptComposer.ComposeFixPass();

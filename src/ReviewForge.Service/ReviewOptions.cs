@@ -1,3 +1,4 @@
+using ReasoningEffort = Microsoft.Extensions.AI.ReasoningEffort;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 

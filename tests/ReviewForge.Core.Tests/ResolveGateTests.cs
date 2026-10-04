@@ -138,6 +138,25 @@ public sealed class ResolveGateTests
         Assert.Null(ctx.ResolveWatermark);
     }
 
+    [Fact]
+    public async Task Stage_terminates_when_creator_is_not_allowlisted()
+    {
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), Watermark)
+        {
+            PullRequest = Pr(),
+            Threads = [Thread(1, Human("creator", Watermark.AddDays(1)))],
+            RunKind = RunKind.Resolve,
+            Trigger = EnqueueTrigger.Discovery,
+        };
+        var stage = new ResolveGateStage(new FakeFindingStore(), new HashSet<string>(), requestedHeadSha: null);
+
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal("resolve-gate", stage.Name);
+        Assert.Equal(20, stage.Order);
+        Assert.Equal(ResolveGateDecision.AuthorNotAllowed.ToString(), ctx.TerminationReason);
+    }
+
     private static PullRequest Pr() => new(1, "title", null, "head", "base", "clone", false, "creator", "Creator");
     private static ThreadComment Human(string id, DateTimeOffset at) => new(id, id, false, "please fix", at);
     private static ReviewThread Thread(int id, ThreadComment comment) => new(id, null, ReviewThreadStatus.Active, [comment]);
