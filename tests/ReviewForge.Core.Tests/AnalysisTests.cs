@@ -609,7 +609,18 @@ public class RepoPathTests
     [Fact]
     public void NormalizeKey_lowercases()
         => Assert.Equal("src/foo.cs", RepoPath.NormalizeKey(@"\Src\Foo.cs"));
+
+    [Fact]
+    public void Path_comparison_matches_host_filesystem_case_rules()
+    {
+        var ignoresCase = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+
+        Assert.Equal(ignoresCase, RepoPath.PathComparer.Equals("src/Feature.cs", "src/feature.cs"));
+        Assert.Equal(ignoresCase, string.Equals(
+            "src/Feature.cs", "src/feature.cs", RepoPath.PathComparison));
+    }
 }
+
 public class TrivialDiffTests
 {
     private const string DeletionsOnly = """
