@@ -9,6 +9,25 @@ public sealed class ProcessRunner : IProcessRunner
 {
     public const int MaxOutputCharacters = 64 * 1024;
 
+    /// <summary>Operational variables a build tool legitimately needs. The child process runs
+    /// repository-controlled build hooks on the PR checkout, so it must NOT inherit the
+    /// service environment (ADO PAT, model-provider keys, webhook secrets): the environment is
+    /// cleared and only this allowlist is passed through.</summary>
+    public static readonly IReadOnlyList<string> EnvironmentAllowlist =
+    [
+        // Executable resolution and shell plumbing.
+        "PATH", "Path", "PATHEXT", "COMSPEC", "SystemRoot", "SYSTEMROOT", "OS",
+        // Temp and profile locations build tools write caches to.
+        "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+        "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "ProgramFiles(x86)",
+        // .NET / NuGet behavior knobs (non-secret).
+        "DOTNET_CLI_TELEMETRY_OPTOUT", "DOTNET_NOLOGO", "DOTNET_CLI_UI_LANGUAGE",
+        "DOTNET_MULTILEVEL_LOOKUP", "NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH",
+        "NUGET_FALLBACK_PACKAGES", "NUMBER_OF_PROCESSORS",
+        // Locale.
+        "LANG", "LC_ALL", "TZ",
+    ];
+
     public async Task<ProcessRunResult> RunAsync(
         IReadOnlyList<string> argv,
         string? workingDirectory,
@@ -36,6 +55,18 @@ public sealed class ProcessRunner : IProcessRunner
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+
+        // Secret hygiene: never inherit the service environment — pass through only the
+        // operational allowlist (see EnvironmentAllowlist).
+        startInfo.Environment.Clear();
+        foreach (var name in EnvironmentAllowlist)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (value is not null)
+            {
+                startInfo.Environment[name] = value;
+            }
+        }
         for (var i = 1; i < argv.Count; i++)
         {
             startInfo.ArgumentList.Add(argv[i]);

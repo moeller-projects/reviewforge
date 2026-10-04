@@ -53,6 +53,40 @@ public sealed class ProcessRunnerTests
         Assert.Equal(ProcessRunner.MaxOutputCharacters, result.StandardOutput.Length + result.StandardError.Length);
     }
 
+    [Fact]
+    public async Task Does_not_inherit_service_environment_variables()
+    {
+        const string name = "REVIEWFORGE_TEST_SECRET";
+        Environment.SetEnvironmentVariable(name, "super-secret");
+        try
+        {
+            var runner = new ProcessRunner();
+            var result = await runner.RunAsync(
+                EnvProbeCommand(name), workingDirectory: null, timeout: TimeSpan.FromSeconds(30));
+
+            Assert.Equal("unset", result.StandardOutput.Trim());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(name, null);
+        }
+    }
+
+    [Fact]
+    public async Task Passes_through_the_operational_allowlist()
+    {
+        var runner = new ProcessRunner();
+        var result = await runner.RunAsync(
+            EnvProbeCommand("PATH"), workingDirectory: null, timeout: TimeSpan.FromSeconds(30));
+
+        Assert.Equal("set", result.StandardOutput.Trim());
+    }
+
+    private static IReadOnlyList<string> EnvProbeCommand(string variable) =>
+        OperatingSystem.IsWindows()
+            ? ["cmd.exe", "/d", "/s", "/c", $"if defined {variable} (echo set) else (echo unset)"]
+            : ["/bin/sh", "-c", $"if [ -n \"${variable}\" ]; then echo set; else echo unset; fi"];
+
     private static string RuntimeExecutable() => "dotnet";
 
     private static IReadOnlyList<string> OutputAndFailureCommand() =>
