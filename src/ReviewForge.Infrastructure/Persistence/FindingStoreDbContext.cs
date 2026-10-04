@@ -57,9 +57,10 @@ public sealed class ResolveActionEntity
 }
 
 
-/// <summary>Durable pushed-fix record (CommitOnHead): written by the commit stage immediately
-/// after a successful push, before any reply is attempted — the crash-after-push recovery
-/// source. Rows are pruned with their run row.</summary>
+/// <summary>Durable pushed-fix record (CommitOnHead): written by the commit stage as a push
+/// INTENT before the external push and confirmed atomically after it succeeds — the
+/// crash-before/after-push recovery source. Only confirmed rows are reconciled for replies.
+/// Rows are pruned with their run row.</summary>
 public sealed class PushedFixEntity
 {
     public int Id { get; set; }
@@ -72,6 +73,8 @@ public sealed class PushedFixEntity
     public required string CommitSha { get; set; }
     public required string CommitSubject { get; set; }
     public int? ThreadId { get; set; }               // resolved live thread when known
+    /// <summary>False while the row is a pre-push intent; true once the push succeeded.</summary>
+    public bool Pushed { get; set; }
     public bool ReplyPosted { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }

@@ -87,6 +87,16 @@ public sealed class SqliteFindingStore : IFindingStore
                 cmd.ExecuteNonQuery();
             }
 
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('PushedFixes') WHERE name = 'Pushed'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                // Pre-two-phase rows were written only after a successful push — Pushed=1
+                // preserves their reconciliation eligibility.
+                cmd.CommandText = "ALTER TABLE PushedFixes ADD COLUMN Pushed INTEGER NOT NULL DEFAULT 1";
+                cmd.ExecuteNonQuery();
+            }
+
             transaction.Commit();
         }
         finally
@@ -143,6 +153,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 CommitSha = fix.CommitSha,
                 CommitSubject = fix.CommitSubject,
                 ThreadId = fix.ThreadId,
+                Pushed = false,
                 ReplyPosted = false,
                 CreatedAt = DateTimeOffset.UtcNow,
             });
@@ -151,17 +162,37 @@ public sealed class SqliteFindingStore : IFindingStore
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
     }
 
+    public async Task ConfirmPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.PushedFixes
+            .Where(p => p.Org == pr.Org && p.Project == pr.Project && p.RepositoryId == pr.RepositoryId
+                        && p.PrId == pr.PrId && p.RunId == runId && !p.Pushed)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.Pushed, true), ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task AbandonPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.PushedFixes
+            .Where(p => p.Org == pr.Org && p.Project == pr.Project && p.RepositoryId == pr.RepositoryId
+                        && p.PrId == pr.PrId && p.RunId == runId && !p.Pushed)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct)
     {
         await using var db = CreateContext();
         var rows = await db.PushedFixes
             .Where(p => p.Org == pr.Org && p.Project == pr.Project && p.RepositoryId == pr.RepositoryId
-                        && p.PrId == pr.PrId && !p.ReplyPosted)
+                        && p.PrId == pr.PrId && p.Pushed && !p.ReplyPosted)
             .OrderBy(p => p.Id)
             .ToListAsync(ct)
             .ConfigureAwait(false);
         return [.. rows.Select(p => new PushedFix(
-            p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.ReplyPosted, p.CreatedAt))];
+            p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.Pushed, p.ReplyPosted, p.CreatedAt))];
     }
 
     public async Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct)

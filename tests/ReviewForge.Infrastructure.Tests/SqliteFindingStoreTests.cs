@@ -478,7 +478,7 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Pushed_fixes_round_trip_and_mark_replied()
+    public async Task Pushed_fixes_confirm_then_round_trip_and_mark_replied()
     {
         var now = DateTimeOffset.UtcNow;
         var run = Run("head", now);
@@ -486,8 +486,13 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SavePushedFixesAsync(
             Key,
             run.Id,
-            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", 42, false, now)],
+            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", 42, Pushed: false, ReplyPosted: false, now)],
             CancellationToken.None);
+
+        // Push-intent rows are invisible to reply reconciliation until confirmed.
+        Assert.Empty(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+
+        await _Store.ConfirmPushedFixesAsync(Key, run.Id, CancellationToken.None);
 
         var saved = Assert.Single(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
         Assert.True(saved.Id > 0);
@@ -495,11 +500,42 @@ public class SqliteFindingStoreTests : IDisposable
         Assert.Equal("k1", saved.DedupeKey);
         Assert.Equal("abcdef123456", saved.CommitSha);
         Assert.Equal(42, saved.ThreadId);
+        Assert.True(saved.Pushed);
         Assert.False(saved.ReplyPosted);
 
         await _Store.MarkPushedFixRepliedAsync(saved.Id, CancellationToken.None);
 
         Assert.Empty(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Abandon_deletes_only_unconfirmed_intent_rows()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var run = Run("head", now);
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+        await _Store.SavePushedFixesAsync(
+            Key,
+            run.Id,
+            [new PushedFix(0, run.Id, "k1", "abcdef123456", "fix(src): change", null, Pushed: false, ReplyPosted: false, now)],
+            CancellationToken.None);
+
+        await _Store.AbandonPushedFixesAsync(Key, run.Id, CancellationToken.None);
+
+        Assert.Empty(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+        // A rejected push leaves nothing to confirm.
+        await _Store.ConfirmPushedFixesAsync(Key, run.Id, CancellationToken.None);
+        Assert.Empty(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+
+        // Confirmed rows survive abandon (a second rejection must not erase a pushed fix).
+        await _Store.SavePushedFixesAsync(
+            Key,
+            run.Id,
+            [new PushedFix(0, run.Id, "k2", "abcdef123456", "fix(src): change", null, Pushed: false, ReplyPosted: false, now)],
+            CancellationToken.None);
+        await _Store.ConfirmPushedFixesAsync(Key, run.Id, CancellationToken.None);
+        await _Store.AbandonPushedFixesAsync(Key, run.Id, CancellationToken.None);
+        Assert.Single(await _Store.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
     }
 
     [Fact]
@@ -513,7 +549,7 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SavePushedFixesAsync(
             Key,
             oldRun.Id,
-            [new PushedFix(0, oldRun.Id, "old-key", "deadbeef", "fix: old", null, false, now.AddDays(-10))],
+            [new PushedFix(0, oldRun.Id, "old-key", "deadbeef", "fix: old", null, false, false, now.AddDays(-10))],
             CancellationToken.None);
 
         var pruned = await _Store.PruneAsync(now.AddDays(-1), minRunsPerPr: 1, CancellationToken.None);

@@ -154,8 +154,9 @@ public sealed class CommitFixesStageTests
         Assert.Equal(a1.CommitSha, a2.CommitSha);   // same file ⇒ same commit
         Assert.NotEqual(a1.CommitSha, b1.CommitSha);
         Assert.All(new[] {a1.CommitSubject, a2.CommitSubject, b1.CommitSubject}, s => Assert.NotNull(s));
-        // Pushed-fix rows durable immediately after push.
+        // Pushed-fix rows are durable immediately after push, confirmed for reconciliation.
         Assert.Equal(3, store.PushedFixes.Count);
+        Assert.All(store.PushedFixes, row => Assert.True(row.Pushed));
         Assert.All(store.PushedFixes, row => Assert.False(row.ReplyPosted));
     }
 

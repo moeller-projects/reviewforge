@@ -231,7 +231,7 @@ public class AutoFixPublishTests
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
             1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", 7,
-            ReplyPosted: false, DateTimeOffset.UtcNow));
+            Pushed: true, ReplyPosted: false, DateTimeOffset.UtcNow));
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
@@ -258,7 +258,7 @@ public class AutoFixPublishTests
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
             1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", 7,
-            ReplyPosted: false, DateTimeOffset.UtcNow));
+            Pushed: true, ReplyPosted: false, DateTimeOffset.UtcNow));
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
@@ -283,7 +283,7 @@ public class AutoFixPublishTests
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
             1, ctx.RunId, "k1", "abcdef123456", "fix(src): quote variable", null,
-            ReplyPosted: false, DateTimeOffset.UtcNow));
+            Pushed: true, ReplyPosted: false, DateTimeOffset.UtcNow));
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,

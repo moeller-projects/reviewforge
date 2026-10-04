@@ -145,6 +145,23 @@ public sealed class CommitFixesStage(
         // irreversible boundary itself, directly before the push.
         PublishGuardChecks.ThrowIfClaimLost(ctx, "at push");
 
+        // Durable push intent BEFORE the external mutation: the rows are invisible to reply
+        // reconciliation until confirmed, but a crash after the push (before confirm) leaves a
+        // recoverable record of exactly which commits were sent.
+        var rows = committed
+            .SelectMany(c => c.Fixes.Select(f => new PushedFix(
+                Id: 0,
+                ctx.RunId,
+                f.DedupeKey,
+                c.Sha,
+                c.Subject,
+                ParseCommandThreadId(f.DedupeKey),
+                Pushed: false,
+                ReplyPosted: false,
+                CreatedAt: default)))
+            .ToArray();
+        await store.SavePushedFixesAsync(ctx.Pr, ctx.RunId, rows, ct).ConfigureAwait(false);
+
         try
         {
             await git.PushAsync(repoDir, pr.CloneUrl, branch, pr.SourceCommitSha, pat, ct).ConfigureAwait(false);
@@ -153,6 +170,7 @@ public sealed class CommitFixesStage(
         {
             ReviewForgeTelemetry.AutoFixPushFailures.Add(
                 1, new TagList { { ReviewForgeTelemetry.TagReason, "pin" } });
+            await AbandonPushIntentAsync(ctx, ct).ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
@@ -162,8 +180,14 @@ public sealed class CommitFixesStage(
             ReviewForgeTelemetry.AutoFixPushFailures.Add(
                 1, new TagList { { ReviewForgeTelemetry.TagReason, "rejected" } });
             logger.LogError(ex, "commit-fixes: push of {Count} commit(s) to {Branch} was rejected", committed.Count, branch);
+            await AbandonPushIntentAsync(ctx, ct).ConfigureAwait(false);
             throw;
         }
+
+        // Push confirmed on the remote: the intent rows become eligible for reply
+        // reconciliation. The publish stage (this run, or a later one after a crash)
+        // reconciles missing "Fixed in {sha}" replies from these rows alone.
+        await store.ConfirmPushedFixesAsync(ctx.Pr, ctx.RunId, ct).ConfigureAwait(false);
 
         ReviewForgeTelemetry.AutoFixPushes.Add(1);
         logger.LogInformation(
@@ -172,21 +196,6 @@ public sealed class CommitFixesStage(
 
         // The run's own push is the one legal head movement; publish accepts this head.
         ctx.PushedHeadSha = committed[^1].Sha;
-
-        // Durability before replies: the publish stage (this run, or a later one after a
-        // crash) reconciles missing "Fixed in {sha}" replies from these rows alone.
-        var rows = committed
-            .SelectMany(c => c.Fixes.Select(f => new PushedFix(
-                Id: 0,
-                ctx.RunId,
-                f.DedupeKey,
-                c.Sha,
-                c.Subject,
-                ParseCommandThreadId(f.DedupeKey),
-                ReplyPosted: false,
-                CreatedAt: default)))
-            .ToArray();
-        await store.SavePushedFixesAsync(ctx.Pr, ctx.RunId, rows, ct).ConfigureAwait(false);
 
         // Commanded fixes: the "Fixed in {sha7}" reply on the command thread is queued here
         // (7.2 queues no success replies in CommitOnHead mode); publish posts it.
@@ -199,6 +208,22 @@ public sealed class CommitFixesStage(
         if (commandReplies.Length > 0)
         {
             ctx.FixCommandReplies = [.. ctx.FixCommandReplies, .. commandReplies];
+        }
+    }
+
+    /// <summary>Best-effort cleanup of unconfirmed push-intent rows after a rejected push.
+    /// Failure to clean up is logged but never masks the push failure that triggered it —
+    /// stale intent rows are inert (never confirmed ⇒ never reconciled) and pruned with
+    /// their run row.</summary>
+    private async Task AbandonPushIntentAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        try
+        {
+            await store.AbandonPushedFixesAsync(ctx.Pr, ctx.RunId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "commit-fixes: failed to abandon push-intent rows for run {RunId}", ctx.RunId);
         }
     }
 

@@ -47,6 +47,8 @@ public class StoreHealthCheckTests
         public Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct) => Task.FromResult(0);
         public Task PingAsync(CancellationToken ct) => Task.CompletedTask;
         public Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct) => Task.CompletedTask;
+        public Task ConfirmPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct) => Task.CompletedTask;
+        public Task AbandonPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<PushedFix>>([]);
         public Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct) => Task.FromResult<ReviewRun?>(null);
         public Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(PrKey pr, IReadOnlyCollection<int> threadIds, CancellationToken ct)

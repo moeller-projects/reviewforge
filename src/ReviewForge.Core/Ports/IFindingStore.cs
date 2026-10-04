@@ -2,11 +2,14 @@ using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Ports;
 
-/// <summary>Durable record of one fix whose commit was pushed to the PR source branch
-/// (CommitOnHead mode). Persisted by the commit stage immediately after a successful push —
-/// BEFORE any reply is attempted — so a crash between push and replies is reconciled by a
-/// later run from this record alone. <see cref="Id"/> is store-assigned (0 on save);
-/// <see cref="RunId"/>, <see cref="ReplyPosted"/> and <see cref="CreatedAt"/> are likewise
+/// <summary>Durable record of one fix whose commit is intended for — or was pushed to — the
+/// PR source branch (CommitOnHead mode). The commit stage persists the rows as a push INTENT
+/// (<see cref="Pushed"/> false) BEFORE the external push, confirms them atomically after a
+/// successful push, and abandons them on rejection — so a crash anywhere in that sequence
+/// leaves either no visible rows or rows a later run can reconcile BEFORE any reply is
+/// attempted. Only confirmed rows (<see cref="Pushed"/> true) are eligible for reply
+/// reconciliation. <see cref="Id"/> is store-assigned (0 on save); <see cref="RunId"/>,
+/// <see cref="Pushed"/>, <see cref="ReplyPosted"/> and <see cref="CreatedAt"/> are likewise
 /// store-owned on save.</summary>
 public sealed record PushedFix(
     int Id,
@@ -15,6 +18,7 @@ public sealed record PushedFix(
     string CommitSha,
     string CommitSubject,
     int? ThreadId,             // resolved live thread when known (commanded fixes)
+    bool Pushed,               // false = push intent only; true = push confirmed on the remote
     bool ReplyPosted,
     DateTimeOffset CreatedAt);
  
@@ -59,12 +63,21 @@ public interface IFindingStore
     /// </summary>
     Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct);
 
-    /// <summary>Persists the pushed-fix records of a run. Called by the commit stage
-    /// immediately after a successful push, before the publish stage runs.</summary>
+    /// <summary>Persists the pushed-fix records of a run as push INTENT (Pushed = false).
+    /// Called by the commit stage BEFORE the external push so a crash leaves a durable record;
+    /// intent rows are invisible to reply reconciliation until confirmed.</summary>
     Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct);
 
-    /// <summary>Pushed fixes of this PR whose "Fixed in {sha}" reply has not been posted yet
-    /// (crash orphans of prior runs plus the current run's fresh rows).</summary>
+    /// <summary>Atomically confirms the run's push-intent rows after a successful push
+    /// (Pushed = true), making them eligible for reply reconciliation.</summary>
+    Task ConfirmPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct);
+
+    /// <summary>Deletes the run's unconfirmed push-intent rows after a rejected push so a
+    /// commit that never reached the remote is never reconciled as pushed.</summary>
+    Task AbandonPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct);
+
+    /// <summary>Confirmed (Pushed) fixes of this PR whose "Fixed in {sha}" reply has not been
+    /// posted yet (crash orphans of prior runs plus the current run's fresh rows).</summary>
     Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct);
 
     /// <summary>Marks one pushed-fix row as replied (exactly-once convergence with the

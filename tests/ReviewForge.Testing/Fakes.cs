@@ -386,7 +386,9 @@ public class FakeFindingStore : IFindingStore
     // Resolve action persistence is kept in-memory for pipeline tests.
 
     /// <summary>Pushed-fix rows saved via <see cref="SavePushedFixesAsync"/> (Id assigned
-    /// sequentially from 1); <see cref="MarkPushedFixRepliedAsync"/> flips ReplyPosted.</summary>
+    /// sequentially from 1, Pushed=false intent); <see cref="ConfirmPushedFixesAsync"/> flips
+    /// Pushed, <see cref="AbandonPushedFixesAsync"/> drops unconfirmed rows of the run, and
+    /// <see cref="MarkPushedFixRepliedAsync"/> flips ReplyPosted.</summary>
     public List<PushedFix> PushedFixes { get; } = [];
     private int _NextPushedFixId = 1;
 
@@ -394,14 +396,33 @@ public class FakeFindingStore : IFindingStore
     {
         foreach (var fix in fixes)
         {
-            PushedFixes.Add(fix with {Id = _NextPushedFixId++, RunId = runId, ReplyPosted = false});
+            PushedFixes.Add(fix with {Id = _NextPushedFixId++, RunId = runId, Pushed = false, ReplyPosted = false});
         }
 
         return Task.CompletedTask;
     }
 
+    public virtual Task ConfirmPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct)
+    {
+        for (var i = 0; i < PushedFixes.Count; i++)
+        {
+            if (PushedFixes[i].RunId == runId && !PushedFixes[i].Pushed)
+            {
+                PushedFixes[i] = PushedFixes[i] with {Pushed = true};
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public virtual Task AbandonPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct)
+    {
+        PushedFixes.RemoveAll(f => f.RunId == runId && !f.Pushed);
+        return Task.CompletedTask;
+    }
+
     public virtual Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct)
-        => Task.FromResult<IReadOnlyList<PushedFix>>([.. PushedFixes.Where(f => !f.ReplyPosted)]);
+        => Task.FromResult<IReadOnlyList<PushedFix>>([.. PushedFixes.Where(f => f.Pushed && !f.ReplyPosted)]);
 
     public virtual Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct)
     {
