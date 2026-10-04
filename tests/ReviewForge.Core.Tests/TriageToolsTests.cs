@@ -28,6 +28,18 @@ public sealed class TriageToolsTests
         Assert.Single(collector.ThreadVerdicts);
     }
 
+    [Fact]
+    public void RecordVerdict_rejects_undefined_numeric_verdicts()
+    {
+        // Enum.TryParse accepts numeric strings for undeclared values; the verdict must
+        // round-trip through the domain enum, never an undefined cast.
+        var collector = new ReviewCollector();
+
+        Assert.Contains("verdict must be", new TriageTools(collector)
+            .RecordVerdict(1, "99", "src/a.cs:1", "high"));
+        Assert.Empty(collector.ThreadVerdicts);
+    }
+
     [Theory]
     [InlineData("", "verdict is required")]
     [InlineData("unknown", "verdict must be")]

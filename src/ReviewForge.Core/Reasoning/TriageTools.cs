@@ -25,7 +25,7 @@ public sealed class TriageTools(ReviewCollector collector, IReadOnlySet<long>? a
         if (allowedThreadIds is not null && !allowedThreadIds.Contains(threadId))
             return "record_verdict rejected: thread is not part of this triage batch";
         if (string.IsNullOrWhiteSpace(verdict)) return "record_verdict rejected: verdict is required";
-        if (!Enum.TryParse<TriageVerdict>(verdict, ignoreCase: true, out var parsed))
+        if (!Enum.TryParse<TriageVerdict>(verdict, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
             return "record_verdict rejected: verdict must be Actionable, NonIssue, Question, AlreadyFixed, or OutOfScope";
         if (string.IsNullOrWhiteSpace(evidence)) return "record_verdict rejected: evidence is required";
         if (string.IsNullOrWhiteSpace(confidence)) return "record_verdict rejected: confidence is required";
