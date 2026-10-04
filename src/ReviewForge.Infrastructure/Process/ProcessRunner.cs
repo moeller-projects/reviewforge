@@ -88,30 +88,50 @@ public sealed class ProcessRunner : IProcessRunner
         try
         {
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
+            // The drain shares the same budget: a DESCENDANT that inherited stdout/stderr
+            // keeps the pipes open after the direct child exits — WaitForExitAsync alone
+            // would let that shape hang the run past its timeout.
+            await Task.WhenAll(stdout, stderr).WaitAsync(linkedCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             timedOut = true;
-            Kill(process);
         }
         catch
         {
             Kill(process);
-            await AwaitOutputAsync(stdout, stderr).ConfigureAwait(false);
+            await DrainAfterKillAsync(stdout, stderr).ConfigureAwait(false);
             throw;
         }
 
         if (timedOut)
         {
+            // Tree kill also terminates pipe-holding descendants, so the readers complete.
             Kill(process);
+            await DrainAfterKillAsync(stdout, stderr).ConfigureAwait(false);
         }
 
-        var capturedOutput = await AwaitOutputAsync(stdout, stderr).ConfigureAwait(false);
         return new ProcessRunResult(
             timedOut ? -1 : process.ExitCode,
-            capturedOutput.StandardOutput,
-            capturedOutput.StandardError,
+            stdout.IsCompletedSuccessfully ? stdout.Result : string.Empty,
+            stderr.IsCompletedSuccessfully ? stderr.Result : string.Empty,
             timedOut);
+    }
+
+    /// <summary>Bounded grace drain after a tree kill: the pipes close with the dead
+    /// processes and the readers complete. If they still do not (a reader itself faulted),
+    /// return what was captured rather than hang the run — the primary outcome (timeout or
+    /// the original exception) is already decided.</summary>
+    private static async Task DrainAfterKillAsync(Task<string> stdout, Task<string> stderr)
+    {
+        try
+        {
+            await Task.WhenAll(stdout, stderr).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // Readers never completed even after the tree kill — proceed with empty output.
+        }
     }
 
     private static async Task<string> CaptureAsync(StreamReader reader, OutputBudget budget)
@@ -134,13 +154,6 @@ public sealed class ProcessRunner : IProcessRunner
         }
     }
 
-    private static async Task<(string StandardOutput, string StandardError)> AwaitOutputAsync(
-        Task<string> stdout,
-        Task<string> stderr)
-    {
-        await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
-        return (stdout.Result, stderr.Result);
-    }
 
     private static void Kill(System.Diagnostics.Process process)
     {

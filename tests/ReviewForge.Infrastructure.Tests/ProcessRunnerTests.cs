@@ -135,6 +135,23 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
+    public async Task Times_out_when_a_descendant_holds_the_output_pipes()
+    {
+        // The direct child exits immediately; a spawned descendant inherits stdout/stderr
+        // and keeps the pipes open. The drain must honor the same timeout.
+        var runner = new ProcessRunner();
+        var result = await runner.RunAsync(
+            DescendantPipeCommand(), workingDirectory: null, timeout: TimeSpan.FromSeconds(1));
+
+        Assert.True(result.TimedOut);
+    }
+
+    private static IReadOnlyList<string> DescendantPipeCommand() =>
+        OperatingSystem.IsWindows()
+            ? ["cmd.exe", "/d", "/s", "/c", "start /b ping -n 30 127.0.0.1"]
+            : ["/bin/sh", "-c", "sleep 30 &"];
+
+    [Fact]
     public async Task Executes_in_the_requested_working_directory()
     {
         var runner = new ProcessRunner();
