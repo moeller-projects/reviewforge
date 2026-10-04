@@ -1,3 +1,4 @@
+using System.Text;
 using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Process;
 using Xunit;
@@ -50,8 +51,28 @@ public sealed class ProcessRunnerTests
         Assert.True(result.Succeeded);
         Assert.False(result.TimedOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(ProcessRunner.MaxOutputCharacters, result.StandardOutput.Length + result.StandardError.Length);
+        Assert.Equal(ProcessRunner.MaxOutputBytes, Encoding.UTF8.GetByteCount(result.StandardOutput) + Encoding.UTF8.GetByteCount(result.StandardError));
     }
+
+    [Fact]
+    public async Task Caps_multibyte_output_by_bytes_not_chars()
+    {
+        // A char-counted cap would retain up to 4x the promised 64 KiB for non-ASCII output.
+        var runner = new ProcessRunner();
+        var result = await runner.RunAsync(
+            MultibyteOutputCommand(),
+            workingDirectory: null,
+            timeout: TimeSpan.FromSeconds(30));
+
+        Assert.True(result.Succeeded);
+        var bytes = Encoding.UTF8.GetByteCount(result.StandardOutput) + Encoding.UTF8.GetByteCount(result.StandardError);
+        Assert.True(bytes <= ProcessRunner.MaxOutputBytes, $"expected ≤ {ProcessRunner.MaxOutputBytes} bytes, got {bytes}");
+    }
+
+    private static IReadOnlyList<string> MultibyteOutputCommand() =>
+        OperatingSystem.IsWindows()
+            ? ["cmd.exe", "/d", "/s", "/c", "for /L %i in (1,1,40000) do @echo é"]
+            : ["/bin/sh", "-c", "yes é | head -c 120000"];
 
     [Fact]
     public async Task Does_not_inherit_service_environment_variables()

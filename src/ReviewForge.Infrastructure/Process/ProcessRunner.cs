@@ -146,12 +146,35 @@ public sealed class ProcessRunner : IProcessRunner
                 return builder.ToString();
             }
 
-            var keep = budget.Reserve(read);
+            var keep = budget.Reserve(Encoding.UTF8.GetByteCount(buffer.AsSpan(0, read)));
             if (keep > 0)
             {
-                builder.Append(buffer, 0, keep);
+                builder.Append(buffer, 0, CharsFittingByteBudget(buffer.AsSpan(0, read), keep));
             }
         }
+    }
+
+    /// <summary>Longest char prefix of <paramref name="chunk"/> whose UTF-8 encoding fits in
+    /// <paramref name="byteBudget"/>. Only runs on the single truncated chunk — the steady
+    /// state appends whole buffers.</summary>
+    private static int CharsFittingByteBudget(ReadOnlySpan<char> chunk, int byteBudget)
+    {
+        var chars = 0;
+        var bytes = 0;
+        while (chars < chunk.Length)
+        {
+            var width = chars + 1 < chunk.Length && char.IsSurrogatePair(chunk[chars], chunk[chars + 1]) ? 2 : 1;
+            var cost = Encoding.UTF8.GetByteCount(chunk.Slice(chars, width));
+            if (bytes + cost > byteBudget)
+            {
+                break;
+            }
+
+            bytes += cost;
+            chars += width;
+        }
+
+        return chars;
     }
 
 
