@@ -34,7 +34,11 @@ public sealed class CollectCommentsStage(
                 || (!deferred && ctx.ResolveWatermark is { } watermark && latestHuman.PublishedAt <= watermark)
                 || (!deferred && previousAction is not null && latestHuman.PublishedAt <= previousAction.CreatedAt))
                 continue;
-            if (Command(latestHuman.Text, "/rf fix") || Command(latestHuman.Text, "/rf resolve"))
+            // "/rf fix" belongs to the auto-fix pipeline. "/rf resolve" stays: the command
+            // comment IS a resolution request (its text may carry the actual instructions);
+            // dropping it would leave a command-only PR with nothing to resolve even though
+            // the command was acknowledged.
+            if (Command(latestHuman.Text, "/rf fix"))
                 continue;
             var allowed = authorOnly
                 ? string.Equals(latestHuman.AuthorId, ctx.RequirePullRequest().CreatorId, StringComparison.OrdinalIgnoreCase)

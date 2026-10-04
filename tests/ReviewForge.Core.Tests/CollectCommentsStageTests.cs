@@ -54,8 +54,8 @@ public sealed class CollectCommentsStageTests
 
         await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
-        var only = Assert.Single(ctx.ResolvableComments);
-        Assert.Equal(7, only.ThreadId);
+        // "/rf resolve" is itself a resolution request and stays; "/rf fix" belongs to auto-fix.
+        Assert.Equal([6, 7], ctx.ResolvableComments.Select(c => c.ThreadId));
     }
 
     [Fact]
