@@ -243,12 +243,14 @@ public sealed class SqliteFindingStore : IFindingStore
     public async Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct)
     {
         await using var db = CreateContext();
-        var run = await db.Runs
+        // SQLite cannot order DateTimeOffset values; filter in SQL and order the per-PR candidates in memory.
+        var candidates = await db.Runs
+            .AsNoTracking()
             .Where(r => r.Org == pr.Org && r.Project == pr.Project && r.RepositoryId == pr.RepositoryId
                         && r.PrId == pr.PrId && r.Pipeline == "Resolve"
                         && r.CompletedAt != null && r.Success)
-            .OrderByDescending(r => r.StartedAt)
-            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+            .ToListAsync(ct).ConfigureAwait(false);
+        var run = candidates.OrderByDescending(r => r.StartedAt).FirstOrDefault();
         return run is null
             ? null
             : new ReviewRun(run.Id, pr, run.HeadSha, Enum.Parse<ReviewKind>(run.Kind),
