@@ -260,6 +260,34 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         Assert.DoesNotContain("RecordFinding", tools);
         Assert.DoesNotContain("RecordUncertainty", tools);
     }
+
+    [Fact]
+    public async Task Triage_stage_fails_closed_when_the_agent_attempts_a_write_tool()
+    {
+        var file = Path.Combine(_root, "A.cs");
+        File.WriteAllText(file, "original\n");
+        // The model attempts an edit through the triage pass: no write tool is registered,
+        // so the attempt must never reach the filesystem — fail closed, pass continues.
+        var chat = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("EditFile", new Dictionary<string, object?>
+            {
+                ["path"] = "A.cs",
+                ["edits"] = new List<object> { new Dictionary<string, object?> { ["replacement"] = "pwned" } },
+            })),
+            ScriptedChatClient.FunctionCalls(("RecordVerdict", new Dictionary<string, object?>
+            {
+                ["threadId"] = 1, ["verdict"] = "OutOfScope", ["evidence"] = "unclear", ["confidence"] = "low",
+            })),
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["summary"] = "done" })));
+        var ctx = Context();
+        ctx.ResolvableComments = [Comment(1)];
+
+        await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat)))
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal("original\n", File.ReadAllText(file));
+        Assert.Single(ctx.ThreadVerdicts);
+    }
     private sealed class ProcessRunner(bool success) : IProcessRunner
     {
         public Task<ProcessRunResult> RunAsync(IReadOnlyList<string> argv, string? workingDirectory, TimeSpan timeout, CancellationToken cancellationToken = default)
