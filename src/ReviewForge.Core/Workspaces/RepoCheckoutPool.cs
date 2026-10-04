@@ -21,6 +21,12 @@ public sealed class RepoCheckoutPool
     private readonly string? _Pat;
     private readonly string _Root;
 
+    /// <summary>Kind dimension for checkout metrics: every acquisition, active-lease gauge
+    /// and eviction recording is split into pooled (shared per-head) and private (run-scoped)
+    /// series so writable leases are visible on dashboards.</summary>
+    private static TagList PooledKind => new() { { ReviewForgeTelemetry.TagKind, "pooled" } };
+    private static TagList PrivateKind => new() { { ReviewForgeTelemetry.TagKind, "private" } };
+
     // path -> measured size + refresh stamp. Sized once at materialization and refreshed
     // lazily by the eviction sweep when older than an hour; the acquire/reuse path never
     // walks the tree (P2-32) — drift from targeted fetches is MB-scale against a GB budget.
@@ -57,7 +63,7 @@ public sealed class RepoCheckoutPool
         var warmed = _WarmedHeads.TryRemove(key, out _); // one-shot warmup attribution
         var lockLease = await _Locks.AcquireAsync(key, ct).ConfigureAwait(false)
                         ?? throw new InvalidOperationException("checkout lock acquisition returned no lease");
-        ReviewForgeTelemetry.CheckoutActive.Add(1);
+        ReviewForgeTelemetry.CheckoutActive.Add(1, PooledKind);
         try
         {
             var path = CheckoutPath(repositoryId, headSha);
@@ -71,7 +77,7 @@ public sealed class RepoCheckoutPool
                 _Fs.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                     Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    new TagList { { ReviewForgeTelemetry.TagWarmed, warmed } });
+                    new TagList { { ReviewForgeTelemetry.TagKind, "pooled" }, { ReviewForgeTelemetry.TagWarmed, warmed } });
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
 
@@ -96,7 +102,7 @@ public sealed class RepoCheckoutPool
 
                     ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                         Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                        new TagList { { ReviewForgeTelemetry.TagWarmed, warmed } });
+                        new TagList { { ReviewForgeTelemetry.TagKind, "pooled" }, { ReviewForgeTelemetry.TagWarmed, warmed } });
                     return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
                 }
                 catch (Exception)
@@ -117,8 +123,8 @@ public sealed class RepoCheckoutPool
         {
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                new TagList { { ReviewForgeTelemetry.TagWarmed, warmed } });
-            ReviewForgeTelemetry.CheckoutActive.Add(-1);
+                new TagList { { ReviewForgeTelemetry.TagKind, "pooled" }, { ReviewForgeTelemetry.TagWarmed, warmed } });
+            ReviewForgeTelemetry.CheckoutActive.Add(-1, PooledKind);
             lockLease.Dispose();
             throw;
         }
@@ -138,7 +144,7 @@ public sealed class RepoCheckoutPool
         var path = PrivatePath(runId);
         var lockLease = await _Locks.AcquireAsync(PrivateLockKey(runId), ct).ConfigureAwait(false)
                         ?? throw new InvalidOperationException("checkout lock acquisition returned no lease");
-        ReviewForgeTelemetry.CheckoutActive.Add(1);
+        ReviewForgeTelemetry.CheckoutActive.Add(1, PrivateKind);
         try
         {
             // Same run id can never recur; a leftover means a crashed earlier attempt whose
@@ -165,7 +171,7 @@ public sealed class RepoCheckoutPool
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                 new TagList { { ReviewForgeTelemetry.TagKind, "private" } });
-            ReviewForgeTelemetry.CheckoutActive.Add(-1);
+            ReviewForgeTelemetry.CheckoutActive.Add(-1, PrivateKind);
             lockLease.Dispose();
             throw;
         }
@@ -301,7 +307,7 @@ public sealed class RepoCheckoutPool
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(
                         1, new TagList { { ReviewForgeTelemetry.TagKind, "private" } });
-                    ReviewForgeTelemetry.CheckoutEvictedBytes.Add(size);
+                    ReviewForgeTelemetry.CheckoutEvictedBytes.Add(size, PrivateKind);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -365,7 +371,7 @@ public sealed class RepoCheckoutPool
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(
                         1, new TagList { { ReviewForgeTelemetry.TagKind, "pooled" } });
-                    ReviewForgeTelemetry.CheckoutEvictedBytes.Add(size);
+                    ReviewForgeTelemetry.CheckoutEvictedBytes.Add(size, PooledKind);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -588,7 +594,7 @@ public sealed class RepoCheckoutPool
             if (Interlocked.Exchange(ref _Disposed, 1) == 0)
             {
                 owner.TryDeletePrivateCheckout(path);
-                ReviewForgeTelemetry.CheckoutActive.Add(-1);
+                ReviewForgeTelemetry.CheckoutActive.Add(-1, PrivateKind);
                 lease.Dispose();
             }
         }
@@ -601,7 +607,7 @@ public sealed class RepoCheckoutPool
         {
             if (Interlocked.Exchange(ref _Disposed, 1) == 0)
             {
-                ReviewForgeTelemetry.CheckoutActive.Add(-1);
+                ReviewForgeTelemetry.CheckoutActive.Add(-1, PooledKind);
                 lease.Dispose();
             }
         }
