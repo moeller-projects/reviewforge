@@ -12,14 +12,13 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// vanishing. GetLastCompletedRunAsync filters on CompletedAt != null && Success, so the
 /// shell never seeds the next run's gate or dedupe.
 /// </summary>
-public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = null) : IReviewStage
+public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = null, int order = 75) : IReviewStage
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
     public string Name => "begin-run";
 
-    public int Order => 75;
-
+    public int Order => order;
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         // Rows: accepted findings (with deterministic-fix JSON) + carry-forward prior
@@ -29,7 +28,8 @@ public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = nul
 
         var run = new ReviewRun(
             ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Kind,
-            ctx.StartedAt, CompletedAt: null, Success: false, findings);
+            ctx.StartedAt, CompletedAt: null, Success: false, findings,
+            Pipeline: ctx.RunKind.ToString());
 
         return store.SaveRunAsync(run, ct);
     }

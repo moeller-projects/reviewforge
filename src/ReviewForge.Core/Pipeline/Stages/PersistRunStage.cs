@@ -44,7 +44,8 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
             _Clock.GetUtcNow(),
             Success: true,
             findings,
-            LastObservedCommentAt: lastObservedComment);
+            LastObservedCommentAt: lastObservedComment,
+            Pipeline: ctx.RunKind.ToString());
 
         return store.SaveRunAsync(run, ct);
     }

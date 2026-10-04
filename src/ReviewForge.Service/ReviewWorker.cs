@@ -18,7 +18,8 @@ public sealed class ReviewWorker(
     InFlightClaims claims,
     IFindingStore store,
     ILogger<ReviewWorker> logger,
-    TimeProvider? clock = null) : BackgroundService
+    TimeProvider? clock = null,
+    IResolveRunService? resolveService = null) : BackgroundService
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
@@ -43,16 +44,16 @@ public sealed class ReviewWorker(
                 logger.LogInformation(
                     "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
                     request.RunId, request.Pr, holder);
-                tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued");
+                tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued", request.Kind);
                 // The request was already dequeued (claimed) from the queue; without this
                 // ack a durable row would stay claimed and be reclaimed forever.
                 queue.Acknowledge(request.RunId);
                 continue; // finally-block of the run loop is not entered; nothing to release
             }
 
-            tracker.Set(request.RunId, request.Pr, RunState.Running);
+            tracker.Set(request.RunId, request.Pr, RunState.Running, kind: request.Kind);
             logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
-            var repoTag = new TagList { { ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId } };
+            var repoTag = new TagList { { ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId }, { "kind", request.Kind.ToString().ToLowerInvariant() } };
             ReviewForgeTelemetry.ReviewsStarted.Add(1, repoTag);
             var runStart = Stopwatch.GetTimestamp();
             ReviewContext? ctx = null;
@@ -60,10 +61,13 @@ public sealed class ReviewWorker(
             {
                 ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId)
                 {
+                    RunKind = request.Kind,
                     PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
                     EnqueueContext = request.EnqueueContext,
                     Trigger = request.Trigger,
                 };
+                if (request.Kind == RunKind.Resolve && resolveService is null)
+                    throw new InvalidOperationException("resolve run requested but no resolve service is registered");
 
                 // Keep the reservation alive for the whole run so a review that outlives the
                 // claim TTL does not admit a duplicate; the publish guard still fails the run
@@ -84,7 +88,14 @@ public sealed class ReviewWorker(
                     .RunUntilCancelled(heartbeatCts.Token);
                 try
                 {
-                    await pipelineFactory.Create().RunAsync(ctx, stoppingToken);
+                    if (request.Kind == RunKind.Resolve)
+                    {
+                        await resolveService!.ExecuteAsync(request, ctx!, stoppingToken);
+                    }
+                    else
+                    {
+                        await pipelineFactory.Create().RunAsync(ctx!, stoppingToken);
+                    }
                 }
                 finally
                 {
@@ -92,12 +103,12 @@ public sealed class ReviewWorker(
                     await heartbeat.ConfigureAwait(false);
                 }
 
-                var state = ctx.Terminated ? RunState.Skipped : RunState.Completed;
-                tracker.Set(request.RunId, request.Pr, state, ctx.TerminationReason);
-                logger.LogInformation("review run {RunId} {State}: {Reason}",
-                    request.RunId, state, ctx.TerminationReason ?? "ok");
+                var state = ctx?.Terminated == true ? RunState.Skipped : RunState.Completed;
+                tracker.Set(request.RunId, request.Pr, state, ctx?.TerminationReason, request.Kind);
+                logger.LogInformation("run {RunId} {State}: {Reason}",
+                    request.RunId, state, ctx?.TerminationReason ?? "ok");
                 var tags = repoTag;
-                tags.Add(ReviewForgeTelemetry.TagResult, ctx.Terminated ? "skipped" : "completed");
+                tags.Add(ReviewForgeTelemetry.TagResult, ctx?.Terminated == true ? "skipped" : "completed");
                 ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);
                 ReviewForgeTelemetry.ReviewDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
@@ -110,7 +121,7 @@ public sealed class ReviewWorker(
                 // shell on next boot. The tracker must reach the same terminal state as the
                 // persisted row: a leftover Running entry would read as alive until the
                 // tracker's own eviction.
-                tracker.Set(request.RunId, request.Pr, RunState.Failed, "cancelled by host shutdown");
+                tracker.Set(request.RunId, request.Pr, RunState.Failed, "cancelled by host shutdown", request.Kind);
                 await PersistFailureAsync(request, ctx, TimeSpan.FromSeconds(5));
                 return;
             }
@@ -121,7 +132,7 @@ public sealed class ReviewWorker(
                 logger.LogInformation(
                     "run {RunId} for {Pr} superseded mid-run (head moved from {Old} to {New})",
                     request.RunId, request.Pr, ex.Expected, ex.Actual);
-                tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message);
+                tracker.Set(request.RunId, request.Pr, RunState.Failed, ex.Message, request.Kind);
                 await PersistFailureAsync(request, ctx, TimeSpan.FromSeconds(5));
             }
             catch (Exception ex)
@@ -129,7 +140,7 @@ public sealed class ReviewWorker(
                 logger.LogError(ex, "run {RunId} for {Pr} failed", request.RunId, request.Pr);
                 // Raw exception messages can carry internal paths/URLs — keep detail in
                 // the logs, expose a generic reason through the run-status API.
-                tracker.Set(request.RunId, request.Pr, RunState.Failed, "internal error — see run log");
+                tracker.Set(request.RunId, request.Pr, RunState.Failed, "internal error — see run log", request.Kind);
                 var tags = repoTag;
                 tags.Add(ReviewForgeTelemetry.TagResult, "failed");
                 ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);
@@ -164,7 +175,8 @@ public sealed class ReviewWorker(
                 ctx?.StartedAt ?? request.EnqueuedAt,
                 _Clock.GetUtcNow(),
                 Success: false,
-                Findings: []), timeoutCts.Token);
+                Findings: [],
+                Pipeline: request.Kind.ToString()), timeoutCts.Token);
         }
         catch (Exception storeEx)
         {

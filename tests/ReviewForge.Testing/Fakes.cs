@@ -344,6 +344,46 @@ public class FakeFindingStore : IFindingStore
 
     public virtual Task PingAsync(CancellationToken ct)
         => ThrowOnPing is { } error ? Task.FromException(error) : Task.CompletedTask;
+    public List<ResolveAction> ResolveActions { get; } = [];
+    private int _NextResolveActionId = 1;
+    private readonly Dictionary<int, PrKey> _ResolveActionPrs = [];
+
+    public virtual Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct)
+        => Task.FromResult(Runs.Where(r => r.Pr == pr && r.Pipeline == RunKind.Resolve.ToString()
+                                           && r.CompletedAt is not null && r.Success)
+            .OrderByDescending(r => r.CompletedAt).FirstOrDefault());
+
+    public virtual Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(
+        PrKey pr, IReadOnlyCollection<int> threadIds, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ResolveAction>>(
+            [.. ResolveActions.Where(a => _ResolveActionPrs.TryGetValue(a.Id, out var key) && key == pr)
+                .Where(a => threadIds.Count == 0 || threadIds.Contains(a.ThreadId))]);
+
+    public virtual Task SaveResolveActionsAsync(
+        PrKey pr, Guid runId, IReadOnlyList<ResolveAction> actions, CancellationToken ct)
+    {
+        foreach (var action in actions)
+        {
+            var index = ResolveActions.FindIndex(a =>
+                _ResolveActionPrs.TryGetValue(a.Id, out var key) && key == pr && a.ThreadId == action.ThreadId);
+            var saved = action with {Id = index >= 0 ? ResolveActions[index].Id : _NextResolveActionId++,
+                RunId = runId, ReplyPosted = false};
+            if (index >= 0) ResolveActions[index] = saved;
+            else ResolveActions.Add(saved);
+            _ResolveActionPrs[saved.Id] = pr;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public virtual Task MarkResolveActionRepliedAsync(int id, CancellationToken ct)
+    {
+        var index = ResolveActions.FindIndex(a => a.Id == id);
+        if (index >= 0) ResolveActions[index] = ResolveActions[index] with {ReplyPosted = true};
+        return Task.CompletedTask;
+    }
+
+    // Resolve action persistence is kept in-memory for pipeline tests.
 
     /// <summary>Pushed-fix rows saved via <see cref="SavePushedFixesAsync"/> (Id assigned
     /// sequentially from 1); <see cref="MarkPushedFixRepliedAsync"/> flips ReplyPosted.</summary>

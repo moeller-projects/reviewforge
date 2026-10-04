@@ -17,7 +17,7 @@ public enum RunState
     Failed
 }
 
-public sealed record RunStatus(Guid RunId, PrKey Pr, RunState State, string? Detail, DateTimeOffset UpdatedAt);
+public sealed record RunStatus(Guid RunId, PrKey Pr, RunState State, string? Detail, DateTimeOffset UpdatedAt, RunKind Kind = RunKind.Review);
 
 /// <summary>How the ingest queue is backed. Memory (default, in-memory channel — queued runs
 /// are lost on restart) or Sqlite (durable rows on the store's database file).</summary>
@@ -107,7 +107,7 @@ public sealed class RunTracker(
     private readonly TimeSpan _Retention = retention ?? DefaultRetention;
     private readonly Dictionary<Guid, RunStatus> _Runs = [];
 
-    public void Set(Guid runId, PrKey pr, RunState state, string? detail = null)
+    public void Set(Guid runId, PrKey pr, RunState state, string? detail = null, RunKind kind = RunKind.Review)
     {
         lock (_Gate)
         {
@@ -121,7 +121,7 @@ public sealed class RunTracker(
             }
 
             var now = _Clock.GetUtcNow();
-            _Runs[runId] = new RunStatus(runId, pr, state, detail, now);
+            _Runs[runId] = new RunStatus(runId, pr, state, detail, now, kind);
             Evict(now);
         }
     }

@@ -11,15 +11,13 @@ public sealed class RunEntity
     public int PrId { get; set; }
     public required string HeadSha { get; set; }
     public required string Kind { get; set; }
+    /// <summary>Pipeline which produced the run (for example Review or Resolve).</summary>
+    public required string Pipeline { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
-
     /// <summary>Newest observed comment timestamp (ADO server time) at fetch; the follow-up
     /// gate compares against this instead of the local-clock CompletedAt (P2-24).</summary>
     public DateTimeOffset? LastObservedCommentAt { get; set; }
-
-    /// <summary>False rows exist once failed runs are persisted (P1-4 failure backoff);
-    /// excluded from PriorRun, backoff eligibility is computed from them.</summary>
     public bool Success { get; set; }
     public List<FindingEntity> Findings { get; set; } = [];
 }
@@ -39,6 +37,24 @@ public sealed class FindingEntity
     /// <summary>Serialized AppliedFix for fixes applied on that run; null for plain findings.</summary>
     public string? AppliedFixJson { get; set; }
 }
+
+/// <summary>Durable resolve action and its reply state.</summary>
+public sealed class ResolveActionEntity
+{
+    public int Id { get; set; }
+    public Guid RunId { get; set; }
+    public required string Org { get; set; }
+    public required string Project { get; set; }
+    public required string RepositoryId { get; set; }
+    public int PrId { get; set; }
+    public int ThreadId { get; set; }
+    public required string Verdict { get; set; }
+    public required string Outcome { get; set; }
+    public string? CommitSha { get; set; }
+    public bool ReplyPosted { get; set; }
+    public string? ReplyText { get; set; }
+}
+
 
 /// <summary>Durable pushed-fix record (CommitOnHead): written by the commit stage immediately
 /// after a successful push, before any reply is attempted — the crash-after-push recovery
@@ -64,6 +80,7 @@ public sealed class FindingStoreDbContext(DbContextOptions<FindingStoreDbContext
     public DbSet<RunEntity> Runs => Set<RunEntity>();
     public DbSet<FindingEntity> Findings => Set<FindingEntity>();
     public DbSet<PushedFixEntity> PushedFixes => Set<PushedFixEntity>();
+    public DbSet<ResolveActionEntity> ResolveActions => Set<ResolveActionEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -73,6 +90,12 @@ public sealed class FindingStoreDbContext(DbContextOptions<FindingStoreDbContext
             e.HasIndex(r => new {r.Org, r.Project, r.RepositoryId, r.PrId});
             e.HasIndex(r => new {r.Org, r.Project, r.RepositoryId, r.PrId, r.CompletedAt});
             e.HasMany(r => r.Findings).WithOne().HasForeignKey(f => f.RunId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<ResolveActionEntity>(e =>
+        {
+            e.HasKey(a => a.Id);
+            e.HasIndex(a => new {a.Org, a.Project, a.RepositoryId, a.PrId, a.ThreadId})
+                .IsUnique().HasDatabaseName("IX_ResolveActions_Pr_Thread");
         });
 
         modelBuilder.Entity<FindingEntity>(e =>

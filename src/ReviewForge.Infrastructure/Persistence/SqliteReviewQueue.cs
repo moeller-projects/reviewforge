@@ -81,8 +81,8 @@ public sealed class SqliteReviewQueue : IReviewQueue
         using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText =
-            "INSERT INTO QueuedRuns (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger) " +
-            "VALUES ($runId, $org, $project, $repo, $prId, $enqueuedAt, $headSha, $traceParent, $traceState, $trigger);";
+            "INSERT INTO QueuedRuns (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind) " +
+            "VALUES ($runId, $org, $project, $repo, $prId, $enqueuedAt, $headSha, $traceParent, $traceState, $trigger, $kind);";
         insert.Parameters.AddWithValue("$runId", request.RunId.ToString());
         insert.Parameters.AddWithValue("$org", request.Pr.Org);
         insert.Parameters.AddWithValue("$project", request.Pr.Project);
@@ -93,6 +93,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         insert.Parameters.AddWithValue("$traceParent", (object?)TraceParentOf(request.EnqueueContext) ?? DBNull.Value);
         insert.Parameters.AddWithValue("$traceState", (object?)request.EnqueueContext?.TraceState ?? DBNull.Value);
         insert.Parameters.AddWithValue("$trigger", request.Trigger.ToString());
+        insert.Parameters.AddWithValue("$kind", request.Kind.ToString());
         insert.ExecuteNonQuery();
         transaction.Commit();
         return new EnqueueResult(true, ApproximateDepth);
@@ -140,7 +141,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         using var connection = Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText =
-            "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger " +
+            "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind " +
             "FROM QueuedRuns WHERE RunId = $runId AND ClaimedBy IS NULL";
         cmd.Parameters.AddWithValue("$runId", runId.ToString());
         using var reader = cmd.ExecuteReader();
@@ -158,7 +159,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         {
             select.Transaction = transaction;
             select.CommandText =
-                "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, " +
+                "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind, " +
                 "ClaimedBy IS NOT NULL FROM QueuedRuns " +
                 "WHERE ClaimedBy IS NULL OR ClaimedAt < $reclaimBefore ORDER BY rowid LIMIT 1;";
             select.Parameters.AddWithValue("$reclaimBefore", Stamp(now - _ClaimTtl));
@@ -169,7 +170,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             }
 
             request = ReadRequest(reader);
-            reclaimed = reader.GetBoolean(10);
+            reclaimed = reader.GetBoolean(11);
         }
 
         using (var update = connection.CreateCommand())
@@ -204,7 +205,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             "RunId TEXT PRIMARY KEY, " +
             "Org TEXT NOT NULL, Project TEXT NOT NULL, RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, " +
             "EnqueuedAt TEXT NOT NULL, HeadSha TEXT NULL, " +
-            "TraceParent TEXT NULL, TraceState TEXT NULL, " +
+            "TraceParent TEXT NULL, TraceState TEXT NULL, Trigger TEXT NULL, Kind TEXT NULL, " +
             "ClaimedBy TEXT NULL, ClaimedAt TEXT NULL);";
         cmd.ExecuteNonQuery();
 
@@ -215,6 +216,13 @@ public sealed class SqliteReviewQueue : IReviewQueue
         if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
         {
             cmd.CommandText = "ALTER TABLE QueuedRuns ADD COLUMN Trigger TEXT NULL";
+            cmd.ExecuteNonQuery();
+        }
+        cmd.CommandText =
+            "SELECT COUNT(*) FROM pragma_table_info('QueuedRuns') WHERE name = 'Kind'";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+        {
+            cmd.CommandText = "ALTER TABLE QueuedRuns ADD COLUMN Kind TEXT NULL";
             cmd.ExecuteNonQuery();
         }
 
@@ -271,8 +279,14 @@ public sealed class SqliteReviewQueue : IReviewQueue
 
         var triggerText = reader.IsDBNull(9) ? null : reader.GetString(9);
         var trigger = triggerText is not null && Enum.TryParse<EnqueueTrigger>(triggerText, out var parsedTrigger)
+                      && Enum.IsDefined(parsedTrigger)
             ? parsedTrigger
             : EnqueueTrigger.Manual;
+        var kindText = reader.IsDBNull(10) ? null : reader.GetString(10);
+        var kind = kindText is not null && Enum.TryParse<RunKind>(kindText, out var parsedKind)
+                   && Enum.IsDefined(parsedKind)
+            ? parsedKind
+            : RunKind.Review;
 
         return new ReviewRequest(
             Guid.Parse(reader.GetString(0)),
@@ -280,6 +294,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             ParseStamp(reader.GetString(5)),
             context,
             reader.IsDBNull(6) ? null : reader.GetString(6),
-            trigger);
+            trigger,
+            kind);
     }
 }

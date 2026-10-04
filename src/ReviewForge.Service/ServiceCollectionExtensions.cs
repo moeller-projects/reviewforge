@@ -13,7 +13,7 @@ using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Filesystem;
-using ReviewForge.Infrastructure.Git;
+using ReviewForge.Infrastructure.Process;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
@@ -122,6 +122,22 @@ public static class ServiceCollectionExtensions
             .Validate(o => o.Sharding.ShardConcurrency >= 1 && o.Sharding.ShardConcurrency <= o.Sharding.MaxShards,
                 "ReviewForge:Sharding:ShardConcurrency must be between 1 and MaxShards")
             .ValidateOnStart();
+        services.AddOptions<ResolveOptions>()
+            .Bind(configuration.GetSection(ResolveOptions.SectionName))
+            .ValidateDataAnnotations()
+            .Validate(o => !o.Enabled || o.AllowedAuthors.Length > 0,
+                "Resolve:AllowedAuthors must be non-empty when Resolve:Enabled is true")
+            .Validate(o => o.CommitGranularity is "PerThread" or "Single",
+                "Resolve:CommitGranularity must be PerThread or Single")
+            .Validate(o => o.VerifyCommand is null || (o.VerifyCommand.Length > 0
+                && !string.IsNullOrWhiteSpace(o.VerifyCommand[0])
+                && o.VerifyCommand.All(arg => arg is not null && !arg.Any(c => c is ';' or '|' or '&' or '>' or '<' or '$' or '`'))),
+                "Resolve:VerifyCommand must be an argv array without shell metacharacters")
+            .Validate(o => !o.Enabled || (!string.IsNullOrWhiteSpace(configuration[$"{AutoFixOptions.SectionName}:CommitAuthorName"])
+                                           && !string.IsNullOrWhiteSpace(configuration[$"{AutoFixOptions.SectionName}:CommitAuthorEmail"])),
+                "Resolve requires AutoFix:CommitAuthorName and AutoFix:CommitAuthorEmail")
+            .ValidateOnStart();
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<ResolveOptions>>().Value);
 
         services.AddOptions<RepoReadToolsOptions>()
             .Bind(configuration.GetSection(RepoReadToolsOptions.SectionName))
@@ -198,6 +214,7 @@ public static class ServiceCollectionExtensions
         // Register the scheduler for disposal with the host.
         services.AddSingleton(sp => (IDisposable)sp.GetRequiredService<GitOperationScheduler>());
         services.AddSingleton<IWorkspaceFs, FileSystemWorkspaceFs>();
+        services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value;
@@ -243,6 +260,23 @@ public static class ServiceCollectionExtensions
             verifyFindingsOptions: sp.GetRequiredService<IOptions<VerifyFindingsOptions>>(),
             gitOps: sp.GetRequiredService<IGitOps>(),
             pushPat: sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat));
+        if (configuration.GetValue<bool>($"{ResolveOptions.SectionName}:{nameof(ResolveOptions.Enabled)}"))
+        {
+            services.AddSingleton<IResolveRunService>(sp => new ResolveRunService(
+                sp.GetRequiredService<IPullRequestSource>(),
+                sp.GetRequiredService<IFindingStore>(),
+                sp.GetRequiredService<RepoCheckoutPool>(),
+                sp.GetRequiredService<IChatClientFactory>(),
+                sp.GetRequiredService<IGitOps>(),
+                sp.GetRequiredService<IProcessRunner>(),
+                sp.GetRequiredService<AutoFixOptions>(),
+                sp.GetRequiredService<IOptions<ResolveOptions>>(),
+                sp.GetRequiredService<IOptions<ReviewForgeServiceOptions>>(),
+                sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat));
+        }
 
         // WorkerCount < 1 is rejected by the options validation above (fail-fast at startup);
         // when unset it defaults to a processor-count-derived clamp, always >= 2.

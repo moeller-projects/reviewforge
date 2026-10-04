@@ -17,6 +17,7 @@ public sealed record PushedFix(
     int? ThreadId,             // resolved live thread when known (commanded fixes)
     bool ReplyPosted,
     DateTimeOffset CreatedAt);
+ 
 
 /// <summary>FP-keyed finding store: run history and posted findings per PR.</summary>
 public interface IFindingStore
@@ -71,5 +72,11 @@ public interface IFindingStore
     Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct);
 
     /// <summary>Connectivity probe for health checks; must not depend on any PR-scoped data.</summary>
+    Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct);
+    Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(
+        PrKey pr, IReadOnlyCollection<int> threadIds, CancellationToken ct);
+    Task SaveResolveActionsAsync(
+        PrKey pr, Guid runId, IReadOnlyList<ResolveAction> actions, CancellationToken ct);
+    Task MarkResolveActionRepliedAsync(int id, CancellationToken ct);
     Task PingAsync(CancellationToken ct);
 }

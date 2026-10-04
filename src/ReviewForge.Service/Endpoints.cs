@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
@@ -37,6 +38,16 @@ public static class Endpoints
             .ProducesProblem(400)
             .ProducesProblem(503);
 
+        app.MapPost("/resolutions", SubmitResolution)
+            .AddEndpointFilter<ApiKeyEndpointFilter>()
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
+            .WithName("SubmitResolution")
+            .WithSummary("Enqueue a resolution run for a pull request")
+            .Produces<SubmitReviewResponse>(202)
+            .Produces<ConflictResponse>(409)
+            .ProducesProblem(400)
+            .ProducesProblem(503);
+
         reviews.MapPost("/discover", DiscoverPullRequests)
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("DiscoverPullRequests")
@@ -60,6 +71,28 @@ public static class Endpoints
         InFlightClaims claims,
         TimeProvider clock,
         ILoggerFactory loggerFactory)
+        => Submit(request, RunKind.Review, queue, tracker, claims, clock, loggerFactory);
+
+    private static IResult SubmitResolution(
+        SubmitReviewRequest request,
+        IReviewQueue queue,
+        RunTracker tracker,
+        InFlightClaims claims,
+        TimeProvider clock,
+        ILoggerFactory loggerFactory,
+        IOptions<ResolveOptions> resolveOptions)
+        => resolveOptions.Value.Enabled
+            ? Submit(request, RunKind.Resolve, queue, tracker, claims, clock, loggerFactory)
+            : TypedResults.Problem(title: "Resolve pipeline disabled", statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    private static IResult Submit(
+        SubmitReviewRequest request,
+        RunKind kind,
+        IReviewQueue queue,
+        RunTracker tracker,
+        InFlightClaims claims,
+        TimeProvider clock,
+        ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("ReviewForge.Service.Endpoints");
         var errors = Validate(request);
@@ -72,30 +105,26 @@ public static class Endpoints
         var runId = Guid.NewGuid();
         if (!claims.TryClaim(pr, runId, out var holder))
         {
-            logger.LogWarning("review submit conflict for {Pr}: already in flight (run {RunId})", pr, holder);
+            logger.LogWarning("{Kind} submit conflict for {Pr}: already in flight (run {RunId})", kind, pr, holder);
             return TypedResults.Conflict(new ConflictResponse(
-                "a review for this pull request is already in flight", holder));
+                "a run for this pull request is already in flight", holder));
         }
 
-        // Track-then-enqueue: the run is visible as Queued before the channel write, so a
-        // fast worker can never overwrite a fresh RunTracker write with a stale one
-        // (P2-25). Roll back the tracker entry if the queue rejects.
-        tracker.Set(runId, pr, RunState.Queued);
+        tracker.Set(runId, pr, RunState.Queued, kind: kind);
         var result = queue.TryEnqueue(new ReviewRequest(
-            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual));
+            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual, Kind: kind));
         if (!result.Accepted)
         {
             tracker.Remove(runId);
             claims.Release(pr, runId);
-            logger.LogWarning("review submit rejected for {Pr}: queue full (depth {Depth})", pr, result.QueueDepth);
+            logger.LogWarning("{Kind} submit rejected for {Pr}: queue full (depth {Depth})", kind, pr, result.QueueDepth);
             return TypedResults.Problem(
                 title: "Review queue full",
                 detail: $"Queue depth {result.QueueDepth} of {queue.Capacity}. Retry shortly.",
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        logger.LogInformation("review submitted for {Pr}, run {RunId}", pr, runId);
-
+        logger.LogInformation("{Kind} submitted for {Pr}, run {RunId}", kind, pr, runId);
         return TypedResults.Accepted($"/reviews/{runId}", new SubmitReviewResponse(runId, $"/reviews/{runId}"));
     }
 
@@ -115,18 +144,23 @@ public static class Endpoints
 
         if (queue.TryGetQueued(runId) is { } queued)
         {
-            return TypedResults.Ok(new RunStatus(runId, queued.Pr, RunState.Queued, null, queued.EnqueuedAt));
+            return TypedResults.Ok(new RunStatus(runId, queued.Pr, RunState.Queued, null, queued.EnqueuedAt, queued.Kind));
         }
 
         var run = await store.GetRunAsync(runId, ct);
         return run switch
         {
             null => TypedResults.NotFound(),
-            { CompletedAt: null } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Running, null, run.StartedAt)),
-            { Success: true } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Completed, null, run.CompletedAt.Value)),
-            _ => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Failed, null, run.CompletedAt!.Value)),
+            { CompletedAt: null } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Running, null, run.StartedAt, ParseRunKind(run.Pipeline))),
+            { Success: true } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Completed, null, run.CompletedAt.Value, ParseRunKind(run.Pipeline))),
+            _ => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Failed, null, run.CompletedAt!.Value, ParseRunKind(run.Pipeline))),
         };
     }
+
+    private static RunKind ParseRunKind(string pipeline)
+        => Enum.TryParse<RunKind>(pipeline, ignoreCase: true, out var kind) && Enum.IsDefined(kind)
+            ? kind
+            : RunKind.Review;
 
     private static List<string> Validate(object instance)
     {

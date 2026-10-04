@@ -60,7 +60,7 @@ tests/
 ```bash
 export REVIEWFORGE_ADO_PAT=...            # ADO personal access token (never in config files)
 # docker compose additionally requires ADO_ORG_URL and ADO_PROJECT (no internal defaults).
-export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for the /reviews endpoints
+export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for review and resolution endpoints
 # provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist).
 #   auth.json holds a long-lived refresh token; keep the directory owner-only:
 #     chmod 700 ~/.codex && chmod 600 ~/.codex/auth.json
@@ -76,7 +76,7 @@ dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll submit \
 dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid> --api-key ...
 ```
 
-Endpoints (all `/reviews*` require the `X-Api-Key` header; keys are configured via the
+Endpoints (`/reviews*` and `/resolutions` require the `X-Api-Key` header; keys are configured via the
 `REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation):
 `POST /reviews` → 202 `{runId, statusUrl}`, 400 on validation errors, 401 without a valid
 key, 409 when a review for the same PR is already in flight (the conflicting run id is in
@@ -85,12 +85,66 @@ default 10/60s), 503 when the bounded queue is full ·
 `GET /reviews/{runId}` (status: the bounded in-memory tracker first, then queued-row and
 store read-through — with `ReviewForge:QueueMode=Sqlite` queued and finalized runs stay
 visible across host restarts; with the default `Memory` mode in-flight status is lost on
-restart) · `POST /reviews/discover` · `GET /health` (store-backed, unauthenticated) ·
-`GET /alive` (liveness, unauthenticated). Rate limiting runs before API-key auth (auth is
+restart) · `POST /resolutions` (opt-in autonomous comment resolution) · `POST /reviews/discover` ·
+`GET /health` (store-backed, unauthenticated) · `GET /alive` (liveness, unauthenticated). Rate limiting runs before API-key auth (auth is
 an endpoint filter, the limiter is middleware), so rejected requests still consume rate
 budget. The limiter partitions by `X-Api-Key` when keys are configured, by remote IP
 otherwise — deploying behind a reverse proxy requires forwarded-headers support, otherwise
 every key-less client shares the proxy's single partition.
+
+## Autonomous comment resolution
+
+The separate resolve pipeline is disabled by default. Enable it with `Resolve:Enabled=true`
+and configure `Resolve:AllowedAuthors` with immutable ADO creator IDs for discovery and
+`/rf resolve` command runs; startup rejects an enabled pipeline with an empty author allowlist.
+An authenticated manual `POST /resolutions` can explicitly bypass that allowlist and the
+watermark, but still rejects drafts and competes for the same PR claim.
+
+Resolve runs collect human comments and triage them with a read-only agent pass. Only
+anchored, authorized, changed-file requests pass to a bounded edit pass in a private
+checkout. Optional `Resolve:VerifyCommand` runs on the host as argv (never through a shell).
+Commits are pushed only while the PR claim is held and the remote branch still matches the
+reviewed head. The bot replies with per-thread outcomes; human threads remain open unless
+`Resolve:SetFixedStatus=true`.
+
+`VerifyCommand` is configured by the operator but executes against PR-controlled checkout
+content with the service account's host permissions and inherited environment. It is not
+a sandbox: isolate the service identity and do not expose secrets to verification commands.
+
+| Stage | Behavior |
+|---|---|
+| gate | draft, author allowlist, watermark, and requested-head checks |
+| prepare / collect | acquire a private checkout and refresh eligible human comments |
+| triage / plan | read-only evidence review; enforce commenter, anchor, manifest, and run budgets |
+| apply / verify | edit only planned files; optionally run the configured argv command |
+| commit / push | commit by configured granularity; require claim, head pin, and fast-forward CAS |
+| reply / persist | persist outcomes before replies; deduplicate retries; keep human threads open by default |
+
+For a triage-only rollout, set `Resolve:MaxWritableFiles=0`; no fix can enter the writable
+set. Enable writes only after reviewing triage and evidence-downgrade metrics.
+
+```json
+"Resolve": {
+  "Enabled": false,
+  "AllowedAuthors": [],
+  "AllowedCommenters": [],
+  "MaxThreadsPerRun": 10,
+  "MaxWritableFiles": 8,
+  "FixPassMaxIterations": 8,
+  "CommitGranularity": "PerThread",
+  "SetFixedStatus": false,
+  "VerifyCommand": null,
+  "VerifyTimeoutSeconds": 600,
+  "DiscoveryEnabled": false,
+  "TriageBatchSize": 20
+}
+```
+
+`AllowedCommenters` limits who may drive edits; empty means PR creator only. Other human
+comments can still be triaged and answered. `/rf resolve` on an active PR thread queues an
+author-commanded resolve run. Discovery-triggered resolve runs require
+`Resolve:DiscoveryEnabled=true` and comments newer than the last completed resolve watermark.
+Both resolution and review runs share the per-PR claim, so they cannot write concurrently.
 
 ## Dev loop: Aspire vs Docker Compose
 

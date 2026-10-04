@@ -784,4 +784,94 @@ public class SqliteFindingStoreTests : IDisposable
         Assert.Equal(0, pruned);
         Assert.Empty(await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None));
     }
+    [Fact]
+    public async Task Resolve_actions_round_trip_and_reply_state_persist()
+    {
+        var runId = Guid.NewGuid();
+        var created = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        var action = new ResolveAction(0, runId, 42, TriageVerdict.Actionable,
+            ResolutionOutcome.Fixed, "abc123", false, created, "Fixed in abc123.");
+
+        await _Store.SaveResolveActionsAsync(Key, runId, [action], CancellationToken.None);
+
+        var loaded = Assert.Single(await _Store.GetResolveActionsAsync(Key, [42], CancellationToken.None));
+        Assert.Equal(runId, loaded.RunId);
+        Assert.Equal(42, loaded.ThreadId);
+        Assert.Equal(TriageVerdict.Actionable, loaded.Verdict);
+        Assert.Equal("Fixed in abc123.", loaded.ReplyText);
+        Assert.Equal(ResolutionOutcome.Fixed, loaded.Outcome);
+        Assert.Equal("abc123", loaded.CommitSha);
+        Assert.False(loaded.ReplyPosted);
+        Assert.Equal(created, loaded.CreatedAt);
+
+        await _Store.MarkResolveActionRepliedAsync(loaded.Id, CancellationToken.None);
+        var replied = Assert.Single(await _Store.GetResolveActionsAsync(Key, [42], CancellationToken.None));
+        Assert.True(replied.ReplyPosted);
+    }
+
+    [Fact]
+    public async Task Saving_a_new_comment_action_resets_previous_reply_state_and_watermark()
+    {
+        var firstRun = Guid.NewGuid();
+        var first = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        await _Store.SaveResolveActionsAsync(Key, firstRun,
+            [new ResolveAction(0, firstRun, 42, TriageVerdict.Question, ResolutionOutcome.Question, null, false, first)],
+            CancellationToken.None);
+        var original = Assert.Single(await _Store.GetResolveActionsAsync(Key, [42], CancellationToken.None));
+        await _Store.MarkResolveActionRepliedAsync(original.Id, CancellationToken.None);
+
+        var secondRun = Guid.NewGuid();
+        var second = first.AddHours(1);
+        await _Store.SaveResolveActionsAsync(Key, secondRun,
+            [new ResolveAction(0, secondRun, 42, TriageVerdict.Actionable, ResolutionOutcome.Fixed, "def456", false, second)],
+            CancellationToken.None);
+
+        var updated = Assert.Single(await _Store.GetResolveActionsAsync(Key, [42], CancellationToken.None));
+        Assert.Equal(secondRun, updated.RunId);
+        Assert.Equal(second, updated.CreatedAt);
+        Assert.False(updated.ReplyPosted);
+        Assert.Equal("def456", updated.CommitSha);
+    }
+
+    [Fact]
+    public async Task Ctor_adds_reply_text_to_an_existing_resolve_actions_table()
+    {
+        await using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE ResolveActions DROP COLUMN ReplyText";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var migrated = new SqliteFindingStore(_ConnectionString);
+        var runId = Guid.NewGuid();
+        await migrated.SaveResolveActionsAsync(Key, runId,
+            [new ResolveAction(0, runId, 91, TriageVerdict.Question, ResolutionOutcome.Question,
+                null, false, DateTimeOffset.UtcNow, "clarify")], CancellationToken.None);
+
+        var loaded = Assert.Single(await migrated.GetResolveActionsAsync(Key, [91], CancellationToken.None));
+        Assert.Equal("clarify", loaded.ReplyText);
+    }
+
+    [Fact]
+    public async Task Last_completed_resolve_run_returns_latest_successful_watermark_only()
+    {
+        var first = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        var second = first.AddHours(1);
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "resolve-1", ReviewKind.Full,
+            first.AddMinutes(-5), first, true, [], first.AddMinutes(-1), "Resolve"), CancellationToken.None);
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "failed", ReviewKind.Full,
+            second.AddMinutes(-5), second, false, [], second, "Resolve"), CancellationToken.None);
+        await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "review", ReviewKind.Full,
+            second.AddMinutes(1), second.AddMinutes(2), true, [], second.AddMinutes(2), "Review"), CancellationToken.None);
+
+        var loaded = await _Store.GetLastCompletedResolveRunAsync(Key, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("resolve-1", loaded.HeadSha);
+        Assert.Equal("Resolve", loaded.Pipeline);
+        Assert.Equal(first.AddMinutes(-1), loaded.LastObservedCommentAt);
+    }
+
 }

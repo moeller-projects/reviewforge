@@ -187,6 +187,70 @@ public sealed class NativeReviewAgent(
         return collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", ruleBook?.VersionHash);
     }
 
+    /// <summary>Runs the read-only full-tier resolve-comment triage pass.</summary>
+    public async Task<IReadOnlyList<ThreadVerdict>> RunTriageAsync(
+        string userPrompt,
+        ReviewCollector collector,
+        ContextStore contextStore,
+        string repoDir,
+        IReadOnlySet<string>? changedFiles,
+        DiffIndex? diff,
+        string? diffText,
+        CancellationToken ct)
+    {
+        var usage = new TokenUsage();
+        var repoTools = new RepoReadTools(
+            repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
+            grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines,
+            diffText: diffText, changedFiles: changedFiles, diff: diff);
+        var reviewTools = new ReviewTools(collector, contextStore);
+        var triageTools = new TriageTools(collector);
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(repoTools.ReadFile),
+            AIFunctionFactory.Create(repoTools.List),
+            AIFunctionFactory.Create(repoTools.Grep),
+            AIFunctionFactory.Create(repoTools.FileDiff, "repo_file_diff"),
+            AIFunctionFactory.Create(repoTools.FindReferences),
+            AIFunctionFactory.Create(reviewTools.ReadContext),
+            AIFunctionFactory.Create(triageTools.RecordVerdict),
+            AIFunctionFactory.Create(triageTools.TaskDone),
+        };
+        var tracked = CreatePipeline(collector, usage, ChatTier.Full);
+        var agent = tracked.AsAIAgent(new ChatClientAgentOptions
+        {
+            Name = "reviewforge-triage",
+            ChatOptions = new ChatOptions
+            {
+                ModelId = chatClientFactory.ModelName(ChatTier.Full),
+                Instructions = SystemPromptComposer.ComposeTriage(),
+                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
+                Tools = tools,
+            },
+            AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
+        });
+
+        await agent.RunAsync(userPrompt, cancellationToken: ct);
+        _Logger?.LogInformation(
+            "triage agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}",
+            usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
+        var modelTag = new TagList
+        {
+            { "model", chatClientFactory.ModelName(ChatTier.Full) },
+            { "tier", "full" },
+        };
+        ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
+        if (!collector.Done)
+        {
+            // Preserve verdicts already recorded: the stage supplies deterministic
+            // defaults for threads the model did not finish.
+            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
+        }
+
+        return collector.ThreadVerdicts;
+    }
+
+
     /// <summary>
     /// Runs a constrained fix pass for one author-commanded "/rf fix": the agent gets ONLY
     /// the hash-line editor tools (ReadFileWithHashes, EditFile) plus TaskDone — no

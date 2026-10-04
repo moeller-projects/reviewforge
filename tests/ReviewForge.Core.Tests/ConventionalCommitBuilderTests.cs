@@ -217,4 +217,19 @@ public sealed class ConventionalCommitBuilderTests
         Assert.StartsWith("- `src/a.sh", parts[1]);
         Assert.StartsWith("ReviewForge-Run:", parts[2]);
     }
+
+    [Fact]
+    public void BuildResolve_maps_category_and_records_related_thread_trailers()
+    {
+        var message = ConventionalCommitBuilder.BuildResolve(
+            RunId, 123, 7, "performance", "src/worker.cs", "avoid repeated work",
+            "src/worker.cs:42 confirms repeated traversal", [7, 9]);
+
+        Assert.StartsWith("perf(src): avoid repeated work", message);
+        Assert.Contains("Refs: !123 thread 7", message);
+        Assert.Contains("ReviewForge-Run: " + RunId.ToString("D"), message);
+        Assert.Contains("ReviewForge-Thread: 7", message);
+        Assert.Contains("ReviewForge-Thread: 9", message);
+        Assert.True(ConventionalCommitBuilder.SubjectOf(message).Length <= ConventionalCommitBuilder.MaxSubjectLength);
+    }
 }

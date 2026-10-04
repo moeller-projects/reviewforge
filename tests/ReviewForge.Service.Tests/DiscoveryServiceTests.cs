@@ -28,8 +28,85 @@ public class DiscoveryServiceTests
 
     private static DiscoveryService Service(
         FakePullRequestSource source, FakeFindingStore store, ReviewQueue queue, RunTracker tracker,
-        DiscoveryOptions? options = null, InFlightClaims? claims = null)
-        => new(source, store, queue, tracker, claims ?? new InFlightClaims(), options ?? new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions());
+        DiscoveryOptions? options = null, InFlightClaims? claims = null, ResolveOptions? resolveOptions = null)
+        => new(source, store, queue, tracker, claims ?? new InFlightClaims(), options ?? new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions(), resolveOptions: resolveOptions);
+
+    [Fact]
+    public async Task Sweep_enqueues_new_author_resolve_command_with_resolve_trigger()
+    {
+        var candidate = Candidate(7, creatorId: "alice");
+        var published = DateTimeOffset.UtcNow;
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [],
+            Threads =
+            [
+                new ReviewThread(42, "comment", ReviewThreadStatus.Active,
+                    [new ThreadComment("alice", "Alice", false, "/rf resolve fix it", published)]),
+            ],
+        };
+        var store = new FakeFindingStore();
+        store.Runs.Add(new ReviewRun(
+            Guid.NewGuid(), candidate.Key, candidate.Pr.SourceCommitSha, ReviewKind.Full,
+            published.AddMinutes(-10), published.AddMinutes(-5), true, [],
+            Pipeline: RunKind.Resolve.ToString(), LastObservedCommentAt: published.AddMinutes(-1)));
+        var queue = new ReviewQueue();
+        var tracker = new RunTracker();
+        var service = Service(
+            source, store, queue, tracker,
+            resolveOptions: new ResolveOptions {Enabled = true, AllowedAuthors = ["alice"]});
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal([candidate.Key], report.Enqueued);
+        var run = Assert.Single(tracker.Snapshot());
+        Assert.Equal(RunKind.Resolve, run.Kind);
+        Assert.Equal(EnqueueTrigger.ResolveCommand, queue.TryGetQueued(run.RunId)?.Trigger);
+        Assert.Equal(RunKind.Resolve, queue.TryGetQueued(run.RunId)?.Kind);
+    }
+
+    [Fact]
+    public async Task Sweep_requeues_deferred_action_without_new_human_comment()
+    {
+        var candidate = Candidate(8, creatorId: "alice");
+        var watermark = DateTimeOffset.UtcNow;
+        var requestAt = watermark.AddMinutes(-2);
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [],
+            Threads =
+            [
+                new ReviewThread(43, "comment", ReviewThreadStatus.Active,
+                    [
+                        new ThreadComment("alice", "Alice", false, "please fix this", requestAt),
+                        new ThreadComment("bot", "ReviewForge", true, "Deferred to next run", watermark.AddMinutes(1)),
+                    ]),
+            ],
+        };
+        var store = new FakeFindingStore();
+        var run = Guid.NewGuid();
+        await store.SaveRunAsync(new ReviewRun(
+            run, candidate.Key, candidate.Pr.SourceCommitSha, ReviewKind.Full,
+            watermark.AddMinutes(-10), watermark, true, [], LastObservedCommentAt: watermark, Pipeline: "Resolve"),
+            CancellationToken.None);
+        await store.SaveResolveActionsAsync(candidate.Key, run,
+            [new ResolveAction(0, run, 43, TriageVerdict.Actionable, ResolutionOutcome.Deferred,
+                null, true, watermark.AddMinutes(1))], CancellationToken.None);
+        var queue = new ReviewQueue();
+        var tracker = new RunTracker();
+        var service = Service(source, store, queue, tracker,
+            resolveOptions: new ResolveOptions { Enabled = true, AllowedAuthors = ["alice"], DiscoveryEnabled = true });
+
+        var report = await service.RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal([candidate.Key], report.Enqueued);
+        var queued = queue.TryGetQueued(Assert.Single(tracker.Snapshot()).RunId);
+        Assert.NotNull(queued);
+        Assert.Equal(RunKind.Resolve, queued!.Kind);
+        Assert.Equal(EnqueueTrigger.Discovery, queued.Trigger);
+    }
 
     [Fact]
     public async Task Sweep_skips_bot_authored_commit_on_warmed_mirror()

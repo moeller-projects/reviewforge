@@ -161,6 +161,30 @@ public static class ReviewForgeTelemetry
     public static readonly Counter<long> AutoFixReconciledReplies =
         Meter.CreateCounter<long>("reviewforge.autofix.reconciled_replies_total");
 
+    // ---- Resolve pipeline ----
+    public static readonly Counter<long> ResolveThreadsTriaged =
+        Meter.CreateCounter<long>("reviewforge.resolve.threads_triaged_total");
+    public static readonly Counter<long> ResolveFixesApplied =
+        Meter.CreateCounter<long>("reviewforge.resolve.fixes_applied_total");
+    public static readonly Counter<long> ResolveFixesDeclined =
+        Meter.CreateCounter<long>("reviewforge.resolve.fixes_declined_total");
+    public static readonly Counter<long> ResolveVerifyFailed =
+        Meter.CreateCounter<long>("reviewforge.resolve.verify_failed_total");
+    public static readonly Counter<long> ResolveCommitsPushed =
+        Meter.CreateCounter<long>("reviewforge.resolve.commits_pushed_total");
+    public static readonly Counter<long> ResolvePushFailures =
+        Meter.CreateCounter<long>("reviewforge.resolve.push_failures_total");
+    public static readonly Counter<long> ResolveRepliesPosted =
+        Meter.CreateCounter<long>("reviewforge.resolve.replies_posted_total");
+    public static readonly Counter<long> ResolveRepliesDeduped =
+        Meter.CreateCounter<long>("reviewforge.resolve.replies_deduped_total");
+    public static readonly Counter<long> ResolveDeferred =
+        Meter.CreateCounter<long>("reviewforge.resolve.deferred_total");
+    public static readonly Counter<long> ResolveEvidenceDowngrades =
+        Meter.CreateCounter<long>("reviewforge.resolve.evidence_downgrades_total");
+    public static readonly Counter<long> ResolveUnknownVerdicts =
+        Meter.CreateCounter<long>("reviewforge.resolve.unknown_verdicts_total");
+
     // ---- Loop guard ----
     /// <summary>Bot-authored heads suppressed — tags: source = gate | discovery.</summary>
     public static readonly Counter<long> LoopGuardSkips =

@@ -52,6 +52,20 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public IReadOnlySet<string> ResolvedKeys { get; set; } = new HashSet<string>(StringComparer.Ordinal);
 
     // Stage 2 — gate
+    // Resolve pipeline state.
+    public RunKind RunKind { get; set; } = RunKind.Review;
+    public string? RequestedHeadSha { get; set; }
+    public DateTimeOffset? ResolveWatermark { get; set; }
+    public IReadOnlyList<ResolvableComment> ResolvableComments { get; set; } = [];
+    public IReadOnlyList<ThreadVerdict> ThreadVerdicts { get; set; } = [];
+    public ResolvePlan? ResolvePlan { get; set; }
+    public string ResolveVerificationStatus { get; set; } = "skipped";
+    public IReadOnlyList<AppliedResolution> AppliedResolutions { get; set; } = [];
+    public IReadOnlyDictionary<int, ResolutionOutcome> ResolutionOutcomes { get; set; } = new Dictionary<int, ResolutionOutcome>();
+    public IReadOnlyList<ResolveAction> ResolveActions { get; set; } = [];
+    public IReadOnlyDictionary<int, string> ResolutionDetails { get; set; } = new Dictionary<int, string>();
+    public IReadOnlyDictionary<int, HashLineEditor> ResolutionEditors { get; set; } = new Dictionary<int, HashLineEditor>();
+
     public GateDecision? Gate { get; set; }
 
     // Stage 3 — repository

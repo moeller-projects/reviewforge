@@ -57,6 +57,36 @@ public static class ConventionalCommitBuilder
         return sb.ToString();
     }
 
+    public static string BuildResolve(
+        Guid runId, int prId, int threadId, string category, string filePath, string rationale, string evidence,
+        IReadOnlyList<int>? relatedThreadIds = null)
+    {
+        var type = category.ToLowerInvariant() switch
+        {
+            "performance" => "perf",
+            "docs" => "docs",
+            "style" => "style",
+            "test" => "test",
+            _ => "fix",
+        };
+        var segments = filePath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var scopeText = segments.Length > 1 ? segments[0] : Path.GetFileNameWithoutExtension(segments[0]);
+        var scope = new string(scopeText.ToLowerInvariant().Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' ? c : '-').ToArray()).Trim('-', '.');
+        var prefix = scope.Length == 0 ? $"{type}: " : $"{type}({scope}): ";
+        var subject = prefix + OneLine(rationale);
+        if (subject.Length > MaxSubjectLength) subject = subject[..MaxSubjectLength].TrimEnd();
+        var sb = new StringBuilder(subject).Append("\n\n");
+        AppendWrapped(sb, $"- resolve thread #{threadId} in `{filePath}` — {OneLine(rationale)}");
+        if (!string.IsNullOrWhiteSpace(evidence)) AppendWrapped(sb, $"- Evidence: {OneLine(evidence)}");
+        var ids = (relatedThreadIds ?? [threadId]).Distinct().Order().ToArray();
+        foreach (var id in ids) AppendWrapped(sb, $"- References review thread #{id}");
+        sb.Append('\n');
+        foreach (var id in ids) sb.Append("Refs: !").Append(prId).Append(" thread ").Append(id).Append('\n');
+        sb.Append(RunTrailerName).Append(": ").Append(runId.ToString("D")).Append('\n');
+        foreach (var id in ids) sb.Append(ThreadTrailerName).Append(": ").Append(id).Append('\n');
+        return sb.ToString();
+    }
+
     /// <summary>The subject line of a message produced by <see cref="Build"/> (first line).</summary>
     public static string SubjectOf(string message)
         => message.Split('\n', 2)[0].TrimEnd('\r');

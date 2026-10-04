@@ -29,7 +29,8 @@ public sealed record ReviewRun(
     DateTimeOffset? CompletedAt,
     bool Success,
     IReadOnlyList<StoredFinding> Findings,
-    DateTimeOffset? LastObservedCommentAt = null);
+    DateTimeOffset? LastObservedCommentAt = null,
+    string Pipeline = "Review");
 
 [ExcludeFromCodeCoverage]
 public sealed record StoredFinding(

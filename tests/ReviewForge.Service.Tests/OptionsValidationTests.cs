@@ -475,4 +475,53 @@ public class OptionsValidationTests
         Assert.Throws<OptionsValidationException>(
             () => provider.GetRequiredService<IOptions<ReviewForgeServiceOptions>>().Value);
     }
+    [Fact]
+    public void Resolve_enabled_without_allowed_authors_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Resolve:Enabled", "true"))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ResolveOptions>>().Value);
+
+        Assert.Contains("Resolve:AllowedAuthors must be non-empty", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("Bogus")]
+    [InlineData("2")]
+    public void Resolve_commit_granularity_must_be_per_thread_or_single(string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Resolve:CommitGranularity", value))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ResolveOptions>>().Value);
+
+        Assert.Contains("Resolve:CommitGranularity", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("echo", "ok;bad")]
+    [InlineData("echo", "$(bad)")]
+    public void Resolve_verify_command_rejects_shell_metacharacters(string executable, string argument)
+    {
+        using var provider = Build([.. With(ValidConfig(),
+            ("Resolve:VerifyCommand:0", executable), ("Resolve:VerifyCommand:1", argument))]);
+
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ResolveOptions>>().Value);
+
+        Assert.Contains("Resolve:VerifyCommand", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("51")]
+    public void Resolve_max_threads_out_of_range_is_rejected(string value)
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Resolve:MaxThreadsPerRun", value))]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ResolveOptions>>().Value);
+    }
+
 }

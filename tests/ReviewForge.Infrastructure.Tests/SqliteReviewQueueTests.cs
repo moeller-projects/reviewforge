@@ -60,6 +60,50 @@ public sealed class SqliteReviewQueueTests : IDisposable
 
         Assert.Equal(EnqueueTrigger.Discovery, dequeued.Trigger);
     }
+    [Fact]
+    public async Task Resolve_kind_round_trips_and_legacy_rows_default_to_review()
+    {
+        var queue = NewQueue(_DbPath);
+        var resolve = Request(9) with { Kind = RunKind.Resolve };
+        Assert.True(queue.TryEnqueue(resolve).Accepted);
+
+        var loaded = await ClaimOneAsync(queue);
+
+        Assert.Equal(RunKind.Resolve, loaded.Kind);
+
+        var legacyPath = Path.Combine(Path.GetTempPath(), "rf-queue-legacy-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            using (var connection = new SqliteConnection($"Data Source={legacyPath};Pooling=False"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TABLE QueuedRuns (
+                        RunId TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                        RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, EnqueuedAt TEXT NOT NULL,
+                        HeadSha TEXT NULL, TraceParent TEXT NULL, TraceState TEXT NULL,
+                        ClaimedBy TEXT NULL, ClaimedAt TEXT NULL);
+                    INSERT INTO QueuedRuns
+                        (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt)
+                    VALUES ($runId, 'o', 'p', 'r', 10, $enqueuedAt);
+                    """;
+                command.Parameters.AddWithValue("$runId", Guid.NewGuid().ToString());
+                command.Parameters.AddWithValue("$enqueuedAt", DateTimeOffset.UtcNow.ToString("O"));
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var legacy = await ClaimOneAsync(NewQueue(legacyPath));
+            Assert.Equal(RunKind.Review, legacy.Kind);
+        }
+        finally
+        {
+            foreach (var suffix in new[] {"", "-wal", "-shm"})
+            {
+                if (File.Exists(legacyPath + suffix)) File.Delete(legacyPath + suffix);
+            }
+        }
+    }
 
     [Fact]
     public async Task Constructor_adds_trigger_to_legacy_queue_and_null_reads_as_manual()
