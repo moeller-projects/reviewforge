@@ -106,6 +106,21 @@ public sealed class ConventionalCommitBuilderTests
         Assert.Contains($"{ConventionalCommitBuilder.AiDraftedTrailerName}: true\n", message);
     }
 
+    [Fact]
+    public void Build_sanitizes_crlf_in_paths_so_no_header_line_can_be_injected()
+    {
+        // A repository filename containing a newline must not become a second commit-message
+        // header line — neither via the subject's single-file branch nor via body bullets.
+        var evilPath = "src/a.sh\nX-Injected: pwned";
+        var message = ConventionalCommitBuilder.Build(RunId,
+        [
+            Input(Fix(evilPath), Finding("one")),
+            Input(Fix(evilPath), Finding("two")),
+        ]);
+
+        Assert.DoesNotContain(message.Split('\n'), line => line.StartsWith("X-Injected", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("src/util/helper.sh", "src")]       // top-level directory
     [InlineData("deploy.sh", "deploy")]             // repo-root file: extension-less name

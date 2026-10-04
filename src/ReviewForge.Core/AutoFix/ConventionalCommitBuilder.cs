@@ -43,7 +43,7 @@ public static class ConventionalCommitBuilder
         sb.Append('\n');
         foreach (var input in fixes)
         {
-            var bullet = $"- `{input.Fix.Proposal.FilePath}:{input.Fix.Proposal.StartLine}–{input.Fix.Proposal.EndLine}` — {OneLine(input.Fix.Proposal.Rationale)}";
+            var bullet = $"- `{OneLine(input.Fix.Proposal.FilePath)}:{input.Fix.Proposal.StartLine}–{input.Fix.Proposal.EndLine}` — {OneLine(input.Fix.Proposal.Rationale)}";
             AppendWrapped(sb, bullet);
         }
 
@@ -85,7 +85,7 @@ public static class ConventionalCommitBuilder
         var subject = prefix + OneLine(rationale);
         if (subject.Length > MaxSubjectLength) subject = subject[..MaxSubjectLength].TrimEnd();
         var sb = new StringBuilder(subject).Append("\n\n");
-        AppendWrapped(sb, $"- resolve thread #{threadId} in `{filePath}` — {OneLine(rationale)}");
+        AppendWrapped(sb, $"- resolve thread #{threadId} in `{OneLine(filePath)}` — {OneLine(rationale)}");
         if (!string.IsNullOrWhiteSpace(evidence)) AppendWrapped(sb, $"- Evidence: {OneLine(evidence)}");
         var ids = (relatedThreadIds ?? [threadId]).Distinct().Order().ToArray();
         foreach (var id in ids) AppendWrapped(sb, $"- References review thread #{id}");
@@ -196,10 +196,12 @@ public static class ConventionalCommitBuilder
 
         var paths = fixes.Select(f => f.Fix.Proposal.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return paths.Length == 1
-            ? $"address {fixes.Count} review findings in {paths[0]}"
+            ? $"address {fixes.Count} review findings in {OneLine(paths[0])}"
             : $"address {fixes.Count} review findings across {paths.Length} files";
     }
 
+    /// <summary>Collapses CR/LF to spaces: repo-controlled text (paths, titles, rationale)
+    /// must never inject extra header/body lines into the composed commit message.</summary>
     private static string OneLine(string text)
         => text.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
