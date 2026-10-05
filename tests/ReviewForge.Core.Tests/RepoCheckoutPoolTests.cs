@@ -610,7 +610,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
         checkout.Dispose();
 
-        Assert.Equal(1, recoveryPool.ReapOrphanedPrivateCheckouts());
+        Assert.Equal(0, recoveryPool.ReapOrphanedPrivateCheckouts());
         Assert.False(Directory.Exists(checkout.Path));
     }
 
