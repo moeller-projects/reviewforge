@@ -44,7 +44,7 @@ public class DiscoveryServiceTests
             Threads =
             [
                 new ReviewThread(42, "comment", ReviewThreadStatus.Active,
-                    [new ThreadComment("alice", "Alice", false, "/rf resolve fix it", published)]),
+                    [new ThreadComment("alice", "Alice", false, "/resolve fix it", published)]),
             ],
         };
         var store = new FakeFindingStore();
