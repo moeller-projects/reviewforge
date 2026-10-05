@@ -11,7 +11,7 @@ public sealed class PersistenceOptions
     public string StoreConnectionString { get; init; } = "Data Source=reviewforge.db";
 
     /// <summary>Ingest queue backing: Memory (default) or Sqlite (durable rows on the store's database file).</summary>
-    public string QueueMode { get; init; } = nameof(ReviewForge.Service.Queue.QueueMode.Memory);
+    public string QueueMode { get; init; } = nameof(Queue.QueueMode.Memory);
 
     /// <summary>Wal (default) | Delete. WAL requires POSIX advisory locks; use Delete on network filesystems.</summary>
     public string JournalMode { get; init; } = "Wal";

@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Options;
-using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Service;

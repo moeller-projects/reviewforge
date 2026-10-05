@@ -1,4 +1,3 @@
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
@@ -32,7 +31,7 @@ public sealed class ReviewPipelineFactory(
         var opts = options.Value;
         var repoReadToolsOpts = repoReadToolsOptions.Value;
         var cleanVote = opts.CleanRunVote.Equals("None", StringComparison.OrdinalIgnoreCase)
-            ? (ReviewerVote?)null
+            ? (ReviewerVote?) null
             : Enum.TryParse<ReviewerVote>(opts.CleanRunVote, ignoreCase: true, out var parsedVote)
               && parsedVote is ReviewerVote.NoResponse or ReviewerVote.Approved or ReviewerVote.ApprovedWithSuggestions
                 ? parsedVote

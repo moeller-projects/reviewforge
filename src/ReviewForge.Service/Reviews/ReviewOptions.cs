@@ -1,6 +1,5 @@
-using ReasoningEffort = Microsoft.Extensions.AI.ReasoningEffort;
 using ReviewForge.Core.Domain;
-using ReviewForge.Core.Reasoning;
+using ReasoningEffort = Microsoft.Extensions.AI.ReasoningEffort;
 
 namespace ReviewForge.Service;
 
@@ -17,6 +16,7 @@ public sealed class ReviewOptions
 
     /// <summary>Maximum review context size passed to the agent.</summary>
     public int MaxContextTokens { get; init; } = 150_000;
+
     /// <summary>Review-agent iteration cap.</summary>
     public int MaxIterations { get; init; } = 30;
 
@@ -47,6 +47,7 @@ public sealed class ReviewOptions
 
     /// <summary>Total diff byte budget; oversized diffs are truncated with a marker.</summary>
     public long MaxDiffBytes { get; init; } = 4 * 1024 * 1024;
+
     /// <summary>Per-file diff byte budget.</summary>
     public int MaxDiffBytesPerFile { get; init; } = 256 * 1024;
 

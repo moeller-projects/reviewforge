@@ -1,6 +1,5 @@
-using Microsoft.Extensions.Options;
 using System.ComponentModel.DataAnnotations;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
@@ -151,8 +150,8 @@ public static class Endpoints
         return run switch
         {
             null => TypedResults.NotFound(),
-            { CompletedAt: null } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Running, null, run.StartedAt, ParseRunKind(run.Pipeline))),
-            { Success: true } => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Completed, null, run.CompletedAt.Value, ParseRunKind(run.Pipeline))),
+            {CompletedAt: null} => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Running, null, run.StartedAt, ParseRunKind(run.Pipeline))),
+            {Success: true} => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Completed, null, run.CompletedAt.Value, ParseRunKind(run.Pipeline))),
             _ => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Failed, null, run.CompletedAt!.Value, ParseRunKind(run.Pipeline))),
         };
     }

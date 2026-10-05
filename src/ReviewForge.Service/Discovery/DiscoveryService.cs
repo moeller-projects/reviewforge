@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 using System.Text;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
@@ -43,8 +42,10 @@ public sealed class DiscoveryService(
     private readonly DiscoveryRules _Rules = new(options.TargetBranches, options.Creators, options.MaxEnqueuesPerSweep);
     private readonly RepoCheckoutPool? _Pool = pool;
     private readonly ResolveOptions? _Resolve = resolveOptions;
+
     private readonly SemaphoreSlim? _WarmupGate =
         pool is not null && options.WarmupEnabled ? new SemaphoreSlim(Math.Max(1, options.WarmupConcurrency)) : null;
+
     private DateTimeOffset _LastPrune = DateTimeOffset.MinValue; // sweep-throttled (P2-26)
 
     public async Task<DiscoveryReport> RunSweepAsync(CancellationToken ct)
@@ -58,12 +59,12 @@ public sealed class DiscoveryService(
         var skipped = new ConcurrentQueue<SkippedPr>();
         var interesting = 0;
         var gate = new object(); // guards the cap-check/claim/enqueue critical section
-        var warmups = _WarmupGate is null ? (List<Task>?)null : []; // mirror prefetches, awaited before the sweep returns
+        var warmups = _WarmupGate is null ? (List<Task>?) null : []; // mirror prefetches, awaited before the sweep returns
 
         void Skip(PrKey pr, string reason)
         {
             skipped.Enqueue(new SkippedPr(pr, reason));
-            ReviewForgeTelemetry.DiscoverySkipped.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, NormalizeReason(reason) } });
+            ReviewForgeTelemetry.DiscoverySkipped.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, NormalizeReason(reason)}});
         }
 
         // Phase 1 — cheap rules only (draft/branch/creator), no I/O.
@@ -109,14 +110,18 @@ public sealed class DiscoveryService(
         var report = new DiscoveryReport(
             candidates.Count,
             interesting,
-            [.. enqueued.OrderBy(k => k.Org, StringComparer.Ordinal)
-                .ThenBy(k => k.Project, StringComparer.Ordinal)
-                .ThenBy(k => k.RepositoryId, StringComparer.Ordinal)
-                .ThenBy(k => k.PrId)],
-            [.. skipped.OrderBy(s => s.Pr.Org, StringComparer.Ordinal)
-                .ThenBy(s => s.Pr.Project, StringComparer.Ordinal)
-                .ThenBy(s => s.Pr.RepositoryId, StringComparer.Ordinal)
-                .ThenBy(s => s.Pr.PrId)]);
+            [
+                .. enqueued.OrderBy(k => k.Org, StringComparer.Ordinal)
+                    .ThenBy(k => k.Project, StringComparer.Ordinal)
+                    .ThenBy(k => k.RepositoryId, StringComparer.Ordinal)
+                    .ThenBy(k => k.PrId)
+            ],
+            [
+                .. skipped.OrderBy(s => s.Pr.Org, StringComparer.Ordinal)
+                    .ThenBy(s => s.Pr.Project, StringComparer.Ordinal)
+                    .ThenBy(s => s.Pr.RepositoryId, StringComparer.Ordinal)
+                    .ThenBy(s => s.Pr.PrId)
+            ]);
         logger?.LogInformation(
             "discovery sweep: {Candidates} candidates, {Interesting} interesting, {Enqueued} enqueued, {Skipped} skipped",
             report.Candidates, report.Interesting, report.Enqueued.Count, report.Skipped.Count);
@@ -127,7 +132,7 @@ public sealed class DiscoveryService(
 
         // Warmups are part of the sweep: the span and the sweep-duration metric cover their
         // outcomes. Individual failures are already swallowed into skip-free telemetry above.
-        if (warmups is { Count: > 0 })
+        if (warmups is {Count: > 0})
         {
             await Task.WhenAll(warmups).ConfigureAwait(false);
         }
@@ -157,8 +162,8 @@ public sealed class DiscoveryService(
             IReadOnlyList<ReviewThread>? threads = null;
             ResolveCommand? resolveCommand = null;
             var resolveRun = false;
-            if (_Resolve is { Enabled: true } && !candidate.Pr.IsDraft
-                && _Resolve.AllowedAuthors.Contains(candidate.Pr.CreatorId, StringComparer.OrdinalIgnoreCase))
+            if (_Resolve is {Enabled: true} && !candidate.Pr.IsDraft
+                                            && _Resolve.AllowedAuthors.Contains(candidate.Pr.CreatorId, StringComparer.OrdinalIgnoreCase))
             {
                 var previousResolve = await store.GetLastCompletedResolveRunAsync(candidate.Key, token);
                 var resolveWatermark = previousResolve?.LastObservedCommentAt ?? previousResolve?.CompletedAt;
@@ -168,7 +173,7 @@ public sealed class DiscoveryService(
                 var newHumanComment = threads.SelectMany(t => t.Comments)
                     .Any(c => !c.IsBot && (resolveWatermark is null || c.PublishedAt > resolveWatermark));
                 var deferredThreadIds = (await store.GetResolveActionsAsync(candidate.Key, [], token)
-                    .ConfigureAwait(false))
+                        .ConfigureAwait(false))
                     .Where(action => action.Outcome == ResolutionOutcome.Deferred)
                     .Select(action => action.ThreadId).ToHashSet();
                 var hasDeferredActions = threads.Any(thread =>
@@ -240,7 +245,7 @@ public sealed class DiscoveryService(
                     candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha, token);
                 if (headInfo is not null && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
                 {
-                    ReviewForgeTelemetry.LoopGuardSkips.Add(1, new TagList { { "source", "discovery" } });
+                    ReviewForgeTelemetry.LoopGuardSkips.Add(1, new TagList {{"source", "discovery"}});
                     Skip(candidate.Key, "bot-authored head");
                     return;
                 }
@@ -296,6 +301,7 @@ public sealed class DiscoveryService(
                     Skip(candidate.Key, "enqueue failed");
                     return;
                 }
+
                 if (!result.Accepted)
                 {
                     tracker.Remove(runId);
@@ -318,6 +324,7 @@ public sealed class DiscoveryService(
                     warmups.Add(WarmupMirrorAsync(candidate, token));
                 }
             }
+
             if (resolveAckRunId is { } ackRunId && resolveCommand is { } command)
             {
                 try
@@ -353,12 +360,12 @@ public sealed class DiscoveryService(
                 }
 
                 _Pool.MarkWarmed(candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha);
-                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList { { ReviewForgeTelemetry.TagResult, "completed" } });
+                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList {{ReviewForgeTelemetry.TagResult, "completed"}});
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Warmup is an optimization only: the run's own fetch remains the correctness path.
-                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList { { ReviewForgeTelemetry.TagResult, "failed" } });
+                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList {{ReviewForgeTelemetry.TagResult, "failed"}});
                 logger?.LogWarning(ex, "mirror warmup for {Pr} failed; the run's own fetch remains the correctness path", candidate.Key);
             }
         }

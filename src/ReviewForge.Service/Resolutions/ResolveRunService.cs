@@ -6,9 +6,9 @@ using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Workspaces;
-using ReviewForge.Infrastructure.Ado;
 
 namespace ReviewForge.Service;
+
 public interface IResolveRunService
 {
     Task ExecuteAsync(ReviewRequest request, ReviewContext context, CancellationToken ct);
@@ -61,7 +61,7 @@ public sealed class ResolveRunService(
             new PlanFixesStage(opts.MaxThreadsPerRun, opts.MaxWritableFiles),
             new ApplyFixesStage(agent, opts.FixPassMaxIterations),
         };
-        if (opts.VerifyCommand is { Length: > 0 })
+        if (opts.VerifyCommand is {Length: > 0})
             stages.Add(new VerifyBuildStage(processRunner, opts.VerifyCommand, TimeSpan.FromSeconds(opts.VerifyTimeoutSeconds),
                 opts.CommitGranularity.Equals("Single", StringComparison.OrdinalIgnoreCase)));
         stages.Add(new BeginRunStage(store, clock, order: 68));

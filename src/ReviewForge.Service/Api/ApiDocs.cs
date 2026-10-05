@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
-using ReviewForge.Service.Security;
 using Scalar.AspNetCore;
+using ApiKeyOptions = ReviewForge.Service.Security.ApiKeyOptions;
 
 namespace ReviewForge.Service;
 
@@ -27,7 +27,7 @@ public static class ApiDocsRegistration
         {
             Type = SecuritySchemeType.ApiKey,
             In = ParameterLocation.Header,
-            Name = Security.ApiKeyOptions.HeaderName,
+            Name = ApiKeyOptions.HeaderName,
             Description = "ReviewForge API key.",
         };
 
@@ -35,8 +35,7 @@ public static class ApiDocsRegistration
         {
             [new OpenApiSecuritySchemeReference(ApiKeySchemeId, document, externalResource: null)] = [],
         };
-        foreach (var path in document.Paths.Where(
-                     pair => pair.Key.StartsWith("/reviews", StringComparison.OrdinalIgnoreCase)))
+        foreach (var path in document.Paths.Where(pair => pair.Key.StartsWith("/reviews", StringComparison.OrdinalIgnoreCase)))
         {
             if (path.Value?.Operations is not { } operations)
             {
@@ -59,7 +58,7 @@ public static class ApiDocsRegistration
         var options = app.Services.GetRequiredService<IOptions<ApiDocsOptions>>().Value;
         if (options.Enabled)
         {
-            var api = app.Services.GetRequiredService<IOptions<Security.ApiKeyOptions>>().Value;
+            var api = app.Services.GetRequiredService<IOptions<ApiKeyOptions>>().Value;
             WarnIfExposed(options, authConfigured: api.Keys.Length > 0,
                 app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ApiDocsRegistration)));
             app.MapOpenApi();
