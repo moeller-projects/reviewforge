@@ -219,3 +219,9 @@ MigrationBackup/
 !.env.example
 # Playwright CLI output (may contain credentials)
 .playwright-cli/
+
+
+# ------------------------------------------------------------
+# environment-specific config files
+# ------------------------------------------------------------
+config.*.toml
