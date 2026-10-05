@@ -77,13 +77,19 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             $"GetPullRequest({pr.PrId})",
             ct).ConfigureAwait(false);
 
+        var cloneUrl = await ResolveCloneUrlAsync(
+            pr.Project,
+            gpr.Repository?.Id,
+            gpr.Repository?.RemoteUrl,
+            ct).ConfigureAwait(false);
+
         return new PullRequest(
             gpr.PullRequestId,
             gpr.Title ?? string.Empty,
             gpr.Description,
             gpr.LastMergeSourceCommit?.CommitId ?? string.Empty,
             gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
-            gpr.Repository?.RemoteUrl ?? string.Empty,
+            cloneUrl,
             gpr.IsDraft ?? false,
             gpr.CreatedBy?.Id.ToString() ?? string.Empty,
             gpr.CreatedBy?.DisplayName ?? string.Empty,
@@ -102,34 +108,45 @@ public sealed class AdoPullRequestSource : IPullRequestSource
 
         await Parallel.ForEachAsync(
             projects.Select((project, index) => (project, index)),
-            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+            new ParallelOptions {MaxDegreeOfParallelism = 4, CancellationToken = ct},
             async (item, token) =>
             {
                 var prs = await _Retry.ExecuteAsync(
                     attemptCt => git.GetPullRequestsByProjectAsync(
                         item.project.Name,
-                        new GitPullRequestSearchCriteria { Status = PullRequestStatus.Active },
+                        new GitPullRequestSearchCriteria {Status = PullRequestStatus.Active},
                         cancellationToken: attemptCt),
                     $"GetPullRequests({item.project.Name})",
                     token).ConfigureAwait(false);
 
                 var list = new List<PullRequestCandidate>(prs.Count);
+                var cloneUrls = new Dictionary<Guid, string>();
                 foreach (var gpr in prs)
                 {
-                    var repositoryId = gpr.Repository?.Id.ToString();
+                    var repositoryId = gpr.Repository?.Id;
                     if (repositoryId is null)
                     {
                         continue;
                     }
 
-                    var key = new PrKey(_Org, item.project.Name, repositoryId, gpr.PullRequestId);
+                    if (!cloneUrls.TryGetValue(repositoryId.Value, out var cloneUrl))
+                    {
+                        cloneUrl = await ResolveCloneUrlAsync(
+                            item.project.Name,
+                            repositoryId,
+                            gpr.Repository?.RemoteUrl,
+                            token).ConfigureAwait(false);
+                        cloneUrls.Add(repositoryId.Value, cloneUrl);
+                    }
+
+                    var key = new PrKey(_Org, item.project.Name, repositoryId.Value.ToString(), gpr.PullRequestId);
                     var pr = new PullRequest(
                         gpr.PullRequestId,
                         gpr.Title ?? string.Empty,
                         gpr.Description,
                         gpr.LastMergeSourceCommit?.CommitId ?? string.Empty,
                         gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
-                        gpr.Repository?.RemoteUrl ?? string.Empty,
+                        cloneUrl,
                         gpr.IsDraft ?? false,
                         gpr.CreatedBy?.Id.ToString() ?? string.Empty,
                         gpr.CreatedBy?.DisplayName ?? string.Empty,
@@ -388,6 +405,38 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             "rename" => ChangedFileType.Rename,
             _ => ChangedFileType.Unknown,
         };
+
+    private async Task<string> ResolveCloneUrlAsync(
+        string project,
+        Guid? repositoryId,
+        string? remoteUrl,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(remoteUrl))
+        {
+            return remoteUrl;
+        }
+
+        if (repositoryId is null)
+        {
+            throw new InvalidOperationException(
+                $"Azure DevOps did not provide a repository ID or clone URL for project '{project}'.");
+        }
+
+        var git = await GitClientAsync(ct).ConfigureAwait(false);
+        var repository = await _Retry.ExecuteAsync(
+            attemptCt => git.GetRepositoryAsync(project, repositoryId.Value, cancellationToken: attemptCt),
+            $"GetRepository({repositoryId.Value})",
+            ct).ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(repository.RemoteUrl))
+        {
+            throw new InvalidOperationException(
+                $"Azure DevOps repository '{repositoryId.Value}' in project '{project}' has no clone URL.");
+        }
+
+        return repository.RemoteUrl;
+    }
 
     private async Task<GitHttpClient> GitClientAsync(CancellationToken ct)
     {
