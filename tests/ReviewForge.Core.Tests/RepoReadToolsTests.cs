@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Reasoning;
 using Xunit;
@@ -89,6 +90,7 @@ public class RepoReadToolsTests : IDisposable
     [InlineData(".aws/credentials")]
     [InlineData(".npmrc")]
     [InlineData("appsettings.Production.json")]
+    [InlineData("appsettings.Production.toml")]
     public void ReadFile_denies_private_keys(string path)
     {
         Assert.StartsWith("access denied", Tools().ReadFile(path));
@@ -98,13 +100,16 @@ public class RepoReadToolsTests : IDisposable
     public void ReadFile_allows_base_appsettings()
     {
         File.WriteAllText(Path.Combine(_Root, "appsettings.json"), "{\"x\": 1}");
+        File.WriteAllText(Path.Combine(_Root, "appsettings.toml"), "x = 1");
         Assert.DoesNotContain("denied", Tools().ReadFile("appsettings.json"));
+        Assert.DoesNotContain("denied", Tools().ReadFile("appsettings.toml"));
     }
 
     [Fact]
     public void Grep_skips_denied_files()
     {
         File.WriteAllText(Path.Combine(_Root, "appsettings.Production.json"), "SECRETVALUE=xyz");
+        File.WriteAllText(Path.Combine(_Root, "appsettings.Production.toml"), "SECRETVALUE=xyz");
         Assert.Equal("no matches", Tools().Grep("SECRETVALUE"));
     }
 
@@ -477,13 +482,13 @@ public class RepoReadToolsTests : IDisposable
     [Fact]
     public async Task Meai_binds_cancellation_token_into_grep()
     {
-        var function = Microsoft.Extensions.AI.AIFunctionFactory.Create(new RepoReadTools(_Root).Grep);
+        var function = AIFunctionFactory.Create(new RepoReadTools(_Root).Grep);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await function.InvokeAsync(
-                new Microsoft.Extensions.AI.AIFunctionArguments(
-                    new Dictionary<string, object?> { ["pattern"] = "one" }),
+                new AIFunctionArguments(
+                    new Dictionary<string, object?> {["pattern"] = "one"}),
                 cts.Token));
     }
 

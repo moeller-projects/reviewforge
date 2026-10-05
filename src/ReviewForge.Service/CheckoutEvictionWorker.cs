@@ -6,7 +6,7 @@ namespace ReviewForge.Service;
 /// <summary>Periodic bounded cleanup of idle per-head repository checkouts.</summary>
 public sealed class CheckoutEvictionWorker(
     RepoCheckoutPool pool,
-    IOptions<ReviewForgeServiceOptions> options,
+    IOptions<WorkspaceOptions> options,
     TimeProvider clock,
     ILogger<CheckoutEvictionWorker> logger) : BackgroundService
 {

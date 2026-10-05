@@ -241,6 +241,21 @@ public class HashLineEditor
         WriteAtomic(rel, full!, string.Join(newLine, lines) + newLine);
     }
 
+    /// <summary>Restores the exact bytes first observed by this edit session. Used by the
+    /// pipeline when an edit pass is declined or host verification fails; never exposed as an
+    /// agent tool.</summary>
+    public virtual void RevertFile(string relativePath)
+    {
+        var rel = RepoPath.Normalize(relativePath);
+        if (!TryResolveWritable(relativePath, out _, out var full, out var error))
+            throw new InvalidOperationException(error ?? $"access denied: {relativePath}");
+        if (!_OriginalRaw.TryGetValue(rel, out var original))
+            throw new InvalidOperationException($"no original snapshot is available for {rel}");
+        WriteAtomic(rel, full!, original);
+        _Sessions.Remove(rel);
+        _RawCache.Remove(rel);
+    }
+
     /// <summary>The merged change this editor session produced on a file: the contiguous
     /// region from the first to the last edited line, with its CURRENT content as
     /// Replacement. Null when the session made no edits to the file.</summary>

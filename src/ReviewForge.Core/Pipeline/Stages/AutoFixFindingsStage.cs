@@ -9,21 +9,24 @@ using ReviewForge.Core.Reasoning;
 namespace ReviewForge.Core.Pipeline.Stages;
 
 /// <summary>
-/// Stage 7.2 (between validate and begin-run): produces suggestion-only fixes.
+/// Stage 7.2 (between validate and begin-run): produces fixes.
 /// Pass 1 is deterministic — validated findings with a registered, eligible fixer get a
-/// pure proposal that goes straight into the applied list (zero disk writes). Pass 2 is
-/// commanded — the PR author replied "/rf fix" on a thread, and a constrained agent pass
-/// (one-file writable set, hash-anchored edits, no findings tools) drafts the fix; its
-/// writes are always reverted before the stage ends. The shared MaxFixesPerRun budget is
-/// consumed deterministic-first. Fixes are published as ADO suggestions — the author's
-/// accept-click is the verification step. Never remove a fixed finding from
+/// pure proposal. Pass 2 is commanded — the PR author replied "/rf fix" on a thread, and a
+/// constrained agent pass (one-file writable set, hash-anchored edits, no findings tools)
+/// drafts the fix. The shared MaxFixesPerRun budget is consumed deterministic-first.
+/// Publication depends on AutoFix:PublishMode: "Suggestion" posts ADO suggestion blocks (the
+/// author's accept-click is the verification step) and never leaves workspace writes behind;
+/// "CommitOnHead" materializes accepted fixes into the run's PRIVATE checkout
+/// (drift-guarded range apply for deterministic fixes; kept agent edits for commanded fixes)
+/// and stage 7.7 commits and pushes them. Never remove a fixed finding from
 /// AcceptedFindings — triage depends on its key staying current (fixed findings must not
 /// trigger "no longer reproduces" auto-resolve).
 ///
 /// <remarks>
 /// Direct System.IO by design — same exception as RepoReadTools/ValidateFindingsStage
 /// (see the IWorkspaceFs scope note). Reads via <paramref name="lineReader"/>; writes go
-/// through <see cref="HashLineEditor"/> (guard + writable set) and are always reverted.
+/// through <see cref="HashLineEditor"/> (guard + writable set). Suggestion-mode writes are
+/// always reverted; CommitOnHead keeps accepted edits and reverts declined/failed passes.
 /// </remarks>
 /// </summary>
 public sealed class AutoFixFindingsStage : IReviewStage
@@ -69,6 +72,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         if (_Options.AllowedAuthors.Length == 0)
         {
             _Logger.LogInformation("auto-fix: disabled — AutoFix:AllowedAuthors is empty");
+            ReplyToRejectedCommands(ctx, "auto-fix is disabled on this service — the /rf fix command was not run.");
             return;
         }
 
@@ -79,6 +83,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             _Logger.LogInformation(
                 "auto-fix: PR creator {CreatorId}/{CreatorName} is not in the author allowlist",
                 pr.CreatorId, pr.CreatorName);
+            ReplyToRejectedCommands(ctx, "auto-fix is not enabled for this pull request author — the /rf fix command was not run.");
             return;
         }
 
@@ -114,6 +119,31 @@ public sealed class AutoFixFindingsStage : IReviewStage
         ctx.AppliedFixes = applied;
     }
 
+    /// <summary>Gate failure must not silently drop author commands: every scanned /rf fix
+    /// command gets a plain rejection reply on its thread (a failed gate is published as a
+    /// comment, never dropped). No audit rows are written — the gate did no work — so the
+    /// comment watermark alone keeps this exactly-once.</summary>
+    private void ReplyToRejectedCommands(ReviewContext ctx, string reason)
+    {
+        if (!_Options.EnableThreadFixCommands)
+        {
+            return;
+        }
+
+        var commands = FixCommandDetector.Scan(
+            ctx.Threads, ctx.RequirePullRequest().CreatorId, ctx.PriorRun?.LastObservedCommentAt);
+        ctx.FixCommands = commands;
+        if (commands.Count == 0)
+        {
+            return;
+        }
+
+        ctx.FixCommandReplies =
+        [
+            .. commands.OrderBy(c => c.ThreadId).Select(c => (c.ThreadId, reason)),
+        ];
+    }
+
     private async Task RunDeterministicPassAsync(
         ReviewContext ctx,
         string repoDir,
@@ -124,9 +154,10 @@ public sealed class AutoFixFindingsStage : IReviewStage
         Action<int> setBudget,
         CancellationToken ct)
     {
-        // Per file: proposals collected in finding order and published as suggestions —
-        // no workspace writes (human acceptance of the suggestion is the verification).
-        var proposalsByFile = new Dictionary<string, List<(RichFinding Finding, FixProposal Proposal)>>(RepoPath.PathComparer);
+        // Per file: proposals collected in finding order. Suggestion mode publishes them
+        // without workspace writes; CommitOnHead materializes them into the private checkout
+        // (drift-guarded range apply) so stage 7.7 can commit the edits.
+        var proposalsByFile = new Dictionary<string, List<(RichFinding Finding, FixProposal Proposal, string[] Lines)>>(RepoPath.PathComparer);
         var guardSkipped = 0;
 
         foreach (var finding in ctx.AcceptedFindings)
@@ -184,7 +215,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 proposalsByFile[path] = list;
             }
 
-            list.Add((finding, proposal));
+            list.Add((finding, proposal, lines));
             setBudget(getBudget() - 1);
         }
         if (guardSkipped > 0)
@@ -198,16 +229,122 @@ public sealed class AutoFixFindingsStage : IReviewStage
             return;
         }
 
+        if (_Options.IsCommitOnHead)
+        {
+            ApplyProposalsToTree(ctx, guard, eligible, proposalsByFile, applied);
+            return;
+        }
+
         foreach (var (path, proposals) in proposalsByFile)
         {
             ct.ThrowIfCancellationRequested();
-            foreach (var (finding, proposal) in proposals)
+            foreach (var (finding, proposal, _) in proposals)
             {
                 ct.ThrowIfCancellationRequested();
                 AttachFix(finding, applied, new AppliedFix(finding.DedupeKey!, proposal), ctx);
             }
         }
     }
+
+    /// <summary>CommitOnHead deterministic materialization: applies each proposal to the
+    /// private checkout via the editor's drift-guarded range API. Hash drift → re-read,
+    /// re-propose through the fixer, retry once → still failing: the run FAILS — CommitOnHead
+    /// never silently falls back from the requested commit/push to suggestion publication.
+    /// (Proposals for files outside the changed-file manifest still degrade to suggestion:
+    /// there is nothing committable to apply.) One editor per run; the writable set is
+    /// proposal files ∩ changed-file manifest.</summary>
+    private void ApplyProposalsToTree(
+        ReviewContext ctx,
+        RepoPathGuard guard,
+        IReadOnlyDictionary<string, IFindingFixer> eligible,
+        Dictionary<string, List<(RichFinding Finding, FixProposal Proposal, string[] Lines)>> proposalsByFile,
+        List<AppliedFix> applied)
+    {
+        var changedFiles = ctx.ChangedFiles
+            .Select(RepoPath.Normalize)
+            .ToHashSet(RepoPath.PathComparer);
+        var writable = proposalsByFile.Keys
+            .Where(changedFiles.Contains)
+            .ToHashSet(RepoPath.PathComparer);
+        var editor = _EditorFactory(guard, writable);
+
+        foreach (var (path, proposals) in proposalsByFile.OrderBy(p => p.Key, RepoPath.PathComparer))
+        {
+            foreach (var (finding, proposal, lines) in proposals)
+            {
+                if (!writable.Contains(path) || !eligible.TryGetValue(finding.RuleId, out var fixer))
+                {
+                    RecordApplyFailure(finding, path, "file outside the writable set");
+                    AttachFix(finding, applied, new AppliedFix(finding.DedupeKey!, proposal), ctx);
+                    continue;
+                }
+
+                var appliedProposal = proposal;
+                var expectedRangeHash = RangeHash(lines, proposal.StartLine, proposal.EndLine);
+                var result = editor.ApplyRange(
+                    path, proposal.StartLine, proposal.EndLine, proposal.Replacement, expectedRangeHash);
+
+                if (!result.Success)
+                {
+                    // Drift retry, exactly once: re-read the current file, let the fixer
+                    // re-propose against it, and re-apply with the fresh range hash.
+                    string[]? freshLines = null;
+                    try
+                    {
+                        freshLines = editor.ReadAllLines(path);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+                    {
+                        _Logger.LogWarning(ex, "auto-fix commit: could not re-read {Path} for rule {Rule}", path, finding.RuleId);
+                    }
+
+                    var retry = freshLines is null
+                        ? null
+                        : fixer.TryPropose(new FixContext(
+                            finding, path, freshLines, ctx.Diff ?? DiffIndex.Parse(string.Empty)));
+                    if (retry is not null && freshLines is not null)
+                    {
+                        var retryResult = editor.ApplyRange(
+                            path, retry.StartLine, retry.EndLine, retry.Replacement,
+                            RangeHash(freshLines, retry.StartLine, retry.EndLine));
+                        if (retryResult.Success)
+                        {
+                            appliedProposal = retry;
+                            result = retryResult;
+                        }
+                    }
+                }
+
+                if (!result.Success)
+                {
+                    // No silent fallback in CommitOnHead: the author asked for a committed
+                    // fix; a fix that cannot be materialized fails the run visibly.
+                    ReviewForgeTelemetry.AutoFixApplyFailed.Add(
+                        1, new TagList { { "rule", finding.RuleId } });
+                    throw new InvalidOperationException(
+                        $"auto-fix commit: could not materialize the fix for rule {finding.RuleId} on {path} — {result.Error ?? "apply failed"}");
+                }
+
+                var fix = new AppliedFix(finding.DedupeKey!, appliedProposal) {AppliedToTree = result.Success};
+                AttachFix(finding, applied, fix, ctx);
+            }
+        }
+    }
+
+    private void RecordApplyFailure(RichFinding finding, string path, string reason)
+    {
+        _Logger.LogWarning(
+            "auto-fix commit: {Rule} on {Path} degraded to suggestion — {Reason}",
+            finding.RuleId, path, reason);
+        ReviewForgeTelemetry.AutoFixApplyFailed.Add(
+            1, new TagList { { "rule", finding.RuleId } });
+    }
+
+    /// <summary>Drift-guard hash of the CURRENT content of [startLine..endLine] (1-based
+    /// inclusive) — must match HashLineEditor.ApplyRange's computation exactly.</summary>
+    private static string RangeHash(string[] lines, int startLine, int endLine)
+        => HashLine.Of(string.Join('\n',
+            lines.Skip(startLine - 1).Take(endLine - startLine + 1).Select(HashLine.Normalize)));
 
     private async Task RunCommandedPassAsync(
         ReviewContext ctx,
@@ -287,12 +424,17 @@ public sealed class AutoFixFindingsStage : IReviewStage
             var snapshotBytes = File.ReadAllBytes(abs);
             var snapshotLines = _LineReader(abs);
             var editor = _EditorFactory(guard, new HashSet<string>(RepoPath.PathComparer) { path });
+            // CommitOnHead: an accepted pass KEEPS its edits (they are the commit payload);
+            // declined/failed passes still revert so a later "nothing to commit" stays accurate.
+            // Suggestion mode reverts always, byte-identical to before.
+            var keepEdits = false;
             try
             {
                 var prompt = FixPromptBuilder.Build(command, path, anchor.StartLine, anchor.EndLine);
+                var collector = new ReviewCollector();
                 var pass = await _Agent.RunWithEditToolsAsync(
                         prompt,
-                        new ReviewCollector(),
+                        collector,
                         ctx.ContextStore,
                         repoDir,
                         new HashSet<string>(RepoPath.PathComparer) { path },
@@ -313,6 +455,19 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     continue;
                 }
 
+                if (_Options.IsCommitOnHead && !collector.Done)
+                {
+                    // The pass edited the file but never completed task_done (iteration cap
+                    // mid-work). Partial agent work is never published: revert the edit
+                    // (keepEdits stays false) and treat the pass as failed.
+                    _Logger.LogWarning(
+                        "fix pass for thread {ThreadId}: discarding edits — task_done missing (iteration cap reached)",
+                        command.ThreadId);
+                    replies.Add((command.ThreadId,
+                        "The fix pass did not complete, so no change was published. Reply /rf fix to retry."));
+                    continue;
+                }
+
                 var rationale = OneSentence(pass.Result.Narrative.ReviewSummary);
                 var proposal = new FixProposal(
                     path,
@@ -322,12 +477,20 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     rationale,
                     FixOrigin.LlmCommanded,
                     command.ThreadId);
-                AttachFix(null, applied, new AppliedFix($"{AppliedFix.CommandKeyPrefix}{command.ThreadId}", proposal), ctx);
+                var acceptedFix = new AppliedFix($"{AppliedFix.CommandKeyPrefix}{command.ThreadId}", proposal)
+                {
+                    AppliedToTree = _Options.IsCommitOnHead,
+                };
+                keepEdits = _Options.IsCommitOnHead;
+                AttachFix(null, applied, acceptedFix, ctx);
                 setBudget(getBudget() - 1);
             }
             finally
             {
-                RevertFile(editor, guard, repoDir, path, snapshotBytes);
+                if (!keepEdits)
+                {
+                    RevertFile(editor, guard, repoDir, path, snapshotBytes);
+                }
             }
         }
 

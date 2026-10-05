@@ -81,8 +81,8 @@ public sealed class SqliteReviewQueue : IReviewQueue
         using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText =
-            "INSERT INTO QueuedRuns (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState) " +
-            "VALUES ($runId, $org, $project, $repo, $prId, $enqueuedAt, $headSha, $traceParent, $traceState);";
+            "INSERT INTO QueuedRuns (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind) " +
+            "VALUES ($runId, $org, $project, $repo, $prId, $enqueuedAt, $headSha, $traceParent, $traceState, $trigger, $kind);";
         insert.Parameters.AddWithValue("$runId", request.RunId.ToString());
         insert.Parameters.AddWithValue("$org", request.Pr.Org);
         insert.Parameters.AddWithValue("$project", request.Pr.Project);
@@ -92,6 +92,8 @@ public sealed class SqliteReviewQueue : IReviewQueue
         insert.Parameters.AddWithValue("$headSha", (object?)request.HeadSha ?? DBNull.Value);
         insert.Parameters.AddWithValue("$traceParent", (object?)TraceParentOf(request.EnqueueContext) ?? DBNull.Value);
         insert.Parameters.AddWithValue("$traceState", (object?)request.EnqueueContext?.TraceState ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$trigger", request.Trigger.ToString());
+        insert.Parameters.AddWithValue("$kind", request.Kind.ToString());
         insert.ExecuteNonQuery();
         transaction.Commit();
         return new EnqueueResult(true, ApproximateDepth);
@@ -139,7 +141,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         using var connection = Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText =
-            "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState " +
+            "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind " +
             "FROM QueuedRuns WHERE RunId = $runId AND ClaimedBy IS NULL";
         cmd.Parameters.AddWithValue("$runId", runId.ToString());
         using var reader = cmd.ExecuteReader();
@@ -157,7 +159,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         {
             select.Transaction = transaction;
             select.CommandText =
-                "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, " +
+                "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind, " +
                 "ClaimedBy IS NOT NULL FROM QueuedRuns " +
                 "WHERE ClaimedBy IS NULL OR ClaimedAt < $reclaimBefore ORDER BY rowid LIMIT 1;";
             select.Parameters.AddWithValue("$reclaimBefore", Stamp(now - _ClaimTtl));
@@ -168,7 +170,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             }
 
             request = ReadRequest(reader);
-            reclaimed = reader.GetBoolean(9);
+            reclaimed = reader.GetBoolean(11);
         }
 
         using (var update = connection.CreateCommand())
@@ -193,15 +195,38 @@ public sealed class SqliteReviewQueue : IReviewQueue
     private void EnsureSchema()
     {
         using var connection = Open();
+        // CREATE IF NOT EXISTS is safe under concurrent startup; serialize the guarded
+        // PRAGMA/ALTER migration so two hosts cannot both observe a missing column.
+        using var transaction = connection.BeginTransaction(deferred: false);
         using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText =
             "CREATE TABLE IF NOT EXISTS QueuedRuns (" +
             "RunId TEXT PRIMARY KEY, " +
             "Org TEXT NOT NULL, Project TEXT NOT NULL, RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, " +
             "EnqueuedAt TEXT NOT NULL, HeadSha TEXT NULL, " +
-            "TraceParent TEXT NULL, TraceState TEXT NULL, " +
+            "TraceParent TEXT NULL, TraceState TEXT NULL, Trigger TEXT NULL, Kind TEXT NULL, " +
             "ClaimedBy TEXT NULL, ClaimedAt TEXT NULL);";
         cmd.ExecuteNonQuery();
+
+        // Null reads as Manual — pre-migration rows cannot reference bot-authored heads
+        // (no code existed to create one), so the worst case is one redundant review.
+        cmd.CommandText =
+            "SELECT COUNT(*) FROM pragma_table_info('QueuedRuns') WHERE name = 'Trigger'";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+        {
+            cmd.CommandText = "ALTER TABLE QueuedRuns ADD COLUMN Trigger TEXT NULL";
+            cmd.ExecuteNonQuery();
+        }
+        cmd.CommandText =
+            "SELECT COUNT(*) FROM pragma_table_info('QueuedRuns') WHERE name = 'Kind'";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+        {
+            cmd.CommandText = "ALTER TABLE QueuedRuns ADD COLUMN Kind TEXT NULL";
+            cmd.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
     }
 
     private SqliteConnection Open()
@@ -229,7 +254,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         => at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
 
     private static DateTimeOffset ParseStamp(string stamp)
-        => new(DateTime.ParseExact(stamp, "O", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), TimeSpan.Zero);
+        => DateTimeOffset.Parse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).ToUniversalTime();
 
     private static string? TraceParentOf(ActivityContext? context)
     {
@@ -252,11 +277,24 @@ public sealed class SqliteReviewQueue : IReviewQueue
             context = parsed;
         }
 
+        var triggerText = reader.IsDBNull(9) ? null : reader.GetString(9);
+        var trigger = triggerText is not null && Enum.TryParse<EnqueueTrigger>(triggerText, out var parsedTrigger)
+                      && Enum.IsDefined(parsedTrigger)
+            ? parsedTrigger
+            : EnqueueTrigger.Manual;
+        var kindText = reader.IsDBNull(10) ? null : reader.GetString(10);
+        var kind = kindText is not null && Enum.TryParse<RunKind>(kindText, out var parsedKind)
+                   && Enum.IsDefined(parsedKind)
+            ? parsedKind
+            : RunKind.Review;
+
         return new ReviewRequest(
             Guid.Parse(reader.GetString(0)),
             new PrKey(reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4)),
             ParseStamp(reader.GetString(5)),
             context,
-            reader.IsDBNull(6) ? null : reader.GetString(6));
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            trigger,
+            kind);
     }
 }

@@ -3,8 +3,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
-using ReviewForge.Core.Ports;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
@@ -33,7 +34,8 @@ public class ReviewWorkerTests
             FakePullRequestSource? source = null,
             FakeGitOps? git = null,
             FakeFindingStore? store = null,
-            string cleanVote = "Approved")
+            string cleanVote = "Approved",
+            IResolveRunService? resolveService = null)
         {
             _WorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-worker-" + Guid.NewGuid().ToString("N"));
             // The real host creates these at startup (P3-m); this direct-factory harness
@@ -42,7 +44,7 @@ public class ReviewWorkerTests
             Claims = new InFlightClaims(Clock, Ttl);
             Store = store ?? new FakeFindingStore();
             Source = source ?? new FakePullRequestSource();
-            var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = _WorkDir, CleanRunVote = cleanVote});
+            var options = Options.Create(new ReviewOptions {CleanRunVote = cleanVote});
             Factory = new ReviewPipelineFactory(
                 Source,
                 Store,
@@ -51,10 +53,12 @@ public class ReviewWorkerTests
                     ScriptedChatClient.FunctionCalls(
                         ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new WorkspaceOptions {WorkDir = _WorkDir}),
                 Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
-            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock);
+            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock, resolveService);
         }
+
 
         public void Dispose()
         {
@@ -269,6 +273,86 @@ public class ReviewWorkerTests
     }
 
 
+    private sealed class CapturingResolveService(bool fail = false) : IResolveRunService
+    {
+        public ReviewRequest? Request { get; private set; }
+        public ReviewContext? Context { get; private set; }
+        public bool PublishGuardHeld { get; private set; }
+
+        public Task ExecuteAsync(ReviewRequest request, ReviewContext context, CancellationToken ct)
+        {
+            Request = request;
+            Context = context;
+            PublishGuardHeld = context.PublishGuard?.Invoke() == true;
+            if (fail)
+            {
+                throw new InvalidOperationException("resolve failed");
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Worker_dispatches_resolve_with_shared_claim_context_and_trigger()
+    {
+        var resolve = new CapturingResolveService();
+        using var h = new Harness(resolveService: resolve);
+        var runId = Guid.NewGuid();
+        Assert.True(h.Claims.TryClaim(Key, runId, out _));
+        var request = new ReviewRequest(
+            runId, Key, h.Clock.GetUtcNow(), HeadSha: "resolve-head",
+            Trigger: EnqueueTrigger.ResolveCommand, Kind: RunKind.Resolve);
+        Assert.True(h.Queue.TryEnqueue(request).Accepted);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var workerTask = h.Worker.StartAsync(cts.Token);
+        for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Completed; i++)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.Equal(RunState.Completed, h.Tracker.Get(runId)?.State);
+        Assert.Same(request, resolve.Request);
+        Assert.NotNull(resolve.Context);
+        Assert.Equal(runId, resolve.Context!.RunId);
+        Assert.Equal(RunKind.Resolve, resolve.Context.RunKind);
+        Assert.Equal(EnqueueTrigger.ResolveCommand, resolve.Context.Trigger);
+        Assert.True(resolve.PublishGuardHeld);
+        Assert.False(h.Claims.IsHeldBy(Key, runId));
+
+        await cts.CancelAsync();
+        try { await workerTask; } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
+    public async Task Worker_persists_resolve_failure_with_resolve_pipeline()
+    {
+        var resolve = new CapturingResolveService(fail: true);
+        using var h = new Harness(resolveService: resolve);
+        var runId = Guid.NewGuid();
+        Assert.True(h.Claims.TryClaim(Key, runId, out _));
+        Assert.True(h.Queue.TryEnqueue(new ReviewRequest(
+            runId, Key, h.Clock.GetUtcNow(), Trigger: EnqueueTrigger.ResolveCommand, Kind: RunKind.Resolve)).Accepted);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var workerTask = h.Worker.StartAsync(cts.Token);
+        for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.Equal(RunState.Failed, h.Tracker.Get(runId)?.State);
+        var failure = Assert.Single(h.Store.RecentRuns);
+        Assert.False(failure.Success);
+        Assert.Equal("Resolve", failure.Pipeline);
+        Assert.Equal(RunKind.Resolve, resolve.Context!.RunKind);
+        Assert.Equal(EnqueueTrigger.ResolveCommand, resolve.Context.Trigger);
+
+        await cts.CancelAsync();
+        try { await workerTask; } catch (OperationCanceledException) { }
+    }
+
     private sealed class FailingFetchSource : FakePullRequestSource
     {
         public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
@@ -327,7 +411,7 @@ public class ReviewWorkerTests
         var root = Path.Combine(Path.GetTempPath(), "reviewforge-nofs-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var options = Options.Create(new ReviewForgeServiceOptions {WorkDir = root});
+            var options = Options.Create(new ReviewOptions());
             var factory = new ReviewPipelineFactory(
                 new FakePullRequestSource(),
                 new FakeFindingStore(),
@@ -337,6 +421,7 @@ public class ReviewWorkerTests
                         ScriptedChatClient.FunctionCalls(
                             ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
+                Options.Create(new WorkspaceOptions {WorkDir = root}),
                 Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 

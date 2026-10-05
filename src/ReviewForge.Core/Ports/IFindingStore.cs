@@ -2,6 +2,28 @@ using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Ports;
 
+/// <summary>Durable record of one fix whose commit is intended for — or was pushed to — the
+/// PR source branch (CommitOnHead mode). The commit stage persists the rows as a push INTENT
+/// (<see cref="Pushed"/> false) BEFORE the external push, confirms them atomically after a
+/// successful push, and abandons them on rejection — so a crash anywhere in that sequence
+/// leaves either no visible rows or rows a later run can reconcile BEFORE any reply is
+/// attempted. Only confirmed rows (<see cref="Pushed"/> true) are eligible for reply
+/// reconciliation. <see cref="Id"/> is store-assigned (0 on save); <see cref="RunId"/>,
+/// <see cref="Pushed"/>, <see cref="ReplyPosted"/> and <see cref="CreatedAt"/> are likewise
+/// store-owned on save.</summary>
+public sealed record PushedFix(
+    int Id,
+    Guid RunId,
+    string DedupeKey,          // finding key, or "thread-{ThreadId}" for commanded fixes
+    string CommitSha,
+    string CommitSubject,
+    int? ThreadId,             // resolved live thread when known (commanded fixes)
+    bool Pushed,               // false = push intent only; true = push confirmed on the remote
+    bool AiDrafted,            // AI-authored change — replies must carry the AI-generated label
+    bool ReplyPosted,
+    DateTimeOffset CreatedAt);
+ 
+
 /// <summary>FP-keyed finding store: run history and posted findings per PR.</summary>
 public interface IFindingStore
 {
@@ -42,6 +64,33 @@ public interface IFindingStore
     /// </summary>
     Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct);
 
+    /// <summary>Persists the pushed-fix records of a run as push INTENT (Pushed = false).
+    /// Called by the commit stage BEFORE the external push so a crash leaves a durable record;
+    /// intent rows are invisible to reply reconciliation until confirmed.</summary>
+    Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct);
+
+    /// <summary>Atomically confirms the run's push-intent rows after a successful push
+    /// (Pushed = true), making them eligible for reply reconciliation.</summary>
+    Task ConfirmPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct);
+
+    /// <summary>Deletes the run's unconfirmed push-intent rows after a rejected push so a
+    /// commit that never reached the remote is never reconciled as pushed.</summary>
+    Task AbandonPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct);
+
+    /// <summary>Confirmed (Pushed) fixes of this PR whose "Fixed in {sha}" reply has not been
+    /// posted yet (crash orphans of prior runs plus the current run's fresh rows).</summary>
+    Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct);
+
+    /// <summary>Marks one pushed-fix row as replied (exactly-once convergence with the
+    /// reply-text dedupe check).</summary>
+    Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct);
+
     /// <summary>Connectivity probe for health checks; must not depend on any PR-scoped data.</summary>
+    Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct);
+    Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(
+        PrKey pr, IReadOnlyCollection<int> threadIds, CancellationToken ct);
+    Task SaveResolveActionsAsync(
+        PrKey pr, Guid runId, IReadOnlyList<ResolveAction> actions, CancellationToken ct);
+    Task MarkResolveActionRepliedAsync(int id, CancellationToken ct);
     Task PingAsync(CancellationToken ct);
 }

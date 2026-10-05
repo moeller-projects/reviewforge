@@ -4,11 +4,11 @@ Guidance for coding agents working in this repository. Read this before editing.
 
 ## What this is
 
-Automated PR review as a service (.NET 10, ASP.NET minimal API). For each submitted
-Azure DevOps pull request it runs a 12-stage pipeline: fetch context → gate → clone →
-classify → enrich → agent reasoning loop → validate findings → auto-fix (7.2, off by
-default) → begin-run (7.5, persist in-flight shell) → triage threads → publish (findings +
-summary + reviewer vote) → persist. See `README.md` for the stage table.
+Automated PR review and autonomous comment resolution as a service (.NET 10, ASP.NET
+minimal API). Review requests run the 12-stage review pipeline; opt-in resolution requests
+run a separate pipeline that fetches context → gates → prepares a private checkout →
+collects comments → read-only triage → bounded edits → verification → commit/push →
+replies → persist. See `README.md` for the stage table.
 
 ## Layout
 
@@ -42,7 +42,7 @@ tests/
   ReviewForge.{Core,Infrastructure,Service}.Tests/
   ReviewForge.Architecture.Tests/  assembly-boundary tests; no coverlet gate by design
 prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prompt; the review
-                               prompt override is ReviewForge:PromptOverridePath, and the embedded
+                               prompt override is Review:PromptOverridePath, and the embedded
                                default lives in src/ReviewForge.Core/Reasoning/Prompts/
 ```
 
@@ -79,26 +79,44 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
    no shell. `HashLineEditor` (used by author-commanded fix passes) shares the same
    containment and deny rules via `RepoPathGuard` and is
    additionally limited to a per-run writable set (a single anchored file for fix passes).
-   Every fix-pass write is reverted before the stage ends. The agent never invokes
-   external processes.
+   `HashLineEditor` writes are reverted in Suggestion mode. In CommitOnHead mode
+   (`AutoFix:PublishMode`), accepted fixes are NOT reverted — they are committed by stage
+   7.7. CommitOnHead runs use a private run-scoped checkout
+   (`RepoCheckoutPool.AcquirePrivateAsync`); the pooled per-head checkout never sees writes.
+   The writable-set, containment, deny-regex and hash-anchor disciplines are unchanged.
+   Resolve runs use the same `HashLineEditor` discipline in a private run-scoped checkout,
+   with each writable set computed from triaged, commenter-authorized, anchored comments.
+   Their triage pass is structurally read-only: no edit or finding-recording tools are registered.
+   The agent never invokes external processes.
 7. **Codex auth file** is rewritten atomically (temp + move) on token rotation. Any mount
    or path you introduce must preserve that (directory mount, read-write).
 8. **Auto-fix discipline.** A fix is only published when (a) the author is allowlisted and
    (b) the rule has a registered fixer or the fix was explicitly commanded by the PR
    author via `/rf fix`. Any gate failing means the finding
-   is published as a plain comment instead. Every fix is published as an ADO suggestion
-   block — ReviewForge never writes to the PR branch, never pushes, never opens pull
-   requests. AI-drafted fixes are always labeled as such. Never resolve another person's
-   thread. Never leave a pooled checkout dirty.
+   is published as a plain comment instead. In Suggestion mode every fix is published as an
+   ADO suggestion block. In CommitOnHead mode (`AutoFix:PublishMode`) fixes are committed in
+   the run's private checkout and pushed fast-forward-only to the PR source branch, and then
+   only when (c) the run holds its PR claim immediately before push, the remote branch tip
+   equals the pinned head at the pre-read, and the push itself is a fast-forward-only
+   compare-and-swap (stage 7.7). Pushed outcomes are persisted before any reply is attempted
+   (pushed_fixes), and a later run reconciles missing replies. ReviewForge never force-pushes,
+   never rebases, never opens pull requests. AI-drafted fixes are always labeled as such.
+   Resolve fixes are committed only after triage and bounded writable-set planning, then only
+   under the same claim/head-pin/fast-forward guards. Discovery and `/rf resolve` command
+   runs require the immutable creator allowlist and comment watermark; an authenticated
+   manual `POST /resolutions` bypasses those two checks but still rejects drafts and shares
+   the PR claim. Resolve outcomes are persisted before replies so a retry can reconcile them.
+   Bot replies never close human threads by default. Never resolve another person's thread.
+   Never leave a pooled checkout dirty.
 
 ## Conventions
 
 - `Directory.Build.props`: `net10.0`, nullable enable, implicit usings, `LangVersion=latest`.
   Experimental APIs suppressed centrally (`MAAI001`, `OPENAI001`, `MEAI001`).
 - Options are typed records/classes with DataAnnotations, validated fail-fast at startup.
-  Config sections: `Ado`, `Reasoning`, `ReviewForge`, `Api`, `ApiDocs`, `AutoFix`,
-  `Discovery`, `RepoReadTools`. Env overrides use double underscore,
-  e.g. `ReviewForge__MaxIterations=50`.
+  Config sections: `Ado`, `Reasoning`, `Review`, `Workspace`, `Persistence`, `Git`, `Host`, `Api`,
+  `ApiDocs`, `AutoFix`, `Resolve`, `VerifyFindings`, `Enrichment`, `Discovery`, `RepoReadTools`.
+  Environment overrides use double underscore, e.g. `Review__MaxIterations=50`.
 - Tests: xUnit, no mocking framework — hand-written fakes live in `ReviewForge.Testing`.
   Service tests run the real host in-process via `WebApplicationFactory<Program>` with
   fakes swapped in DI. `ScriptedChatClient` scripts the agent loop's tool calls.
@@ -118,10 +136,10 @@ dotnet test tests/ReviewForge.Core.Tests /p:CollectCoverage=true
 dotnet run --project src/ReviewForge.Service        # serves http://localhost:5080
 ```
 
-Service endpoints: `POST /reviews` → 202 `{runId, statusUrl}` (400 validation, 401 bad
-key, 409 PR already in flight, 429 rate-limited, 503 queue full) · `GET /reviews/{runId}`
-· `POST /reviews/discover` · `GET /health` (store-backed) · `GET /alive` (liveness). The
-ingest queue has a fixed capacity of 100; `ReviewForge:WorkerCount` sets the workers
+Service endpoints: `POST /reviews` and opt-in `POST /resolutions` → 202 `{runId, statusUrl}`
+(400 validation, 401 bad key, 409 PR already in flight, 429 rate-limited, 503 queue full) ·
+`GET /reviews/{runId}` · `POST /reviews/discover` · `GET /health` (store-backed) · `GET /alive` (liveness). The
+ingest queue has a fixed capacity of 100; `Host:WorkerCount` sets the workers
 (default processorCount/2 clamped 2–8, validated 1–64). `RunTracker` is a bounded
 in-memory status cache (24 h retention, 10k entries, sticky terminal states); status
 read-through falls back to the durable queue row and then the store row, so with
@@ -147,7 +165,7 @@ registry pull (locally built `reviewforge:latest`; CI pushes only `sha-<commit>`
 
 Mounts (see `docker-compose.yml`):
 
-- named volume `reviewforge-data` → `/var/reviewforge` — `ReviewForge__WorkDir` is
+- named volume `reviewforge-data` → `/var/reviewforge` — `Workspace__WorkDir` is
   `/var/reviewforge/work`, so head checkouts live at `work/checkouts/<repository>/<head>`,
   local mirrors at `work/mirror/<repository>`, per-run `work/findings/{runId}.jsonl`;
   the SQLite store is `reviewforge.db` at the volume root.
@@ -164,7 +182,7 @@ Container listens on 8080; compose maps host 5080 → 8080 to match the CLI defa
 
 - New PR host (GitHub/GitLab): `IPullRequestSource` — pipeline untouched.
 - New reasoning provider: `IChatClientFactory` (see `ChatClientFactory`).
-- Prompt tuning: `ReviewForge:PromptOverridePath` → markdown file; default is the embedded
+- Prompt tuning: `Review:PromptOverridePath` → markdown file; default is the embedded
   resource `ReviewForge.Core.Reasoning.Prompts.native-review-system.md`.
 - Finding identity: `DedupeKey` = ruleId + file + normalized snippet (no line numbers —
   shift-proof across force-pushes). Bot threads carry the key in ADO thread properties.

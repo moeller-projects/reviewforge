@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
@@ -34,11 +35,14 @@ public sealed class DiscoveryService(
     RetentionOptions retention,
     RepoCheckoutPool? pool = null,
     ILogger<DiscoveryService>? logger = null,
-    TimeProvider? clock = null)
+    TimeProvider? clock = null,
+    AutoFixOptions? autoFix = null,
+    ResolveOptions? resolveOptions = null)
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     private readonly DiscoveryRules _Rules = new(options.TargetBranches, options.Creators, options.MaxEnqueuesPerSweep);
     private readonly RepoCheckoutPool? _Pool = pool;
+    private readonly ResolveOptions? _Resolve = resolveOptions;
     private readonly SemaphoreSlim? _WarmupGate =
         pool is not null && options.WarmupEnabled ? new SemaphoreSlim(Math.Max(1, options.WarmupConcurrency)) : null;
     private DateTimeOffset _LastPrune = DateTimeOffset.MinValue; // sweep-throttled (P2-26)
@@ -150,35 +154,59 @@ public sealed class DiscoveryService(
 
         async Task EvaluateCandidateAsync(PullRequestCandidate candidate, CancellationToken token)
         {
+            IReadOnlyList<ReviewThread>? threads = null;
+            ResolveCommand? resolveCommand = null;
+            var resolveRun = false;
+            if (_Resolve is { Enabled: true } && !candidate.Pr.IsDraft
+                && _Resolve.AllowedAuthors.Contains(candidate.Pr.CreatorId, StringComparer.OrdinalIgnoreCase))
+            {
+                var previousResolve = await store.GetLastCompletedResolveRunAsync(candidate.Key, token);
+                var resolveWatermark = previousResolve?.LastObservedCommentAt ?? previousResolve?.CompletedAt;
+                threads = await source.GetThreadsAsync(candidate.Key, token);
+                resolveCommand = ResolveCommandDetector.Scan(threads, candidate.Pr.CreatorId, resolveWatermark)
+                    .OrderBy(c => c.PublishedAt).LastOrDefault();
+                var newHumanComment = threads.SelectMany(t => t.Comments)
+                    .Any(c => !c.IsBot && (resolveWatermark is null || c.PublishedAt > resolveWatermark));
+                var deferredThreadIds = (await store.GetResolveActionsAsync(candidate.Key, [], token)
+                    .ConfigureAwait(false))
+                    .Where(action => action.Outcome == ResolutionOutcome.Deferred)
+                    .Select(action => action.ThreadId).ToHashSet();
+                var hasDeferredActions = threads.Any(thread =>
+                    deferredThreadIds.Contains(thread.Id)
+                    && thread.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
+                    && thread.Comments.Any(comment => !comment.IsBot));
+                resolveRun = resolveCommand is not null || (_Resolve.DiscoveryEnabled && (newHumanComment || hasDeferredActions));
+            }
+
             var workItems = await source.GetLinkedWorkItemsAsync(candidate.Key, token);
             var workItemDecision = DiscoveryFilter.Evaluate(candidate, workItems.Count, lastReviewedHeadSha: null, _Rules);
-            if (!workItemDecision.Interesting)
+            if (!workItemDecision.Interesting && !resolveRun)
             {
                 Skip(candidate.Key, workItemDecision.Reason);
                 return;
             }
 
             var prior = await store.GetLastCompletedRunAsync(candidate.Key, token);
-
-            // Same head as the last completed run: the head check alone would skip the PR,
-            // but new human comments since that run make it interesting again.
             var hasNewHumanComments = false;
             if (prior is not null
                 && string.Equals(candidate.Pr.SourceCommitSha, prior.HeadSha, StringComparison.Ordinal))
             {
-                var threads = await source.GetThreadsAsync(candidate.Key, token);
+                threads ??= await source.GetThreadsAsync(candidate.Key, token);
                 var watermark = prior.LastObservedCommentAt ?? prior.CompletedAt;
                 hasNewHumanComments = threads
                     .SelectMany(t => t.Comments)
                     .Any(c => !c.IsBot && c.PublishedAt > watermark);
             }
 
-            var headDecision = DiscoveryFilter.Evaluate(
-                candidate, workItems.Count, prior?.HeadSha, _Rules, hasNewHumanComments);
-            if (!headDecision.Interesting)
+            if (!resolveRun)
             {
-                Skip(candidate.Key, headDecision.Reason);
-                return;
+                var headDecision = DiscoveryFilter.Evaluate(
+                    candidate, workItems.Count, prior?.HeadSha, _Rules, hasNewHumanComments);
+                if (!headDecision.Interesting)
+                {
+                    Skip(candidate.Key, headDecision.Reason);
+                    return;
+                }
             }
 
             // In-flight check first (P1-12): a live run legitimately owns the PR — the
@@ -191,21 +219,38 @@ public sealed class DiscoveryService(
                 return;
             }
 
-            // Failure memory: a head whose recent runs all failed backs off exponentially.
-            var recentRuns = await store.GetRecentRunsAsync(candidate.Key, count: 10, token);
-            var blockedUntil = FailureBackoff.BlockedUntil(
-                recentRuns, candidate.Pr.SourceCommitSha, _Clock.GetUtcNow(),
-                new FailureBackoffPolicy(options.FailureBackoffBase, options.FailureBackoffMax));
-            if (blockedUntil is not null)
+            if (resolveCommand is null)
             {
-                Skip(candidate.Key, $"head failing; backoff until {blockedUntil.Value:u}");
-                return;
+                var recentRuns = await store.GetRecentRunsAsync(candidate.Key, count: 10, token);
+                var blockedUntil = FailureBackoff.BlockedUntil(
+                    recentRuns, candidate.Pr.SourceCommitSha, _Clock.GetUtcNow(),
+                    new FailureBackoffPolicy(options.FailureBackoffBase, options.FailureBackoffMax));
+                if (blockedUntil is not null)
+                {
+                    Skip(candidate.Key, $"head failing; backoff until {blockedUntil.Value:u}");
+                    return;
+                }
+            }
+
+            // Loop guard suppresses discovery-triggered runs only. An author-issued resolve
+            // command is manual and may intentionally address the bot's preceding commit.
+            if (resolveCommand is null && autoFix is not null && _Pool is not null)
+            {
+                var headInfo = await _Pool.GetMirrorCommitInfoAsync(
+                    candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha, token);
+                if (headInfo is not null && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
+                {
+                    ReviewForgeTelemetry.LoopGuardSkips.Add(1, new TagList { { "source", "discovery" } });
+                    Skip(candidate.Key, "bot-authored head");
+                    return;
+                }
             }
 
             Interlocked.Increment(ref interesting);
 
             // Cap + claim + enqueue must be atomic relative to other candidates so the
             // per-sweep cap is exact and a failed enqueue always releases its claim.
+            Guid? resolveAckRunId = null;
             lock (gate)
             {
                 token.ThrowIfCancellationRequested();
@@ -225,7 +270,8 @@ public sealed class DiscoveryService(
 
                 // Track-then-enqueue (P2-25): Queued is recorded before the channel write so a
                 // fast worker can never resurrect a finished run with a stale write.
-                tracker.Set(runId, candidate.Key, RunState.Queued);
+                var kind = resolveRun ? RunKind.Resolve : RunKind.Review;
+                tracker.Set(runId, candidate.Key, RunState.Queued, kind: kind);
                 EnqueueResult result;
                 try
                 {
@@ -234,7 +280,9 @@ public sealed class DiscoveryService(
                         candidate.Key,
                         _Clock.GetUtcNow(),
                         Activity.Current?.Context,
-                        candidate.Pr.SourceCommitSha));
+                        candidate.Pr.SourceCommitSha,
+                        Trigger: resolveCommand is null ? EnqueueTrigger.Discovery : EnqueueTrigger.ResolveCommand,
+                        Kind: kind));
                 }
                 catch (Exception ex)
                 {
@@ -258,6 +306,7 @@ public sealed class DiscoveryService(
 
                 ReviewForgeTelemetry.DiscoveryEnqueued.Add(1);
                 enqueued.Enqueue(candidate.Key);
+                if (resolveCommand is not null) resolveAckRunId = runId;
 
                 // Speculative mirror warmup: prefetch the accepted head's commits so the
                 // run's prepare-repository stage skips the origin fetch. Skipped when the
@@ -267,6 +316,19 @@ public sealed class DiscoveryService(
                     && !_Pool!.HasCheckout(candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha))
                 {
                     warmups.Add(WarmupMirrorAsync(candidate, token));
+                }
+            }
+            if (resolveAckRunId is { } ackRunId && resolveCommand is { } command)
+            {
+                try
+                {
+                    await source.ReplyToThreadAsync(candidate.Key, command.ThreadId,
+                        CommentFormatter.WithBotPreamble($"👀 Resolve run {ackRunId:D} queued."), token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger?.LogWarning(ex, "resolve command acknowledgment failed for {Pr} thread {ThreadId}",
+                        candidate.Key, command.ThreadId);
                 }
             }
         }

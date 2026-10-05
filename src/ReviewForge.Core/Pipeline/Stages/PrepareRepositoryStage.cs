@@ -1,22 +1,34 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
+/// <summary>How stage 3 materializes the workspace. Pooled (default) shares the per-head
+/// checkout with sibling runs; Private gives CommitOnHead runs a run-scoped writable checkout
+/// that is deleted on disposal (see RepoCheckoutPool.AcquirePrivateAsync).</summary>
+public enum CheckoutMode { Pooled, Private }
+
 /// <summary>Stage 3: acquire a per-head checkout and compute the unified change diff.
 /// Also starts the stage-4 threads refresh and the stage-5 enrichment call so both round-trips
 /// overlap the clone/fetch window; the stage-order contract is untouched — stages 4 and 5
-/// consume the in-flight tasks with the same freshness and fail-safe semantics as before.</summary>
+/// consume the in-flight tasks with the same freshness and fail-safe semantics as before.
+/// Loop guard: after checkout the head commit's author/message is read (cheap local lookup);
+/// a discovery-triggered run on a verifiably bot-authored head terminates here — the review
+/// gate (order 20) runs before the checkout exists, so the rule cannot live there.</summary>
 public sealed class PrepareRepositoryStage(
     RepoCheckoutPool pool,
     ILogger<PrepareRepositoryStage> logger,
     DiffBudget? diffBudget = null,
     IPullRequestSource? source = null,
     IContextEnricher? enricher = null,
-    TimeProvider? clock = null) : IReviewStage
+    TimeProvider? clock = null,
+    CheckoutMode checkoutMode = CheckoutMode.Pooled,
+    AutoFixOptions? autoFix = null) : IReviewStage
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
@@ -40,9 +52,29 @@ public sealed class PrepareRepositoryStage(
         }
 
         var pr = ctx.RequirePullRequest();
-        var checkout = await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
+        var checkout = checkoutMode == CheckoutMode.Private
+            ? await pool.AcquirePrivateAsync(ctx.RunId, ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false)
+            : await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
         ctx.RepoLease = checkout;
         ctx.RepoDir = checkout.Path;
+
+        // Loop-guard input: cheap local lookup, filled for every run so the gate rule and
+        // tests observe the same value. Null (commit not found) reads as "proceed".
+        ctx.HeadCommitInfo = await pool.GetCommitInfoAsync(ctx.RepoDir, pr.SourceCommitSha, ct).ConfigureAwait(false);
+        if (ctx.Trigger == EnqueueTrigger.Discovery
+            && ctx.HeadCommitInfo is { } headInfo
+            && autoFix is not null
+            && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
+        {
+            ReviewForgeTelemetry.LoopGuardSkips.Add(
+                1, new TagList { { "source", "gate" } });
+            logger.LogInformation(
+                "loop guard: discovery-triggered run on bot-authored head {Sha} suppressed (run {RunId})",
+                pr.SourceCommitSha, ctx.RunId);
+            ctx.Terminate("bot-authored head");
+            return;
+        }
+
         ctx.DiffText = await pool.GetDiffAsync(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
         ctx.Diff = DiffIndex.Parse(ctx.DiffText);
 

@@ -13,16 +13,45 @@ public sealed class ReviewCollector
     private static readonly JsonSerializerOptions JsonOptions = new() {WriteIndented = false};
 
     private readonly List<RichFinding> _Findings = [];
+    private readonly List<ReviewUncertainty> _Uncertainties = [];
     private readonly object _Gate = new();
     private readonly TextWriter? _Jsonl;
     private readonly HashSet<string> _KnownKeys;
     private readonly HashSet<string> _PriorKnownKeys;
     private readonly HashSet<string> _RedetectedKeys = new(StringComparer.Ordinal);
     private readonly HashSet<string> _RegressedKeys = new(StringComparer.Ordinal);
-    private readonly List<ReviewUncertainty> _Uncertainties = [];
+    private readonly List<ThreadVerdict> _Verdicts = [];
     private readonly Guid? _RunId;
     private readonly string? _HeadSha;
     private readonly TimeProvider _Clock;
+    /// <summary>Verdicts recorded by the read-only resolve triage pass.</summary>
+    public IReadOnlyList<ThreadVerdict> ThreadVerdicts
+    {
+        get
+        {
+            lock (_Gate)
+            {
+                return [.. _Verdicts];
+            }
+        }
+    }
+
+    /// <summary>Appends a validated resolve triage verdict.</summary>
+    public void AddVerdict(ThreadVerdict verdict)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+        lock (_Gate)
+        {
+            _Verdicts.Add(verdict);
+        }
+    }
+
+    /// <summary>Completes a triage pass without creating review findings.</summary>
+    public void CompleteTriage(string summary)
+    {
+        if (string.IsNullOrWhiteSpace(summary)) throw new ArgumentException("A triage summary is required.", nameof(summary));
+        Complete(new ReviewNarrative { ReviewSummary = summary });
+    }
 
     public ReviewCollector(
         IEnumerable<string>? knownDedupeKeys = null,

@@ -36,7 +36,7 @@ tests/
 
 ## The review pipeline
 
-10 numbered stages plus two inserts (7.2 auto-fix, 7.5 begin-run); every stage is a class in
+10 numbered stages plus three inserts (7.2 auto-fix, 7.5 begin-run, 7.7 commit-fixes); every stage is a class in
 `Core/Pipeline/Stages/` and a failed stage fails the run.
 
 | #  | Stage              | What it does                                                                                                                                               |
@@ -48,10 +48,11 @@ tests/
 | 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                      |
 | 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files |
 | 7  | validate-findings  | re-anchors via snippet (AnchorResolver), downgrades unverifiable/out-of-diff anchors to general comments                                                   |
-| 7.2| auto-fix-findings  | suggestion-only fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; with the default null verifier the deterministic path performs **zero** checkout writes |
+| 7.2| auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; published as suggestions (default) or committed by stage 7.7 (`AutoFix:PublishMode=CommitOnHead`) |
 | 7.5| begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService |
+| 7.7| commit-fixes       | CommitOnHead only (no-op otherwise): commits the materialized fixes in the run's private checkout, pushes fast-forward-only to the PR source branch (claim check + head pin + server-side CAS), persists pushed_fixes rows before any reply |
 | 8  | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
-| 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `ReviewForge:CleanRunVote` (default NoResponse) |
+| 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `Review:CleanRunVote` (default NoResponse) |
 | 10 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
 
 ## Run it
@@ -59,7 +60,7 @@ tests/
 ```bash
 export REVIEWFORGE_ADO_PAT=...            # ADO personal access token (never in config files)
 # docker compose additionally requires ADO_ORG_URL and ADO_PROJECT (no internal defaults).
-export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for the /reviews endpoints
+export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for review and resolution endpoints
 # provider openai-codex: ~/.codex/auth.json must exist (OAuth, auto-refresh + atomic persist).
 #   auth.json holds a long-lived refresh token; keep the directory owner-only:
 #     chmod 700 ~/.codex && chmod 600 ~/.codex/auth.json
@@ -75,21 +76,78 @@ dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll submit \
 dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid> --api-key ...
 ```
 
-Endpoints (all `/reviews*` require the `X-Api-Key` header; keys are configured via the
+Endpoints (`/reviews*` and `/resolutions` require the `X-Api-Key` header; keys are configured via the
 `REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation):
 `POST /reviews` → 202 `{runId, statusUrl}`, 400 on validation errors, 401 without a valid
 key, 409 when a review for the same PR is already in flight (the conflicting run id is in
 the body), 429 over the submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`,
 default 10/60s), 503 when the bounded queue is full ·
 `GET /reviews/{runId}` (status: the bounded in-memory tracker first, then queued-row and
-store read-through — with `ReviewForge:QueueMode=Sqlite` queued and finalized runs stay
+store read-through — with `Persistence:QueueMode=Sqlite` queued and finalized runs stay
 visible across host restarts; with the default `Memory` mode in-flight status is lost on
-restart) · `POST /reviews/discover` · `GET /health` (store-backed, unauthenticated) ·
-`GET /alive` (liveness, unauthenticated). Rate limiting runs before API-key auth (auth is
+restart) · `POST /resolutions` (opt-in autonomous comment resolution) · `POST /reviews/discover` ·
+`GET /health` (store-backed, unauthenticated) · `GET /alive` (liveness, unauthenticated). Rate limiting runs before API-key auth (auth is
 an endpoint filter, the limiter is middleware), so rejected requests still consume rate
 budget. The limiter partitions by `X-Api-Key` when keys are configured, by remote IP
 otherwise — deploying behind a reverse proxy requires forwarded-headers support, otherwise
 every key-less client shares the proxy's single partition.
+
+## Autonomous comment resolution
+
+The separate resolve pipeline is disabled by default. Enable it with `Resolve:Enabled=true`
+and configure `Resolve:AllowedAuthors` with immutable ADO creator IDs for discovery and
+`/rf resolve` command runs; startup rejects an enabled pipeline with an empty author allowlist.
+An authenticated manual `POST /resolutions` can explicitly bypass that allowlist and the
+watermark, but still rejects drafts and competes for the same PR claim.
+
+Resolve runs collect human comments and triage them with a read-only agent pass. Only
+anchored, authorized, changed-file requests pass to a bounded edit pass in a private
+checkout. Optional `Resolve:VerifyCommand` runs on the host as argv (never through a shell).
+Commits are pushed only while the PR claim is held and the remote branch still matches the
+reviewed head. The bot replies with per-thread outcomes; human threads remain open unless
+`Resolve:SetFixedStatus=true`.
+
+`VerifyCommand` is configured by the operator but executes against PR-controlled checkout
+content with the service account's host permissions and inherited environment. It is not
+a sandbox: isolate the service identity and do not expose secrets to verification commands.
+
+| Stage | Behavior |
+|---|---|
+| gate | draft, author allowlist, watermark, and requested-head checks |
+| prepare / collect | acquire a private checkout and refresh eligible human comments |
+| triage / plan | read-only evidence review; enforce commenter, anchor, manifest, and run budgets |
+| apply / verify | edit only planned files; optionally run the configured argv command |
+| commit / push | commit by configured granularity; require claim, head pin, and fast-forward CAS |
+| reply / persist | persist outcomes before replies; deduplicate retries; keep human threads open by default |
+
+For a triage-only rollout, set `Resolve:MaxWritableFiles=0`; no fix can enter the writable
+set. Enable writes only after reviewing triage and evidence-downgrade metrics.
+
+```json
+"Resolve": {
+  "Enabled": false,
+  "AllowedAuthors": [],
+  "AllowedCommenters": [],
+  "MaxThreadsPerRun": 10,
+  "MaxWritableFiles": 8,
+  "FixPassMaxIterations": 8,
+  "CommitGranularity": "PerThread",
+  "SetFixedStatus": false,
+  "VerifyCommand": null,
+  "VerifyTimeoutSeconds": 600,
+  "DiscoveryEnabled": false,
+  "TriageBatchSize": 20
+}
+```
+
+`AllowedCommenters` limits who may drive edits; empty means PR creator only. Other human
+comments can still be triaged and answered. `/rf resolve` on an active PR thread queues an
+author-commanded resolve run. Discovery-triggered resolve runs require
+`Resolve:DiscoveryEnabled=true` and comments newer than the last completed resolve watermark —
+with one exception: a thread whose previous resolution was deferred (budget exhausted) is
+re-queued even when no comment is newer than the watermark, and the run's watermark is cleared
+so the deferred retry is actually collected.
+Both resolution and review runs share the per-PR claim, so they cannot write concurrently.
 
 ## Dev loop: Aspire vs Docker Compose
 
@@ -132,23 +190,26 @@ are configured, because the docs describe the `/reviews*` surface:
 
 ## Configuration
 
-`src/ReviewForge.Service/appsettings.json` — typed options with DataAnnotations validation,
-fail-fast at startup. PAT and API keys come from the environment only.
+`src/ReviewForge.Service/config.toml` — typed options with DataAnnotations validation,
+fail-fast at startup. `config.{Environment}.toml` can override environment-specific
+settings and reloads on change. Environment variables and command-line arguments take
+precedence. This is a breaking migration from `ReviewForge:*` / `ReviewForge__*`; update
+deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `Host` sections.
 
-- `ReviewForge:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
+- `Review:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
   `Medium`, `High`, `ExtraHigh`). Omit it (or leave unset) to keep the provider default. The
   Codex endpoint may ignore or restrict effort per model — verify against the deployed model.
-- `ReviewForge:Store:JournalMode` — `Wal` (default) or `Delete`. WAL lets readers proceed
+- `Persistence:JournalMode` — `Wal` (default) or `Delete`. WAL lets readers proceed
   during writes and tolerates a power loss losing only the last transaction — safe for this
-  dedupe/audit store. WAL requires POSIX advisory locks: keep `StoreConnectionString` on a
+  dedupe/audit store. WAL requires POSIX advisory locks: keep `Persistence:StoreConnectionString` on a
   local disk (the shipped container volume is fine); on network filesystems use `Delete`.
-- `ReviewForge:QueueMode` — `Memory` (default, in-memory channel) or `Sqlite` (durable rows on
+- `Persistence:QueueMode` — `Memory` (default, in-memory channel) or `Sqlite` (durable rows on
   the store's database file). Sqlite mode survives host restarts: queued runs are re-claimed
   after the claim TTL, `GET /reviews/{runId}` reads through the queue row (`Queued`) and the
   store row (`Completed`/`Failed`), and expired claims are counted by
   `reviewforge.queue.reclaimed_total`. In-flight PR claims remain in-memory for now — a
   restarted run is re-acquired idempotently at dequeue.
-- `ReviewForge:Sharding` — map-reduce sharding for large diffs. `Enabled` (default `false`)
+- `Review:Sharding` — map-reduce sharding for large diffs. `Enabled` (default `false`)
   turns it on; when the planned shard count is at least two, stage 6 runs one agent per
   shard concurrently and merges findings into the single run collector. `ShardMaxChars`
   (default 30000) is the cumulative diff budget per shard — a file larger than the budget
@@ -166,75 +227,89 @@ fail-fast at startup. PAT and API keys come from the environment only.
   startup validation. Unset (default) aliases the Fast tier to the full model — identical
   behavior, zero config. Token metrics carry a `model` tag, so per-tier cost splits out
   without new series.
-- `ReviewForge:TrivialDiffSkipEnabled` — default true. Iterations whose post-exclusion diff
+- `Review:TrivialDiffSkipEnabled` — default true. Iterations whose post-exclusion diff
   adds zero reviewable lines (lockfile-only churn, deletions-only) with no open threads get
   a clean vote without an LLM call; counted by `reviewforge.reviews.trivial_total`. The
   deterministic homoglyph analyzer still runs. Set false to restore the always-run behavior.
 - `Reasoning:MaxConcurrentRequests` / `Reasoning:GovernorAcquireTimeoutSeconds` — the
   process-wide LLM governor bounds concurrent provider HTTP requests (across both model
   tiers) so `WorkerCount × iterations` cannot burst the provider into 429s. Unset cap
-  defaults to `ReviewForge:WorkerCount × 2`; an acquisition timeout fails the run with a
+  defaults to `Host:WorkerCount × 2`; an acquisition timeout fails the run with a
   visible `LlmGovernorTimeoutException` (counted by `reviewforge.llm.governor.timeout_total`).
   Watch `reviewforge.llm.governor.wait_ms` before tightening the cap.
-- `ReviewForge:WorkerCount` — concurrent queue workers (validated 1–64; unset defaults to
+- `Host:WorkerCount` — concurrent queue workers (validated 1–64; unset defaults to
   `processorCount/2` clamped to 2–8).
-- `ReviewForge:CleanRunVote` — reviewer vote on clean runs (no findings, all AC met, no
+- `Review:CleanRunVote` — reviewer vote on clean runs (no findings, all AC met, no
   unanswered threads): `NoResponse` (default) | `Approved` | `ApprovedWithSuggestions` |
   `None` (leave the vote untouched).
-- `ReviewForge:StaleShellMinutes` — 10 by default. At startup, in-flight run shells
+- `Host:StaleShellMinutes` — 10 by default. At startup, in-flight run shells
   (persisted by begin-run, never finalized — a crash between stages 7.5 and 10) older than
   this are reaped and finalized as failures so a crashed head can be re-reviewed after a
   bounded window.
-- `ReviewForge:Retention:Days` / `MinRunsPerPr` — 30 / 5. Old store runs are pruned at the
+- `Persistence:Retention:Days` / `MinRunsPerPr` — 30 / 5. Old store runs are pruned at the
   discovery-sweep tail (at most hourly); the latest completed run and the last
   `MinRunsPerPr` runs of a PR are always kept.
-- `ReviewForge:GitMaxConcurrency` — dedicated LibGit2Sharp operation scheduler bound
+- `Git:MaxConcurrency` — dedicated LibGit2Sharp operation scheduler bound
   (unset defaults to `processorCount/2` clamped to 2–4).
-- `ReviewForge:TargetedFetchEnabled` — default true; targeted/partial fetches into the
+- `Git:TargetedFetchEnabled` — default true; targeted/partial fetches into the
   shared mirror so prepare-repository skips full origin fetches.
-- `ReviewForge:OtlpEnabled` — opt-in switch enabling OTLP export without an env endpoint;
+- `Host:OtlpEnabled` — opt-in switch enabling OTLP export without an env endpoint;
   the standard `OTEL_EXPORTER_OTLP_*` variables alone also turn export on (per-signal
   variants included). Never hardcode an endpoint in configuration.
 - `RepoReadTools:GrepMaxMs` / `GrepMaxLines` — aggregate wall-clock (default 10 s) and
   line (default 200k) budgets for one agent Grep call; the call aborts with a truncation
   marker when either is hit.
-- Diff budgets: `ReviewForge:MaxDiffChars` (200k) / `MaxDiffCharsPerFile` (40k) and
+- Diff budgets: `Review:MaxDiffChars` (200k) / `MaxDiffCharsPerFile` (40k) and
   `MaxDiffBytes` (4 MiB) / `MaxDiffBytesPerFile` (256 KiB); oversized diffs are truncated
-  with a marker. `ReviewForge:DiffExcludeGlobs` replaces the default exclusion set
+  with a marker. `Review:DiffExcludeGlobs` replaces the default exclusion set
   (lockfiles, generated code) when set.
 
-## Auto-fix (suggestion-only, off by default)
+## Auto-fix (off by default)
 
-Every fix ReviewForge produces is an ADO ` ```suggestion ` block the PR author applies
-with one click. ReviewForge **never** writes to the PR branch, never pushes, and never
-opens pull requests; the PAT keeps comment-only permissions.
+In the default **Suggestion** mode every fix ReviewForge produces is an ADO ` ```suggestion `
+block the PR author applies with one click; the pipeline performs zero checkout writes and
+the PAT keeps comment-only permissions. In **CommitOnHead** mode
+(`AutoFix:PublishMode=CommitOnHead`) accepted fixes are committed in a run-scoped private
+checkout and pushed fast-forward-only to the PR source branch (stage 7.7: claim re-check
+immediately before push, remote-tip pin, server-side compare-and-swap — never a force-push).
+CommitOnHead additionally requires the PAT to have **Contribute** on the target repos, and a
+branch-policy rejection fails the run visibly (a configuration fact, not a transient error).
+ReviewForge never rebases, never force-pushes, and never opens pull requests.
 
 Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__…`):
 
 - **Deterministic** — a validated finding whose rule has a registered, enabled fixer
   (v1: `homoglyph/mixed-script-identifier`, `homoglyph/confusable-keyword`,
   `bash.unquoted-vars`, `bash.set-e-missing`, `py.mutable-default-arg`,
-  `docker.add-vs-copy`) gets a pure-C# proposal. This path performs **zero checkout
-  writes**.
+  `docker.add-vs-copy`) gets a pure-C# proposal. Suggestion mode performs **zero checkout
+  writes**; CommitOnHead materializes accepted fixes in a run-scoped private checkout.
 - **Commanded** — the PR author replies `/rf fix` on any thread (human, bot, or a
   ReviewForge finding). Only commands from the PR author, newer than the last completed
   run's comment watermark, on active file-anchored threads trigger a constrained agent
   fix pass: hash-anchored line edits, a one-file writable set, no shell, no findings
-  tools. Its writes are applied, captured, and reverted before the stage ends.
+  tools. Suggestion-mode writes are reverted before the stage ends; CommitOnHead retains
+  accepted edits only in its private checkout.
 
 ```json
 "AutoFix": {
   "Enabled": false,                 // master switch; false = byte-identical pipeline
   "AllowedAuthors": [],             // immutable creator ids only (display names never match); empty = disabled
   "AllowedRuleIds": [],             // intersected with the fixer registry
-  "PublishMode": "Suggestion",      // the only supported mode (write modes are reserved)
+  "PublishMode": "Suggestion",      // "Suggestion" (default) | "CommitOnHead"; StackedBranch remains reserved
+  "CommitGranularity": "PerFix",    // CommitOnHead: "PerFix" = one commit per file (same-file fixes coalesce) | "Single" = one commit per run
+  "CommitAuthorName": null,         // required when enabled in CommitOnHead mode
+  "CommitAuthorEmail": null,        // required when enabled; also the loop-guard author reference
   "MaxFixesPerRun": 3,              // shared budget, deterministic fixes first
   "EnableThreadFixCommands": false, // the '/rf fix' thread command
   "FixPassMaxIterations": 8         // iteration cap for one commanded fix pass
 }
 ```
-
-Fixes are published as suggestions; human acceptance is the verification step.
+In Suggestion mode fixes are published as suggestions; human acceptance is the verification
+step. In CommitOnHead mode the push is the run's point of no return: pushed-fix rows are
+persisted before any reply, and a later run's publish stage reconciles missing
+"Fixed in {sha}" replies after a crash. The bot's own commits never re-trigger automation:
+discovery suppresses heads whose exact `ReviewForge-Run:` trailer and author email both match
+(manual `POST /reviews` still reviews them).
 
 Safety properties pinned by tests: fixed findings stay in the accepted set (their keys
 stay current, so triage never auto-resolves their threads); commanded suggestion threads
@@ -268,7 +343,7 @@ the verifier entirely.
 
 Reviews use embedded general, performance, security, and language rule packs. Packs
 activate from changed-file extensions, path patterns, or repository root marker files.
-Set `ReviewForge:RuleSetsPath` to a directory of JSON packs to replace or extend embedded
+Set `Review:RuleSetsPath` to a directory of JSON packs to replace or extend embedded
 packs. Repeated override files for the same pack are processed in filename order, with
 later rules replacing earlier rules by ID; extension packs must use unique rule IDs.
 Findings must use an active rule id. Use `general.other` for a verified issue that has no
@@ -309,14 +384,16 @@ sweep enqueue is only a candidate; the gate decides whether a run actually proce
 
 ## Runtime concurrency and checkout storage
 
-`ReviewForge:WorkerCount` controls the number of concurrent queue workers (default
+`Host:WorkerCount` controls the number of concurrent queue workers (default
 `processorCount/2` clamped to 2–8). The ingest queue has a fixed capacity of 100; a full
 queue rejects submissions immediately with HTTP 503 (and discovery records a `queue full`
 skip). Queue depth is exported as `reviewforge.queue.depth`, and rejected enqueues as
 `reviewforge.queue.rejected_total`. Each review holds its per-head checkout lease until the
-run finishes. `ReviewForge:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
-`MaxCheckoutsPerRepo`, and `SweepInterval`. Eviction removes old or over-cap head checkouts
-but never mirrors, and skips checkouts currently held by a review.
+run finishes. `Workspace:Checkout` controls idle checkout eviction: `Enabled`, `MaxAge`,
+`MaxCheckoutsPerRepo`, `SweepInterval`, and `PrivateMaxAgeMinutes` (default 60). Pooled
+head checkouts are evicted by age/capacity but never mirrors; private run checkouts are
+reaped at startup if left by a crash and periodically after the configured age. Both paths
+skip checkouts currently held by a review.
 
 ## Observability model
 
@@ -366,7 +443,7 @@ production code, so it carries no coverlet threshold.
 - **New PR host** (GitHub, GitLab): implement `IPullRequestSource` — pipeline untouched.
 - **New reasoning provider**: implement `IChatClientFactory` (see `ChatClientFactory`).
 - **Enrichment (CRG/MCP)**: implement `IContextEnricher`, register in DI — fail-safe contract.
-- **Prompt tuning**: `ReviewForge:PromptOverridePath` points at a markdown file; the embedded
+- **Prompt tuning**: `Review:PromptOverridePath` points at a markdown file; the embedded
   default lives in `src/ReviewForge.Core/Reasoning/Prompts/native-review-system.md`.
 - **Finding identity**: `DedupeKey` = ruleId + file + normalized snippet (no line numbers —
   shift-proof across force-pushes). Bot threads carry the key in ADO thread Properties.

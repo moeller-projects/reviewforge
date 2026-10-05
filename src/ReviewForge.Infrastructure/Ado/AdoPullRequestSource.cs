@@ -86,7 +86,8 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             gpr.Repository?.RemoteUrl ?? string.Empty,
             gpr.IsDraft ?? false,
             gpr.CreatedBy?.Id.ToString() ?? string.Empty,
-            gpr.CreatedBy?.DisplayName ?? string.Empty);
+            gpr.CreatedBy?.DisplayName ?? string.Empty,
+            gpr.SourceRefName);
     }
 
     public async Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
@@ -131,7 +132,8 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                         gpr.Repository?.RemoteUrl ?? string.Empty,
                         gpr.IsDraft ?? false,
                         gpr.CreatedBy?.Id.ToString() ?? string.Empty,
-                        gpr.CreatedBy?.DisplayName ?? string.Empty);
+                        gpr.CreatedBy?.DisplayName ?? string.Empty,
+                        gpr.SourceRefName);
 
                     list.Add(new PullRequestCandidate(
                         key,

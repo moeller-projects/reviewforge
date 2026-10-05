@@ -1,10 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using LibGit2Sharp;
+using LibGit2Sharp.Handlers;
 using ReviewForge.Core.Analysis;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
-
 namespace ReviewForge.Infrastructure.Git;
 
 /// <summary>
@@ -31,16 +32,111 @@ public sealed class LibGit2SharpGitOps : IGitOps
             Math.Clamp(Environment.ProcessorCount / 2, 2, 4));
     }
 
-    public async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct)
+    public async Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct, string? mirrorPath = null)
     {
         // The mirror is shared across checkouts: hold the keyed lock for clone+fetch.
         // The wait is cancellable (real ct); the native work runs off the pool.
-        var mirror = MirrorPath(workDir);
+        var mirror = mirrorPath ?? MirrorPath(workDir);
         using var gate = await _MirrorLocks.AcquireAsync(mirror, ct).ConfigureAwait(false)
                          ?? throw new InvalidOperationException("mirror lock acquisition returned no lease");
         return await _Scheduler.RunAsync(() => CloneOrOpenCore(cloneUrl, workDir, pat, mirror), ct)
             .ConfigureAwait(false);
     }
+
+    public Task<string> CommitAsync(
+        string repoPath, string message, string authorName, string authorEmail,
+        IReadOnlyList<string>? paths, CancellationToken ct)
+        => _Scheduler.RunAsync(() =>
+        {
+            using var repo = new Repository(repoPath);
+            if (paths is not null)
+            {
+                Commands.Stage(repo, paths);
+            }
+            else
+            {
+                Commands.Stage(repo, "*");
+            }
+
+            if (!repo.RetrieveStatus(new StatusOptions {IncludeIgnored = false}).IsDirty
+                || !repo.Diff.Compare<TreeChanges>(repo.Head.Tip?.Tree, DiffTargets.Index).Any())
+            {
+                throw new InvalidOperationException("nothing to commit");
+            }
+
+            var signature = new Signature(authorName, authorEmail, DateTimeOffset.Now);
+            return repo.Commit(message, signature, signature).Sha;
+        }, ct);
+
+    public Task PushAsync(
+        string repoPath, string cloneUrl, string remoteBranch, string expectedRemoteTipSha, string? pat, CancellationToken ct)
+        => _Scheduler.RunAsync(() =>
+        {
+            using var repo = new Repository(repoPath);
+            var remote = AuthoritativeRemote(repo, cloneUrl);
+            var localRef = $"refs/heads/{remoteBranch}";
+
+            // Compare-and-swap: re-read the authoritative tip IMMEDIATELY before the ref
+            // update, inside the same scheduled action. A plain non-force refspec only
+            // requires the remote tip to be an ANCESTOR of the pushed commit — after a
+            // force-reset to an ancestor of the pinned head the update would still
+            // fast-forward and silently overwrite the reset. libgit2 has no
+            // force-with-lease, so tip-equality re-validation at the update plus the
+            // server-side non-fast-forward rejection is the strongest available CAS. The
+            // refspec carries no force flag anywhere.
+            var tip = repo.Network.ListReferences(remote, Credentials(pat))
+                .FirstOrDefault(reference => string.Equals(reference.CanonicalName, localRef, StringComparison.Ordinal))
+                ?.TargetIdentifier;
+            if (!string.Equals(tip, expectedRemoteTipSha, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PrHeadChangedException(expectedRemoteTipSha, tip ?? "(branch missing on remote)");
+            }
+
+            // The checkout HEAD is detached; the push refspec needs a local ref for the new tip.
+            repo.Refs.Add(localRef, repo.Head.Tip?.Id ?? throw new InvalidOperationException("no HEAD commit to push"), allowOverwrite: true);
+            try
+            {
+                repo.Network.Push(remote, $"{localRef}:{localRef}", new PushOptions
+                {
+                    CredentialsProvider = Credentials(pat),
+                });
+            }
+            finally
+            {
+                RemoveRef(repo, localRef);
+            }
+
+            return true;
+        }, ct);
+
+    public Task<string?> GetRemoteTipAsync(
+        string repoPath, string cloneUrl, string remoteBranch, string? pat, CancellationToken ct)
+        => _Scheduler.RunAsync(() =>
+        {
+            using var repo = new Repository(repoPath);
+            var remote = AuthoritativeRemote(repo, cloneUrl);
+            var canonical = $"refs/heads/{remoteBranch}";
+            return repo.Network.ListReferences(remote, Credentials(pat))
+                .FirstOrDefault(reference => string.Equals(reference.CanonicalName, canonical, StringComparison.Ordinal))
+                ?.TargetIdentifier;
+        }, ct);
+
+    public Task<TipCommitInfo?> GetCommitInfoAsync(string repoPath, string commitSha, CancellationToken ct)
+        => _Scheduler.RunAsync(() =>
+        {
+            using var repo = new Repository(repoPath);
+            var commit = repo.Lookup<Commit>(commitSha);
+            return commit is null ? null : new TipCommitInfo(commit.Author.Email, commit.Message);
+        }, ct);
+
+    /// <summary>The remote that talks to the authoritative clone URL. A checkout cloned from
+    /// the local mirror has "origin" pointing at that mirror — pushes and remote-tip reads
+    /// must never use it.</summary>
+    private static Remote AuthoritativeRemote(Repository repo, string cloneUrl)
+        => repo.Network.Remotes[AuthoritativeRemoteName]
+           ?? repo.Network.Remotes.Add(AuthoritativeRemoteName, cloneUrl);
+
+    private const string AuthoritativeRemoteName = "reviewforge-origin";
 
     public Task CheckoutAsync(string repoPath, string commitSha, CancellationToken ct)
         => _Scheduler.RunAsync(() =>
@@ -140,11 +236,12 @@ public sealed class LibGit2SharpGitOps : IGitOps
 
         // The checkout's "origin" remote points at the local mirror; fetch the SHAs from
         // the authoritative clone URL so forks and PR refs resolve regardless of namespace.
-        const string remoteName = "reviewforge-origin";
-        if (repo.Network.Remotes[remoteName] is null)
+        if (repo.Network.Remotes[AuthoritativeRemoteName] is null)
         {
-            repo.Network.Remotes.Add(remoteName, cloneUrl);
+            repo.Network.Remotes.Add(AuthoritativeRemoteName, cloneUrl);
         }
+
+        const string remoteName = AuthoritativeRemoteName;
 
         try
         {
@@ -262,6 +359,10 @@ public sealed class LibGit2SharpGitOps : IGitOps
             repo.Refs.Remove(name);
         }
     }
+
+    private CredentialsHandler Credentials(string? pat)
+        => FetchOptions(pat).CredentialsProvider
+           ?? ((_, _, _) => throw new InvalidOperationException("ADO PAT is not configured"));
 
     private FetchOptions FetchOptions(string? pat) => new()
     {

@@ -43,12 +43,19 @@ public sealed class SqliteFindingStore : IFindingStore
                 cmd.ExecuteNonQuery();
             }
 
-            // EnsureCreated never alters existing tables. The immediate transaction above
-            // serializes the check-and-alter sequence across concurrently starting instances.
+            // EnsureCreated never alters existing tables. Guard every additive schema change
+            // so databases created by earlier versions remain readable.
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'Pipeline'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE Runs ADD COLUMN Pipeline TEXT NOT NULL DEFAULT 'Review'";
+                cmd.ExecuteNonQuery();
+            }
+
             cmd.CommandText =
                 "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'LastObservedCommentAt'";
-            var hasWatermarkColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
-            if (!hasWatermarkColumn)
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
             {
                 cmd.CommandText = "ALTER TABLE Runs ADD COLUMN LastObservedCommentAt TEXT NULL";
                 cmd.ExecuteNonQuery();
@@ -56,10 +63,63 @@ public sealed class SqliteFindingStore : IFindingStore
 
             cmd.CommandText =
                 "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'AppliedFixJson'";
-            var hasAppliedFixColumn = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
-            if (!hasAppliedFixColumn)
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
             {
                 cmd.CommandText = "ALTER TABLE Findings ADD COLUMN AppliedFixJson TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
+            cmd.CommandText =
+                "CREATE TABLE IF NOT EXISTS \"ResolveActions\" (" +
+                "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_ResolveActions\" PRIMARY KEY AUTOINCREMENT, " +
+                "\"RunId\" TEXT NOT NULL, \"Org\" TEXT NOT NULL, \"Project\" TEXT NOT NULL, " +
+                "\"RepositoryId\" TEXT NOT NULL, \"PrId\" INTEGER NOT NULL, \"ThreadId\" INTEGER NOT NULL, " +
+                "\"Verdict\" TEXT NOT NULL, \"Outcome\" TEXT NOT NULL, \"CommitSha\" TEXT NULL, " +
+                "\"ReplyPosted\" INTEGER NOT NULL, \"CreatedAt\" TEXT NOT NULL, \"ReplyText\" TEXT NULL); " +
+                "CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ResolveActions_Pr_Thread\" ON " +
+                "\"ResolveActions\" (\"Org\", \"Project\", \"RepositoryId\", \"PrId\", \"ThreadId\");";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('ResolveActions') WHERE name = 'ReplyText'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE ResolveActions ADD COLUMN ReplyText TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
+            // Databases created before CommitOnHead have no PushedFixes table at all —
+            // GenerateCreateScript only runs for brand-new databases.
+            cmd.CommandText =
+                "CREATE TABLE IF NOT EXISTS \"PushedFixes\" (" +
+                "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_PushedFixes\" PRIMARY KEY AUTOINCREMENT, " +
+                "\"RunId\" TEXT NOT NULL, \"Org\" TEXT NOT NULL, \"Project\" TEXT NOT NULL, " +
+                "\"RepositoryId\" TEXT NOT NULL, \"PrId\" INTEGER NOT NULL, " +
+                "\"DedupeKey\" TEXT NOT NULL, \"CommitSha\" TEXT NOT NULL, \"CommitSubject\" TEXT NOT NULL, " +
+                "\"ThreadId\" INTEGER NULL, \"Pushed\" INTEGER NOT NULL DEFAULT 1, " +
+                "\"AiDrafted\" INTEGER NOT NULL DEFAULT 0, \"ReplyPosted\" INTEGER NOT NULL, " +
+                "\"CreatedAt\" TEXT NOT NULL); " +
+                "CREATE INDEX IF NOT EXISTS \"IX_PushedFixes_Org_Project_RepositoryId_PrId\" ON " +
+                "\"PushedFixes\" (\"Org\", \"Project\", \"RepositoryId\", \"PrId\");";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('PushedFixes') WHERE name = 'Pushed'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                // Pre-two-phase rows were written only after a successful push — Pushed=1
+                // preserves their reconciliation eligibility.
+                cmd.CommandText = "ALTER TABLE PushedFixes ADD COLUMN Pushed INTEGER NOT NULL DEFAULT 1";
+                cmd.ExecuteNonQuery();
+            }
+
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('PushedFixes') WHERE name = 'AiDrafted'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE PushedFixes ADD COLUMN AiDrafted INTEGER NOT NULL DEFAULT 0";
+                cmd.ExecuteNonQuery();
+                // Commanded (thread-keyed) fixes of earlier builds were always AI-drafted.
+                cmd.CommandText = "UPDATE PushedFixes SET AiDrafted = 1 WHERE DedupeKey LIKE 'thread-%'";
                 cmd.ExecuteNonQuery();
             }
 
@@ -80,7 +140,7 @@ public sealed class SqliteFindingStore : IFindingStore
         var id = await QuerySingleRunId(db,
             "SELECT Id FROM Runs " +
             "WHERE Org = $org AND Project = $project AND RepositoryId = $repo AND PrId = $prId " +
-            "AND CompletedAt IS NOT NULL AND Success = 1 " +
+            "AND Pipeline = 'Review' AND CompletedAt IS NOT NULL AND Success = 1 " +
             "ORDER BY rowid DESC LIMIT 1",
             pr, ct).ConfigureAwait(false);
         if (id is null)
@@ -101,6 +161,74 @@ public sealed class SqliteFindingStore : IFindingStore
             [.. run.Findings.Select(f => new StoredFinding(
                 f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
             run.LastObservedCommentAt);
+    }
+
+    public async Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        foreach (var fix in fixes)
+        {
+            db.PushedFixes.Add(new PushedFixEntity
+            {
+                RunId = runId,
+                Org = pr.Org,
+                Project = pr.Project,
+                RepositoryId = pr.RepositoryId,
+                PrId = pr.PrId,
+                DedupeKey = fix.DedupeKey,
+                CommitSha = fix.CommitSha,
+                CommitSubject = fix.CommitSubject,
+                ThreadId = fix.ThreadId,
+                Pushed = false,
+                AiDrafted = fix.AiDrafted,
+                ReplyPosted = false,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task ConfirmPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.PushedFixes
+            .Where(p => p.Org == pr.Org && p.Project == pr.Project && p.RepositoryId == pr.RepositoryId
+                        && p.PrId == pr.PrId && p.RunId == runId && !p.Pushed)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.Pushed, true), ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task AbandonPushedFixesAsync(PrKey pr, Guid runId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.PushedFixes
+            .Where(p => p.Org == pr.Org && p.Project == pr.Project && p.RepositoryId == pr.RepositoryId
+                        && p.PrId == pr.PrId && p.RunId == runId && !p.Pushed)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<PushedFix>> GetUnrepliedPushedFixesAsync(PrKey pr, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var rows = await db.PushedFixes
+            .Where(p => p.Org == pr.Org && p.Project == pr.Project && p.RepositoryId == pr.RepositoryId
+                        && p.PrId == pr.PrId && p.Pushed && !p.ReplyPosted)
+            .OrderBy(p => p.Id)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        return [.. rows.Select(p => new PushedFix(
+            p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.Pushed, p.AiDrafted, p.ReplyPosted, p.CreatedAt))];
+    }
+
+    public async Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.PushedFixes
+            .Where(p => p.Id == pushedFixId)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.ReplyPosted, true), ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>The run row by id regardless of outcome, or null when unknown.</summary>
@@ -125,7 +253,8 @@ public sealed class SqliteFindingStore : IFindingStore
             run.Success,
             [.. run.Findings.Select(f => new StoredFinding(
                 f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
-            run.LastObservedCommentAt);
+            run.LastObservedCommentAt,
+            run.Pipeline);
     }
 
     /// <summary>Runs one of the bounded rowid-ordered id queries against <paramref name="sql"/>.</summary>
@@ -167,6 +296,83 @@ public sealed class SqliteFindingStore : IFindingStore
         {
             await db.Database.CloseConnectionAsync().ConfigureAwait(false);
         }
+    }
+
+    public async Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        // SQLite cannot order DateTimeOffset values; filter in SQL and order the per-PR candidates in memory.
+        var candidates = await db.Runs
+            .AsNoTracking()
+            .Where(r => r.Org == pr.Org && r.Project == pr.Project && r.RepositoryId == pr.RepositoryId
+                        && r.PrId == pr.PrId && r.Pipeline == "Resolve"
+                        && r.CompletedAt != null && r.Success)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var run = candidates.OrderByDescending(r => r.StartedAt).FirstOrDefault();
+        return run is null
+            ? null
+            : new ReviewRun(run.Id, pr, run.HeadSha, Enum.Parse<ReviewKind>(run.Kind),
+                run.StartedAt, run.CompletedAt, run.Success, [], run.LastObservedCommentAt, run.Pipeline);
+    }
+
+    public async Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(
+        PrKey pr, IReadOnlyCollection<int> threadIds, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var query = db.ResolveActions.Where(a => a.Org == pr.Org && a.Project == pr.Project
+            && a.RepositoryId == pr.RepositoryId && a.PrId == pr.PrId);
+        if (threadIds.Count > 0)
+        {
+            query = query.Where(a => threadIds.Contains(a.ThreadId));
+        }
+
+        var rows = await query.OrderBy(a => a.Id).ToListAsync(ct).ConfigureAwait(false);
+        return [.. rows.Select(a => new ResolveAction(a.Id, a.RunId, a.ThreadId,
+            Enum.Parse<TriageVerdict>(a.Verdict), Enum.Parse<ResolutionOutcome>(a.Outcome),
+            a.CommitSha, a.ReplyPosted, a.CreatedAt, a.ReplyText))];
+    }
+
+    public async Task SaveResolveActionsAsync(
+        PrKey pr, Guid runId, IReadOnlyList<ResolveAction> actions, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        foreach (var action in actions)
+        {
+            var existing = await db.ResolveActions.FirstOrDefaultAsync(a =>
+                a.Org == pr.Org && a.Project == pr.Project && a.RepositoryId == pr.RepositoryId
+                && a.PrId == pr.PrId && a.ThreadId == action.ThreadId, ct).ConfigureAwait(false);
+            if (existing is null)
+            {
+                db.ResolveActions.Add(new ResolveActionEntity
+                {
+                    RunId = runId, Org = pr.Org, Project = pr.Project, RepositoryId = pr.RepositoryId,
+                    PrId = pr.PrId, ThreadId = action.ThreadId, Verdict = action.Verdict.ToString(),
+                    Outcome = action.Outcome.ToString(), CommitSha = action.CommitSha, ReplyPosted = false,
+                    CreatedAt = action.CreatedAt == default ? DateTimeOffset.UtcNow : action.CreatedAt,
+                    ReplyText = action.ReplyText
+                });
+            }
+            else
+            {
+                existing.RunId = runId;
+                existing.Verdict = action.Verdict.ToString();
+                existing.Outcome = action.Outcome.ToString();
+                existing.CommitSha = action.CommitSha;
+                existing.ReplyPosted = false;
+                existing.CreatedAt = action.CreatedAt == default ? DateTimeOffset.UtcNow : action.CreatedAt;
+                existing.ReplyText = action.ReplyText;
+            }
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task MarkResolveActionRepliedAsync(int id, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.ResolveActions.Where(a => a.Id == id)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.ReplyPosted, true), ct)
+            .ConfigureAwait(false);
     }
 
     public async Task PingAsync(CancellationToken ct)
@@ -231,6 +437,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 PrId = run.Pr.PrId,
                 HeadSha = run.HeadSha,
                 Kind = run.Kind.ToString(),
+                Pipeline = run.Pipeline,
                 StartedAt = run.StartedAt,
                 CompletedAt = run.CompletedAt,
                 LastObservedCommentAt = run.LastObservedCommentAt,
@@ -244,6 +451,7 @@ public sealed class SqliteFindingStore : IFindingStore
             // Existing rows keep their ThreadId backfills (SetThreadIdAsync) — never overwritten.
             existing.HeadSha = run.HeadSha;
             existing.Kind = run.Kind.ToString();
+            existing.Pipeline = run.Pipeline;
             existing.CompletedAt = run.CompletedAt;
             existing.LastObservedCommentAt = run.LastObservedCommentAt;
             existing.Success = run.Success;
@@ -309,7 +517,7 @@ public sealed class SqliteFindingStore : IFindingStore
                     r.StartedAt, r.CompletedAt, r.Success,
                     [.. r.Findings.Select(f => new StoredFinding(
                         f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
-                    r.LastObservedCommentAt))
+                    r.LastObservedCommentAt, r.Pipeline))
         ];
     }
 
@@ -330,7 +538,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 .Select(r => new ReviewRun(
                     r.Id, new PrKey(r.Org, r.Project, r.RepositoryId, r.PrId), r.HeadSha,
                     Enum.Parse<ReviewKind>(r.Kind), r.StartedAt, r.CompletedAt, r.Success,
-                    [], r.LastObservedCommentAt))
+                    [], r.LastObservedCommentAt, r.Pipeline))
         ];
     }
 
@@ -367,6 +575,23 @@ public sealed class SqliteFindingStore : IFindingStore
                 AddPruneParameters(deleteFindings, olderThan, minRunsPerPr);
                 await deleteFindings.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
+
+            await using (var deletePushedFixes = connection.CreateCommand())
+            {
+                deletePushedFixes.Transaction = tx;
+                deletePushedFixes.CommandText = PrunableRunsCte + "DELETE FROM PushedFixes WHERE RunId IN (SELECT Id FROM Prunable)";
+                AddPruneParameters(deletePushedFixes, olderThan, minRunsPerPr);
+                await deletePushedFixes.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            await using (var deleteResolveActions = connection.CreateCommand())
+            {
+                deleteResolveActions.Transaction = tx;
+                deleteResolveActions.CommandText =
+                    PrunableRunsCte + "DELETE FROM ResolveActions WHERE RunId IN (SELECT Id FROM Prunable)";
+                AddPruneParameters(deleteResolveActions, olderThan, minRunsPerPr);
+                await deleteResolveActions.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
 
             var pruned = 0;
             await using (var deleteRuns = connection.CreateCommand())

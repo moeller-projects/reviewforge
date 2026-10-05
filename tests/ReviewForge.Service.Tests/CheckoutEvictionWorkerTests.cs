@@ -40,6 +40,8 @@ public class CheckoutEvictionWorkerTests
 
         public long GetFileLength(string path) => _Inner.GetFileLength(path);
 
+
+        public DateTime GetCreationTimeUtc(string path) => _Inner.GetCreationTimeUtc(path);
         public DateTime GetLastWriteTimeUtc(string path) => _Inner.GetLastWriteTimeUtc(path);
 
         public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
@@ -71,6 +73,8 @@ public class CheckoutEvictionWorkerTests
 
         public string[] EnumerateFileSystemEntries(string path) => _Inner.EnumerateFileSystemEntries(path);
 
+
+        public DateTime GetCreationTimeUtc(string path) => _Inner.GetCreationTimeUtc(path);
         public string[] EnumerateFilesRecursive(string path) => _Inner.EnumerateFilesRecursive(path);
 
         public long GetFileLength(string path) => _Inner.GetFileLength(path);
@@ -106,7 +110,7 @@ public class CheckoutEvictionWorkerTests
         try
         {
             var pool = new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root);
-            var options = Options.Create(new ReviewForgeServiceOptions
+            var options = Options.Create(new WorkspaceOptions
             {
                 WorkDir = root,
                 Checkout = new CheckoutEvictionOptions
@@ -138,6 +142,52 @@ public class CheckoutEvictionWorkerTests
             }
         }
     }
+    [Fact]
+    public async Task Worker_sweeps_stale_private_checkouts()
+    {
+        var root = TempRoot("reviewforge-private-eviction-worker-");
+        var orphan = Path.Combine(root, "private", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(orphan);
+        File.WriteAllText(Path.Combine(orphan, "file"), "private checkout");
+        Directory.SetCreationTimeUtc(orphan, DateTime.UtcNow.AddHours(-2));
+        try
+        {
+            var worker = new CheckoutEvictionWorker(
+                new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root),
+                Options.Create(new WorkspaceOptions
+                {
+                    WorkDir = root,
+                    Checkout = new CheckoutEvictionOptions
+                    {
+                        Enabled = true,
+                        PrivateMaxAgeMinutes = 60,
+                        SweepInterval = TimeSpan.FromMilliseconds(10),
+                    },
+                }),
+                TimeProvider.System,
+                NullLogger<CheckoutEvictionWorker>.Instance);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+            await worker.StartAsync(cts.Token);
+            while (Directory.Exists(orphan))
+            {
+                await Task.Delay(10, cts.Token);
+            }
+
+            await cts.CancelAsync();
+            await worker.StopAsync(CancellationToken.None);
+
+            Assert.False(Directory.Exists(orphan));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
 
     [Fact]
     public async Task Disabled_worker_exits_without_sweeping()
@@ -149,7 +199,7 @@ public class CheckoutEvictionWorkerTests
         {
             var worker = new CheckoutEvictionWorker(
                 new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root),
-                Options.Create(new ReviewForgeServiceOptions
+                Options.Create(new WorkspaceOptions
                 {
                     WorkDir = root,
                     // A short interval makes a "loop started despite Enabled=false" regression
@@ -185,7 +235,7 @@ public class CheckoutEvictionWorkerTests
     {
         var root = TempRoot("reviewforge-eviction-budget-");
         var pool = new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root);
-        var options = Options.Create(new ReviewForgeServiceOptions
+        var options = Options.Create(new WorkspaceOptions
         {
             WorkDir = root,
             Checkout = new CheckoutEvictionOptions
@@ -234,7 +284,7 @@ public class CheckoutEvictionWorkerTests
         File.WriteAllText(Path.Combine(checkout, "payload"), "data");
         var fs = new FailingDeleteFs(checkout);
         var pool = new RepoCheckoutPool(new FakeGitOps(), fs, root);
-        var options = Options.Create(new ReviewForgeServiceOptions
+        var options = Options.Create(new WorkspaceOptions
         {
             WorkDir = root,
             Checkout = new CheckoutEvictionOptions
@@ -269,7 +319,7 @@ public class CheckoutEvictionWorkerTests
     {
         var root = TempRoot("reviewforge-eviction-throw-");
         var pool = new RepoCheckoutPool(new FakeGitOps(), new EnumerateThrowingFs(), root);
-        var options = Options.Create(new ReviewForgeServiceOptions
+        var options = Options.Create(new WorkspaceOptions
         {
             WorkDir = root,
             Checkout = new CheckoutEvictionOptions

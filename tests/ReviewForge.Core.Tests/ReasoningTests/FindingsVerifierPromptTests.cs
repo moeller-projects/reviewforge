@@ -74,6 +74,15 @@ public sealed class FindingsVerifierPromptTests
     }
 
     [Fact]
+    public void Build_includes_omitted_marker_when_it_fits_the_remaining_budget()
+    {
+        var prompt = FindingsVerifierPrompt.Build([Finding("key-1")], _ => null, 141);
+
+        Assert.Contains("remaining findings omitted by prompt budget", prompt);
+        Assert.True(prompt.Length <= 141);
+    }
+
+    [Fact]
     public void Messages_contain_system_and_user_roles()
     {
         var messages = FindingsVerifierPrompt.Messages("verify these");

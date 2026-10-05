@@ -1,0 +1,93 @@
+Urls = "http://localhost:5080"
+
+[Ado]
+OrgUrl = "https://dev.azure.com/your-org"
+Project = "Your.Project"
+
+[Reasoning]
+Provider = "openai-codex"
+Model = "openai-codex:gpt-5.6-luna"
+GovernorAcquireTimeoutSeconds = 300
+
+[Workspace]
+WorkDir = "./work"
+
+[Workspace.Checkout]
+Enabled = true
+MaxAge = "3.00:00:00"
+MaxCheckoutsPerRepo = 10
+SweepInterval = "01:00:00"
+
+[Persistence]
+StoreConnectionString = "Data Source=./work/reviewforge.db"
+QueueMode = "Memory"
+JournalMode = "Wal"
+
+[Review]
+MaxContextTokens = 150000
+MaxIterations = 30
+AgentDebugLogging = false
+TrivialDiffSkipEnabled = true
+
+[Review.Sharding]
+Enabled = false
+ShardMaxChars = 30000
+MaxShards = 8
+ShardConcurrency = 2
+
+[Git]
+TargetedFetchEnabled = true
+
+[Host]
+WorkerCount = 4
+
+[ApiDocs]
+Enabled = false
+
+[Resolve]
+Enabled = false
+AllowedAuthors = []
+AllowedCommenters = []
+MaxThreadsPerRun = 10
+MaxWritableFiles = 8
+FixPassMaxIterations = 8
+CommitGranularity = "PerThread"
+SetFixedStatus = false
+VerifyTimeoutSeconds = 600
+DiscoveryEnabled = false
+TriageBatchSize = 20
+
+[AutoFix]
+Enabled = false
+AllowedAuthors = []
+AllowedRuleIds = []
+PublishMode = "Suggestion"
+MaxFixesPerRun = 3
+EnableThreadFixCommands = false
+FixPassMaxIterations = 8
+
+[VerifyFindings]
+Enabled = false
+MaxFindings = 20
+ContextLines = 15
+TimeoutSeconds = 60
+MaxPromptChars = 24000
+
+[Enrichment]
+SymbolUsageEnabled = false
+
+[Discovery]
+TargetBranches = ["main", "develop"]
+Creators = []
+AllowAllCreators = false
+MaxEnqueuesPerSweep = 20
+MaxDegreeOfParallelism = 4
+WarmupEnabled = false
+WarmupMaxPerSweep = 5
+WarmupConcurrency = 2
+
+[Logging.LogLevel]
+Default = "Information"
+"ReviewForge.Core.Reasoning" = "Information"
+"Microsoft.AspNetCore" = "Warning"
+"Microsoft.Extensions.Http" = "Warning"

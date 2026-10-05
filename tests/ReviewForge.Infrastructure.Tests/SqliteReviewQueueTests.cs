@@ -50,6 +50,97 @@ public sealed class SqliteReviewQueueTests : IDisposable
     }
 
     [Fact]
+    public async Task Trigger_round_trips_in_durable_queue()
+    {
+        var queue = NewQueue(_DbPath);
+        var request = Request(1) with { Trigger = EnqueueTrigger.Discovery };
+        Assert.True(queue.TryEnqueue(request).Accepted);
+
+        var dequeued = await ClaimOneAsync(queue);
+
+        Assert.Equal(EnqueueTrigger.Discovery, dequeued.Trigger);
+    }
+    [Fact]
+    public async Task Resolve_kind_round_trips_and_legacy_rows_default_to_review()
+    {
+        var queue = NewQueue(_DbPath);
+        var resolve = Request(9) with { Kind = RunKind.Resolve };
+        Assert.True(queue.TryEnqueue(resolve).Accepted);
+
+        var loaded = await ClaimOneAsync(queue);
+
+        Assert.Equal(RunKind.Resolve, loaded.Kind);
+
+        var legacyPath = Path.Combine(Path.GetTempPath(), "rf-queue-legacy-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            using (var connection = new SqliteConnection($"Data Source={legacyPath};Pooling=False"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TABLE QueuedRuns (
+                        RunId TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                        RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, EnqueuedAt TEXT NOT NULL,
+                        HeadSha TEXT NULL, TraceParent TEXT NULL, TraceState TEXT NULL,
+                        ClaimedBy TEXT NULL, ClaimedAt TEXT NULL);
+                    INSERT INTO QueuedRuns
+                        (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt)
+                    VALUES ($runId, 'o', 'p', 'r', 10, $enqueuedAt);
+                    """;
+                command.Parameters.AddWithValue("$runId", Guid.NewGuid().ToString());
+                command.Parameters.AddWithValue("$enqueuedAt", DateTimeOffset.UtcNow.ToString("O"));
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var legacy = await ClaimOneAsync(NewQueue(legacyPath));
+            Assert.Equal(RunKind.Review, legacy.Kind);
+        }
+        finally
+        {
+            foreach (var suffix in new[] {"", "-wal", "-shm"})
+            {
+                if (File.Exists(legacyPath + suffix)) File.Delete(legacyPath + suffix);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Constructor_adds_trigger_to_legacy_queue_and_null_reads_as_manual()
+    {
+        var request = Request(8);
+        using (var connection = new SqliteConnection($"Data Source={_DbPath};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE QueuedRuns (
+                    RunId TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                    RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, EnqueuedAt TEXT NOT NULL,
+                    HeadSha TEXT NULL, TraceParent TEXT NULL, TraceState TEXT NULL,
+                    ClaimedBy TEXT NULL, ClaimedAt TEXT NULL);
+                INSERT INTO QueuedRuns
+                    (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha)
+                VALUES ($runId, 'o', 'p', 'r', 8, $enqueuedAt, NULL);
+                """;
+            command.Parameters.AddWithValue("$runId", request.RunId.ToString());
+            command.Parameters.AddWithValue("$enqueuedAt", request.EnqueuedAt.UtcDateTime.ToString("O"));
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var queue = NewQueue(_DbPath);
+        var dequeued = await ClaimOneAsync(queue);
+
+        Assert.Equal(request.RunId, dequeued.RunId);
+        Assert.Equal(EnqueueTrigger.Manual, dequeued.Trigger);
+        using var verify = new SqliteConnection($"Data Source={_DbPath};Pooling=False");
+        await verify.OpenAsync();
+        await using var check = verify.CreateCommand();
+        check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('QueuedRuns') WHERE name = 'Trigger'";
+        Assert.Equal(1L, Convert.ToInt64(await check.ExecuteScalarAsync()));
+    }
+
+    [Fact]
     public void Enqueue_rejects_past_capacity_with_unclaimed_depth()
     {
         var queue = NewQueue(_DbPath, capacity: 2);

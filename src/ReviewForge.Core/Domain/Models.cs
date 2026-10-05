@@ -19,7 +19,8 @@ public sealed record PullRequest(
     string CloneUrl,
     bool IsDraft,
     string CreatorId,
-    string CreatorName);
+    string CreatorName,
+    string? SourceRefName = null);  // "refs/heads/feature/x" — null when the provider doesn't expose it
 
 [ExcludeFromCodeCoverage]
 public sealed record WorkItem(

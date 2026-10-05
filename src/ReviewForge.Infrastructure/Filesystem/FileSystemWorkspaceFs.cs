@@ -21,6 +21,8 @@ public sealed class FileSystemWorkspaceFs : IWorkspaceFs
 
     public DateTime GetLastWriteTimeUtc(string path) => Directory.GetLastWriteTimeUtc(path);
 
+    public DateTime GetCreationTimeUtc(string path) => Directory.GetCreationTimeUtc(path);
+
     public void SetLastWriteTimeUtc(string path, DateTime timestamp) => Directory.SetLastWriteTimeUtc(path, timestamp);
 
     public void DeleteDirectory(string path, bool recursive) => Directory.Delete(path, recursive);

@@ -129,6 +129,53 @@ public class ApiKeyAuthTests
     }
 
     [Fact]
+    public async Task Resolutions_endpoint_requires_api_key()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = factory.Server.CreateClient();
+
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            await PostReview(client, null, 1, "/resolutions"));
+    }
+
+    [Fact]
+    public async Task Resolutions_endpoint_returns_service_unavailable_when_disabled()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = factory.CreateClient();
+
+        var response = await PostReview(client, "test-key-1", 1, "/resolutions");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response);
+    }
+
+    [Fact]
+    public async Task Resolutions_endpoint_accepts_authenticated_request_when_enabled()
+    {
+        Environment.SetEnvironmentVariable("Resolve__Enabled", "true");
+        Environment.SetEnvironmentVariable("Resolve__AllowedAuthors__0", "creator-1");
+        Environment.SetEnvironmentVariable("AutoFix__CommitAuthorName", "reviewforge[bot]");
+        Environment.SetEnvironmentVariable("AutoFix__CommitAuthorEmail", "reviewforge@example.com");
+        try
+        {
+            using var factory = new ReviewForgeFactory().WithoutWorkers();
+            using var client = factory.CreateClient();
+
+            var response = await PostReview(client, "test-key-1", 1, "/resolutions");
+
+            Assert.Equal(HttpStatusCode.Accepted, response);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("Resolve__Enabled", null);
+            Environment.SetEnvironmentVariable("Resolve__AllowedAuthors__0", null);
+            Environment.SetEnvironmentVariable("AutoFix__CommitAuthorName", null);
+            Environment.SetEnvironmentVariable("AutoFix__CommitAuthorEmail", null);
+        }
+    }
+
+
+    [Fact]
     public async Task Second_configured_key_also_authenticates()
     {
         using var factory = new ReviewForgeFactory();

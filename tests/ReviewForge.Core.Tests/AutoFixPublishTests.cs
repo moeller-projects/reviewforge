@@ -1,3 +1,4 @@
+using ReviewForge.Core.Ports;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
@@ -218,6 +219,109 @@ public class AutoFixPublishTests
                 .ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Empty(source.Replies);
+    }
+
+    [Fact]
+    public async Task CommitOnHead_reconciliation_posts_prior_run_reply_and_marks_row()
+    {
+        var source = new FakePullRequestSource();
+        source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+        var ctx = Ctx(source);
+        var store = new FakeFindingStore();
+        store.PushedFixes.Add(new PushedFix(
+            1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", 7,
+            Pushed: true, AiDrafted: true, ReplyPosted: false, DateTimeOffset.UtcNow));
+
+        await new PublishFindingsStage(
+                source, store, NullLogger<PublishFindingsStage>.Instance,
+                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var reply = Assert.Single(source.Replies);
+        Assert.Equal(7, reply.ThreadId);
+        Assert.Contains("Fixed in abcdef1 — fix(src): quote variable (AI-generated — verify before accepting)", reply.Text);
+        Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
+    }
+
+    [Fact]
+    public async Task CommitOnHead_reconciliation_recognizes_reply_posted_before_crash()
+    {
+        var source = new FakePullRequestSource();
+        var body = CommentFormatter.FormatCommittedFixReply("abcdef123456", "fix(src): quote variable", aiDrafted: true);
+        source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
+            [
+                new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow),
+                new ThreadComment("b", "bot", true, body, DateTimeOffset.UtcNow),
+            ]));
+        var ctx = Ctx(source);
+        var store = new FakeFindingStore();
+        store.PushedFixes.Add(new PushedFix(
+            1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", 7,
+            Pushed: true, AiDrafted: true, ReplyPosted: false, DateTimeOffset.UtcNow));
+
+        await new PublishFindingsStage(
+                source, store, NullLogger<PublishFindingsStage>.Instance,
+                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies);
+        Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
+    }
+
+    [Fact]
+    public async Task CommitOnHead_reconciliation_recognizes_finding_body_announcement()
+    {
+        // Crash window: the run posted the FULL committed-finding body (which embeds the
+        // "Fixed in {sha7}" line) but died before marking the row. Reconciliation must
+        // recognize that announcement instead of posting a second "Fixed in …" comment.
+        var source = new FakePullRequestSource();
+        var announcement =
+            $"### 🔧 title\n**{CommentFormatter.CommittedFixLine("abcdef123456", "fix(src): quote variable")}** — rationale";
+        source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
+            [
+                new ThreadComment("b", "bot", true, announcement, DateTimeOffset.UtcNow),
+                new ThreadComment("h", "human", false, "thanks", DateTimeOffset.UtcNow.AddMinutes(1)),
+            ]));
+        var ctx = Ctx(source);
+        var store = new FakeFindingStore();
+        store.PushedFixes.Add(new PushedFix(
+            1, Guid.NewGuid(), "k1", "abcdef123456", "fix(src): quote variable", null,
+            Pushed: true, AiDrafted: false, ReplyPosted: false, DateTimeOffset.UtcNow));
+
+        await new PublishFindingsStage(
+                source, store, NullLogger<PublishFindingsStage>.Instance,
+                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Empty(source.Replies);
+        Assert.DoesNotContain(source.GeneralComments, text => text.Contains("Fixed in abcdef1", StringComparison.Ordinal));
+        Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
+    }
+
+    [Fact]
+    public async Task Committed_general_finding_marks_row_replied_after_post()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        var finding = Fixable();
+        finding.Anchor = null;
+        finding.AnchorDowngraded = true;
+        finding.AppliedFix!.CommitSha = "abcdef123456";
+        finding.AppliedFix.CommitSubject = "fix(src): quote variable";
+        ctx.AcceptedFindings = [finding];
+        var store = new FakeFindingStore();
+        store.PushedFixes.Add(new PushedFix(
+            1, ctx.RunId, "k1", "abcdef123456", "fix(src): quote variable", null,
+            Pushed: true, AiDrafted: false, ReplyPosted: false, DateTimeOffset.UtcNow));
+
+        await new PublishFindingsStage(
+                source, store, NullLogger<PublishFindingsStage>.Instance,
+                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Contains(source.GeneralComments, text => text.Contains("Fixed in abcdef1", StringComparison.Ordinal));
+        Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
     }
 
     [Fact]

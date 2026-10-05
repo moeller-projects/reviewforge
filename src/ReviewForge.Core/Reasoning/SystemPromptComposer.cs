@@ -18,6 +18,7 @@ public static class SystemPromptComposer
 {
     private const string ResourceName = "ReviewForge.Core.Reasoning.Prompts.native-review-system.md";
     private const string FixPassResourceName = "ReviewForge.Core.Reasoning.Prompts.fix-pass-system.md";
+    private const string TriageResourceName = "ReviewForge.Core.Reasoning.Prompts.resolve-triage-system.md";
 
     // Keyed by composition kind + source + rulebook version hash + override mtime. The
     // kind prefix separates review and fix-pass compositions of the same file.
@@ -30,6 +31,10 @@ public static class SystemPromptComposer
 
     public static string Compose(string? overridePath = null, RuleBook? ruleBook = null)
         => Memoized("review", overridePath, ruleBook?.VersionHash, () => ComposeCore(overridePath, ruleBook));
+
+    /// <summary>Composes the embedded read-only resolve-comment triage prompt.</summary>
+    public static string ComposeTriage()
+        => Memoized("triage", overridePath: null, versionHash: null, () => ReadEmbedded(TriageResourceName));
 
     public static string ComposeFixPass(string? overridePath = null)
         => Memoized("fixpass", overridePath, versionHash: null, () => ComposeFixPassCore(overridePath));
