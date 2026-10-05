@@ -1,7 +1,6 @@
-using Microsoft.Extensions.Logging;
-
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -30,24 +29,26 @@ public sealed class ReplyCommentsStage(
             var body = action.ReplyText ?? CommentFormatter.WithBotPreamble(FormatOutcome(ctx, action, applied));
             if (action.ReplyText is null)
             {
-                action = action with { ReplyText = body };
+                action = action with {ReplyText = body};
                 await store.SaveResolveActionsAsync(ctx.Pr, action.RunId, [action], ct).ConfigureAwait(false);
             }
+
             if (threads.TryGetValue(action.ThreadId, out var thread)
-                && thread.Comments.LastOrDefault() is { IsBot: true } last
+                && thread.Comments.LastOrDefault() is {IsBot: true} last
                 && string.Equals(last.Text, body, StringComparison.Ordinal))
             {
                 if (MayMarkFixed(threads, action))
                     await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
-                ReviewForgeTelemetry.ResolveRepliesDeduped.Add(1, new TagList { { "outcome", action.Outcome.ToString().ToLowerInvariant() } });
+                ReviewForgeTelemetry.ResolveRepliesDeduped.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
                 await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
                 continue;
             }
+
             await source.ReplyToThreadAsync(ctx.Pr, action.ThreadId, body, ct).ConfigureAwait(false);
             if (MayMarkFixed(threads, action))
                 await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
             await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
-            ReviewForgeTelemetry.ResolveRepliesPosted.Add(1, new TagList { { "outcome", action.Outcome.ToString().ToLowerInvariant() } });
+            ReviewForgeTelemetry.ResolveRepliesPosted.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
             replies++;
         }
 
@@ -57,7 +58,7 @@ public sealed class ReplyCommentsStage(
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before resolve summary");
             var summary = new StringBuilder(CommentFormatter.BotPreamble).AppendLine().AppendLine()
-                .AppendLine("## ReviewForge · resolve summary");
+                .AppendLine("## Review · resolve summary");
             foreach (var group in current.Where(a => a.CommitSha is not null)
                          .GroupBy(a => a.CommitSha!, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
             {
@@ -66,11 +67,13 @@ public sealed class ReplyCommentsStage(
                 if (!string.IsNullOrWhiteSpace(subject)) summary.Append(" — ").Append(subject);
                 summary.AppendLine();
             }
+
             var deferred = current.Where(a => a.Outcome == ResolutionOutcome.Deferred).Select(a => $"#{a.ThreadId}").ToArray();
             if (deferred.Length > 0) summary.Append("- Deferred: ").AppendLine(string.Join(", ", deferred));
             summary.Append("- Verification: ").AppendLine(ctx.ResolveVerificationStatus);
             await source.PostGeneralCommentAsync(ctx.Pr, summary.ToString().TrimEnd(), summaryKey, ct).ConfigureAwait(false);
         }
+
         logger?.LogInformation("resolve replies posted: {Count}", replies);
     }
 
