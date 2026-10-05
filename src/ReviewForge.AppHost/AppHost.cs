@@ -15,7 +15,7 @@ var reviewforgeWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge");
 Directory.CreateDirectory(reviewforgeWorkDir);
 
 builder.AddProject<ReviewForge_Service>("reviewforge")
-    .WithHttpEndpoint(name: "http")
+    .WithHttpEndpoint(name: "http", targetPort: 5080)
     // The dashboard health tile reflects readiness; liveness remains available to orchestrators.
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints()
