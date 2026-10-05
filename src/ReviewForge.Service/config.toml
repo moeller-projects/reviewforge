@@ -95,6 +95,8 @@ CommitGranularity = "PerFix"
 MaxFixesPerRun = 3
 EnableThreadFixCommands = false
 FixPassMaxIterations = 8
+CommitAuthorName = "Review[bot]"
+CommitAuthorEmail = "review-bot@email.de"
 
 [VerifyFindings]
 Enabled = false
