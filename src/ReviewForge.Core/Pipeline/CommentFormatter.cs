@@ -120,7 +120,7 @@ public static class CommentFormatter
         sb.Append('\n');
         Line(sb, "### 🔧 Requested fix");
         sb.Append('\n');
-        Line(sb, $"**Requested via `/rf fix` on thread #{fix.SourceThreadId}** — {fix.Rationale}");
+        Line(sb, $"**Requested via `/fixit` on thread #{fix.SourceThreadId}** — {fix.Rationale}");
         sb.Append('\n');
         Line(sb, $"> {OneLine(threadExcerpt)}");
         sb.Append('\n');

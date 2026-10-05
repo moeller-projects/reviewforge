@@ -347,7 +347,7 @@ public sealed class AutoFixStageTests : IDisposable
     {
         var abs = WriteFile("script.sh", fileContent);
         var t0 = DateTimeOffset.UtcNow.AddMinutes(-5);
-        var commandText = instruction is null ? "/rf fix" : $"/rf fix {instruction}";
+        var commandText = instruction is null ? "/fixit" : $"/fixit {instruction}";
         var ctx = Ctx();
         ctx.Threads =
         [
@@ -507,7 +507,7 @@ public sealed class AutoFixStageTests : IDisposable
         Assert.Single(ctx.AppliedFixes); // deterministic fix consumed the budget
         var reply = Assert.Single(ctx.FixCommandReplies);
         Assert.Contains("budget for this run is exhausted", reply.Text);
-        Assert.Contains("Reply /rf fix again", reply.Text);
+        Assert.Contains("Reply /fixit again", reply.Text);
     }
 
     [Fact]
@@ -519,7 +519,7 @@ public sealed class AutoFixStageTests : IDisposable
         ctx.Threads =
         [
             new ReviewThread(42, null, ReviewThreadStatus.Active,
-                [new ThreadComment("someone-else", "Reviewer", false, "/rf fix", t0)],
+                [new ThreadComment("someone-else", "Reviewer", false, "/fixit", t0)],
                 new ThreadAnchor("script.sh", 1, 1)),
         ];
 
@@ -541,7 +541,7 @@ public sealed class AutoFixStageTests : IDisposable
         ctx.Threads =
         [
             new ReviewThread(42, null, ReviewThreadStatus.Active,
-                [new ThreadComment("creator-1", "PR Author", false, "/rf fix", t0)],
+                [new ThreadComment("creator-1", "PR Author", false, "/fixit", t0)],
                 new ThreadAnchor(anchorPath, 1, 1)),
         ];
         var chat = new ScriptedChatClient();

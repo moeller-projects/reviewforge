@@ -5,13 +5,13 @@ namespace ReviewForge.Core.AutoFix;
 /// <summary>An author-issued fix command on a PR thread.</summary>
 public sealed record FixCommand(
     int ThreadId,
-    ThreadAnchor Anchor,          // the thread's file/line; required
-    string? Instruction,          // free text after "/rf fix", may be null
-    string QuotedComment);        // the comment being answered (bounded)
+    ThreadAnchor Anchor, // the thread's file/line; required
+    string? Instruction, // free text after "/fixit", may be null
+    string QuotedComment); // the comment being answered (bounded)
 
 /// <summary>
-/// Detects "/rf fix" commands from the PR author. Eligible commands: ACTIVE threads whose
-/// LAST comment is by the PR author id, starts (case-insensitive, trimmed) with "/rf fix"
+/// Detects "/fixit" commands from the PR author. Eligible commands: ACTIVE threads whose
+/// LAST comment is by the PR author id, starts (case-insensitive, trimmed) with "/fixit"
 /// followed by end-of-string or whitespace, was published after the watermark, and whose
 /// thread has a file anchor. Fixed/Closed threads and threads whose last comment is ours are
 /// excluded (the latter makes replies self-idempotent). Commands from non-authors are
@@ -19,7 +19,7 @@ public sealed record FixCommand(
 /// </summary>
 public static class FixCommandDetector
 {
-    public const string Prefix = "/rf fix";
+    public const string Prefix = "/fixit";
 
     /// <summary>Bound for the command instruction carried into the fix prompt.</summary>
     public const int MaxInstructionChars = 300;

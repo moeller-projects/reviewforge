@@ -13,8 +13,8 @@ public sealed class ResolveCommandTests
     {
         var threads = new[]
         {
-            Thread(7, "  /RF RESOLVE  ", PublishedAt),
-            Thread(8, "/rf resolve Please fix the null check", PublishedAt),
+            Thread(7, "  /RESOLVE  ", PublishedAt),
+            Thread(8, "/resolve Please fix the null check", PublishedAt),
         };
 
         var commands = ResolveCommandDetector.Scan(threads, CreatorId, watermark: null);
@@ -29,14 +29,14 @@ public sealed class ResolveCommandTests
     {
         var threads = new[]
         {
-            new ReviewThread(1, null, ReviewThreadStatus.Fixed, [Comment(CreatorId, false, "/rf resolve fix")]),
-            new ReviewThread(2, null, ReviewThreadStatus.Closed, [Comment(CreatorId, false, "/rf resolve fix")]),
+            new ReviewThread(1, null, ReviewThreadStatus.Fixed, [Comment(CreatorId, false, "/resolve fix")]),
+            new ReviewThread(2, null, ReviewThreadStatus.Closed, [Comment(CreatorId, false, "/resolve fix")]),
             new ReviewThread(3, null, ReviewThreadStatus.Active, []),
-            new ReviewThread(4, null, ReviewThreadStatus.Active, [Comment(CreatorId, true, "/rf resolve fix")]),
-            new ReviewThread(5, null, ReviewThreadStatus.Active, [Comment("other-user", false, "/rf resolve fix")]),
-            Thread(6, "/rf resolve fix", PublishedAt.AddMinutes(-1)),
+            new ReviewThread(4, null, ReviewThreadStatus.Active, [Comment(CreatorId, true, "/resolve fix")]),
+            new ReviewThread(5, null, ReviewThreadStatus.Active, [Comment("other-user", false, "/resolve fix")]),
+            Thread(6, "/resolve fix", PublishedAt.AddMinutes(-1)),
             Thread(7, "/rf resolvex is not a command", PublishedAt),
-            Thread(8, "please /rf resolve fix", PublishedAt),
+            Thread(8, "please /resolve fix", PublishedAt),
         };
 
         var commands = ResolveCommandDetector.Scan(threads, CreatorId, PublishedAt.AddMinutes(-1));

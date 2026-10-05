@@ -22,6 +22,7 @@ public sealed record AgentOptions
     public string? PromptOverridePath { get; init; }
     public string? RuleSetsPath { get; init; }
     public IEnumerable<string>? DenyPatterns { get; init; }
+
     /// <summary>Directory names Grep never descends into; null = defaults (bin, obj, node_modules, .git, .vs, packages).</summary>
     public IEnumerable<string>? GrepExcludeDirs { get; init; }
 
@@ -30,6 +31,7 @@ public sealed record AgentOptions
 
     /// <summary>Aggregate line budget for one Grep tool call (P2-28).</summary>
     public int GrepMaxLines { get; init; } = RepoReadTools.DefaultGrepMaxLines;
+
     public ReasoningEffort? Effort { get; init; }
     public bool DebugLogging { get; init; }
 }
@@ -177,7 +179,7 @@ public sealed class NativeReviewAgent(
         var agent = CreateAgentWithDiff(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, diffText, resolvedKeys, tier);
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
-        var modelTag = new TagList { { "model", chatClientFactory.ModelName(tier) }, { "tier", tier.ToString().ToLowerInvariant() } };
+        var modelTag = new TagList {{"model", chatClientFactory.ModelName(tier)}, {"tier", tier.ToString().ToLowerInvariant()}};
         ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
         if (!collector.Done)
         {
@@ -239,8 +241,8 @@ public sealed class NativeReviewAgent(
             usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         var modelTag = new TagList
         {
-            { "model", chatClientFactory.ModelName(ChatTier.Full) },
-            { "tier", "full" },
+            {"model", chatClientFactory.ModelName(ChatTier.Full)},
+            {"tier", "full"},
         };
         ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
         if (!collector.Done)
@@ -255,7 +257,7 @@ public sealed class NativeReviewAgent(
 
 
     /// <summary>
-    /// Runs a constrained fix pass for one author-commanded "/rf fix": the agent gets ONLY
+    /// Runs a constrained fix pass for one author-commanded "/fixit": the agent gets ONLY
     /// the hash-line editor tools (ReadFileWithHashes, EditFile) plus TaskDone — no
     /// findings tools, no Grep — inside the same sandbox with a one-file writable set.
     /// The returned <see cref="FixPassResult"/> exposes the editor so the caller can read
@@ -307,8 +309,8 @@ public sealed class NativeReviewAgent(
         {
             ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, new TagList
             {
-                { "model", chatClientFactory.ModelName(ChatTier.Fast) },
-                { "tier", "fast" },
+                {"model", chatClientFactory.ModelName(ChatTier.Fast)},
+                {"tier", "fast"},
             });
         }
 
@@ -351,17 +353,17 @@ public sealed class NativeReviewAgent(
             var response = await base.GetResponseAsync(messages, options, cancellationToken);
             usage.Add(response.Usage);
             var model = options?.ModelId ?? "default";
-            ReviewForgeTelemetry.LlmRequests.Add(1, new TagList { { "model", model } });
+            ReviewForgeTelemetry.LlmRequests.Add(1, new TagList {{"model", model}});
             var inputTokens = response.Usage?.InputTokenCount ?? 0;
             var outputTokens = response.Usage?.OutputTokenCount ?? 0;
             if (inputTokens > 0)
             {
-                ReviewForgeTelemetry.LlmTokens.Add(inputTokens, new TagList { { "token_type", "input" }, { "model", model } });
+                ReviewForgeTelemetry.LlmTokens.Add(inputTokens, new TagList {{"token_type", "input"}, {"model", model}});
             }
 
             if (outputTokens > 0)
             {
-                ReviewForgeTelemetry.LlmTokens.Add(outputTokens, new TagList { { "token_type", "output" }, { "model", model } });
+                ReviewForgeTelemetry.LlmTokens.Add(outputTokens, new TagList {{"token_type", "output"}, {"model", model}});
             }
 
             // Prompt-cache measurement: emitted only when the provider reports cached
@@ -369,7 +371,7 @@ public sealed class NativeReviewAgent(
             var cachedTokens = response.Usage?.CachedInputTokenCount ?? 0;
             if (cachedTokens > 0)
             {
-                ReviewForgeTelemetry.LlmCachedTokens.Add(cachedTokens, new TagList { { "model", model } });
+                ReviewForgeTelemetry.LlmCachedTokens.Add(cachedTokens, new TagList {{"model", model}});
             }
 
             logger?.LogDebug(
@@ -406,7 +408,7 @@ public sealed class NativeReviewAgent(
                     {
                         ReviewForgeTelemetry.LlmCachedTokens.Add(
                             cachedTokens,
-                            new TagList { { "model", options?.ModelId ?? "default" } });
+                            new TagList {{"model", options?.ModelId ?? "default"}});
                     }
                 }
 

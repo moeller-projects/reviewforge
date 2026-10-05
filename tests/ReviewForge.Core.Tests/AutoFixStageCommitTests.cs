@@ -60,7 +60,7 @@ public sealed class AutoFixStageCommitTests : IDisposable
         ctx.Threads =
         [
             new ReviewThread(threadId, null, ReviewThreadStatus.Active,
-                [new ThreadComment("creator-1", "PR Author", false, "/rf fix", DateTimeOffset.UtcNow.AddMinutes(-5))],
+                [new ThreadComment("creator-1", "PR Author", false, "/fixit", DateTimeOffset.UtcNow.AddMinutes(-5))],
                 new ThreadAnchor("script.sh", 1, 1)),
         ];
         return ctx;
@@ -92,7 +92,10 @@ public sealed class AutoFixStageCommitTests : IDisposable
 
     /// <summary>Editor that fails ApplyRange a scripted number of times before delegating.</summary>
     private sealed class FlakyApplyEditor(
-        RepoPathGuard guard, IReadOnlySet<string> writable, int failures, string error = "hash mismatch — re-read and retry")
+        RepoPathGuard guard,
+        IReadOnlySet<string> writable,
+        int failures,
+        string error = "hash mismatch — re-read and retry")
         : HashLineEditor(guard, writable)
     {
         public int Calls { get; private set; }

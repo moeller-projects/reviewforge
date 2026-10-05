@@ -4,7 +4,7 @@ public sealed record ResolveCommand(int ThreadId, string RequestText, DateTimeOf
 
 public static class ResolveCommandDetector
 {
-    public const string Prefix = "/rf resolve";
+    public const string Prefix = "/resolve";
 
     public static IReadOnlyList<ResolveCommand> Scan(
         IReadOnlyList<ReviewThread> threads,
@@ -18,7 +18,7 @@ public static class ResolveCommandDetector
                 continue;
             var last = thread.Comments[^1];
             if (last.IsBot || !string.Equals(last.AuthorId, creatorId, StringComparison.OrdinalIgnoreCase)
-                || (watermark is { } at && last.PublishedAt <= at))
+                           || (watermark is { } at && last.PublishedAt <= at))
                 continue;
             var text = last.Text.TrimStart();
             if (!text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)
@@ -27,6 +27,7 @@ public static class ResolveCommandDetector
             commands.Add(new ResolveCommand(thread.Id,
                 text.Length <= Prefix.Length ? string.Empty : text[Prefix.Length..].Trim(), last.PublishedAt));
         }
+
         return commands;
     }
 }

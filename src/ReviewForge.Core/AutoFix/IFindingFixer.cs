@@ -21,12 +21,12 @@ public interface IFindingFixer
 /// <summary>Input for one fix attempt: the finding, its file's content lines, and the diff.</summary>
 public sealed record FixContext(
     RichFinding Finding,
-    string FilePath,          // repo-relative, normalized
-    string[] FileLines,       // 0-based; Finding.Anchor is 1-based into this array
+    string FilePath, // repo-relative, normalized
+    string[] FileLines, // 0-based; Finding.Anchor is 1-based into this array
     DiffIndex Diff);
 
 /// <summary>Deterministic = rule-registered fixer. LlmCommanded = agent-drafted after an
-/// explicit /rf fix command by the PR author. (LlmAutonomous is reserved — see the
+/// explicit /fixit command by the PR author. (LlmAutonomous is reserved — see the
 /// AutoFix implementation plan appendix.)</summary>
 public enum FixOrigin
 {
@@ -93,7 +93,7 @@ public sealed record FixProposal
 /// <summary>A fix that passed all gates this run and will be published — as a suggestion
 /// (Suggestion mode, or degraded) or as a pushed commit (CommitOnHead mode).</summary>
 public sealed record AppliedFix(
-    string DedupeKey,         // finding key, or "thread-{ThreadId}" for commanded fixes
+    string DedupeKey, // finding key, or "thread-{ThreadId}" for commanded fixes
     FixProposal Proposal)
 {
     /// <summary>Prefix of audit-only keys for commanded fixes; never a finding identity.</summary>

@@ -31,8 +31,9 @@ public sealed class AutoFixOptions
     /// <summary>Commit identity. Required when Enabled && PublishMode=CommitOnHead; the email is
     /// also the loop-guard author reference (a discovery-triggered run on a head whose exact
     /// run trailer + this author email match is suppressed).</summary>
-    public string? CommitAuthorName { get; init; }      // e.g. "reviewforge[bot]"
-    public string? CommitAuthorEmail { get; init; }     // e.g. "reviewforge@contoso.com"
+    public string? CommitAuthorName { get; init; } // e.g. "reviewforge[bot]"
+
+    public string? CommitAuthorEmail { get; init; } // e.g. "reviewforge@contoso.com"
 
     /// <summary>True when CommitOnHead publication is active for this run's pipeline.</summary>
     public bool IsCommitOnHead
@@ -44,11 +45,13 @@ public sealed class AutoFixOptions
     public const string GranularitySingle = "Single";
 
     /// <summary>Hard cap of applied fixes per run, shared by both fix sources.</summary>
-    [Range(1, 50)] public int MaxFixesPerRun { get; init; } = 3;
+    [Range(1, 50)]
+    public int MaxFixesPerRun { get; init; } = 3;
 
-    /// <summary>Author-commanded thread fixes: the PR author replies "/rf fix" on a thread.</summary>
+    /// <summary>Author-commanded thread fixes: the PR author replies "/fixit" on a thread.</summary>
     public bool EnableThreadFixCommands { get; init; } = false;
 
     /// <summary>Iteration cap for a single fix pass (the review pass uses Review:MaxIterations).</summary>
-    [Range(2, 30)] public int FixPassMaxIterations { get; init; } = 8;
+    [Range(2, 30)]
+    public int FixPassMaxIterations { get; init; } = 8;
 }

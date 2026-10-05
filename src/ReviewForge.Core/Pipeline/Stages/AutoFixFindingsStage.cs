@@ -11,7 +11,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// <summary>
 /// Stage 7.2 (between validate and begin-run): produces fixes.
 /// Pass 1 is deterministic — validated findings with a registered, eligible fixer get a
-/// pure proposal. Pass 2 is commanded — the PR author replied "/rf fix" on a thread, and a
+/// pure proposal. Pass 2 is commanded — the PR author replied "/fixit" on a thread, and a
 /// constrained agent pass (one-file writable set, hash-anchored edits, no findings tools)
 /// drafts the fix. The shared MaxFixesPerRun budget is consumed deterministic-first.
 /// Publication depends on AutoFix:PublishMode: "Suggestion" posts ADO suggestion blocks (the
@@ -72,7 +72,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         if (_Options.AllowedAuthors.Length == 0)
         {
             _Logger.LogInformation("auto-fix: disabled — AutoFix:AllowedAuthors is empty");
-            ReplyToRejectedCommands(ctx, "auto-fix is disabled on this service — the /rf fix command was not run.");
+            ReplyToRejectedCommands(ctx, "auto-fix is disabled on this service — the /fixit command was not run.");
             return;
         }
 
@@ -83,7 +83,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             _Logger.LogInformation(
                 "auto-fix: PR creator {CreatorId}/{CreatorName} is not in the author allowlist",
                 pr.CreatorId, pr.CreatorName);
-            ReplyToRejectedCommands(ctx, "auto-fix is not enabled for this pull request author — the /rf fix command was not run.");
+            ReplyToRejectedCommands(ctx, "auto-fix is not enabled for this pull request author — the /fixit command was not run.");
             return;
         }
 
@@ -119,7 +119,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         ctx.AppliedFixes = applied;
     }
 
-    /// <summary>Gate failure must not silently drop author commands: every scanned /rf fix
+    /// <summary>Gate failure must not silently drop author commands: every scanned /fixit
     /// command gets a plain rejection reply on its thread (a failed gate is published as a
     /// comment, never dropped). No audit rows are written — the gate did no work — so the
     /// comment watermark alone keeps this exactly-once.</summary>
@@ -218,6 +218,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             list.Add((finding, proposal, lines));
             setBudget(getBudget() - 1);
         }
+
         if (guardSkipped > 0)
         {
             ReviewForgeTelemetry.DeterministicGuardSkipped.Add(guardSkipped);
@@ -320,7 +321,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     // No silent fallback in CommitOnHead: the author asked for a committed
                     // fix; a fix that cannot be materialized fails the run visibly.
                     ReviewForgeTelemetry.AutoFixApplyFailed.Add(
-                        1, new TagList { { "rule", finding.RuleId } });
+                        1, new TagList {{"rule", finding.RuleId}});
                     throw new InvalidOperationException(
                         $"auto-fix commit: could not materialize the fix for rule {finding.RuleId} on {path} — {result.Error ?? "apply failed"}");
                 }
@@ -337,7 +338,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             "auto-fix commit: {Rule} on {Path} degraded to suggestion — {Reason}",
             finding.RuleId, path, reason);
         ReviewForgeTelemetry.AutoFixApplyFailed.Add(
-            1, new TagList { { "rule", finding.RuleId } });
+            1, new TagList {{"rule", finding.RuleId}});
     }
 
     /// <summary>Drift-guard hash of the CURRENT content of [startLine..endLine] (1-based
@@ -362,6 +363,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         {
             return;
         }
+
         var handledThreadIds = _Store is null
             ? new HashSet<long>()
             : (await _Store.GetCommandedFixThreadIdsAsync(ctx.Pr, ct).ConfigureAwait(false)).ToHashSet();
@@ -382,13 +384,14 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 replies.Add((command.ThreadId, "This fix command was already handled; not re-running."));
                 continue;
             }
+
             var anchor = command.Anchor;
             var path = RepoPath.Normalize(anchor.FilePath);
 
             if (getBudget() <= 0)
             {
                 replies.Add((command.ThreadId,
-                    $"The fix budget for this run is exhausted ({_Options.MaxFixesPerRun} fixes). Reply /rf fix again to re-queue for the next run."));
+                    $"The fix budget for this run is exhausted ({_Options.MaxFixesPerRun} fixes). Reply /fixit again to re-queue for the next run."));
                 continue;
             }
 
@@ -423,7 +426,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
             var snapshotBytes = File.ReadAllBytes(abs);
             var snapshotLines = _LineReader(abs);
-            var editor = _EditorFactory(guard, new HashSet<string>(RepoPath.PathComparer) { path });
+            var editor = _EditorFactory(guard, new HashSet<string>(RepoPath.PathComparer) {path});
             // CommitOnHead: an accepted pass KEEPS its edits (they are the commit payload);
             // declined/failed passes still revert so a later "nothing to commit" stays accurate.
             // Suggestion mode reverts always, byte-identical to before.
@@ -437,7 +440,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                         collector,
                         ctx.ContextStore,
                         repoDir,
-                        new HashSet<string>(RepoPath.PathComparer) { path },
+                        new HashSet<string>(RepoPath.PathComparer) {path},
                         _Options.FixPassMaxIterations,
                         ct)
                     .ConfigureAwait(false);
@@ -464,7 +467,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                         "fix pass for thread {ThreadId}: discarding edits — task_done missing (iteration cap reached)",
                         command.ThreadId);
                     replies.Add((command.ThreadId,
-                        "The fix pass did not complete, so no change was published. Reply /rf fix to retry."));
+                        "The fix pass did not complete, so no change was published. Reply /fixit to retry."));
                     continue;
                 }
 
@@ -523,9 +526,9 @@ public sealed class AutoFixFindingsStage : IReviewStage
         HashLineEditor editor, RepoPathGuard guard, string repoDir, string path, byte[] snapshotBytes)
     {
         var resolved = guard.Resolve(path, out var resolveError)
-            ?? throw new IOException($"auto-fix revert path denied for {path}: {resolveError}");
+                       ?? throw new IOException($"auto-fix revert path denied for {path}: {resolveError}");
         var directory = Path.GetDirectoryName(resolved)
-            ?? throw new IOException($"auto-fix revert path has no directory: {path}");
+                        ?? throw new IOException($"auto-fix revert path has no directory: {path}");
         if (new DirectoryInfo(directory).LinkTarget is not null)
         {
             throw new IOException($"auto-fix revert parent is a symlink: {directory}");
@@ -579,5 +582,5 @@ public sealed class AutoFixFindingsStage : IReviewStage
         => value is not null && string.Equals(allowlisted, value, StringComparison.OrdinalIgnoreCase);
 
     private static TagList FixTags(FixOrigin origin, string rule)
-        => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
+        => new() {{"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule}};
 }

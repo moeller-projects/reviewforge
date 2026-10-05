@@ -1,9 +1,9 @@
-using ReviewForge.Core.Ports;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Ports;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -125,7 +125,7 @@ public class AutoFixPublishTests
         Assert.Equal(3, anchor.StartLine);
         Assert.Null(Assert.Single(source.PostedSuggestionDedupeKeys)); // invisible to triage/publish
         Assert.Contains("### 🔧 Requested fix", body);
-        Assert.Contains("**Requested via `/rf fix` on thread #42** — Quoted as requested.", body);
+        Assert.Contains("**Requested via `/fixit` on thread #42** — Quoted as requested.", body);
         Assert.Contains("> please quote this", body);
         Assert.Contains("AI-generated from the thread command — verify before accepting", body);
         Assert.Contains("```suggestion\necho \"$name\"\n```", body);
@@ -235,7 +235,7 @@ public class AutoFixPublishTests
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
-                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+                autoFix: new AutoFixOptions {Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead})
             .ExecuteAsync(ctx, CancellationToken.None);
 
         var reply = Assert.Single(source.Replies);
@@ -250,10 +250,10 @@ public class AutoFixPublishTests
         var source = new FakePullRequestSource();
         var body = CommentFormatter.FormatCommittedFixReply("abcdef123456", "fix(src): quote variable", aiDrafted: true);
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
-            [
-                new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow),
-                new ThreadComment("b", "bot", true, body, DateTimeOffset.UtcNow),
-            ]));
+        [
+            new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow),
+            new ThreadComment("b", "bot", true, body, DateTimeOffset.UtcNow),
+        ]));
         var ctx = Ctx(source);
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
@@ -262,7 +262,7 @@ public class AutoFixPublishTests
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
-                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+                autoFix: new AutoFixOptions {Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead})
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(source.Replies);
@@ -279,10 +279,10 @@ public class AutoFixPublishTests
         var announcement =
             $"### 🔧 title\n**{CommentFormatter.CommittedFixLine("abcdef123456", "fix(src): quote variable")}** — rationale";
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
-            [
-                new ThreadComment("b", "bot", true, announcement, DateTimeOffset.UtcNow),
-                new ThreadComment("h", "human", false, "thanks", DateTimeOffset.UtcNow.AddMinutes(1)),
-            ]));
+        [
+            new ThreadComment("b", "bot", true, announcement, DateTimeOffset.UtcNow),
+            new ThreadComment("h", "human", false, "thanks", DateTimeOffset.UtcNow.AddMinutes(1)),
+        ]));
         var ctx = Ctx(source);
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
@@ -291,7 +291,7 @@ public class AutoFixPublishTests
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
-                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+                autoFix: new AutoFixOptions {Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead})
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(source.Replies);
@@ -317,7 +317,7 @@ public class AutoFixPublishTests
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
-                autoFix: new AutoFixOptions { Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead })
+                autoFix: new AutoFixOptions {Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead})
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Contains(source.GeneralComments, text => text.Contains("Fixed in abcdef1", StringComparison.Ordinal));
@@ -330,9 +330,12 @@ public class AutoFixPublishTests
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
         ctx.AcceptedFindings = [Fixable()];
-        ctx.AppliedFixes = [Fixable().AppliedFix!, new AppliedFix(
-            "thread-42",
-            new FixProposal("a.sh", 1, 1, "x", "r", FixOrigin.LlmCommanded, 42))];
+        ctx.AppliedFixes =
+        [
+            Fixable().AppliedFix!, new AppliedFix(
+                "thread-42",
+                new FixProposal("a.sh", 1, 1, "x", "r", FixOrigin.LlmCommanded, 42))
+        ];
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);

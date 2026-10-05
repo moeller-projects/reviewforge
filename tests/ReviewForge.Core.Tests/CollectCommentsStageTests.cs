@@ -45,8 +45,8 @@ public sealed class CollectCommentsStageTests
             Thread(2, [Human("creator", "fixed", Now.AddMinutes(1))], status: ReviewThreadStatus.Fixed),
             Thread(3, [Human("creator", "old", Now)], status: ReviewThreadStatus.Active),
             Thread(4, [Human("creator", "latest", Now.AddMinutes(1)), new ThreadComment("bot", "answer", true, "bot", Now.AddMinutes(2))]),
-            Thread(5, [Human("creator", "/rf fix this", Now.AddMinutes(1))]),
-            Thread(6, [Human("creator", "/rf resolve now", Now.AddMinutes(1))]),
+            Thread(5, [Human("creator", "/fixit this", Now.AddMinutes(1))]),
+            Thread(6, [Human("creator", "/resolve now", Now.AddMinutes(1))]),
             Thread(7, [Human("creator", "eligible", Now.AddMinutes(1))])
         ];
         var ctx = Context(source);
@@ -54,7 +54,7 @@ public sealed class CollectCommentsStageTests
 
         await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
-        // "/rf resolve" is itself a resolution request and stays; "/rf fix" belongs to auto-fix.
+        // "/resolve" is itself a resolution request and stays; "/fixit" belongs to auto-fix.
         Assert.Equal([6, 7], ctx.ResolvableComments.Select(c => c.ThreadId));
     }
 
@@ -79,7 +79,7 @@ public sealed class CollectCommentsStageTests
         var source = new FakePullRequestSource();
         source.Threads = [Thread(1, [Human("reviewer", "request", Now.AddMinutes(1))]), Thread(2, [Human("creator", "author request", Now.AddMinutes(1))])];
         var ctx = Context(source);
- 
+
 
         await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(["reviewer"]), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
         Assert.Equal(["reviewer", "creator"], ctx.ResolvableComments.Select(comment => comment.RequesterId));
@@ -99,9 +99,11 @@ public sealed class CollectCommentsStageTests
         var pr = new PrKey("o", "p", "r", 1);
         var store = new FakeFindingStore();
         await store.SaveResolveActionsAsync(pr, Guid.NewGuid(),
-            [new ResolveAction(0, Guid.NewGuid(), 1, TriageVerdict.Question, ResolutionOutcome.Question,
-                null, true, Now.AddMinutes(2))], CancellationToken.None);
-        var ctx = new ReviewContext(pr, Now) { PullRequest = source.Pr };
+        [
+            new ResolveAction(0, Guid.NewGuid(), 1, TriageVerdict.Question, ResolutionOutcome.Question,
+                null, true, Now.AddMinutes(2))
+        ], CancellationToken.None);
+        var ctx = new ReviewContext(pr, Now) {PullRequest = source.Pr};
 
         await new CollectCommentsStage(source, store, new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -126,8 +128,10 @@ public sealed class CollectCommentsStageTests
         var store = new FakeFindingStore();
         var run = Guid.NewGuid();
         await store.SaveResolveActionsAsync(pr, run,
-            [new ResolveAction(0, run, 9, TriageVerdict.Actionable, ResolutionOutcome.Deferred,
-                null, true, Now.AddMinutes(1))], CancellationToken.None);
+        [
+            new ResolveAction(0, run, 9, TriageVerdict.Actionable, ResolutionOutcome.Deferred,
+                null, true, Now.AddMinutes(1))
+        ], CancellationToken.None);
         var ctx = Context(source);
         ctx.ResolveWatermark = Now;
 
@@ -135,8 +139,9 @@ public sealed class CollectCommentsStageTests
 
         Assert.Equal(9, Assert.Single(ctx.ResolvableComments).ThreadId);
     }
+
     private static ReviewContext Context(FakePullRequestSource source)
-        => new(new PrKey("o", "p", "r", 1), Now) { PullRequest = source.Pr with { CreatorId = "creator" } };
+        => new(new PrKey("o", "p", "r", 1), Now) {PullRequest = source.Pr with {CreatorId = "creator"}};
 
     private static ThreadComment Human(string id, string text, DateTimeOffset at)
         => new(id, id, false, text, at);

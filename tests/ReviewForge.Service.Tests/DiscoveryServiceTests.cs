@@ -1,12 +1,13 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
-using ReviewForge.Core.Domain;
+using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Service.Queue;
-using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -79,25 +80,27 @@ public class DiscoveryServiceTests
             Threads =
             [
                 new ReviewThread(43, "comment", ReviewThreadStatus.Active,
-                    [
-                        new ThreadComment("alice", "Alice", false, "please fix this", requestAt),
-                        new ThreadComment("bot", "ReviewForge", true, "Deferred to next run", watermark.AddMinutes(1)),
-                    ]),
+                [
+                    new ThreadComment("alice", "Alice", false, "please fix this", requestAt),
+                    new ThreadComment("bot", "ReviewForge", true, "Deferred to next run", watermark.AddMinutes(1)),
+                ]),
             ],
         };
         var store = new FakeFindingStore();
         var run = Guid.NewGuid();
         await store.SaveRunAsync(new ReviewRun(
-            run, candidate.Key, candidate.Pr.SourceCommitSha, ReviewKind.Full,
-            watermark.AddMinutes(-10), watermark, true, [], LastObservedCommentAt: watermark, Pipeline: "Resolve"),
+                run, candidate.Key, candidate.Pr.SourceCommitSha, ReviewKind.Full,
+                watermark.AddMinutes(-10), watermark, true, [], LastObservedCommentAt: watermark, Pipeline: "Resolve"),
             CancellationToken.None);
         await store.SaveResolveActionsAsync(candidate.Key, run,
-            [new ResolveAction(0, run, 43, TriageVerdict.Actionable, ResolutionOutcome.Deferred,
-                null, true, watermark.AddMinutes(1))], CancellationToken.None);
+        [
+            new ResolveAction(0, run, 43, TriageVerdict.Actionable, ResolutionOutcome.Deferred,
+                null, true, watermark.AddMinutes(1))
+        ], CancellationToken.None);
         var queue = new ReviewQueue();
         var tracker = new RunTracker();
         var service = Service(source, store, queue, tracker,
-            resolveOptions: new ResolveOptions { Enabled = true, AllowedAuthors = ["alice"], DiscoveryEnabled = true });
+            resolveOptions: new ResolveOptions {Enabled = true, AllowedAuthors = ["alice"], DiscoveryEnabled = true});
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 
@@ -130,7 +133,7 @@ public class DiscoveryServiceTests
             Directory.CreateDirectory(pool.MirrorPath(candidate.Key.RepositoryId));
             var service = new DiscoveryService(
                 source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), new InFlightClaims(),
-                new DiscoveryOptions { TargetBranches = ["main"] },
+                new DiscoveryOptions {TargetBranches = ["main"]},
                 new RetentionOptions(),
                 pool,
                 NullLogger<DiscoveryService>.Instance,
@@ -536,7 +539,7 @@ public class DiscoveryServiceTests
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
             WorkItemBarrier = new Barrier(4),
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], MaxDegreeOfParallelism = 4};
         var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
@@ -552,7 +555,7 @@ public class DiscoveryServiceTests
             OpenPullRequests = Enumerable.Range(1, 10).Select(i => Candidate(i)).ToList(),
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxEnqueuesPerSweep = 3, MaxDegreeOfParallelism = 8 };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], MaxEnqueuesPerSweep = 3, MaxDegreeOfParallelism = 8};
         var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
@@ -572,7 +575,7 @@ public class DiscoveryServiceTests
         var claims = new InFlightClaims();
         Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 1), Guid.NewGuid(), out _));
         Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 2), Guid.NewGuid(), out _));
-        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 8 };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], MaxDegreeOfParallelism = 8};
         var service = Service(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options, claims);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
@@ -595,7 +598,7 @@ public class DiscoverySweepWorkerTests
     private static DiscoveryService CreateService(
         FakePullRequestSource source, FakeFindingStore store, ReviewQueue queue, RunTracker tracker,
         DiscoveryOptions? options = null)
-        => new(source, store, queue, tracker, new InFlightClaims(), options ?? new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions());
+        => new(source, store, queue, tracker, new InFlightClaims(), options ?? new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions());
 
     [Fact]
     public async Task Faulting_candidate_is_isolated_as_a_skip_and_others_still_enqueue()
@@ -605,7 +608,7 @@ public class DiscoverySweepWorkerTests
             OpenPullRequests = [Candidate(1), Candidate(2)],
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], MaxDegreeOfParallelism = 4};
         var service = CreateService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
@@ -654,7 +657,7 @@ public class DiscoverySweepWorkerTests
             OpenPullRequests = [Candidate(2), Candidate(3, draft: true), Candidate(1)],
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], MaxDegreeOfParallelism = 4 };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], MaxDegreeOfParallelism = 4};
         var service = CreateService(source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(), options);
         return await service.RunSweepAsync(CancellationToken.None);
     }
@@ -688,7 +691,7 @@ public class DiscoverySweepWorkerTests
             OpenPullRequests = [Candidate(1), Candidate(2)],
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], WarmupEnabled = true};
         var service = new DiscoveryService(
             source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
             new InFlightClaims(), options, new RetentionOptions(), pool);
@@ -718,7 +721,7 @@ public class DiscoverySweepWorkerTests
         };
         var service = new DiscoveryService(
             source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
-            new InFlightClaims(), new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions(), pool);
+            new InFlightClaims(), new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions(), pool);
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 
@@ -736,7 +739,7 @@ public class DiscoverySweepWorkerTests
             OpenPullRequests = [Candidate(1), Candidate(2), Candidate(3)],
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true, WarmupMaxPerSweep = 2 };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], WarmupEnabled = true, WarmupMaxPerSweep = 2};
         var service = new DiscoveryService(
             source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
             new InFlightClaims(), options, new RetentionOptions(), pool);
@@ -749,14 +752,14 @@ public class DiscoverySweepWorkerTests
     [Fact]
     public async Task Warmup_failure_does_not_fail_the_sweep()
     {
-        var git = new RecordingGitOps { ThrowOnWarmup = true };
+        var git = new RecordingGitOps {ThrowOnWarmup = true};
         var pool = NewPool(git);
         var source = new FakePullRequestSource
         {
             OpenPullRequests = [Candidate(1)],
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], WarmupEnabled = true};
         var service = new DiscoveryService(
             source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
             new InFlightClaims(), options, new RetentionOptions(), pool);
@@ -783,7 +786,7 @@ public class DiscoverySweepWorkerTests
             OpenPullRequests = [Candidate(1)], // head "head", repository "r" — the acquired key
             WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")],
         };
-        var options = new DiscoveryOptions { TargetBranches = ["main"], WarmupEnabled = true };
+        var options = new DiscoveryOptions {TargetBranches = ["main"], WarmupEnabled = true};
         var service = new DiscoveryService(
             source, new FakeFindingStore(), new ReviewQueue(), new RunTracker(),
             new InFlightClaims(), options, new RetentionOptions(), pool);
@@ -827,7 +830,7 @@ public class DiscoverySweepWorkerTests
         };
         var service = new DiscoveryService(
             source, new FakeFindingStore(), queue, tracker,
-            claims, new DiscoveryOptions { TargetBranches = ["main"] }, new RetentionOptions());
+            claims, new DiscoveryOptions {TargetBranches = ["main"]}, new RetentionOptions());
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 
@@ -841,13 +844,17 @@ public class DiscoverySweepWorkerTests
         public int Capacity => 100;
         public int ApproximateDepth => 0;
         public EnqueueResult TryEnqueue(ReviewRequest request) => throw new InvalidOperationException("db down");
-        public async IAsyncEnumerable<ReviewRequest> ReadAllAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+
+        public async IAsyncEnumerable<ReviewRequest> ReadAllAsync([EnumeratorCancellation] CancellationToken ct)
         {
             await Task.CompletedTask;
             yield break;
         }
 
-        public void Acknowledge(Guid runId) { }
+        public void Acknowledge(Guid runId)
+        {
+        }
+
         public bool RenewClaim(Guid runId) => true;
         public ReviewRequest? TryGetQueued(Guid runId) => null;
     }
@@ -968,7 +975,6 @@ public class DiscoverySweepWorkerTests
         await service.RunSweepAsync(CancellationToken.None);
         Assert.Equal(2, store.PruneCalls.Count);
     }
-
 }
 
 [Collection("ReviewForge service host")]
