@@ -87,8 +87,11 @@ public sealed class AutoFixFindingsStage : IReviewStage
             return;
         }
 
-        // Gate 2: allowed rule ids ∩ registered fixers (ordinal-insensitive config side).
-        var eligible = _Options.AllowedRuleIds
+        // Gate 2: either all registered fixers or the configured allowlist, intersected with the registry.
+        var ruleIds = _Options.AllowAllRules
+            ? _Registry.RegisteredRuleIds
+            : _Options.AllowedRuleIds;
+        var eligible = ruleIds
             .Select(id => (Id: id, Fixer: _Registry.TryGet(id, out var f) ? f : null))
             .Where(p => p.Fixer is not null)
             .ToDictionary(p => p.Id, p => p.Fixer!, StringComparer.OrdinalIgnoreCase);

@@ -90,6 +90,7 @@ TriageBatchSize = 20
 Enabled = false
 AllowedAuthors = []
 AllowedRuleIds = []
+AllowAllRules = false
 PublishMode = "Suggestion"
 CommitGranularity = "PerFix"
 MaxFixesPerRun = 3

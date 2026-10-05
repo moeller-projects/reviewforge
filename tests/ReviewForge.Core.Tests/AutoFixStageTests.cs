@@ -72,12 +72,14 @@ public sealed class AutoFixStageTests : IDisposable
         string[]? authors = null,
         string[]? rules = null,
         int maxFixes = 3,
-        bool commands = false)
+        bool commands = false,
+        bool allowAllRules = false)
         => new()
         {
             Enabled = enabled,
             AllowedAuthors = authors ?? ["creator-1"],
             AllowedRuleIds = rules ?? ["bash.unquoted-vars"],
+            AllowAllRules = allowAllRules,
             MaxFixesPerRun = maxFixes,
             EnableThreadFixCommands = commands,
         };
@@ -200,6 +202,20 @@ public sealed class AutoFixStageTests : IDisposable
     }
 
     [Fact]
+    public async Task Allow_all_rules_uses_every_registered_fixer_instead_of_allowlist()
+    {
+        WriteFile("Dockerfile", "ADD app.txt /app/");
+        var ctx = Ctx();
+        ctx.ChangedFileManifest = [new ChangedFile("Dockerfile", ChangedFileType.Edit)];
+        ctx.AcceptedFindings = [Finding("docker.add-vs-copy", "Dockerfile", 1, "docker-key")];
+
+        await Stage(Options(rules: [], allowAllRules: true)).ExecuteAsync(ctx, CancellationToken.None);
+
+        var fix = Assert.Single(ctx.AppliedFixes);
+        Assert.Equal("COPY app.txt /app/", fix.Proposal.Replacement);
+    }
+
+    [Fact]
     public async Task Empty_registered_rule_intersection_still_processes_commands()
     {
         var ctx = CommandCtx("echo $name");
@@ -291,14 +307,13 @@ public sealed class AutoFixStageTests : IDisposable
         var ctx = CommandCtx("echo $name");
         var abs = Path.Combine(_Root, "script.sh");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Stage(
-                    Options(commands: true),
-                    chat: EditScriptThenDone(1, "echo \"$name\""),
-                    editorFactory: (guard, writable) =>
-                        new CorruptingRestoreEditor(
-                            guard, writable, () => File.WriteAllText(abs, "corrupted")))
-                .ExecuteAsync(ctx, CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Stage(
+                Options(commands: true),
+                chat: EditScriptThenDone(1, "echo \"$name\""),
+                editorFactory: (guard, writable) =>
+                    new CorruptingRestoreEditor(
+                        guard, writable, () => File.WriteAllText(abs, "corrupted")))
+            .ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Contains("poisoning", ex.Message);
         Assert.Empty(ctx.AppliedFixes);
@@ -467,7 +482,7 @@ public sealed class AutoFixStageTests : IDisposable
         var ctx = CommandCtx("echo $name");
         ctx.Threads =
         [
-            ..ctx.Threads,
+            .. ctx.Threads,
             new ReviewThread(
                 99, "existing-fix", ReviewThreadStatus.Closed,
                 [new ThreadComment("reviewforge-bot", "reviewforge bot", true, "fixed", DateTimeOffset.UtcNow.AddMinutes(-2))],
@@ -563,24 +578,24 @@ public sealed class AutoFixStageTests : IDisposable
         Assert.Empty(ctx.AppliedFixes);
         Assert.Empty(ctx.FixCommands);
     }
+
     [Fact]
     public async Task Revert_fails_the_run_when_the_file_vanishes_mid_pass()
     {
         var ctx = CommandCtx("echo $name");
         var abs = Path.Combine(_Root, "script.sh");
 
-        await Assert.ThrowsAnyAsync<Exception>(
-            () => Stage(
-                    Options(commands: true),
-                    chat: EditScriptThenDone(1, "echo \"$name\""),
-                    editorFactory: (guard, writable) => new CorruptingRestoreEditor(
-                        guard, writable,
-                        () =>
-                        {
-                            File.Delete(abs);
-                            Directory.CreateDirectory(abs);
-                        }))
-                .ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<Exception>(() => Stage(
+                Options(commands: true),
+                chat: EditScriptThenDone(1, "echo \"$name\""),
+                editorFactory: (guard, writable) => new CorruptingRestoreEditor(
+                    guard, writable,
+                    () =>
+                    {
+                        File.Delete(abs);
+                        Directory.CreateDirectory(abs);
+                    }))
+            .ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.True(Directory.Exists(abs));
         Assert.Empty(Directory.EnumerateFiles(_Root, "*.rf-revert.tmp", SearchOption.AllDirectories));

@@ -17,6 +17,9 @@ public sealed class AutoFixOptions
     /// <summary>Rule ids eligible for auto-fix; intersected with the fixer registry.</summary>
     public string[] AllowedRuleIds { get; init; } = [];
 
+    /// <summary>When true, every currently registered fixer is eligible regardless of <see cref="AllowedRuleIds"/>.</summary>
+    public bool AllowAllRules { get; init; } = false;
+
     /// <summary>"Suggestion" (default) | "CommitOnHead". "StackedBranch" remains reserved.
     /// With <see cref="Enabled"/> false the pipeline is byte-identical regardless of this
     /// value — the mode is inert until the feature itself is on.</summary>

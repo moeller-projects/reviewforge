@@ -294,7 +294,10 @@ Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__â
 "AutoFix": {
   "Enabled": false,                 // master switch; false = byte-identical pipeline
   "AllowedAuthors": [],             // immutable creator ids only (display names never match); empty = disabled
-  "AllowedRuleIds": [],             // intersected with the fixer registry
+  "AllowedRuleIds": [],
+  // rule ids intersected with the fixer registry
+  "AllowAllRules": false,
+  // true = allow every registered fixer; overrides AllowedRuleIds
   "PublishMode": "Suggestion",      // "Suggestion" (default) | "CommitOnHead"; StackedBranch remains reserved
   "CommitGranularity": "PerFix",    // CommitOnHead: "PerFix" = one commit per file (same-file fixes coalesce) | "Single" = one commit per run
   "CommitAuthorName": null,         // required when enabled in CommitOnHead mode
