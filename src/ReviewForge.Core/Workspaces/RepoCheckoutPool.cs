@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -24,8 +23,9 @@ public sealed class RepoCheckoutPool
     /// <summary>Kind dimension for checkout metrics: every acquisition, active-lease gauge
     /// and eviction recording is split into pooled (shared per-head) and private (run-scoped)
     /// series so writable leases are visible on dashboards.</summary>
-    private static TagList PooledKind => new() { { ReviewForgeTelemetry.TagKind, "pooled" } };
-    private static TagList PrivateKind => new() { { ReviewForgeTelemetry.TagKind, "private" } };
+    private static TagList PooledKind => new() {{ReviewForgeTelemetry.TagKind, "pooled"}};
+
+    private static TagList PrivateKind => new() {{ReviewForgeTelemetry.TagKind, "private"}};
 
     // path -> measured size + refresh stamp. Sized once at materialization and refreshed
     // lazily by the eviction sweep when older than an hour; the acquire/reuse path never
@@ -53,6 +53,7 @@ public sealed class RepoCheckoutPool
         _Fs.CreateDirectory(Path.Combine(_Root, "checkouts"));
         _Fs.CreateDirectory(Path.Combine(_Root, "mirror"));
         _Fs.CreateDirectory(Path.Combine(_Root, "private"));
+        _Fs.CreateDirectory(Path.Combine(_Root, "locks"));
     }
 
     public async Task<RepoCheckout> AcquireAsync(
@@ -77,7 +78,7 @@ public sealed class RepoCheckoutPool
                 _Fs.SetLastWriteTimeUtc(path, DateTime.UtcNow);
                 ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                     Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    new TagList { { ReviewForgeTelemetry.TagKind, "pooled" }, { ReviewForgeTelemetry.TagWarmed, warmed } });
+                    new TagList {{ReviewForgeTelemetry.TagKind, "pooled"}, {ReviewForgeTelemetry.TagWarmed, warmed}});
                 return new RepoCheckout(path, new CheckoutLease(lockLease));
             }
 
@@ -86,7 +87,7 @@ public sealed class RepoCheckoutPool
             // then retry the clone exactly once (transient network failures self-heal).
             // No retry for the reuse fast-path above: a corrupt existing checkout is a
             // different failure and is surfaced immediately without deleting anything.
-            for (var attempt = 1; ; attempt++)
+            for (var attempt = 1;; attempt++)
             {
                 try
                 {
@@ -102,7 +103,7 @@ public sealed class RepoCheckoutPool
 
                     ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                         Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                        new TagList { { ReviewForgeTelemetry.TagKind, "pooled" }, { ReviewForgeTelemetry.TagWarmed, warmed } });
+                        new TagList {{ReviewForgeTelemetry.TagKind, "pooled"}, {ReviewForgeTelemetry.TagWarmed, warmed}});
                     return new RepoCheckout(repoPath, new CheckoutLease(lockLease));
                 }
                 catch (Exception)
@@ -123,7 +124,7 @@ public sealed class RepoCheckoutPool
         {
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                new TagList { { ReviewForgeTelemetry.TagKind, "pooled" }, { ReviewForgeTelemetry.TagWarmed, warmed } });
+                new TagList {{ReviewForgeTelemetry.TagKind, "pooled"}, {ReviewForgeTelemetry.TagWarmed, warmed}});
             ReviewForgeTelemetry.CheckoutActive.Add(-1, PooledKind);
             lockLease.Dispose();
             throw;
@@ -134,16 +135,15 @@ public sealed class RepoCheckoutPool
         => _Git.GetDiffAsync(repoPath, baseSha, headSha, ct, budget);
 
     /// <summary>Run-scoped writable checkout for CommitOnHead runs: a mirror-local clone into
-    /// {root}/private/{runId}, never shared, protected by the lock key "private-{runId}" for its
-    /// whole lifetime, deleted on lease disposal. The pooled per-head checkouts never see
-    /// writes — CommitOnHead edits live here until the push, then the tree is garbage.</summary>
+    /// {root}/private/{runId}, protected by process-local and OS-backed locks for its whole
+    /// lifetime and deleted on lease disposal. The pooled per-head checkouts never see writes —
+    /// CommitOnHead edits live here until the push, then the tree is garbage.</summary>
     public async Task<RepoCheckout> AcquirePrivateAsync(
         Guid runId, string repositoryId, string cloneUrl, string baseSha, string headSha, CancellationToken ct)
     {
         var started = Stopwatch.GetTimestamp();
         var path = PrivatePath(runId);
-        var lockLease = await _Locks.AcquireAsync(PrivateLockKey(runId), ct).ConfigureAwait(false)
-                        ?? throw new InvalidOperationException("checkout lock acquisition returned no lease");
+        var lockLease = await AcquirePrivateLockAsync(runId, ct).ConfigureAwait(false);
         ReviewForgeTelemetry.CheckoutActive.Add(1, PrivateKind);
         try
         {
@@ -162,7 +162,7 @@ public sealed class RepoCheckoutPool
             await _Git.CheckoutAsync(repoPath, headSha, ct).ConfigureAwait(false); // detached at headSha
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                new TagList { { ReviewForgeTelemetry.TagKind, "private" } });
+                new TagList {{ReviewForgeTelemetry.TagKind, "private"}});
             return new RepoCheckout(repoPath, new PrivateCheckoutLease(lockLease, this, path));
         }
         catch
@@ -170,7 +170,7 @@ public sealed class RepoCheckoutPool
             TryDeletePrivateCheckout(path);
             ReviewForgeTelemetry.CheckoutAcquireMilliseconds.Record(
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                new TagList { { ReviewForgeTelemetry.TagKind, "private" } });
+                new TagList {{ReviewForgeTelemetry.TagKind, "private"}});
             ReviewForgeTelemetry.CheckoutActive.Add(-1, PrivateKind);
             lockLease.Dispose();
             throw;
@@ -181,6 +181,75 @@ public sealed class RepoCheckoutPool
         => Path.Combine(_Root, "private", runId.ToString("N"));
 
     internal static string PrivateLockKey(Guid runId) => $"private-{runId:N}";
+
+    private async Task<IDisposable> AcquirePrivateLockAsync(Guid runId, CancellationToken ct)
+    {
+        var name = runId.ToString("N");
+        var processLease = await _Locks.AcquireAsync(PrivateLockKey(runId), ct).ConfigureAwait(false)
+                           ?? throw new InvalidOperationException("private checkout lock acquisition returned no lease");
+        try
+        {
+            var fileLease = await _Fs.AcquireExclusiveLockAsync(PrivateLockPath(name), ct).ConfigureAwait(false);
+            return new PrivateLockLease(processLease, fileLease);
+        }
+        catch
+        {
+            processLease.Dispose();
+            throw;
+        }
+    }
+
+    private IDisposable? TryAcquirePrivateLock(string name)
+    {
+        var processLease = _Locks.TryAcquire($"private-{name}");
+        if (processLease is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var fileLease = _Fs.TryAcquireExclusiveLock(PrivateLockPath(name));
+            if (fileLease is null)
+            {
+                processLease.Dispose();
+                return null;
+            }
+
+            return new PrivateLockLease(processLease, fileLease);
+        }
+        catch
+        {
+            processLease.Dispose();
+            throw;
+        }
+    }
+
+    private string PrivateLockPath(string name)
+    {
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(name)));
+        return Path.Combine(_Root, "locks", $"private-{digest}.lock");
+    }
+
+    private sealed class PrivateLockLease(IDisposable processLease, IDisposable fileLease) : IDisposable
+    {
+        private int _Disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _Disposed, 1) == 0)
+            {
+                try
+                {
+                    fileLease.Dispose();
+                }
+                finally
+                {
+                    processLease.Dispose();
+                }
+            }
+        }
+    }
 
     /// <summary>Loop-guard input for stage 3: author/message of the checked-out head commit.</summary>
     internal Task<TipCommitInfo?> GetCommitInfoAsync(string repoPath, string commitSha, CancellationToken ct)
@@ -196,10 +265,8 @@ public sealed class RepoCheckoutPool
             : Task.FromResult<TipCommitInfo?>(null);
     }
 
-    /// <summary>Startup recovery: at process start no private checkout can be live (leases are
-    /// process-lifetime by construction), so every directory under {root}/private is deleted —
-    /// still guarded by the try-lock as belt-and-suspenders against a second host sharing the
-    /// volume (which the store's journal-mode guidance already discourages).</summary>
+    /// <summary>Startup recovery: private checkouts owned by this process cannot be live.
+    /// An OS-backed run lock protects against deleting another process's active checkout.</summary>
     public int ReapOrphanedPrivateCheckouts()
     {
         var privateRoot = Path.Combine(_Root, "private");
@@ -211,7 +278,7 @@ public sealed class RepoCheckoutPool
         var deleted = 0;
         foreach (var dir in _Fs.EnumerateDirectories(privateRoot))
         {
-            using var lease = _Locks.TryAcquire($"private-{Path.GetFileName(dir)}");
+            using var lease = TryAcquirePrivateLock(Path.GetFileName(dir));
             if (lease is null)
             {
                 continue; // another host holds it — never touch a live run's checkout
@@ -223,9 +290,9 @@ public sealed class RepoCheckoutPool
                 _Fs.DeleteDirectory(dir, recursive: true);
                 deleted++;
                 ReviewForgeTelemetry.CheckoutEvicted.Add(
-                    1, new TagList { { ReviewForgeTelemetry.TagKind, "private" } });
+                    1, new TagList {{ReviewForgeTelemetry.TagKind, "private"}});
                 ReviewForgeTelemetry.CheckoutEvictedBytes.Add(
-                    size, new TagList { { ReviewForgeTelemetry.TagKind, "private" } });
+                    size, new TagList {{ReviewForgeTelemetry.TagKind, "private"}});
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -292,7 +359,7 @@ public sealed class RepoCheckoutPool
                     continue; // too young to reap regardless of lock state
                 }
 
-                using var privateLease = _Locks.TryAcquire($"private-{Path.GetFileName(dir)}");
+                using var privateLease = TryAcquirePrivateLock(Path.GetFileName(dir));
                 if (privateLease is null)
                 {
                     inUse++;
@@ -306,7 +373,7 @@ public sealed class RepoCheckoutPool
                     bytes += size;
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(
-                        1, new TagList { { ReviewForgeTelemetry.TagKind, "private" } });
+                        1, new TagList {{ReviewForgeTelemetry.TagKind, "private"}});
                     ReviewForgeTelemetry.CheckoutEvictedBytes.Add(size, PrivateKind);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -370,7 +437,7 @@ public sealed class RepoCheckoutPool
                     bytes += size;
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(
-                        1, new TagList { { ReviewForgeTelemetry.TagKind, "pooled" } });
+                        1, new TagList {{ReviewForgeTelemetry.TagKind, "pooled"}});
                     ReviewForgeTelemetry.CheckoutEvictedBytes.Add(size, PooledKind);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -435,7 +502,7 @@ public sealed class RepoCheckoutPool
                     totalBytes -= candidate.Size;
                     deleted++;
                     ReviewForgeTelemetry.CheckoutEvicted.Add(
-                        1, new TagList { { ReviewForgeTelemetry.TagKind, "pooled" } });
+                        1, new TagList {{ReviewForgeTelemetry.TagKind, "pooled"}});
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -555,9 +622,9 @@ public sealed class RepoCheckoutPool
     }
 
     /// <summary>
-/// Best-effort removal of a checkout dir created by a failed acquire. Deletes only
-/// directories beneath the pool's checkouts root; failures never mask the original error.
-/// </summary>
+    /// Best-effort removal of a checkout dir created by a failed acquire. Deletes only
+    /// directories beneath the pool's checkouts root; failures never mask the original error.
+    /// </summary>
     private void TryDeletePartialCheckout(string path)
     {
         try
@@ -582,10 +649,9 @@ public sealed class RepoCheckoutPool
         => _Fs.EnumerateFilesRecursive(path).Sum(_Fs.GetFileLength);
 
 
-    /// <summary>Private-checkout lease: disposal deletes {root}/private/{runId} (failures
-    /// logged, never thrown — a dispose exception would mask the run's real outcome), then
-    /// releases the run lock.</summary>
-    private sealed class PrivateCheckoutLease(KeyedLockPool.Lease lease, RepoCheckoutPool owner, string path) : IDisposable
+    /// <summary>Private-checkout lease: disposal deletes {root}/private/{runId} while the
+    /// process-local and OS-backed run locks remain held, then releases both locks.</summary>
+    private sealed class PrivateCheckoutLease(IDisposable lease, RepoCheckoutPool owner, string path) : IDisposable
     {
         private int _Disposed;
 
@@ -599,6 +665,7 @@ public sealed class RepoCheckoutPool
             }
         }
     }
+
     private sealed class CheckoutLease(KeyedLockPool.Lease lease) : IDisposable
     {
         private int _Disposed;

@@ -397,6 +397,10 @@ run finishes. `Workspace:Checkout` controls idle checkout eviction: `Enabled`, `
 head checkouts are evicted by age/capacity but never mirrors; private run checkouts are
 reaped at startup if left by a crash and periodically after the configured age. Both paths
 skip checkouts currently held by a review.
+Private checkout locks are OS-backed files under `Workspace:WorkDir/locks`, so startup
+recovery and eviction cannot delete a run checkout held by another local ReviewForge process.
+Deletion removes read-only attributes and retries brief Windows sharing violations before
+leaving a failed cleanup for the next sweep.
 
 ## Observability model
 

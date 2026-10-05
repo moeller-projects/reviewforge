@@ -1,6 +1,7 @@
 using Microsoft.Extensions.AI;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Testing;
@@ -16,9 +17,11 @@ public class FakePullRequestSource : IPullRequestSource
     public List<PullRequestCandidate> OpenPullRequests { get; set; } = [];
     public int OpenPullRequestsFetches => _openPullRequestsFetches;
     public int WorkItemFetches => _workItemFetches;
+
     public PullRequest Pr { get; set; } = new(
         1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false,
         CreatorId: "creator-1", CreatorName: "PR Author", SourceRefName: "refs/heads/feature/test");
+
     public Dictionary<PrKey, PullRequest> PullRequestsByKey { get; } = [];
     public List<WorkItem> WorkItems { get; set; } = [];
     public List<ChangedFile> ChangedFiles { get; set; } = [];
@@ -46,6 +49,7 @@ public class FakePullRequestSource : IPullRequestSource
 
     /// <summary>When set, the Nth PostFindingThreadAsync call throws (order-agnostic partial failure).</summary>
     public int? ThrowOnNthPost { get; set; }
+
     private int _PostCount;
 
     /// <summary>Optional exception for PR retrieval tests.</summary>
@@ -85,6 +89,7 @@ public class FakePullRequestSource : IPullRequestSource
         {
             throw error;
         }
+
         if (WorkItemBarrier is not null && !WorkItemBarrier.SignalAndWait(TimeSpan.FromSeconds(10)))
         {
             throw new TimeoutException("work-item fetches did not overlap");
@@ -119,7 +124,7 @@ public class FakePullRequestSource : IPullRequestSource
 
             var id = _NextThreadId++;
             PostedFindings.Add((finding, id));
-            PostedFindingBodies.Add(ReviewForge.Core.Pipeline.CommentFormatter.FormatFinding(finding));
+            PostedFindingBodies.Add(CommentFormatter.FormatFinding(finding));
             return Task.FromResult(id);
         }
     }
@@ -278,6 +283,7 @@ public class FakeFindingStore : IFindingStore
     public List<string> KnownKeys { get; set; } = [];
     public List<(Guid RunId, string Key, int ThreadId)> ThreadIdBackfills { get; } = [];
     public List<ReviewRun> RecentRuns { get; } = [];
+
     /// <summary>Optional exception for SaveRunAsync failure tests.</summary>
     public Exception? ThrowOnSave { get; set; }
 
@@ -304,6 +310,7 @@ public class FakeFindingStore : IFindingStore
     }
 
     public virtual Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(KnownKeys);
+
     public virtual Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
         => Task.FromResult<IReadOnlySet<long>>(
             Runs.Where(r => r.Pr == pr)
@@ -344,20 +351,23 @@ public class FakeFindingStore : IFindingStore
 
     public virtual Task PingAsync(CancellationToken ct)
         => ThrowOnPing is { } error ? Task.FromException(error) : Task.CompletedTask;
+
     public List<ResolveAction> ResolveActions { get; } = [];
     private int _NextResolveActionId = 1;
     private readonly Dictionary<int, PrKey> _ResolveActionPrs = [];
 
     public virtual Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct)
         => Task.FromResult(Runs.Where(r => r.Pr == pr && r.Pipeline == RunKind.Resolve.ToString()
-                                           && r.CompletedAt is not null && r.Success)
+                                                      && r.CompletedAt is not null && r.Success)
             .OrderByDescending(r => r.CompletedAt).FirstOrDefault());
 
     public virtual Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(
         PrKey pr, IReadOnlyCollection<int> threadIds, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<ResolveAction>>(
-            [.. ResolveActions.Where(a => _ResolveActionPrs.TryGetValue(a.Id, out var key) && key == pr)
-                .Where(a => threadIds.Count == 0 || threadIds.Contains(a.ThreadId))]);
+        [
+            .. ResolveActions.Where(a => _ResolveActionPrs.TryGetValue(a.Id, out var key) && key == pr)
+                .Where(a => threadIds.Count == 0 || threadIds.Contains(a.ThreadId))
+        ]);
 
     public virtual Task SaveResolveActionsAsync(
         PrKey pr, Guid runId, IReadOnlyList<ResolveAction> actions, CancellationToken ct)
@@ -366,8 +376,11 @@ public class FakeFindingStore : IFindingStore
         {
             var index = ResolveActions.FindIndex(a =>
                 _ResolveActionPrs.TryGetValue(a.Id, out var key) && key == pr && a.ThreadId == action.ThreadId);
-            var saved = action with {Id = index >= 0 ? ResolveActions[index].Id : _NextResolveActionId++,
-                RunId = runId, ReplyPosted = false};
+            var saved = action with
+            {
+                Id = index >= 0 ? ResolveActions[index].Id : _NextResolveActionId++,
+                RunId = runId, ReplyPosted = false
+            };
             if (index >= 0) ResolveActions[index] = saved;
             else ResolveActions.Add(saved);
             _ResolveActionPrs[saved.Id] = pr;
@@ -390,6 +403,7 @@ public class FakeFindingStore : IFindingStore
     /// Pushed, <see cref="AbandonPushedFixesAsync"/> drops unconfirmed rows of the run, and
     /// <see cref="MarkPushedFixRepliedAsync"/> flips ReplyPosted.</summary>
     public List<PushedFix> PushedFixes { get; } = [];
+
     private int _NextPushedFixId = 1;
 
     public virtual Task SavePushedFixesAsync(PrKey pr, Guid runId, IReadOnlyList<PushedFix> fixes, CancellationToken ct)
@@ -435,6 +449,7 @@ public class FakeFindingStore : IFindingStore
         return Task.CompletedTask;
     }
 }
+
 /// <summary>Fake git: serves a scripted diff, records checkouts.</summary>
 public class FakeGitOps : IGitOps
 {
@@ -504,7 +519,7 @@ public class FakeGitOps : IGitOps
         {
             if (!string.Equals(RemoteTip, expectedRemoteTipSha, StringComparison.OrdinalIgnoreCase))
             {
-                throw new ReviewForge.Core.Pipeline.PrHeadChangedException(
+                throw new PrHeadChangedException(
                     expectedRemoteTipSha, RemoteTip ?? "(branch missing on remote)");
             }
 
@@ -575,6 +590,7 @@ public class FakeGitOps : IGitOps
 
         return Task.CompletedTask;
     }
+
     public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
         => ThrowOnGetDiff is { } error ? Task.FromException<string>(error) : Task.FromResult(Diff);
 }
@@ -586,6 +602,7 @@ public class FakeEnricher(string? payload = null, bool throws = false) : IContex
     // use their own explicit Name.
     public string Name => "crg";
     public int Calls { get; private set; }
+
     public Task<string?> EnrichAsync(string repoDir, string diffText, CancellationToken ct)
     {
         Calls++;
@@ -644,6 +661,37 @@ public sealed class FakeWorkspaceFs : IWorkspaceFs
     public DateTime GetCreationTimeUtc(string path) => Directory.GetCreationTimeUtc(path);
 
     public void SetLastWriteTimeUtc(string path, DateTime timestamp) => Directory.SetLastWriteTimeUtc(path, timestamp);
+
+    public async Task<IDisposable> AcquireExclusiveLockAsync(string path, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    public IDisposable? TryAcquireExclusiveLock(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        try
+        {
+            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33)
+        {
+            return null;
+        }
+    }
+
 
     public void DeleteDirectory(string path, bool recursive)
     {

@@ -46,6 +46,11 @@ public class CheckoutEvictionWorkerTests
 
         public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
 
+        public Task<IDisposable> AcquireExclusiveLockAsync(string path, CancellationToken ct)
+            => _Inner.AcquireExclusiveLockAsync(path, ct);
+
+        public IDisposable? TryAcquireExclusiveLock(string path) => _Inner.TryAcquireExclusiveLock(path);
+
         public void DeleteDirectory(string path, bool recursive)
         {
             if (failOnPrefix is not null && path.StartsWith(failOnPrefix, StringComparison.Ordinal))
@@ -83,6 +88,11 @@ public class CheckoutEvictionWorkerTests
 
         public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
 
+        public Task<IDisposable> AcquireExclusiveLockAsync(string path, CancellationToken ct)
+            => _Inner.AcquireExclusiveLockAsync(path, ct);
+
+        public IDisposable? TryAcquireExclusiveLock(string path) => _Inner.TryAcquireExclusiveLock(path);
+
         public void DeleteDirectory(string path, bool recursive) => _Inner.DeleteDirectory(path, recursive);
     }
 
@@ -101,6 +111,7 @@ public class CheckoutEvictionWorkerTests
         await cts.CancelAsync();
         await worker.StopAsync(CancellationToken.None);
     }
+
     [Fact]
     public async Task Enabled_worker_sweeps_idle_checkouts()
     {
@@ -142,6 +153,7 @@ public class CheckoutEvictionWorkerTests
             }
         }
     }
+
     [Fact]
     public async Task Worker_sweeps_stale_private_checkouts()
     {

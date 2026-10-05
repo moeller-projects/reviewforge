@@ -2,11 +2,11 @@ namespace ReviewForge.Core.Ports;
 
 /// <summary>
 /// Filesystem primitives for checkout-pool management and eviction (directory lifecycle,
-/// size accounting, timestamps). Implementations are thin wrappers over <c>System.IO</c>.
-/// Scope note: this port is deliberately NOT a general filesystem abstraction — read-only
-/// access inside a repo checkout (RepoReadTools, anchor validation, path containment) and
-/// single-writer run artifacts (findings/{runId}.jsonl) use System.IO directly in Core;
-/// those paths are either covered by injected delegates or exercised through real temp
+/// size accounting, timestamps, and cross-process private-checkout locks). Implementations
+/// are thin wrappers over <c>System.IO</c>. Scope note: this is deliberately NOT a general
+/// filesystem abstraction — read-only access inside a repo checkout (RepoReadTools, anchor
+/// validation, path containment) and single-writer run artifacts use System.IO directly in
+/// Core; those paths are either covered by injected delegates or exercised through real temp
 /// directories in tests.
 /// </summary>
 public interface IWorkspaceFs
@@ -31,5 +31,15 @@ public interface IWorkspaceFs
 
     void SetLastWriteTimeUtc(string path, DateTime timestamp);
 
+    /// <summary>
+    /// Acquires an OS-backed exclusive lock on a lock-file path, waiting cancellably while
+    /// another process owns it. The returned lease releases the lock on disposal.
+    /// </summary>
+    Task<IDisposable> AcquireExclusiveLockAsync(string path, CancellationToken ct);
+
+    /// <summary>Attempts to acquire an OS-backed exclusive lock without waiting.</summary>
+    IDisposable? TryAcquireExclusiveLock(string path);
+
+    /// <summary>Deletes a directory recursively, handling read-only checkout files.</summary>
     void DeleteDirectory(string path, bool recursive);
 }

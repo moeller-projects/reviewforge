@@ -78,8 +78,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         var git = new TestGitOps {FailCloneTimes = 2};
         var pool = Pool(git);
 
-        await Assert.ThrowsAsync<IOException>(
-            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
 
         Assert.False(Directory.Exists(pool.CheckoutPath("repo", "head")), "partial checkout must be removed");
     }
@@ -103,8 +102,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         var git = new TestGitOps {FailCloneTimes = 2};
         var pool = Pool(git);
 
-        var ex = await Assert.ThrowsAsync<IOException>(
-            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
         Assert.Equal("clone failed midline", ex.Message);
         Assert.False(Directory.Exists(pool.CheckoutPath("repo", "head")));
 
@@ -122,8 +120,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         var path = pool.CheckoutPath("repo", "head");
         Directory.CreateDirectory(Path.Combine(path, ".git")); // a pre-existing, valid checkout
 
-        await Assert.ThrowsAsync<IOException>(
-            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+        await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
 
         Assert.True(Directory.Exists(path), "an existing checkout must never be deleted by a failed acquire");
         Assert.DoesNotContain("clone", git.Calls);
@@ -138,8 +135,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             ThrowOnDeleteDirectory = new IOException("delete failed"),
         }, _Root);
 
-        var ex = await Assert.ThrowsAsync<IOException>(
-            () => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<IOException>(() => pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None));
 
         Assert.Equal("clone failed midline", ex.Message); // the clone error, not the cleanup error
     }
@@ -220,7 +216,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         CreateCheckout(b2, oneMb, now);
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxTotalBytes = 3L * oneMb, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            new CheckoutEvictionOptions {MaxTotalBytes = 3L * oneMb, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30)},
             TimeProvider.System);
 
         Assert.Equal(1, report.Deleted);
@@ -243,7 +239,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         CreateCheckout(a2, oneMb, DateTime.UtcNow);
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxTotalBytes = 0, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            new CheckoutEvictionOptions {MaxTotalBytes = 0, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30)},
             TimeProvider.System);
 
         Assert.Equal(0, report.Deleted);
@@ -266,12 +262,12 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         CreateCheckout(other, oneMb, DateTime.UtcNow.AddMinutes(-1));
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxTotalBytes = oneMb + oneMb / 2, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            new CheckoutEvictionOptions {MaxTotalBytes = oneMb + oneMb / 2, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30)},
             TimeProvider.System);
 
         Assert.Equal(1, report.SkippedInUse);
         Assert.True(Directory.Exists(heldPath)); // in-use survives the budget pass
-        Assert.False(Directory.Exists(other));   // next-oldest evicted instead
+        Assert.False(Directory.Exists(other)); // next-oldest evicted instead
     }
 
     [Fact]
@@ -288,7 +284,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         using var lease2 = await pool.AcquireAsync("repo", "url", "base", "h2", CancellationToken.None);
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxTotalBytes = oneMb, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            new CheckoutEvictionOptions {MaxTotalBytes = oneMb, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30)},
             TimeProvider.System);
 
         Assert.Equal(0, report.Deleted);
@@ -310,7 +306,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         }
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxTotalBytes = oneMb / 2, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            new CheckoutEvictionOptions {MaxTotalBytes = oneMb / 2, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30)},
             TimeProvider.System);
 
         Assert.Equal(1, report.Deleted);
@@ -341,7 +337,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         CreateCheckout(path, 1000, DateTime.UtcNow);
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxTotalBytes = 100, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            new CheckoutEvictionOptions {MaxTotalBytes = 100, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30)},
             TimeProvider.System);
 
         Assert.Equal(0, report.Deleted); // size unknown (0), budget not exceeded
@@ -358,7 +354,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         CreateCheckout(path, 1000, DateTime.UtcNow.AddDays(-10));
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxAge = TimeSpan.FromDays(1), MaxTotalBytes = 0 },
+            new CheckoutEvictionOptions {MaxAge = TimeSpan.FromDays(1), MaxTotalBytes = 0},
             TimeProvider.System);
 
         Assert.Equal(1, report.Failed);
@@ -377,7 +373,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         CreateCheckout(path, 1000, DateTime.UtcNow);
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { MaxTotalBytes = 100, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30) },
+            new CheckoutEvictionOptions {MaxTotalBytes = 100, MaxCheckoutsPerRepo = 10, MaxAge = TimeSpan.FromDays(30)},
             TimeProvider.System);
 
         Assert.Equal(1, report.Failed);
@@ -454,6 +450,11 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         public long GetFileLength(string path) => _Inner.GetFileLength(path);
         public DateTime GetLastWriteTimeUtc(string path) => _Inner.GetLastWriteTimeUtc(path);
         public void SetLastWriteTimeUtc(string path, DateTime timestamp) => _Inner.SetLastWriteTimeUtc(path, timestamp);
+
+        public Task<IDisposable> AcquireExclusiveLockAsync(string path, CancellationToken ct)
+            => _Inner.AcquireExclusiveLockAsync(path, ct);
+
+        public IDisposable? TryAcquireExclusiveLock(string path) => _Inner.TryAcquireExclusiveLock(path);
         public void DeleteDirectory(string path, bool recursive) => _Inner.DeleteDirectory(path, recursive);
     }
 
@@ -596,11 +597,28 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Assert.False(Directory.Exists(checkout.Path));
     }
 
+    [Fact]
+    public async Task Startup_recovery_in_another_pool_cannot_delete_a_live_private_checkout()
+    {
+        var activePool = Pool(new TestGitOps());
+        var recoveryPool = Pool(new TestGitOps());
+        var checkout = await activePool.AcquirePrivateAsync(
+            Guid.NewGuid(), "repo", "url", "base", "head", CancellationToken.None);
+
+        Assert.Equal(0, recoveryPool.ReapOrphanedPrivateCheckouts());
+        Assert.True(Directory.Exists(checkout.Path));
+
+        checkout.Dispose();
+
+        Assert.Equal(1, recoveryPool.ReapOrphanedPrivateCheckouts());
+        Assert.False(Directory.Exists(checkout.Path));
+    }
+
 
     [Fact]
     public async Task Private_disposal_delete_failure_is_nonfatal_and_sweep_reaps_the_orphan()
     {
-        var fs = new FakeWorkspaceFs { ThrowOnDeleteDirectory = new IOException("locked") };
+        var fs = new FakeWorkspaceFs {ThrowOnDeleteDirectory = new IOException("locked")};
         var pool = new RepoCheckoutPool(
             new TestGitOps(), fs, _Root, logger: NullLogger<RepoCheckoutPool>.Instance);
         var checkout = await pool.AcquirePrivateAsync(
@@ -613,11 +631,12 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         fs.ThrowOnDeleteDirectory = null;
         Directory.SetCreationTimeUtc(path, DateTime.UtcNow.AddHours(-2));
         var report = pool.Evict(
-            new CheckoutEvictionOptions { PrivateMaxAgeMinutes = 60 }, TimeProvider.System);
+            new CheckoutEvictionOptions {PrivateMaxAgeMinutes = 60}, TimeProvider.System);
 
         Assert.Equal(1, report.Deleted);
         Assert.False(Directory.Exists(path));
     }
+
     [Fact]
     public async Task Private_eviction_requires_age_and_a_free_run_lock()
     {
@@ -638,8 +657,8 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         Directory.SetCreationTimeUtc(live.Path, now.AddHours(-2).UtcDateTime);
 
         var report = pool.Evict(
-            new CheckoutEvictionOptions { PrivateMaxAgeMinutes = 60 },
-            new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now));
+            new CheckoutEvictionOptions {PrivateMaxAgeMinutes = 60},
+            new FakeTimeProvider(now));
 
         Assert.Equal(3, report.Scanned);
         Assert.Equal(1, report.Deleted);
