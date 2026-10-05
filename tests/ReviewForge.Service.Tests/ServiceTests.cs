@@ -34,20 +34,26 @@ public sealed class ReviewForgeServiceCollectionDefinition
 /// restart-scenario fixtures (durable queue) can derive and re-point the store/queue.</summary>
 public class ReviewForgeFactory : WebApplicationFactory<Program>
 {
+    private readonly EnvironmentVariableScope _Environment = new();
     private bool _WithoutWorkers;
     private List<string>? _LogSink;
-
     public ReviewForgeFactory()
     {
         // Minimal-hosting config must be visible before Program.cs runs — env vars are.
-        Environment.SetEnvironmentVariable("Ado__OrgUrl", "https://dev.azure.com/test");
-        Environment.SetEnvironmentVariable("Ado__Project", "test");
-        Environment.SetEnvironmentVariable("Reasoning__Provider", "openai");
-        Environment.SetEnvironmentVariable("Reasoning__Model", "test-model");
-        Environment.SetEnvironmentVariable("Workspace__WorkDir", WorkDir);
-        Environment.SetEnvironmentVariable("Host__WorkerCount", "2");
-        Environment.SetEnvironmentVariable("Persistence__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
-        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, "test-key-1,test-key-2");
+        _Environment.Set("Ado__OrgUrl", "https://dev.azure.com/test");
+        _Environment.Set("Ado__Project", "test");
+        _Environment.Set("Reasoning__Provider", "openai");
+        _Environment.Set("Reasoning__Model", "test-model");
+        _Environment.Set("Workspace__WorkDir", WorkDir);
+        _Environment.Set("Host__WorkerCount", "2");
+        _Environment.Set("Persistence__StoreConnectionString", $"Data Source={Path.Combine(WorkDir, "test.db")};Pooling=False");
+        _Environment.Set(ApiKeyOptions.KeysEnvironmentVariable, "test-key-1,test-key-2");
+
+        // Development config enables features and uses values unsuitable for isolated tests.
+        _Environment.SetIfUnset("Resolve__Enabled", "false");
+        _Environment.SetIfUnset("ApiDocs__Enabled", "false");
+        _Environment.Set("Discovery__Creators__0", "alice");
+        _Environment.Set("AutoFix__MaxFixesPerRun", "3");
     }
 
     public FakePullRequestSource Source { get; } = new();
@@ -68,7 +74,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
     /// <summary>Clears configured API keys so the host boots without any — fail-closed or opt-out paths.</summary>
     public ReviewForgeFactory WithoutApiKeys()
     {
-        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, null);
+        _Environment.Set(ApiKeyOptions.KeysEnvironmentVariable, null);
         return this;
     }
 
@@ -82,35 +88,35 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
     /// <summary>No keys + the explicit development opt-out, so /reviews stays reachable.</summary>
     public ReviewForgeFactory WithDevelopmentOptOut()
     {
-        Environment.SetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable, null);
-        Environment.SetEnvironmentVariable("Api__AllowUnauthenticatedForDevelopment", "true");
+        _Environment.Set(ApiKeyOptions.KeysEnvironmentVariable, null);
+        _Environment.Set("Api__AllowUnauthenticatedForDevelopment", "true");
         return this;
     }
 
     /// <summary>Overrides the fixed-window submit limit for rate-limit tests.</summary>
     public ReviewForgeFactory WithSubmitLimit(int permitLimit, int windowSeconds)
     {
-        Environment.SetEnvironmentVariable("Api__SubmitPermitLimit", permitLimit.ToString());
-        Environment.SetEnvironmentVariable("Api__SubmitWindowSeconds", windowSeconds.ToString());
+        _Environment.Set("Api__SubmitPermitLimit", permitLimit.ToString());
+        _Environment.Set("Api__SubmitWindowSeconds", windowSeconds.ToString());
         return this;
     }
 
     /// <summary>Overrides the fixed-window status-poll limit for rate-limit tests.</summary>
     public ReviewForgeFactory WithStatusLimit(int permitLimit, int windowSeconds)
     {
-        Environment.SetEnvironmentVariable("Api__StatusPermitLimit", permitLimit.ToString());
-        Environment.SetEnvironmentVariable("Api__StatusWindowSeconds", windowSeconds.ToString());
+        _Environment.Set("Api__StatusPermitLimit", permitLimit.ToString());
+        _Environment.Set("Api__StatusWindowSeconds", windowSeconds.ToString());
         return this;
     }
 
     /// <summary>Enables the suggestion-only auto-fix feature for end-to-end tests.</summary>
     public ReviewForgeFactory WithAutoFix(bool threadCommands = false)
     {
-        Environment.SetEnvironmentVariable("AutoFix__Enabled", "true");
-        Environment.SetEnvironmentVariable("AutoFix__AllowedAuthors__0", "creator-1");
-        Environment.SetEnvironmentVariable("AutoFix__AllowedRuleIds__0", "bash.unquoted-vars");
-        Environment.SetEnvironmentVariable("AutoFix__AllowedRuleIds__1", "bash.set-e-missing");
-        Environment.SetEnvironmentVariable(
+        _Environment.Set("AutoFix__Enabled", "true");
+        _Environment.Set("AutoFix__AllowedAuthors__0", "creator-1");
+        _Environment.Set("AutoFix__AllowedRuleIds__0", "bash.unquoted-vars");
+        _Environment.Set("AutoFix__AllowedRuleIds__1", "bash.set-e-missing");
+        _Environment.Set(
             "AutoFix__EnableThreadFixCommands",
             threadCommands.ToString().ToLowerInvariant());
 
@@ -173,20 +179,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            foreach (var key in new[]
-            {
-                "Ado__OrgUrl", "Ado__Project", "Reasoning__Provider", "Reasoning__Model",
-                "Workspace__WorkDir", "Host__WorkerCount", "Persistence__StoreConnectionString",
-                ApiKeyOptions.KeysEnvironmentVariable, "Api__AllowUnauthenticatedForDevelopment",
-                "Api__SubmitPermitLimit", "Api__SubmitWindowSeconds",
-                "Api__StatusPermitLimit", "Api__StatusWindowSeconds",
-                "AutoFix__Enabled", "AutoFix__AllowedAuthors__0",
-                "AutoFix__AllowedRuleIds__0", "AutoFix__AllowedRuleIds__1",
-                "AutoFix__EnableThreadFixCommands",
-            })
-            {
-                Environment.SetEnvironmentVariable(key, null);
-            }
+            _Environment.Dispose();
 
             if (Directory.Exists(WorkDir))
             {
@@ -781,6 +774,7 @@ public class ServiceTests : IAsyncLifetime
         Assert.Equal(FixOrigin.Deterministic, persisted.Proposal.Origin);
     }
 }
+
 }
 
 [Collection("ReviewForge service host")]
