@@ -27,7 +27,7 @@
         <None Update="config*.toml"
               CopyToOutputDirectory="PreserveNewest"
               CopyToPublishDirectory="PreserveNewest"/>
-        <None Update="config.Development.toml">
+        <None Update="config.Production.toml">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
         </None>

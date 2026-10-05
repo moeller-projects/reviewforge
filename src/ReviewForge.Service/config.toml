@@ -4,10 +4,16 @@ Urls = "http://localhost:5080"
 OrgUrl = "https://dev.azure.com/your-org"
 Project = "Your.Project"
 
+[Ado.Retry]
+MaxAttempts = 5
+BaseDelay = "00:00:00.500"
+MaxDelay = "00:00:30"
+
 [Reasoning]
 Provider = "openai-codex"
 Model = "openai-codex:gpt-5.6-luna"
 GovernorAcquireTimeoutSeconds = 300
+MaxConcurrentRequests = 8
 
 [Workspace]
 WorkDir = "./work"
@@ -15,17 +21,28 @@ WorkDir = "./work"
 [Workspace.Checkout]
 Enabled = true
 MaxAge = "3.00:00:00"
+PrivateMaxAgeMinutes = 60
 MaxCheckoutsPerRepo = 10
 SweepInterval = "01:00:00"
+MaxTotalBytes = 21474836480
 
 [Persistence]
 StoreConnectionString = "Data Source=./work/reviewforge.db"
 QueueMode = "Memory"
 JournalMode = "Wal"
 
+[Persistence.Retention]
+Days = 30
+MinRunsPerPr = 5
+
 [Review]
 MaxContextTokens = 150000
 MaxIterations = 30
+CleanRunVote = "NoResponse"
+MaxDiffChars = 200000
+MaxDiffCharsPerFile = 40000
+MaxDiffBytes = 4194304
+MaxDiffBytesPerFile = 262144
 AgentDebugLogging = false
 TrivialDiffSkipEnabled = true
 
@@ -36,13 +53,25 @@ MaxShards = 8
 ShardConcurrency = 2
 
 [Git]
+MaxConcurrency = 4
 TargetedFetchEnabled = true
 
 [Host]
 WorkerCount = 4
+StaleShellMinutes = 10
+OtlpEnabled = false
+
+[Api]
+AllowUnauthenticatedForDevelopment = false
+SubmitPermitLimit = 10
+SubmitWindowSeconds = 60
+StatusPermitLimit = 600
+StatusWindowSeconds = 60
 
 [ApiDocs]
 Enabled = false
+Title = "reviewforge API"
+Version = "v1"
 
 [Resolve]
 Enabled = false
@@ -62,6 +91,7 @@ Enabled = false
 AllowedAuthors = []
 AllowedRuleIds = []
 PublishMode = "Suggestion"
+CommitGranularity = "PerFix"
 MaxFixesPerRun = 3
 EnableThreadFixCommands = false
 FixPassMaxIterations = 8
@@ -78,13 +108,20 @@ SymbolUsageEnabled = false
 
 [Discovery]
 TargetBranches = ["main", "develop"]
-Creators = []
+Creators = ["00000000-0000-0000-0000-000000000000"]
 AllowAllCreators = false
+SweepInterval = "00:15:00"
 MaxEnqueuesPerSweep = 20
 MaxDegreeOfParallelism = 4
+WarmupConcurrency = 2
 WarmupEnabled = false
 WarmupMaxPerSweep = 5
-WarmupConcurrency = 2
+FailureBackoffBase = "00:30:00"
+FailureBackoffMax = "08:00:00"
+
+[RepoReadTools]
+GrepMaxMs = 10000
+GrepMaxLines = 200000
 
 [Logging.LogLevel]
 Default = "Information"
