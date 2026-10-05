@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Console;
 using OpenTelemetry.Logs;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Service;
+using HostOptions = ReviewForge.Service.HostOptions;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddTomlFile("config.toml", optional: true, reloadOnChange: true);
@@ -21,7 +22,7 @@ var commonOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_
 var logOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
 var traceOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
 var metricOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT");
-var otlpConfigured = builder.Configuration.GetValue<bool?>($"{ReviewForge.Service.HostOptions.SectionName}:OtlpEnabled") is true;
+var otlpConfigured = builder.Configuration.GetValue<bool?>($"{HostOptions.SectionName}:OtlpEnabled") is true;
 var otlpLogsEnabled = ServiceCollectionExtensions.ShouldEnableOtlpExporter(otlpConfigured, commonOtlpEndpoint, logOtlpEndpoint);
 var otlpTracesEnabled = ServiceCollectionExtensions.ShouldEnableOtlpExporter(otlpConfigured, commonOtlpEndpoint, traceOtlpEndpoint);
 var otlpMetricsEnabled = ServiceCollectionExtensions.ShouldEnableOtlpExporter(otlpConfigured, commonOtlpEndpoint, metricOtlpEndpoint);
@@ -34,7 +35,8 @@ builder.Logging.AddOpenTelemetry(options =>
         options.AddOtlpExporter();
 });
 builder.Services.AddHealthChecks()
-    .AddCheck<StoreHealthCheck>("finding-store");
+    .AddCheck<StoreHealthCheck>("finding-store")
+    .AddCheck<LivenessHealthCheck>(LivenessHealthCheck.Name);
 builder.Services.AddReviewForge(builder.Configuration);
 builder.Services.AddOpenApi(ApiDocsRegistration.Configure);
 
@@ -71,7 +73,10 @@ app.Use(async (ctx, next) =>
     await next();
 });
 app.MapHealthChecks("/health");
-app.MapHealthChecks("/alive", new HealthCheckOptions {Predicate = _ => false});
+app.MapHealthChecks("/alive", new HealthCheckOptions
+{
+    Predicate = check => check.Name == LivenessHealthCheck.Name,
+});
 app.MapReviewForgeEndpoints();
 app.MapDocsEndpoints();
 app.Run();

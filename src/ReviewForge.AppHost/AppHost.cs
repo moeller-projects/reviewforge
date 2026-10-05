@@ -1,3 +1,5 @@
+using Projects;
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 // Secrets as parameters: the dashboard marks them and Aspire fails fast with a clear
@@ -12,12 +14,10 @@ var apiKey = builder.AddParameter("api-key", secret: true);
 var reviewforgeWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge");
 Directory.CreateDirectory(reviewforgeWorkDir);
 
-builder.AddProject<Projects.ReviewForge_Service>("reviewforge")
+builder.AddProject<ReviewForge_Service>("reviewforge")
     .WithHttpEndpoint(name: "http")
-    // Readiness: store-backed (/health) drives the dashboard health tile; liveness stays
-    // /alive for orchestrators.
+    // The dashboard health tile reflects readiness; liveness remains available to orchestrators.
     .WithHttpHealthCheck("/health")
-    .WithHttpHealthCheck("/alive")
     .WithExternalHttpEndpoints()
     .WithEnvironment("Workspace__WorkDir", reviewforgeWorkDir)
     .WithEnvironment(
