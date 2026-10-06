@@ -57,6 +57,8 @@ failed stage fails the run.
 | 12 | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `Review:CleanRunVote` (default NoResponse) |
 | 13 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
 
+`ReviewContext` stores stage outputs in typed groups: `Fetch`, `Repository`, `Classification`, `Reasoning`, `Validation`, `AutoFix`, `Triage`, and `Published`. Resolve runs additionally initialize `Resolve`; review runs leave it null. Repository preparation owns its overlapping thread-refresh and enrichment work, canceling and observing those tasks when the context is disposed.
+
 ## Run it
 
 ```bash

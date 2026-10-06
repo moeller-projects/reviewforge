@@ -20,9 +20,10 @@ public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize =
         foreach (var batch in comments.Chunk(batchSize))
         {
             var batchIds = batch.Select(c => (long)c.ThreadId).ToHashSet();
+            ctx.Reasoning = ctx.Reasoning with { Collector = new ReviewCollector() };
             var verdicts = await agent.RunTriageAsync(
                 ResolvePromptBuilder.BuildTriagePrompt(batch, ctx.Fetch.WorkItems),
-                ctx.Collector = new ReviewCollector(), ctx.ContextStore,
+                ctx.Reasoning.Collector, ctx.Reasoning.ContextStore,
                 ctx.RequireRepoDir(), ctx.Fetch.ChangedFiles.ToHashSet(RepoPath.PathComparer),
                 ctx.Repository.Diff, ctx.Repository.DiffText, batchIds, ct).ConfigureAwait(false);
             // Belt and suspenders: the tool rejects out-of-batch verdicts already; a verdict

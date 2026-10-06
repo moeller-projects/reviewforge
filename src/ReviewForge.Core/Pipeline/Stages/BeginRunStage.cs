@@ -26,7 +26,7 @@ public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = nul
         var findings = AppliedFixPersistence.BuildRows(ctx);
 
         var run = new ReviewRun(
-            ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Kind,
+            ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Classification.Kind,
             ctx.StartedAt, CompletedAt: null, Success: false, findings,
             Pipeline: ctx.RunKind.ToString());
 

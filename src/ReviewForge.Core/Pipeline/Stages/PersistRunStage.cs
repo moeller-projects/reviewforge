@@ -24,7 +24,7 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
         ct.ThrowIfCancellationRequested();
 
         var findings = AppliedFixPersistence.BuildFinalRows(
-            ctx, key => ctx.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
+            ctx, key => ctx.Published.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
 
         // Watermark for the follow-up gate (P2-24): the newest comment timestamp observed at
         // stage-1 fetch, in ADO server time. Comments the run itself posts (stage 9) are
@@ -38,7 +38,7 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
             ctx.RunId,
             ctx.Pr,
             ctx.RequirePullRequest().SourceCommitSha,
-            ctx.Kind,
+            ctx.Classification.Kind,
             ctx.StartedAt,
             _Clock.GetUtcNow(),
             Success: true,

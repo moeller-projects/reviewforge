@@ -47,11 +47,14 @@ public sealed class ResolvePipelineTests : IDisposable
 
         var runId = Guid.NewGuid();
         var ctx = Context(runId);
-        ctx.Resolve!.ResolvableComments = [Comment(7)];
-        ctx.Threads = [new ReviewThread(7, "k7", ReviewThreadStatus.Active,
-            [new ThreadComment("human", "Human", false, "Please update this", DateTimeOffset.UtcNow)],
-            new ThreadAnchor("src/A.cs", 1, 1))];
-        ctx.ChangedFileManifest = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+        ctx.Resolve = ctx.Resolve! with {ResolvableComments = [Comment(7)]};
+        ctx.Fetch = ctx.Fetch with
+        {
+            Threads = [new ReviewThread(7, "k7", ReviewThreadStatus.Active,
+                [new ThreadComment("human", "Human", false, "Please update this", DateTimeOffset.UtcNow)],
+                new ThreadAnchor("src/A.cs", 1, 1))],
+            ChangedFileManifest = [new ChangedFile("src/A.cs", ChangedFileType.Edit)],
+        };
 
         var agent = new NativeReviewAgent(new FakeChatClientFactory(chat));
         var process = new SuccessfulProcessRunner();
@@ -85,11 +88,17 @@ public sealed class ResolvePipelineTests : IDisposable
             [new ResolveAction(0, runId, 7, TriageVerdict.Actionable, ResolutionOutcome.Fixed, sha, false, DateTimeOffset.UtcNow)],
             CancellationToken.None);
         var ctx = Context(runId);
-        ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(7, TriageVerdict.Actionable, "src/A.cs:1", "high")];
-        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(7, "updated the return value.", ["src/A.cs"], sha, "fix(resolve): update return value")];
+        ctx.Resolve = ctx.Resolve! with
+        {
+            ThreadVerdicts = [new ThreadVerdict(7, TriageVerdict.Actionable, "src/A.cs:1", "high")],
+            AppliedResolutions = [new AppliedResolution(7, "updated the return value.", ["src/A.cs"], sha, "fix(resolve): update return value")],
+        };
         var body = CommentFormatter.WithBotPreamble($"Fixed in {sha[..7]} — fix(resolve): update return value. ");
-        ctx.Threads = [new ReviewThread(7, null, ReviewThreadStatus.Active,
-            [new ThreadComment("bot", "reviewforge", true, body, DateTimeOffset.UtcNow)])];
+        ctx.Fetch = ctx.Fetch with
+        {
+            Threads = [new ReviewThread(7, null, ReviewThreadStatus.Active,
+                [new ThreadComment("bot", "reviewforge", true, body, DateTimeOffset.UtcNow)])],
+        };
 
         await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -100,14 +109,13 @@ public sealed class ResolvePipelineTests : IDisposable
 
     private ReviewContext Context(Guid runId)
     {
-        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow, runId)
+        return new ReviewContext(Key, DateTimeOffset.UtcNow, runId)
         {
-            RepoDir = _repo,
+            Fetch = new FetchOutcome {PullRequest = sourcePr},
+            Repository = new RepoPreparation {RepoDir = _repo},
             RunKind = RunKind.Resolve,
             Resolve = new ResolveState(),
         };
-        ctx.PullRequest = sourcePr;
-        return ctx;
     }
 
     private static PullRequest sourcePr => new(42, "Resolve", null, "head-sha", "base-sha", "https://clone", false,

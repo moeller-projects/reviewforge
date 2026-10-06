@@ -44,15 +44,18 @@ public sealed class CommitFixesStageTests
         PullRequest? pr = null, params AppliedFix[] fixes)
         => new(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = pr ?? new PullRequest(
+            Fetch = new() {PullRequest = pr ?? new PullRequest(
                 1, "t", null, "head-sha", "base", "https://clone", false, "creator-1", "PR Author",
-                SourceRefName: "refs/heads/feature/x"),
-            RepoDir = Path.GetTempPath(),
-            AppliedFixes = fixes,
-            AcceptedFindings = fixes
-                .Where(f => f.Proposal.SourceThreadId is null)
-                .Select(f => Finding(f.DedupeKey))
-                .ToArray(),
+                SourceRefName: "refs/heads/feature/x")},
+            Repository = new() {RepoDir = Path.GetTempPath()},
+            AutoFix = new() {AppliedFixes = fixes},
+            Validation = new()
+            {
+                AcceptedFindings = fixes
+                    .Where(f => f.Proposal.SourceThreadId is null)
+                    .Select(f => Finding(f.DedupeKey))
+                    .ToArray(),
+            },
         };
 
     private static CommitFixesStage Stage(FakeGitOps git, FakeFindingStore store, AutoFixOptions options)
@@ -278,7 +281,7 @@ public sealed class CommitFixesStageTests
 
         await Stage(git, store, Options()).ExecuteAsync(ctx, CancellationToken.None);
 
-        var (threadId, text) = Assert.Single(ctx.FixCommandReplies);
+        var (threadId, text) = Assert.Single(ctx.AutoFix.FixCommandReplies);
         Assert.Equal(42, threadId);
         Assert.StartsWith("Fixed in ", text);
         Assert.Contains(fix.CommitSha![..7], text);
@@ -299,7 +302,7 @@ public sealed class CommitFixesStageTests
 
         await Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.NotNull(ctx.PushedHeadSha);
-        Assert.Equal(ctx.AppliedFixes[0].CommitSha, ctx.PushedHeadSha);
+        Assert.NotNull(ctx.AutoFix.PushedHeadSha);
+        Assert.Equal(ctx.AutoFix.AppliedFixes[0].CommitSha, ctx.AutoFix.PushedHeadSha);
     }
 }

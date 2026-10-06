@@ -46,11 +46,13 @@ public sealed class AutoFixStageTests : IDisposable
     private ReviewContext Ctx(PullRequest? pr = null)
         => new(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = pr ?? new PullRequest(
-                1, "t", null, "head-sha", "base", "url", false, "creator-1", "PR Author"),
-            RepoDir = _Root,
-            Diff = DiffIndex.Parse(string.Empty),
-            ChangedFileManifest = [new ChangedFile("script.sh", ChangedFileType.Edit)],
+            Fetch = new()
+            {
+                PullRequest = pr ?? new PullRequest(
+                    1, "t", null, "head-sha", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("script.sh", ChangedFileType.Edit)],
+            },
+            Repository = new() {RepoDir = _Root, Diff = DiffIndex.Parse(string.Empty)},
         };
 
     private static AutoFixFindingsStage Stage(
@@ -138,12 +140,12 @@ public sealed class AutoFixStageTests : IDisposable
         var abs = WriteFile("script.sh", "echo $name");
         var before = File.ReadAllBytes(abs);
         var ctx = Ctx();
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options(enabled: false)).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        Assert.Null(ctx.AcceptedFindings[0].AppliedFix);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        Assert.Null(ctx.Validation.AcceptedFindings[0].AppliedFix);
         Assert.Equal(before, File.ReadAllBytes(abs));
     }
 
@@ -153,12 +155,12 @@ public sealed class AutoFixStageTests : IDisposable
         WriteFile("script.sh", "echo $name");
         var ctx = Ctx(new PullRequest(
             1, "t", null, "head-sha", "base", "url", false, "intruder-9", "Mallory"));
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options(authors: ["creator-1"])).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        Assert.Null(ctx.AcceptedFindings[0].AppliedFix);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        Assert.Null(ctx.Validation.AcceptedFindings[0].AppliedFix);
     }
 
     [Fact]
@@ -168,12 +170,12 @@ public sealed class AutoFixStageTests : IDisposable
         // the immutable creator id only, so a spoofed display name gains nothing.
         WriteFile("script.sh", "echo $name");
         var ctx = Ctx();
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options(authors: ["pr author"])).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        Assert.Null(ctx.AcceptedFindings[0].AppliedFix);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        Assert.Null(ctx.Validation.AcceptedFindings[0].AppliedFix);
     }
 
     [Fact]
@@ -181,11 +183,11 @@ public sealed class AutoFixStageTests : IDisposable
     {
         WriteFile("script.sh", "echo $name");
         var ctx = Ctx();
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options(authors: [])).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
     }
 
     [Fact]
@@ -193,11 +195,11 @@ public sealed class AutoFixStageTests : IDisposable
     {
         WriteFile("script.sh", "echo $name");
         var ctx = Ctx();
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options(rules: ["docker.add-vs-copy"])).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
     }
 
     [Fact]
@@ -205,12 +207,12 @@ public sealed class AutoFixStageTests : IDisposable
     {
         WriteFile("Dockerfile", "ADD app.txt /app/");
         var ctx = Ctx();
-        ctx.ChangedFileManifest = [new ChangedFile("Dockerfile", ChangedFileType.Edit)];
-        ctx.AcceptedFindings = [Finding("docker.add-vs-copy", "Dockerfile", 1, "docker-key")];
+        ctx.Fetch = ctx.Fetch with {ChangedFileManifest = [new ChangedFile("Dockerfile", ChangedFileType.Edit)]};
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("docker.add-vs-copy", "Dockerfile", 1, "docker-key")]};
 
         await Stage(Options(rules: [], allowAllRules: true)).ExecuteAsync(ctx, CancellationToken.None);
 
-        var fix = Assert.Single(ctx.AppliedFixes);
+        var fix = Assert.Single(ctx.AutoFix.AppliedFixes);
         Assert.Equal("COPY app.txt /app/", fix.Proposal.Replacement);
     }
 
@@ -223,7 +225,7 @@ public sealed class AutoFixStageTests : IDisposable
         await Stage(Options(commands: true, rules: []), chat: chat)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AppliedFixes);
+        Assert.Single(ctx.AutoFix.AppliedFixes);
     }
 
     // ---- deterministic pass ----
@@ -236,7 +238,7 @@ public sealed class AutoFixStageTests : IDisposable
         RecordingEditor? recording = null;
         var factoryInvoked = false;
         var ctx = Ctx();
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(
                 Options(),
@@ -248,11 +250,11 @@ public sealed class AutoFixStageTests : IDisposable
                 })
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        var fix = Assert.Single(ctx.AppliedFixes);
+        var fix = Assert.Single(ctx.AutoFix.AppliedFixes);
         Assert.Equal("k1", fix.DedupeKey);
         Assert.Equal(FixOrigin.Deterministic, fix.Proposal.Origin);
         Assert.Equal("echo \"$name\"", fix.Proposal.Replacement);
-        Assert.Same(fix, ctx.AcceptedFindings[0].AppliedFix);
+        Assert.Same(fix, ctx.Validation.AcceptedFindings[0].AppliedFix);
         // Zero-write path: the deterministic pass never constructs an editor and never writes.
         Assert.False(factoryInvoked);
         Assert.Null(recording);
@@ -265,12 +267,12 @@ public sealed class AutoFixStageTests : IDisposable
         var abs = WriteFile("script.sh", "echo \"$name\""); // already quoted → decline
         var before = File.ReadAllBytes(abs);
         var ctx = Ctx();
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options()).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        Assert.Null(ctx.AcceptedFindings[0].AppliedFix);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        Assert.Null(ctx.Validation.AcceptedFindings[0].AppliedFix);
         Assert.Equal(before, File.ReadAllBytes(abs));
     }
 
@@ -282,22 +284,22 @@ public sealed class AutoFixStageTests : IDisposable
         var downgraded = Finding("bash.unquoted-vars", "script.sh", 1, "k2");
         downgraded.AnchorDowngraded = true;
         var ctx = Ctx();
-        ctx.AcceptedFindings = [noKey, downgraded];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [noKey, downgraded]};
 
         await Stage(Options()).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
     }
 
     [Fact]
     public async Task Missing_file_is_skipped_without_failing_the_run()
     {
         var ctx = Ctx();
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "ghost.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "ghost.sh", 1, "k1")]};
 
         await Stage(Options()).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
     }
 
     [Fact]
@@ -315,7 +317,7 @@ public sealed class AutoFixStageTests : IDisposable
             .ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Contains("poisoning", ex.Message);
-        Assert.Empty(ctx.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
     }
 
     [Fact]
@@ -324,17 +326,20 @@ public sealed class AutoFixStageTests : IDisposable
         var abs = WriteFile("script.sh", "echo $one", "echo $two");
         var before = File.ReadAllBytes(abs);
         var ctx = Ctx();
-        ctx.AcceptedFindings =
-        [
-            Finding("bash.unquoted-vars", "script.sh", 1, "k1"),
-            Finding("bash.unquoted-vars", "script.sh", 2, "k2"),
-        ];
+        ctx.Validation = ctx.Validation with
+        {
+            AcceptedFindings =
+            [
+                Finding("bash.unquoted-vars", "script.sh", 1, "k1"),
+                Finding("bash.unquoted-vars", "script.sh", 2, "k2"),
+            ],
+        };
 
         await Stage(Options(maxFixes: 3)).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(2, ctx.AppliedFixes.Count);
-        Assert.Equal("k1", ctx.AppliedFixes[0].DedupeKey);
-        Assert.Equal("k2", ctx.AppliedFixes[1].DedupeKey);
+        Assert.Equal(2, ctx.AutoFix.AppliedFixes.Count);
+        Assert.Equal("k1", ctx.AutoFix.AppliedFixes[0].DedupeKey);
+        Assert.Equal("k2", ctx.AutoFix.AppliedFixes[1].DedupeKey);
         Assert.Equal(before, File.ReadAllBytes(abs));
     }
 
@@ -343,16 +348,19 @@ public sealed class AutoFixStageTests : IDisposable
     {
         WriteFile("script.sh", "echo $one", "echo $two", "echo $three");
         var ctx = Ctx();
-        ctx.AcceptedFindings =
-        [
-            Finding("bash.unquoted-vars", "script.sh", 1, "k1"),
-            Finding("bash.unquoted-vars", "script.sh", 2, "k2"),
-            Finding("bash.unquoted-vars", "script.sh", 3, "k3"),
-        ];
+        ctx.Validation = ctx.Validation with
+        {
+            AcceptedFindings =
+            [
+                Finding("bash.unquoted-vars", "script.sh", 1, "k1"),
+                Finding("bash.unquoted-vars", "script.sh", 2, "k2"),
+                Finding("bash.unquoted-vars", "script.sh", 3, "k3"),
+            ],
+        };
 
         await Stage(Options(maxFixes: 2)).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(2, ctx.AppliedFixes.Count);
+        Assert.Equal(2, ctx.AutoFix.AppliedFixes.Count);
     }
 
     // ---- commanded pass ----
@@ -363,12 +371,15 @@ public sealed class AutoFixStageTests : IDisposable
         var t0 = DateTimeOffset.UtcNow.AddMinutes(-5);
         var commandText = instruction is null ? "/fixit" : $"/fixit {instruction}";
         var ctx = Ctx();
-        ctx.Threads =
-        [
-            new ReviewThread(threadId, null, ReviewThreadStatus.Active,
-                [new ThreadComment("creator-1", "PR Author", false, commandText, t0)],
-                new ThreadAnchor("script.sh", 1, 1)),
-        ];
+        ctx.Fetch = ctx.Fetch with
+        {
+            Threads =
+            [
+                new ReviewThread(threadId, null, ReviewThreadStatus.Active,
+                    [new ThreadComment("creator-1", "PR Author", false, commandText, t0)],
+                    new ThreadAnchor("script.sh", 1, 1)),
+            ],
+        };
         return ctx;
     }
 
@@ -420,14 +431,14 @@ public sealed class AutoFixStageTests : IDisposable
         await Stage(Options(commands: true), chat: EditScriptThenDone(1, "echo \"$name\""))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        var fix = Assert.Single(ctx.AppliedFixes);
+        var fix = Assert.Single(ctx.AutoFix.AppliedFixes);
         Assert.Equal("thread-42", fix.DedupeKey);
         Assert.Equal(FixOrigin.LlmCommanded, fix.Proposal.Origin);
         Assert.Equal(42, fix.Proposal.SourceThreadId);
         Assert.Equal("script.sh", fix.Proposal.FilePath);
         Assert.Equal("echo \"$name\"", fix.Proposal.Replacement);
         Assert.Equal("quoted the variable.", fix.Proposal.Rationale);
-        Assert.Empty(ctx.FixCommandReplies);
+        Assert.Empty(ctx.AutoFix.FixCommandReplies);
         Assert.Equal(before, File.ReadAllBytes(abs)); // reverted
     }
 
@@ -449,13 +460,13 @@ public sealed class AutoFixStageTests : IDisposable
     public async Task Command_out_of_diff_gets_polite_reply()
     {
         var ctx = CommandCtx("echo $name");
-        ctx.ChangedFileManifest = [new ChangedFile("other.sh", ChangedFileType.Edit)];
+        ctx.Fetch = ctx.Fetch with {ChangedFileManifest = [new ChangedFile("other.sh", ChangedFileType.Edit)]};
 
         await Stage(Options(commands: true), chat: EditScriptThenDone(1, "echo \"$name\""))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        var reply = Assert.Single(ctx.FixCommandReplies);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        var reply = Assert.Single(ctx.AutoFix.FixCommandReplies);
         Assert.Equal(42, reply.ThreadId);
         Assert.Contains("isn't part of the current diff", reply.Text);
     }
@@ -470,8 +481,8 @@ public sealed class AutoFixStageTests : IDisposable
 
         await Stage(Options(commands: true), chat: chat).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        var reply = Assert.Single(ctx.FixCommandReplies);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        var reply = Assert.Single(ctx.AutoFix.FixCommandReplies);
         Assert.Contains("couldn't derive a safe fix", reply.Text);
     }
 
@@ -479,32 +490,35 @@ public sealed class AutoFixStageTests : IDisposable
     public async Task Closed_bot_thread_does_not_cover_a_command()
     {
         var ctx = CommandCtx("echo $name");
-        ctx.Threads =
-        [
-            .. ctx.Threads,
-            new ReviewThread(
-                99, "existing-fix", ReviewThreadStatus.Closed,
-                [new ThreadComment("reviewforge-bot", "reviewforge bot", true, "fixed", DateTimeOffset.UtcNow.AddMinutes(-2))],
-                new ThreadAnchor("script.sh", 1, 1)),
-        ];
+        ctx.Fetch = ctx.Fetch with
+        {
+            Threads =
+            [
+                .. ctx.Fetch.Threads,
+                new ReviewThread(
+                    99, "existing-fix", ReviewThreadStatus.Closed,
+                    [new ThreadComment("reviewforge-bot", "reviewforge bot", true, "fixed", DateTimeOffset.UtcNow.AddMinutes(-2))],
+                    new ThreadAnchor("script.sh", 1, 1)),
+            ],
+        };
 
         await Stage(Options(commands: true), chat: EditScriptThenDone(1, "echo \"$name\""))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AppliedFixes);
+        Assert.Single(ctx.AutoFix.AppliedFixes);
     }
 
     [Fact]
     public async Task Command_dedupes_against_this_runs_deterministic_fix()
     {
         var ctx = CommandCtx("echo $name");
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options(commands: true, maxFixes: 3), chat: EditScriptThenDone(1, "echo \"$name\""))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AppliedFixes); // only the deterministic fix
-        var reply = Assert.Single(ctx.FixCommandReplies);
+        Assert.Single(ctx.AutoFix.AppliedFixes); // only the deterministic fix
+        var reply = Assert.Single(ctx.AutoFix.FixCommandReplies);
         Assert.Contains("already posted", reply.Text);
     }
 
@@ -513,13 +527,13 @@ public sealed class AutoFixStageTests : IDisposable
     {
         WriteFile("other.sh", "echo $x");
         var ctx = CommandCtx("echo $name");
-        ctx.AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Finding("bash.unquoted-vars", "script.sh", 1, "k1")]};
 
         await Stage(Options(commands: true, maxFixes: 1), chat: EditScriptThenDone(1, "echo \"$name\""))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AppliedFixes); // deterministic fix consumed the budget
-        var reply = Assert.Single(ctx.FixCommandReplies);
+        Assert.Single(ctx.AutoFix.AppliedFixes); // deterministic fix consumed the budget
+        var reply = Assert.Single(ctx.AutoFix.FixCommandReplies);
         Assert.Contains("budget for this run is exhausted", reply.Text);
         Assert.Contains("Reply /fixit again", reply.Text);
     }
@@ -530,17 +544,20 @@ public sealed class AutoFixStageTests : IDisposable
         WriteFile("script.sh", "echo $name");
         var t0 = DateTimeOffset.UtcNow.AddMinutes(-5);
         var ctx = Ctx();
-        ctx.Threads =
-        [
-            new ReviewThread(42, null, ReviewThreadStatus.Active,
-                [new ThreadComment("someone-else", "Reviewer", false, "/fixit", t0)],
-                new ThreadAnchor("script.sh", 1, 1)),
-        ];
+        ctx.Fetch = ctx.Fetch with
+        {
+            Threads =
+            [
+                new ReviewThread(42, null, ReviewThreadStatus.Active,
+                    [new ThreadComment("someone-else", "Reviewer", false, "/fixit", t0)],
+                    new ThreadAnchor("script.sh", 1, 1)),
+            ],
+        };
 
         await Stage(Options(commands: true)).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        Assert.Empty(ctx.FixCommandReplies);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.FixCommandReplies);
     }
 
     [Theory]
@@ -551,18 +568,21 @@ public sealed class AutoFixStageTests : IDisposable
         WriteFile("script.sh", "echo $name");
         var t0 = DateTimeOffset.UtcNow.AddMinutes(-5);
         var ctx = Ctx();
-        ctx.ChangedFileManifest = [new ChangedFile(anchorPath, ChangedFileType.Edit)];
-        ctx.Threads =
-        [
-            new ReviewThread(42, null, ReviewThreadStatus.Active,
-                [new ThreadComment("creator-1", "PR Author", false, "/fixit", t0)],
-                new ThreadAnchor(anchorPath, 1, 1)),
-        ];
+        ctx.Fetch = ctx.Fetch with
+        {
+            ChangedFileManifest = [new ChangedFile(anchorPath, ChangedFileType.Edit)],
+            Threads =
+            [
+                new ReviewThread(42, null, ReviewThreadStatus.Active,
+                    [new ThreadComment("creator-1", "PR Author", false, "/fixit", t0)],
+                    new ThreadAnchor(anchorPath, 1, 1)),
+            ],
+        };
         var chat = new ScriptedChatClient();
 
         await Stage(Options(commands: true), chat: chat).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
         Assert.Equal(0, chat.Calls);
     }
 
@@ -574,8 +594,8 @@ public sealed class AutoFixStageTests : IDisposable
         await Stage(Options(commands: false), chat: EditScriptThenDone(1, "echo \"$name\""))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedFixes);
-        Assert.Empty(ctx.FixCommands);
+        Assert.Empty(ctx.AutoFix.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.FixCommands);
     }
 
     [Fact]
@@ -610,7 +630,7 @@ public sealed class AutoFixStageTests : IDisposable
                 chat: EditScriptThenDone(1, "echo \"$name\"", summary: "   "))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        var fix = Assert.Single(ctx.AppliedFixes);
+        var fix = Assert.Single(ctx.AutoFix.AppliedFixes);
         Assert.Equal("addresses the review comment with a minimal edit", fix.Proposal.Rationale);
     }
 }

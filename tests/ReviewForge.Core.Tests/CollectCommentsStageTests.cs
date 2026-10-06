@@ -106,7 +106,11 @@ public sealed class CollectCommentsStageTests
             new ResolveAction(0, Guid.NewGuid(), 1, TriageVerdict.Question, ResolutionOutcome.Question,
                 null, true, Now.AddMinutes(2))
         ], CancellationToken.None);
-        var ctx = new ReviewContext(pr, Now) {PullRequest = source.Pr, Resolve = new ResolveState()};
+        var ctx = new ReviewContext(pr, Now)
+        {
+            Fetch = new FetchOutcome {PullRequest = source.Pr},
+            Resolve = new ResolveState(),
+        };
 
         await new CollectCommentsStage(source, store, new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -146,7 +150,7 @@ public sealed class CollectCommentsStageTests
     private static ReviewContext Context(FakePullRequestSource source)
         => new(new PrKey("o", "p", "r", 1), Now)
         {
-            PullRequest = source.Pr with {CreatorId = "creator"},
+            Fetch = new FetchOutcome {PullRequest = source.Pr with {CreatorId = "creator"}},
             Resolve = new ResolveState(),
         };
 

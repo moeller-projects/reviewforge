@@ -19,8 +19,15 @@ public sealed class ResolveStageBoundaryTests : IDisposable
 
     private ReviewContext Context(Guid? runId = null)
     {
-        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow, runId) { RepoDir = _root, Resolve = new ResolveState() };
-        ctx.PullRequest = new PullRequest(1, "title", null, "head-sha", "base", "https://clone", false, "creator", "Creator", "refs/heads/feature");
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow, runId)
+        {
+            Repository = new RepoPreparation {RepoDir = _root},
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(1, "title", null, "head-sha", "base", "https://clone", false, "creator", "Creator", "refs/heads/feature"),
+            },
+            Resolve = new ResolveState(),
+        };
         return ctx;
     }
 
@@ -112,7 +119,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     public async Task Commit_push_downgrades_when_source_ref_is_missing_and_does_not_commit()
     {
         var store = new FakeFindingStore(); var git = new FakeGitOps();
-        var ctx = Context(); ctx.PullRequest = ctx.PullRequest! with { SourceRefName = null };
+        var ctx = Context(); ctx.Fetch = ctx.Fetch with {PullRequest = ctx.Fetch.PullRequest! with { SourceRefName = null }};
         ctx.Resolve!.ResolvableComments = [Comment(1)];
         ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
         ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
@@ -189,8 +196,8 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             "abcdef123", false, DateTimeOffset.UtcNow, body);
         await store.SaveResolveActionsAsync(Key, run, [action], CancellationToken.None);
         var ctx = Context(run);
-        ctx.Threads = [new ReviewThread(1, "k1", ReviewThreadStatus.Active,
-            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])];
+        ctx.Fetch = ctx.Fetch with {Threads = [new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])]};
 
         await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
         Assert.Empty(source.Replies);
@@ -208,8 +215,8 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         await store.SaveResolveActionsAsync(Key, run, [action], CancellationToken.None);
         var ctx = Context(run);
         // Human-authored thread (no bot dedupe key): a Fixed outcome must not close it.
-        ctx.Threads = [new ReviewThread(1, null, ReviewThreadStatus.Active,
-            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])];
+        ctx.Fetch = ctx.Fetch with {Threads = [new ReviewThread(1, null, ReviewThreadStatus.Active,
+            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])]};
 
         await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
 

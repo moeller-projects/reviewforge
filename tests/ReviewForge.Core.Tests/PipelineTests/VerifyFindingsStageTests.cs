@@ -39,9 +39,12 @@ public sealed class VerifyFindingsStageTests : IDisposable
     {
         return new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            RepoDir = _RepoDir,
-            AcceptedFindings = findings,
-            Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
+            Repository = new() {RepoDir = _RepoDir},
+            Validation = new() {AcceptedFindings = findings},
+            Reasoning = new()
+            {
+                Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
+            },
         };
     }
 
@@ -60,7 +63,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(["k1"], ctx.AcceptedFindings.Select(f => f.DedupeKey));
+        Assert.Equal(["k1"], ctx.Validation.AcceptedFindings.Select(f => f.DedupeKey));
     }
 
     [Fact]
@@ -72,7 +75,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(["k2"], ctx.AcceptedFindings.Select(f => f.DedupeKey));
+        Assert.Equal(["k2"], ctx.Validation.AcceptedFindings.Select(f => f.DedupeKey));
     }
 
     [Fact]
@@ -84,7 +87,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(["k1"], ctx.AcceptedFindings.Select(f => f.DedupeKey));
+        Assert.Equal(["k1"], ctx.Validation.AcceptedFindings.Select(f => f.DedupeKey));
     }
 
     [Fact]
@@ -98,7 +101,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(2, chat.Calls);
-        Assert.Empty(ctx.AcceptedFindings);
+        Assert.Empty(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -112,7 +115,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(2, chat.Calls);
-        Assert.Equal(2, ctx.AcceptedFindings.Count);
+        Assert.Equal(2, ctx.Validation.AcceptedFindings.Count);
     }
 
     [Fact]
@@ -127,7 +130,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
 
         await stage.ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AcceptedFindings);
+        Assert.Single(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -157,7 +160,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
         await stage.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, chat.Calls);
-        Assert.Single(ctx.AcceptedFindings);
+        Assert.Single(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -175,12 +178,12 @@ public sealed class VerifyFindingsStageTests : IDisposable
     {
         var chat = new ScriptedChatClient();
         var ctx = Ctx(Finding("k1"));
-        ctx.Result!.ReviewDepth = "trivial diff — no agent run";
+        ctx.Reasoning.Result!.ReviewDepth = "trivial diff — no agent run";
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, chat.Calls);
-        Assert.Single(ctx.AcceptedFindings);
+        Assert.Single(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -192,7 +195,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, chat.Calls);
-        Assert.Single(ctx.AcceptedFindings);
+        Assert.Single(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -207,7 +210,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
         await Stage(chat, new VerifyFindingsOptions {Enabled = true, MaxFindings = 2})
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(5, ctx.AcceptedFindings.Count); // none verified → all kept
+        Assert.Equal(5, ctx.Validation.AcceptedFindings.Count); // none verified → all kept
         var prompt = chat.Received[0].Last().Text;
         Assert.Contains("key: k1", prompt);
         Assert.Contains("key: k2", prompt);
@@ -262,7 +265,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AcceptedFindings);
+        Assert.Single(ctx.Validation.AcceptedFindings);
         Assert.DoesNotContain(">>", chat.Received[0].Last().Text);
     }
 

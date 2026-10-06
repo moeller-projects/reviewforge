@@ -172,8 +172,8 @@ public sealed class ReviewWorker(
             await store.SaveRunAsync(new ReviewRun(
                 request.RunId,
                 request.Pr,
-                ctx?.PullRequest?.SourceCommitSha ?? request.HeadSha ?? string.Empty,
-                ctx?.Kind ?? ReviewKind.Full,
+                ctx?.Fetch.PullRequest?.SourceCommitSha ?? request.HeadSha ?? string.Empty,
+                ctx?.Classification.Kind ?? ReviewKind.Full,
                 ctx?.StartedAt ?? request.EnqueuedAt,
                 _Clock.GetUtcNow(),
                 Success: false,
