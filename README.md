@@ -25,7 +25,8 @@ src/
   ReviewForge.Service/        ASP.NET host: Endpoints, Queue/ (ReviewQueue+RunTracker, InFlightClaims),
                               Security/ (API-key filter), Logging/ (per-run JSONL), hosted workers
                               (ReviewWorker, DiscoverySweepWorker, CheckoutEvictionWorker,
-                              ShellReaperService), ReviewPipelineFactory (composition root), OpenTelemetry
+                              ShellReaperService), Pipelines/ (AgentFactory, ReviewPipelineBuilder,
+                              StageCatalog), OpenTelemetry
   ReviewForge.AppHost/        Aspire orchestration for the dev loop (dashboard + OTLP injection)
   ReviewForge.Cli/            thin client for the service (submit / status)
 tests/

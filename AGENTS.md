@@ -33,7 +33,8 @@ src/
                                ClaimHeartbeat), Security/ (API-key filter),
                                hosted workers (ReviewWorker, DiscoverySweepWorker,
                                CheckoutEvictionWorker, ShellReaperService),
-                               ReviewPipelineFactory (composition root), Program.cs
+                               Pipelines/ (AgentFactory, ReviewPipelineBuilder, StageCatalog),
+                               Program.cs
   ReviewForge.AppHost/         Aspire orchestration (dev dashboard, OTLP injection, secret params)
   ReviewForge.Cli/             thin HTTP client (submit / status) — all logic is server-side
 tests/

@@ -37,25 +37,32 @@ public static partial class ServiceCollectionExtensions
                 "Discovery:Creators must be a non-empty allowlist when Discovery:SweepInterval is enabled " +
                 "(or set Discovery:AllowAllCreators=true to accept PRs from any author explicitly).");
 
-        services.AddSingleton(sp => new ReviewPipelineFactory(
-            sp.GetRequiredService<IPullRequestSource>(), sp.GetRequiredService<IFindingStore>(),
-            sp.GetRequiredService<RepoCheckoutPool>(), sp.GetRequiredService<IChatClientFactory>(),
-            sp.GetRequiredService<IOptions<ReviewOptions>>(), sp.GetRequiredService<IOptions<WorkspaceOptions>>(),
+        services.AddSingleton(typeof(PushCredentials), sp =>
+        {
+            var ado = sp.GetRequiredService<IOptions<AdoOptions>>().Value;
+            var autoFix = sp.GetRequiredService<AutoFixOptions>();
+            return new PushCredentials(ado.Pat, autoFix.CommitAuthorName, autoFix.CommitAuthorEmail);
+        });
+        services.AddSingleton<AgentFactory>();
+        services.AddSingleton<StageCatalog>(sp => new StageCatalog(
+            sp.GetRequiredService<IPullRequestSource>(),
+            sp.GetRequiredService<IFindingStore>(),
+            sp.GetRequiredService<RepoCheckoutPool>(),
+            sp.GetRequiredService<IChatClientFactory>(),
+            sp.GetService<IContextEnricher>(),
+            sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<ILoggerFactory>(),
-            enricher: sp.GetService<IContextEnricher>(), clock: sp.GetRequiredService<TimeProvider>(),
-            findingFixers: sp.GetRequiredService<IFindingFixer[]>(),
-            autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>(),
-            verifyFindingsOptions: sp.GetRequiredService<IOptions<VerifyFindingsOptions>>(),
-            gitOps: sp.GetRequiredService<IGitOps>(), pushPat: sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat));
-        if (configuration.GetValue<bool>($"{ResolveOptions.SectionName}:{nameof(ResolveOptions.Enabled)}"))
-            services.AddSingleton<IResolveRunService>(sp => new ResolveRunService(
-                sp.GetRequiredService<IPullRequestSource>(), sp.GetRequiredService<IFindingStore>(),
-                sp.GetRequiredService<RepoCheckoutPool>(), sp.GetRequiredService<IChatClientFactory>(),
-                sp.GetRequiredService<IGitOps>(), sp.GetRequiredService<IProcessRunner>(),
-                sp.GetRequiredService<AutoFixOptions>(), sp.GetRequiredService<IOptions<ResolveOptions>>(),
-                sp.GetRequiredService<IOptions<ReviewOptions>>(),
-                sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<TimeProvider>(),
-                sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat));
+            sp.GetRequiredService<IOptions<ReviewOptions>>(),
+            sp.GetRequiredService<IOptions<ResolveOptions>>(),
+            sp.GetRequiredService<IOptions<WorkspaceOptions>>(),
+            sp.GetRequiredService<IOptions<AutoFixOptions>>(),
+            sp.GetRequiredService<IOptions<VerifyFindingsOptions>>(),
+            sp.GetServices<IFindingFixer>(),
+            sp.GetRequiredService<IGitOps>(),
+            sp.GetRequiredService<IProcessRunner>(),
+            sp.GetRequiredService<PushCredentials>()));
+        services.AddSingleton<ResolveContextInitializer>();
+        services.AddSingleton<IPipelineBuilder, ReviewPipelineBuilder>();
 
         services.AddHostedService<WorkspaceStartupTask>();
         services.AddHostedService<ReviewWorker>();

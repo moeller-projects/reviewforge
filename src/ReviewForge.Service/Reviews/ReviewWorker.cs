@@ -15,12 +15,11 @@ public sealed class ReviewWorker(
     IReviewQueue queue,
     IOptions<HostOptions> hostOptions,
     RunTracker tracker,
-    ReviewPipelineFactory pipelineFactory,
+    IPipelineBuilder pipelineBuilder,
     InFlightClaims claims,
     IFindingStore store,
     ILogger<ReviewWorker> logger,
-    TimeProvider? clock = null,
-    IResolveRunService? resolveService = null) : BackgroundService
+    TimeProvider? clock = null) : BackgroundService
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
@@ -78,8 +77,6 @@ public sealed class ReviewWorker(
                     EnqueueContext = request.EnqueueContext,
                     Trigger = request.Trigger,
                 };
-                if (request.Kind == RunKind.Resolve && resolveService is null)
-                    throw new InvalidOperationException("resolve run requested but no resolve service is registered");
 
                 // Keep the reservation alive for the whole run so a review that outlives the
                 // claim TTL does not admit a duplicate; the publish guard still fails the run
@@ -100,14 +97,7 @@ public sealed class ReviewWorker(
                     .RunUntilCancelled(heartbeatCts.Token);
                 try
                 {
-                    if (request.Kind == RunKind.Resolve)
-                    {
-                        await resolveService!.ExecuteAsync(request, ctx!, stoppingToken);
-                    }
-                    else
-                    {
-                        await pipelineFactory.Create().RunAsync(ctx!, stoppingToken);
-                    }
+                    await pipelineBuilder.Build(request.Kind, request, ctx!).RunAsync(ctx!, stoppingToken);
                 }
                 finally
                 {
