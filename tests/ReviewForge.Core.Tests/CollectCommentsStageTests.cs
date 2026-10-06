@@ -24,7 +24,7 @@ public sealed class CollectCommentsStageTests
 
         await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
-        var comments = ctx.ResolvableComments;
+        var comments = ctx.Resolve!.ResolvableComments;
         Assert.Equal([1, 2, 3], comments.Select(c => c.ThreadId));
         var first = comments[0];
         Assert.Equal("creator", first.RequesterId);
@@ -50,12 +50,12 @@ public sealed class CollectCommentsStageTests
             Thread(7, [Human("creator", "eligible", Now.AddMinutes(1))])
         ];
         var ctx = Context(source);
-        ctx.ResolveWatermark = Now;
+        ctx.Resolve!.ResolveWatermark = Now;
 
         await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
         // "/resolve" is itself a resolution request and stays; "/fixit" belongs to auto-fix.
-        Assert.Equal([6, 7], ctx.ResolvableComments.Select(c => c.ThreadId));
+        Assert.Equal([6, 7], ctx.Resolve!.ResolvableComments.Select(c => c.ThreadId));
     }
 
     [Fact]
@@ -82,9 +82,9 @@ public sealed class CollectCommentsStageTests
 
 
         await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(["reviewer"]), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
-        Assert.Equal(["reviewer", "creator"], ctx.ResolvableComments.Select(comment => comment.RequesterId));
-        Assert.True(ctx.ResolvableComments[0].CommenterAllowed);
-        Assert.False(ctx.ResolvableComments[1].CommenterAllowed);
+        Assert.Equal(["reviewer", "creator"], ctx.Resolve!.ResolvableComments.Select(comment => comment.RequesterId));
+        Assert.True(ctx.Resolve!.ResolvableComments[0].CommenterAllowed);
+        Assert.False(ctx.Resolve!.ResolvableComments[1].CommenterAllowed);
     }
 
     [Fact]
@@ -103,11 +103,11 @@ public sealed class CollectCommentsStageTests
             new ResolveAction(0, Guid.NewGuid(), 1, TriageVerdict.Question, ResolutionOutcome.Question,
                 null, true, Now.AddMinutes(2))
         ], CancellationToken.None);
-        var ctx = new ReviewContext(pr, Now) {PullRequest = source.Pr};
+        var ctx = new ReviewContext(pr, Now) {PullRequest = source.Pr, Resolve = new ResolveState()};
 
         await new CollectCommentsStage(source, store, new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
-        var only = Assert.Single(ctx.ResolvableComments);
+        var only = Assert.Single(ctx.Resolve!.ResolvableComments);
         Assert.Equal(2, only.ThreadId);
         Assert.Equal("new request", only.RequestText);
     }
@@ -133,15 +133,19 @@ public sealed class CollectCommentsStageTests
                 null, true, Now.AddMinutes(1))
         ], CancellationToken.None);
         var ctx = Context(source);
-        ctx.ResolveWatermark = Now;
+        ctx.Resolve!.ResolveWatermark = Now;
 
         await new CollectCommentsStage(source, store, new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(9, Assert.Single(ctx.ResolvableComments).ThreadId);
+        Assert.Equal(9, Assert.Single(ctx.Resolve!.ResolvableComments).ThreadId);
     }
 
     private static ReviewContext Context(FakePullRequestSource source)
-        => new(new PrKey("o", "p", "r", 1), Now) {PullRequest = source.Pr with {CreatorId = "creator"}};
+        => new(new PrKey("o", "p", "r", 1), Now)
+        {
+            PullRequest = source.Pr with {CreatorId = "creator"},
+            Resolve = new ResolveState(),
+        };
 
     private static ThreadComment Human(string id, string text, DateTimeOffset at)
         => new(id, id, false, text, at);

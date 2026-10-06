@@ -2,7 +2,6 @@ using System.Diagnostics;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
-
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline;
@@ -52,20 +51,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public IReadOnlySet<string> ResolvedKeys { get; set; } = new HashSet<string>(StringComparer.Ordinal);
 
     // Stage 2 — gate
-    // Resolve pipeline state.
+    // Gate state shared by review and resolve runs.
     public RunKind RunKind { get; set; } = RunKind.Review;
-    public string? RequestedHeadSha { get; set; }
-    public DateTimeOffset? ResolveWatermark { get; set; }
-    public IReadOnlyList<ResolvableComment> ResolvableComments { get; set; } = [];
-    public IReadOnlyList<ThreadVerdict> ThreadVerdicts { get; set; } = [];
-    public ResolvePlan? ResolvePlan { get; set; }
-    public string ResolveVerificationStatus { get; set; } = "skipped";
-    public IReadOnlyList<AppliedResolution> AppliedResolutions { get; set; } = [];
-    public IReadOnlyDictionary<int, ResolutionOutcome> ResolutionOutcomes { get; set; } = new Dictionary<int, ResolutionOutcome>();
-    public IReadOnlyList<ResolveAction> ResolveActions { get; set; } = [];
-    public IReadOnlyDictionary<int, string> ResolutionDetails { get; set; } = new Dictionary<int, string>();
-    public IReadOnlyDictionary<int, HashLineEditor> ResolutionEditors { get; set; } = new Dictionary<int, HashLineEditor>();
-
+    public ResolveState? Resolve { get; set; }
     public GateDecision? Gate { get; set; }
 
     // Stage 3 — repository
@@ -189,6 +177,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public ReviewResult RequireResult()
         => Result ?? throw new InvalidOperationException(
             $"stage ordering violation: {nameof(Result)} is null but required (reasoning stage must run first)");
+
+    public ResolveState RequireResolveState()
+        => Resolve ?? throw new InvalidOperationException("resolve state is not initialized for this run");
 
     public void Terminate(string reason)
     {

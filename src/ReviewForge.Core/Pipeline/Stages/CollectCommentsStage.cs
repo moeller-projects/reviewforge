@@ -15,6 +15,7 @@ public sealed class CollectCommentsStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var resolve = ctx.RequireResolveState();
         ctx.Threads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false);
         var priorByThread = (await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false))
             .ToDictionary(action => action.ThreadId);
@@ -30,7 +31,7 @@ public sealed class CollectCommentsStage(
                 continue;
             var latestHuman = thread.Comments.LastOrDefault(c => !c.IsBot);
             if (latestHuman is null
-                || (!deferred && ctx.ResolveWatermark is { } watermark && latestHuman.PublishedAt <= watermark)
+                || (!deferred && resolve.ResolveWatermark is { } watermark && latestHuman.PublishedAt <= watermark)
                 || (!deferred && previousAction is not null && latestHuman.PublishedAt <= previousAction.CreatedAt))
                 continue;
             // "/fixit" belongs to the auto-fix pipeline. "/resolve" stays: the command
@@ -52,7 +53,7 @@ public sealed class CollectCommentsStage(
                 allowed));
         }
 
-        ctx.ResolvableComments = comments;
+        resolve.ResolvableComments = comments;
     }
 
     private async Task<IReadOnlyList<ReviewThread>> ResolveThreadsAsync(ReviewContext ctx, CancellationToken ct)

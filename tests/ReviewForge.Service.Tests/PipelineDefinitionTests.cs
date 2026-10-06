@@ -91,7 +91,7 @@ public sealed class PipelineDefinitionTests
         new ResolveContextInitializer().Initialize(request, context);
 
         Assert.Equal(RunKind.Resolve, context.RunKind);
-        Assert.Equal("expected-head", context.RequestedHeadSha);
+        Assert.Equal("expected-head", context.Resolve!.RequestedHeadSha);
         Assert.Equal(EnqueueTrigger.ResolveCommand, context.Trigger);
         Assert.Equal(enqueueContext, context.EnqueueContext);
     }
@@ -106,6 +106,7 @@ public sealed class PipelineDefinitionTests
         {
             new ResolveContextInitializer().Initialize(request, context);
         });
+        Assert.Null(context.Resolve);
     }
 
     [Fact]

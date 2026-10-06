@@ -14,13 +14,14 @@ public sealed class VerifyBuildStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        if (command.Count == 0 || ctx.AppliedResolutions.Count == 0) return;
-        ctx.ResolveVerificationStatus = "passed";
-        var outcomes = new Dictionary<int, ResolutionOutcome>(ctx.ResolutionOutcomes);
-        var details = new Dictionary<int, string>(ctx.ResolutionDetails);
+        var resolve = ctx.RequireResolveState();
+        if (command.Count == 0 || resolve.AppliedResolutions.Count == 0) return;
+        resolve.ResolveVerificationStatus = "passed";
+        var outcomes = new Dictionary<int, ResolutionOutcome>(resolve.ResolutionOutcomes);
+        var details = new Dictionary<int, string>(resolve.ResolutionDetails);
         var surviving = new List<AppliedResolution>();
         var failed = new List<(AppliedResolution[] Items, string Detail)>();
-        foreach (var group in ctx.AppliedResolutions
+        foreach (var group in resolve.AppliedResolutions
                      .GroupBy(r => string.Join("\0", r.Files.Order(RepoPath.PathComparer)), StringComparer.Ordinal)
                      .OrderBy(g => g.Key, StringComparer.Ordinal))
         {
@@ -40,7 +41,7 @@ public sealed class VerifyBuildStage(
             {
                 foreach (var file in item.Files)
                 {
-                    if (ctx.ResolutionEditors.TryGetValue(item.ThreadId, out var editor)
+                    if (resolve.ResolutionEditors.TryGetValue(item.ThreadId, out var editor)
                         && editor.GetSessionChange(file) is not null)
                         editor.RevertFile(file);
                 }
@@ -48,7 +49,7 @@ public sealed class VerifyBuildStage(
                 break;
             }
         }
-        if (failed.Count > 0) ctx.ResolveVerificationStatus = "failed";
+        if (failed.Count > 0) resolve.ResolveVerificationStatus = "failed";
 
         if (singleCommit && failed.Count > 0)
         {
@@ -57,7 +58,7 @@ public sealed class VerifyBuildStage(
             {
                 foreach (var file in item.Files)
                 {
-                    if (ctx.ResolutionEditors.TryGetValue(item.ThreadId, out var editor)
+                    if (resolve.ResolutionEditors.TryGetValue(item.ThreadId, out var editor)
                         && editor.GetSessionChange(file) is not null)
                         editor.RevertFile(file);
                 }
@@ -76,8 +77,8 @@ public sealed class VerifyBuildStage(
                 details[item.ThreadId] = detail;
             }
         }
-        ctx.AppliedResolutions = surviving;
-        ctx.ResolutionOutcomes = outcomes;
-        ctx.ResolutionDetails = details;
+        resolve.AppliedResolutions = surviving;
+        resolve.ResolutionOutcomes = outcomes;
+        resolve.ResolutionDetails = details;
     }
 }

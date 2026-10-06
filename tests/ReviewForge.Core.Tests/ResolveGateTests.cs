@@ -80,11 +80,12 @@ public sealed class ResolveGateTests
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
         {
             PullRequest = Pr() with { SourceCommitSha = "current" },
-            Threads = [Thread(1, Human("creator", DateTimeOffset.UtcNow))]
+            Threads = [Thread(1, Human("creator", DateTimeOffset.UtcNow))],
+            Resolve = new ResolveState {RequestedHeadSha = "requested"},
         };
 
         await Assert.ThrowsAsync<PrHeadChangedException>(() =>
-            new ResolveGateStage(new FakeFindingStore(), new HashSet<string>(["creator"]), "requested", null)
+            new ResolveGateStage(new FakeFindingStore(), new HashSet<string>(["creator"]))
                 .ExecuteAsync(ctx, CancellationToken.None));
     }
 
@@ -102,13 +103,14 @@ public sealed class ResolveGateTests
             Threads = [Thread(1, Human("reviewer", Watermark))],
             RunKind = RunKind.Resolve,
             Trigger = EnqueueTrigger.Manual,
+            Resolve = new ResolveState(),
         };
 
-        await new ResolveGateStage(store, new HashSet<string>(), requestedHeadSha: null)
+        await new ResolveGateStage(store, new HashSet<string>())
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Null(ctx.TerminationReason);
-        Assert.Null(ctx.ResolveWatermark);
+        Assert.Null(ctx.Resolve!.ResolveWatermark);
     }
 
     [Fact]
@@ -129,13 +131,14 @@ public sealed class ResolveGateTests
             Threads = [Thread(1, Human("creator", Watermark.AddMinutes(-1)))],
             RunKind = RunKind.Resolve,
             Trigger = EnqueueTrigger.Discovery,
+            Resolve = new ResolveState(),
         };
 
-        await new ResolveGateStage(store, new HashSet<string>(["creator"], StringComparer.OrdinalIgnoreCase), null)
+        await new ResolveGateStage(store, new HashSet<string>(["creator"], StringComparer.OrdinalIgnoreCase))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Null(ctx.TerminationReason);
-        Assert.Null(ctx.ResolveWatermark);
+        Assert.Null(ctx.Resolve!.ResolveWatermark);
     }
 
     [Fact]
@@ -147,8 +150,9 @@ public sealed class ResolveGateTests
             Threads = [Thread(1, Human("creator", Watermark.AddDays(1)))],
             RunKind = RunKind.Resolve,
             Trigger = EnqueueTrigger.Discovery,
+            Resolve = new ResolveState(),
         };
-        var stage = new ResolveGateStage(new FakeFindingStore(), new HashSet<string>(), requestedHeadSha: null);
+        var stage = new ResolveGateStage(new FakeFindingStore(), new HashSet<string>());
 
         await stage.ExecuteAsync(ctx, CancellationToken.None);
 
