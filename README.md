@@ -15,7 +15,8 @@ src/
     Reasoning/                NativeReviewAgent, RepoReadTools, prompt building, RuleBook,
                               embedded prompts (native-review-system.md, fix-pass-system.md)
     AutoFix/                  fixer registry + deterministic fixers, fix-pass prompt, applied-fix rows
-    Workspaces/               RepoCheckoutPool (per-head checkout leases, idle eviction)
+    Workspaces/               RepoCheckoutPool facade with MirrorManager, CheckoutLeaseStore,
+                              CheckoutSizeCache, CheckoutEvictionPolicy, and eviction executor
     Pipeline/                 ReviewPipeline + stages, CommentFormatter, telemetry
     Ports/                    IPullRequestSource, IFindingStore, IGitOps, IChatClientFactory,
                               IContextEnricher, IReviewQueue, IWorkspaceFs
