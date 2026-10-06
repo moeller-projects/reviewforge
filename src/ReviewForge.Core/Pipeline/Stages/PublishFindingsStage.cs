@@ -66,13 +66,13 @@ public sealed class PublishFindingsStage(
         // survive a lost/corrupt local store. Fixed/Closed threads do not suppress — a
         // resolved finding that regresses must be re-posted, EXCEPT when the regression is
         // resurfaced by reopening that thread in triage (P1-11): exactly one visible action.
-        var liveThreadKeys = ctx.Threads
+        var liveThreadKeys = ctx.Fetch.Threads
             .Where(t => t.DedupeKey is not null
                         && t.Status is ReviewThreadStatus.Active or ReviewThreadStatus.Pending)
             .Select(t => t.DedupeKey!)
             .ToHashSet(StringComparer.Ordinal);
 
-        var regressedThreadIds = ctx.Threads
+        var regressedThreadIds = ctx.Fetch.Threads
             .Where(t => t.DedupeKey is not null
                         && ctx.Collector.RegressedKeys.Contains(t.DedupeKey)
                         && t.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
@@ -91,7 +91,7 @@ public sealed class PublishFindingsStage(
                         && liveThreadKeys.Contains(f.DedupeKey)
                         && !regressedThreadIds.ContainsKey(f.DedupeKey))
             .Select(f => (Key: f.DedupeKey!,
-                          ThreadId: ctx.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
+                          ThreadId: ctx.Fetch.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
                           Body: CommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
             .ToList();
 
@@ -309,7 +309,7 @@ public sealed class PublishFindingsStage(
         await source.PostGeneralCommentAsync(
                 ctx.Pr,
                 CommentFormatter.FormatSummary(
-                    ctx.RequireResult(), ctx.WorkItems, ctx.UnansweredThreads, ctx.Kind,
+                    ctx.RequireResult(), ctx.Fetch.WorkItems, ctx.UnansweredThreads, ctx.Kind,
                     appliedFixCount: publishedFixCount),
                 dedupeKey: null,
                 ct: ct)
@@ -320,14 +320,14 @@ public sealed class PublishFindingsStage(
         if (needsAttention)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before vote");
-            await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, ReviewerVote.WaitingForAuthor, ct);
-            logger.LogInformation("reviewer vote set to waiting-for-author for {User}", ctx.CurrentUser!.DisplayName);
+            await source.SetReviewerVoteAsync(ctx.Pr, ctx.Fetch.CurrentUser!.Id, ReviewerVote.WaitingForAuthor, ct);
+            logger.LogInformation("reviewer vote set to waiting-for-author for {User}", ctx.Fetch.CurrentUser!.DisplayName);
         }
         else if (cleanVote is { } vote)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before vote");
-            await source.SetReviewerVoteAsync(ctx.Pr, ctx.CurrentUser!.Id, vote, ct);
-            logger.LogInformation("clean run: reviewer vote reset to {Vote} for {User}", vote, ctx.CurrentUser!.DisplayName);
+            await source.SetReviewerVoteAsync(ctx.Pr, ctx.Fetch.CurrentUser!.Id, vote, ct);
+            logger.LogInformation("clean run: reviewer vote reset to {Vote} for {User}", vote, ctx.Fetch.CurrentUser!.DisplayName);
         }
     }
 
@@ -446,7 +446,7 @@ public sealed class PublishFindingsStage(
 
     /// <summary>
     /// Re-fetch the thread immediately before replying: a previous attempt or a
-    /// competing run may have posted this exact reply after ctx.Threads was fetched.
+    /// competing run may have posted this exact reply after ctx.Fetch.Threads was fetched.
     /// </summary>
     private async Task<bool> AlreadyRepliedAsync(ReviewContext ctx, int threadId, string text, CancellationToken ct)
     {

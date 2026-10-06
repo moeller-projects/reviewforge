@@ -87,11 +87,11 @@ public sealed class ReviewPipeline
                     _Logger.LogInformation("stage {Stage} done in {ElapsedMs} ms", stage.Name, sw.ElapsedMilliseconds);
                 }
 
-                if (headScope is null && ctx.PullRequest is not null)
+                if (headScope is null && ctx.Fetch.PullRequest is not null)
                 {
                     headScope = _Logger.BeginScope(new Dictionary<string, object>
                     {
-                        ["HeadSha"] = ctx.PullRequest.SourceCommitSha,
+                        ["HeadSha"] = ctx.Fetch.PullRequest.SourceCommitSha,
                     });
                 }
             }
@@ -107,9 +107,9 @@ public sealed class ReviewPipeline
             _Logger.LogInformation("run terminated early: {Reason}", ctx.TerminationReason);
         }
 
-        if (ctx.PullRequest is not null)
+        if (ctx.Fetch.PullRequest is not null)
         {
-            runActivity?.SetTag(ReviewForgeTelemetry.TagHeadSha, ctx.PullRequest.SourceCommitSha);
+            runActivity?.SetTag(ReviewForgeTelemetry.TagHeadSha, ctx.Fetch.PullRequest.SourceCommitSha);
         }
 
         return ctx;

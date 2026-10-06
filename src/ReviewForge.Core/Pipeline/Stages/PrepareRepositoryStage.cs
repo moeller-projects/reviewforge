@@ -50,21 +50,23 @@ public sealed class PrepareRepositoryStage(
             _ = ObserveCompletionAsync(overlap);
         }
 
-        var pr = ctx.RequirePullRequest();
+        var pr = ctx.Fetch.PullRequest ?? throw new InvalidOperationException(
+            $"stage ordering violation: {nameof(FetchOutcome.PullRequest)} is null but required (fetch stage must run first)");
         var checkout = checkoutMode == CheckoutMode.Private
             ? await pool.AcquirePrivateAsync(ctx.RunId, ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false)
             : await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
         ctx.RepoLease = checkout;
-        ctx.RepoDir = checkout.Path;
 
         // Loop-guard input: cheap local lookup, filled for every run so the gate rule and
         // tests observe the same value. Null (commit not found) reads as "proceed".
-        ctx.HeadCommitInfo = await pool.GetCommitInfoAsync(ctx.RepoDir, pr.SourceCommitSha, ct).ConfigureAwait(false);
+        var headCommitInfo = await pool.GetCommitInfoAsync(checkout.Path, pr.SourceCommitSha, ct).ConfigureAwait(false);
+        var repository = new RepoPreparation {RepoDir = checkout.Path, HeadCommitInfo = headCommitInfo};
         if (ctx.Trigger == EnqueueTrigger.Discovery
-            && ctx.HeadCommitInfo is { } headInfo
+            && headCommitInfo is { } headInfo
             && autoFix is not null
             && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
         {
+            ctx.Repository = repository;
             ReviewTelemetry.LoopGuardSkips.Add(
                 1, new TagList { { "source", "gate" } });
             logger.LogInformation(
@@ -73,19 +75,17 @@ public sealed class PrepareRepositoryStage(
             ctx.Terminate("bot-authored head");
             return;
         }
-
-        ctx.DiffText = await pool.GetDiffAsync(ctx.RepoDir, pr.TargetCommitSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
-        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
-
-        var nonReviewable = ctx.Diff.NonReviewableFiles.Keys.ToHashSet(RepoPath.PathComparer);
+        var diffText = await pool.GetDiffAsync(checkout.Path, pr.TargetCommitSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
+        var diff = DiffIndex.Parse(diffText);
+        var nonReviewable = diff.NonReviewableFiles.Keys.ToHashSet(RepoPath.PathComparer);
         var reviewable = new HashSet<string>(RepoPath.PathComparer);
-        foreach (var file in ctx.ChangedFileManifest.Where(f => f.ChangeType != ChangedFileType.Delete))
+        foreach (var file in ctx.Fetch.ChangedFileManifest.Where(f => f.ChangeType != ChangedFileType.Delete))
         {
             var path = RepoPath.Normalize(file.Path);
             if (nonReviewable.Contains(path))
             {
                 logger.LogInformation("excluding non-reviewable file {Path} ({Kind}) from review scope",
-                    path, ctx.Diff.NonReviewableFiles[path]);
+                    path, diff.NonReviewableFiles[path]);
                 continue;
             }
 
@@ -100,7 +100,7 @@ public sealed class PrepareRepositoryStage(
             reviewable.Add(path);
         }
 
-        var diffFiles = ctx.Diff.Files.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
+        var diffFiles = diff.Files.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
         var missingFromDiff = reviewable.Where(f => !diffFiles.Contains(f)).Order(RepoPath.PathComparer).ToArray();
         if (missingFromDiff.Length > 0)
         {
@@ -117,18 +117,19 @@ public sealed class PrepareRepositoryStage(
                 $"provider changed-file scope does not match Git diff (provider: {reviewable.Count}, diff: {diffFiles.Count})");
         }
 
-        ctx.ReviewableFiles = reviewable;
+        repository = repository with {DiffText = diffText, Diff = diff, ReviewableFiles = reviewable};
+        ctx.Repository = repository;
         ctx.RepoPreparedAt = _Clock.GetUtcNow();
 
         // Enrichment needs only RepoDir + DiffText, both final now; stage 5 awaits the task
         // with its usual fail-safe catch. A contract-violating synchronous throw is captured
         // into the task so stage 5 handles it identically to an async failure.
-        if (enricher is not null && ctx.RepoDir is not null)
+        if (enricher is not null && repository.RepoDir is not null)
         {
             try
             {
                 ctx.PendingEnrichment = enricher.EnrichAsync(
-                    ctx.RepoDir, ctx.DiffText, LinkOverlapToken(ct, ctx.OverlapCts.Token));
+                    repository.RepoDir, repository.DiffText, LinkOverlapToken(ct, ctx.OverlapCts.Token));
             }
             catch (Exception ex)
             {

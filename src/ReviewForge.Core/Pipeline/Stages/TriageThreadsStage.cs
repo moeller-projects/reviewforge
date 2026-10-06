@@ -32,7 +32,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
         ct = CancellationToken.None;
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before triage");
 
-        var botThreads = ctx.Threads.Where(t => t.DedupeKey is not null).ToList();
+        var botThreads = ctx.Fetch.Threads.Where(t => t.DedupeKey is not null).ToList();
         var agentActions = ctx.RequireResult().Narrative.ThreadActions ?? [];
 
         // Only findings validated in this run count as current. Prior keys remain in
@@ -41,7 +41,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
         currentKeys.UnionWith(ctx.Collector.RedetectedKeys);
 
         var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
-        var reviewed = ctx.RequirePullRequest().SourceCommitSha;
+        var reviewed = ctx.Fetch.PullRequest!.SourceCommitSha;
         if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
         {
             throw new PrHeadChangedException(reviewed, current.SourceCommitSha);
@@ -53,7 +53,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
             agentActions,
             CommentFormatter.WithBotPreamble,
             ctx.Collector.RegressedKeys.ToHashSet(StringComparer.Ordinal),
-            ctx.RequirePullRequest().SourceCommitSha);
+            ctx.Fetch.PullRequest!.SourceCommitSha);
         ctx.UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions);
         var opCount = ctx.TriagePlan.Count(o => o.Op != TriageOp.None);
         logger.LogInformation("triage plan: {BotThreads} bot threads, {Actions} agent actions, {Ops} ops, {Unanswered} unanswered", botThreads.Count, agentActions.Length, opCount, ctx.UnansweredThreads.Count);
@@ -112,7 +112,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 
     /// <summary>
     /// Re-fetch the thread immediately before replying: a previous attempt or a
-    /// competing run may have posted this exact reply after ctx.Threads was fetched.
+    /// competing run may have posted this exact reply after ctx.Fetch.Threads was fetched.
     /// </summary>
     private async Task<bool> AlreadyRepliedAsync(ReviewContext ctx, int threadId, string text, CancellationToken ct)
     {

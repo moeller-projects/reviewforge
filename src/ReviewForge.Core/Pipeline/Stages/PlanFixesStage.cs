@@ -13,7 +13,7 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
     {
         var resolve = ctx.RequireResolveState();
         var comments = resolve.ResolvableComments.ToDictionary(c => c.ThreadId);
-        var changed = ctx.ChangedFiles.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
+        var changed = ctx.Fetch.ChangedFiles.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
         // The writable plan must respect the same deny policy as the editor: an anchored
         // comment on .env/.git/secrets must be rejected HERE, not fail the agent pass later.
         var guard = new RepoPathGuard(ctx.RequireRepoDir());

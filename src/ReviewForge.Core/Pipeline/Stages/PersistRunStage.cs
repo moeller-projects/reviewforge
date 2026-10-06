@@ -28,8 +28,8 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
 
         // Watermark for the follow-up gate (P2-24): the newest comment timestamp observed at
         // stage-1 fetch, in ADO server time. Comments the run itself posts (stage 9) are
-        // not in ctx.Threads, so they cannot raise the watermark of their own run.
-        var lastObservedComment = ctx.Threads
+        // not in ctx.Fetch.Threads, so they cannot raise the watermark of their own run.
+        var lastObservedComment = ctx.Fetch.Threads
             .SelectMany(t => t.Comments)
             .Select(c => (DateTimeOffset?)c.PublishedAt)
             .Max();

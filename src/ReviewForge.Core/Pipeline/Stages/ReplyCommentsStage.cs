@@ -19,7 +19,7 @@ public sealed class ReplyCommentsStage(
         var resolve = ctx.RequireResolveState();
         var unresolved = await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false);
         var actions = unresolved.Where(a => !a.ReplyPosted).OrderBy(a => a.RunId == ctx.RunId ? 1 : 0).ThenBy(a => a.Id).ToArray();
-        var threads = ctx.Threads.ToDictionary(t => t.Id);
+        var threads = ctx.Fetch.Threads.ToDictionary(t => t.Id);
         var applied = resolve.AppliedResolutions.ToDictionary(r => r.ThreadId);
         var replies = 0;
         foreach (var pendingAction in actions)

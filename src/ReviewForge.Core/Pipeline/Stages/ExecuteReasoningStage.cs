@@ -29,18 +29,21 @@ public sealed class ExecuteReasoningStage(
             ? null
             : new StreamWriter(Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl"), append: true) {AutoFlush = true};
         ctx.Collector = new ReviewCollector(
-            ctx.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.PullRequest?.SourceCommitSha);
+            ctx.Fetch.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.Fetch.PullRequest?.SourceCommitSha);
 
         // Status-aware dedupe (P1-11): known keys whose live thread is Fixed/Closed
         // resurface when regressed verbatim; Active/Pending threads keep suppressing.
         // Threads were fetched at stage 1 — no extra ADO call.
-        ctx.ResolvedKeys = ctx.Threads
-            .Where(t => t.DedupeKey is not null
-                        && t.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
-            .Select(t => t.DedupeKey!)
-            .ToHashSet(StringComparer.Ordinal);
+        ctx.Fetch = ctx.Fetch with
+        {
+            ResolvedKeys = ctx.Fetch.Threads
+                .Where(t => t.DedupeKey is not null
+                            && t.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
+                .Select(t => t.DedupeKey!)
+                .ToHashSet(StringComparer.Ordinal),
+        };
 
-        foreach (var finding in HomoglyphDiffAnalyzer.Analyze(ctx.DiffText))
+        foreach (var finding in HomoglyphDiffAnalyzer.Analyze(ctx.Repository.DiffText))
         {
             var key = DedupeKey.Compute(
                 finding.RuleId,
@@ -50,7 +53,7 @@ public sealed class ExecuteReasoningStage(
             {
                 if (ctx.Collector.WasKnownAtStart(key))
                 {
-                    if (ctx.ResolvedKeys.Contains(key) && !ctx.Collector.RegressedKeys.Contains(key))
+                    if (ctx.Fetch.ResolvedKeys.Contains(key) && !ctx.Collector.RegressedKeys.Contains(key))
                     {
                         finding.DedupeKey = key;
                         finding.IsRegression = true;
@@ -74,8 +77,8 @@ public sealed class ExecuteReasoningStage(
         // answer → clean vote without an LLM call. The deterministic homoglyph analyzer
         // above has already run, so its findings are still recorded. Unknown reviewability
         // (stage-3 fields unset, e.g. stage unit tests) never skips.
-        if (trivialDiffSkipEnabled && ctx.ReviewableFiles is { } reviewable
-            && TrivialDiff.IsTrivial(ctx.Diff ?? DiffIndex.Parse(ctx.DiffText), ctx.PendingReplies, reviewable))
+        if (trivialDiffSkipEnabled && ctx.Repository.ReviewableFiles is { } reviewable
+            && TrivialDiff.IsTrivial(ctx.Repository.Diff ?? DiffIndex.Parse(ctx.Repository.DiffText), ctx.PendingReplies, reviewable))
         {
             ReviewTelemetry.TrivialReviews.Add(1);
             // The synthetic result must carry the collector's findings: the homoglyph
@@ -93,15 +96,15 @@ public sealed class ExecuteReasoningStage(
 
         var rootFiles = Directory.Exists(repoDir) ? Directory.GetFiles(repoDir, "*", SearchOption.TopDirectoryOnly) : [];
 
-        var ruleBook = agent.ComposeRuleBook(ctx.ChangedFiles, rootFiles);
+        var ruleBook = agent.ComposeRuleBook(ctx.Fetch.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
-            Pr: ctx.RequirePullRequest(), Kind: ctx.Kind, WorkItems: ctx.WorkItems, ChangedFiles: ctx.ChangedFiles,
-            PendingReplies: ctx.PendingReplies, DiffText: ctx.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names,
+            Pr: ctx.RequirePullRequest(), Kind: ctx.Kind, WorkItems: ctx.Fetch.WorkItems, ChangedFiles: ctx.Fetch.ChangedFiles,
+            PendingReplies: ctx.PendingReplies, DiffText: ctx.Repository.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names,
             MaxDiffChars: maxDiffChars, MaxDiffCharsPerFile: maxDiffCharsPerFile));
         ctx.Result = await agent.RunAsync(new AgentRunRequest(
             prompt, ctx.Collector, ctx.ContextStore, repoDir, ToolProfile.Review,
-            ruleBook, ctx.ChangedFiles.ToHashSet(RepoPath.PathComparer), ctx.Diff, ctx.DiffText,
-            ctx.ResolvedKeys, Tier: ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct);
+            ruleBook, ctx.Fetch.ChangedFiles.ToHashSet(RepoPath.PathComparer), ctx.Repository.Diff, ctx.Repository.DiffText,
+            ctx.Fetch.ResolvedKeys, Tier: ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct);
     }
 
 }

@@ -18,7 +18,7 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
         var apiManual = ctx.RunKind == RunKind.Resolve && ctx.Trigger == EnqueueTrigger.Manual;
         var lastResolveRun = apiManual ? null : await store.GetLastCompletedResolveRunAsync(ctx.Pr, ct).ConfigureAwait(false);
         var priorActions = await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false);
-        var activeThreads = ctx.Threads
+        var activeThreads = ctx.Fetch.Threads
             .Where(thread => thread.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
                              && thread.Comments.Any(comment => !comment.IsBot))
             .Select(thread => thread.Id).ToHashSet();
@@ -30,7 +30,7 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
             ? null
             : lastResolveRun?.LastObservedCommentAt ?? lastResolveRun?.CompletedAt;
         var decision = ResolveGate.Evaluate(
-            pr, ctx.Threads, resolve.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds);
+            pr, ctx.Fetch.Threads, resolve.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds);
         if (decision != ResolveGateDecision.Continue)
         {
             logger?.LogInformation("resolve gate terminated run: {Decision}", decision);

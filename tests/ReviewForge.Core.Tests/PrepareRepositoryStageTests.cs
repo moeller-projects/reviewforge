@@ -44,15 +44,15 @@ public sealed class PrepareRepositoryStageTests : IDisposable
         var pool = new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), _Root);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = PullRequest(),
+            Fetch = new FetchOutcome {PullRequest = PullRequest()},
         };
 
         await Stage(pool, CheckoutMode.Private).ExecuteAsync(ctx, CancellationToken.None);
         var privatePath = pool.PrivatePath(ctx.RunId);
 
-        Assert.Equal(privatePath, ctx.RepoDir);
+        Assert.Equal(privatePath, ctx.Repository.RepoDir);
         Assert.True(Directory.Exists(privatePath));
-        Assert.NotNull(ctx.Diff);
+        Assert.NotNull(ctx.Repository.Diff);
         ctx.Dispose();
         Assert.False(Directory.Exists(privatePath));
     }
@@ -66,13 +66,13 @@ public sealed class PrepareRepositoryStageTests : IDisposable
         var pool = new RepoCheckoutPool(new FakeGitOps { HeadInfo = headInfo }, new FakeWorkspaceFs(), _Root);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = PullRequest(),
+            Fetch = new FetchOutcome {PullRequest = PullRequest()},
         };
 
         await Stage(pool).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(pool.CheckoutPath("r", "head-sha"), ctx.RepoDir);
-        Assert.Equal(headInfo, ctx.HeadCommitInfo);
+        Assert.Equal(pool.CheckoutPath("r", "head-sha"), ctx.Repository.RepoDir);
+        Assert.Equal(headInfo, ctx.Repository.HeadCommitInfo);
         ctx.Dispose();
         Assert.True(Directory.Exists(pool.CheckoutPath("r", "head-sha")));
     }
@@ -88,35 +88,35 @@ public sealed class PrepareRepositoryStageTests : IDisposable
         var options = CommitMode();
         var discovery = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = PullRequest(),
+            Fetch = new FetchOutcome {PullRequest = PullRequest()},
             Trigger = ReviewForge.Core.Ports.EnqueueTrigger.Discovery,
         };
         var manual = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = PullRequest(),
+            Fetch = new FetchOutcome {PullRequest = PullRequest()},
             Trigger = ReviewForge.Core.Ports.EnqueueTrigger.Manual,
         };
         var unknownHead = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = PullRequest(),
+            Fetch = new FetchOutcome {PullRequest = PullRequest()},
             Trigger = ReviewForge.Core.Ports.EnqueueTrigger.Discovery,
         };
         await Stage(pool, options: options).ExecuteAsync(discovery, CancellationToken.None);
         Assert.True(discovery.Terminated);
         Assert.Equal("bot-authored head", discovery.TerminationReason);
-        Assert.Equal(headInfo, discovery.HeadCommitInfo);
+        Assert.Equal(headInfo, discovery.Repository.HeadCommitInfo);
         discovery.Dispose(); // release the per-head lease before the next run acquires it
 
         await Stage(pool, options: options).ExecuteAsync(manual, CancellationToken.None);
         Assert.False(manual.Terminated);
-        Assert.NotNull(manual.Diff);
+        Assert.NotNull(manual.Repository.Diff);
         manual.Dispose();
 
         git.HeadInfo = null;
         await Stage(pool, options: options).ExecuteAsync(unknownHead, CancellationToken.None);
         Assert.False(unknownHead.Terminated);
-        Assert.Null(unknownHead.HeadCommitInfo);
-        Assert.NotNull(unknownHead.Diff);
+        Assert.Null(unknownHead.Repository.HeadCommitInfo);
+        Assert.NotNull(unknownHead.Repository.Diff);
         unknownHead.Dispose();
 }
 }

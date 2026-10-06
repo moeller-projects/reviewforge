@@ -22,33 +22,47 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public EnqueueTrigger Trigger { get; set; } = EnqueueTrigger.Manual;
 
 
-    // Stage 1 — fetch
-    public PullRequest? PullRequest { get; set; }
-    public IReadOnlyList<WorkItem> WorkItems { get; set; } = [];
-    public IReadOnlyList<ReviewThread> Threads { get; set; } = [];
-    private IReadOnlyList<ChangedFile> _changedFileManifest = [];
-    private IReadOnlyList<string>? _changedFiles;
+    public FetchOutcome Fetch { get; set; } = new();
 
+    // Temporary forwarding properties; removed when all stages and fixtures consume Fetch.
+    public PullRequest? PullRequest
+    {
+        get => Fetch.PullRequest;
+        set => Fetch = Fetch with {PullRequest = value};
+    }
+    public IReadOnlyList<WorkItem> WorkItems
+    {
+        get => Fetch.WorkItems;
+        set => Fetch = Fetch with {WorkItems = value};
+    }
+    public IReadOnlyList<ReviewThread> Threads
+    {
+        get => Fetch.Threads;
+        set => Fetch = Fetch with {Threads = value};
+    }
     public IReadOnlyList<ChangedFile> ChangedFileManifest
     {
-        get => _changedFileManifest;
-        set
-        {
-            _changedFileManifest = value;
-            _changedFiles = null; // invalidate the projection cache
-        }
+        get => Fetch.ChangedFileManifest;
+        set => Fetch = Fetch with {ChangedFileManifest = value};
+    }
+    public IReadOnlyList<string> ChangedFiles => Fetch.ChangedFiles;
+    public CurrentUser? CurrentUser
+    {
+        get => Fetch.CurrentUser;
+        set => Fetch = Fetch with {CurrentUser = value};
+    }
+    public PriorRun? PriorRun
+    {
+        get => Fetch.PriorRun;
+        set => Fetch = Fetch with {PriorRun = value};
     }
 
-    /// <summary>Lazy projection of <see cref="ChangedFileManifest"/>; computed once per assignment.</summary>
-    public IReadOnlyList<string> ChangedFiles
-        => _changedFiles ??= ChangedFileManifest.Select(file => file.Path).ToArray();
-    public CurrentUser? CurrentUser { get; set; }
-    public PriorRun? PriorRun { get; set; }
-
-    /// <summary>DedupeKeys whose live ADO thread is Fixed/Closed in the stage-1 snapshot.
-    /// A verbatim re-submission of one of these resurfaces as a regression (P1-11) instead
-    /// of staying dedupe-silent; keys with Active/Pending threads stay in the known set only.</summary>
-    public IReadOnlySet<string> ResolvedKeys { get; set; } = new HashSet<string>(StringComparer.Ordinal);
+    /// <summary>DedupeKeys whose live threads are Fixed/Closed in the fetched snapshot.</summary>
+    public IReadOnlySet<string> ResolvedKeys
+    {
+        get => Fetch.ResolvedKeys;
+        set => Fetch = Fetch with {ResolvedKeys = value};
+    }
 
     // Stage 2 — gate
     // Gate state shared by review and resolve runs.
@@ -56,33 +70,43 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public ResolveState? Resolve { get; set; }
     public GateDecision? Gate { get; set; }
 
-    // Stage 3 — repository
-
-    // Stage 3 — repository lease held until the worker disposes this context.
+    public RepoPreparation Repository { get; set; } = new();
     public IDisposable? RepoLease { get; set; }
-    public string? RepoDir { get; set; }
-    public string DiffText { get; set; } = string.Empty;
-    public DiffIndex? Diff { get; set; }
+    public string? RepoDir
+    {
+        get => Repository.RepoDir;
+        set => Repository = Repository with {RepoDir = value};
+    }
+    public string DiffText
+    {
+        get => Repository.DiffText;
+        set => Repository = Repository with {DiffText = value};
+    }
+    public DiffIndex? Diff
+    {
+        get => Repository.Diff;
+        set => Repository = Repository with {Diff = value};
+    }
 
     /// <summary>Manifest ∩ diff files that carry reviewable text (set by stage 3).</summary>
-    public IReadOnlyCollection<string>? ReviewableFiles { get; set; }
+    public IReadOnlyCollection<string>? ReviewableFiles
+    {
+        get => Repository.ReviewableFiles;
+        set => Repository = Repository with {ReviewableFiles = value};
+    }
 
-    /// <summary>Threads refresh that stage 3 starts before the clone so stage 4 can consume
-    /// the in-flight fetch instead of paying the round-trip serially. Stage 4 consumes it
-    /// only when the response was received at/after <see cref="RepoPreparedAt"/> — see
-    /// <see cref="ThreadsRefreshOverlap.CompletedAt"/>.</summary>
+    /// <summary>Threads refresh overlap remains on the context until phase 3 relocates its protocol.</summary>
     public ThreadsRefreshOverlap? PendingThreadsRefresh { get; set; }
-
-    /// <summary>Wall-clock stamp for when repository preparation finished; bounds the stage-4
-    /// freshness predicate on <see cref="PendingThreadsRefresh"/>.</summary>
     public DateTimeOffset? RepoPreparedAt { get; set; }
 
-    /// <summary>Head-commit author/message read from the local checkout by stage 3 (loop-guard
-    /// input); null when the commit info could not be read — the guard treats that as "proceed".</summary>
-    public TipCommitInfo? HeadCommitInfo { get; set; }
+    /// <summary>Head-commit author/message read by stage 3; null when unavailable.</summary>
+    public TipCommitInfo? HeadCommitInfo
+    {
+        get => Repository.HeadCommitInfo;
+        set => Repository = Repository with {HeadCommitInfo = value};
+    }
 
-    /// <summary>Enrichment call stage 3 starts once RepoDir+DiffText exist; stage 5 awaits it
-    /// with the same fail-safe handling as a call it made itself.</summary>
+    /// <summary>Stage 3 starts enrichment when repository outputs are final; stage 5 awaits it.</summary>
     public Task<string?>? PendingEnrichment { get; set; }
 
     // Stage 4 — classify
@@ -161,7 +185,7 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public string RequireRepoDir()
     {
-        if (RepoDir is not { } dir)
+        if (Repository.RepoDir is not { } dir)
         {
             throw new InvalidOperationException(
                 $"stage ordering violation: {nameof(RepoDir)} is null but required");
@@ -171,7 +195,7 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     }
 
     public PullRequest RequirePullRequest()
-        => PullRequest ?? throw new InvalidOperationException(
+        => Fetch.PullRequest ?? throw new InvalidOperationException(
             $"stage ordering violation: {nameof(PullRequest)} is null but required (fetch stage must run first)");
 
     public ReviewResult RequireResult()

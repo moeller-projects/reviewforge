@@ -24,7 +24,7 @@ public sealed class ValidateFindingsStage(
     {
         var repoDir = ctx.RequireRepoDir();
         var accepted = new List<RichFinding>();
-        var changedFiles = ctx.ChangedFiles
+        var changedFiles = ctx.Fetch.ChangedFiles
             .ToHashSet(RepoPath.PathComparer);
 
         foreach (var finding in ctx.RequireResult().Findings)
@@ -37,7 +37,7 @@ public sealed class ValidateFindingsStage(
             }
 
             var path = RepoPath.Normalize(finding.Anchor.FilePath);
-            if (ctx.Diff?.NonReviewableFiles.TryGetValue(path, out var nonReviewableKind) == true)
+            if (ctx.Repository.Diff?.NonReviewableFiles.TryGetValue(path, out var nonReviewableKind) == true)
             {
                 logger.LogInformation(
                     "finding {Key} rejected because file {Path} is non-reviewable ({Kind})",
@@ -55,7 +55,7 @@ public sealed class ValidateFindingsStage(
             }
 
             if (!changedFiles.Contains(path) ||
-                (ctx.Diff is not null && !ctx.Diff.Contains(path, finding.Anchor.StartLine)))
+                (ctx.Repository.Diff is not null && !ctx.Repository.Diff.Contains(path, finding.Anchor.StartLine)))
             {
                 logger.LogInformation("finding {Key} rejected because its anchor is outside the current PR diff", finding.DedupeKey);
                 FindingsTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "not-in-diff" } });

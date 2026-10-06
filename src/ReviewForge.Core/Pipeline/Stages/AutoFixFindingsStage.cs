@@ -133,7 +133,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         }
 
         var commands = FixCommandDetector.Scan(
-            ctx.Threads, ctx.RequirePullRequest().CreatorId, ctx.PriorRun?.LastObservedCommentAt);
+            ctx.Fetch.Threads, ctx.RequirePullRequest().CreatorId, ctx.Fetch.PriorRun?.LastObservedCommentAt);
         ctx.FixCommands = commands;
         if (commands.Count == 0)
         {
@@ -203,7 +203,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
 
             var proposal = fixer.TryPropose(
-                new FixContext(finding, path, lines, ctx.Diff ?? DiffIndex.Parse(string.Empty)));
+                new FixContext(finding, path, lines, ctx.Repository.Diff ?? DiffIndex.Parse(string.Empty)));
             if (proposal is null)
             {
                 _Logger.LogInformation("auto-fix: fixer for {Rule} declined finding {Key}", finding.RuleId, finding.DedupeKey);
@@ -263,7 +263,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         Dictionary<string, List<(RichFinding Finding, FixProposal Proposal, string[] Lines)>> proposalsByFile,
         List<AppliedFix> applied)
     {
-        var changedFiles = ctx.ChangedFiles
+        var changedFiles = ctx.Fetch.ChangedFiles
             .Select(RepoPath.Normalize)
             .ToHashSet(RepoPath.PathComparer);
         var writable = proposalsByFile.Keys
@@ -304,7 +304,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                     var retry = freshLines is null
                         ? null
                         : fixer.TryPropose(new FixContext(
-                            finding, path, freshLines, ctx.Diff ?? DiffIndex.Parse(string.Empty)));
+                            finding, path, freshLines, ctx.Repository.Diff ?? DiffIndex.Parse(string.Empty)));
                     if (retry is not null && freshLines is not null)
                     {
                         var retryResult = editor.ApplyRange(
@@ -359,7 +359,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         CancellationToken ct)
     {
         var commands = FixCommandDetector.Scan(
-            ctx.Threads, ctx.RequirePullRequest().CreatorId, ctx.PriorRun?.LastObservedCommentAt);
+            ctx.Fetch.Threads, ctx.RequirePullRequest().CreatorId, ctx.Fetch.PriorRun?.LastObservedCommentAt);
         ctx.FixCommands = commands;
         if (commands.Count == 0)
         {
@@ -372,7 +372,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         var watermarkSkipped = 0;
 
         var replies = new List<(int ThreadId, string Text)>();
-        var changedFiles = ctx.ChangedFiles
+        var changedFiles = ctx.Fetch.ChangedFiles
             .Select(RepoPath.Normalize)
             .ToHashSet(RepoPath.PathComparer);
         // Audit rows are durable watermarks; a handled command must never spend fix budget twice.
@@ -399,7 +399,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
             // Dedupe: only active bot threads provide coverage; closed/fixed threads do not.
             var alreadyCovered =
-                ctx.Threads.Any(t =>
+                ctx.Fetch.Threads.Any(t =>
                     t.Status == ReviewThreadStatus.Active
                     && t.DedupeKey is not null
                     && t.Anchor is { } a
@@ -418,7 +418,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             var abs = guard.Resolve(path, out _);
             if (abs is null
                 || !changedFiles.Contains(path)
-                || (ctx.Diff?.NonReviewableFiles.ContainsKey(path) ?? false)
+                || (ctx.Repository.Diff?.NonReviewableFiles.ContainsKey(path) ?? false)
                 || !File.Exists(abs))
             {
                 replies.Add((command.ThreadId,
