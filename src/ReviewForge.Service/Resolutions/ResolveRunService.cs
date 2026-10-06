@@ -24,7 +24,6 @@ public sealed class ResolveRunService(
     AutoFixOptions autoFix,
     IOptions<ResolveOptions> resolveOptions,
     IOptions<ReviewOptions> reviewOptions,
-    IOptions<RepoReadToolsOptions> repoToolsOptions,
     ILoggerFactory loggerFactory,
     TimeProvider clock,
     string? pushPat) : IResolveRunService
@@ -34,7 +33,6 @@ public sealed class ResolveRunService(
         var opts = resolveOptions.Value;
         if (!opts.Enabled) throw new InvalidOperationException("resolve pipeline is disabled");
         var review = reviewOptions.Value;
-        var tools = repoToolsOptions.Value;
         var agent = new NativeReviewAgent(chatClientFactory, new AgentOptions
         {
             MaxContextTokens = review.MaxContextTokens,
@@ -43,8 +41,8 @@ public sealed class ResolveRunService(
             RuleSetsPath = review.RuleSetsPath,
             Effort = review.ReasoningEffort,
             DebugLogging = review.AgentDebugLogging,
-            GrepMaxMs = tools.GrepMaxMs,
-            GrepMaxLines = tools.GrepMaxLines,
+            GrepMaxMs = review.GrepMaxMs,
+            GrepMaxLines = review.GrepMaxLines,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
 
         var privateCheckout = new PrepareRepositoryStage(

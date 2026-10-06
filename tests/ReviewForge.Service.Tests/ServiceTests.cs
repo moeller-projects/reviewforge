@@ -163,7 +163,6 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 sp.GetRequiredService<IChatClientFactory>(),
                 sp.GetRequiredService<IOptions<ReviewOptions>>(),
                 sp.GetRequiredService<IOptions<WorkspaceOptions>>(),
-                sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 findingFixers:
                 [
@@ -394,9 +393,8 @@ public class ServiceTests : IAsyncLifetime
             new FakeChatClientFactory(_Factory.Chat),
             reviewOptions,
             workspaceOptions,
-            Options.Create(new RepoReadToolsOptions()),
             LoggerFactory.Create(b => { }));
-        var worker = new ReviewWorker(queue, tracker, failingFactory, new InFlightClaims(),
+        var worker = new ReviewWorker(queue, Options.Create(new HostOptions {WorkerCount = 1}), tracker, failingFactory, new InFlightClaims(),
             _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -880,19 +878,6 @@ public class DiWiringTests
         });
     }
 
-    [Fact]
-    public void WorkerCount_registers_multiple_workers()
-    {
-        WithPat(() =>
-        {
-            var services = new ServiceCollection();
-            services.AddLogging();
-            services.AddReviewForge(BuildConfig(new Dictionary<string, string?> {["Host:WorkerCount"] = "3"}));
-            using var provider = services.BuildServiceProvider();
-
-            Assert.Equal(3, provider.GetServices<IHostedService>().OfType<ReviewWorker>().Count());
-        });
-    }
 
     [Fact]
     public void ReasoningEffort_binds_from_config()
@@ -956,7 +941,6 @@ public class DiWiringTests
                 new FakeChatClientFactory(new ScriptedChatClient()),
                 reviewOptions,
                 workspaceOptions,
-                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 
             Assert.Throws<InvalidOperationException>(() => factory.Create());

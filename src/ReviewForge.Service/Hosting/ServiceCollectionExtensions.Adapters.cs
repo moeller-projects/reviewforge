@@ -33,11 +33,7 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<IPullRequestSource>(sp => new InstrumentedPullRequestSource(
             new AdoPullRequestSource(sp.GetRequiredService<IOptions<AdoOptions>>().Value)));
         services.AddSingleton(sp =>
-        {
-            var chat = sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
-            var host = sp.GetRequiredService<IOptions<HostOptions>>().Value;
-            return new LlmGovernor(chat.MaxConcurrentRequests ?? host.WorkerCount * 2);
-        });
+            new LlmGovernor(sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value.MaxConcurrentRequests));
         services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(
             sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value,
             governor: sp.GetRequiredService<LlmGovernor>()));

@@ -10,8 +10,8 @@ criteria, triages existing threads, posts findings, and sets the reviewer vote.
 src/
   ReviewForge.Core/           pure domain + pipeline + agent loop (no IO adapters)
     Domain/                   models, ReviewGate, RunClassifier, ThreadTriage, FailureBackoff
-    Analysis/                 DedupeKey (shift-proof), DiffIndex, AnchorResolver, ShardPlanner,
-                              homoglyph analyzer, LineEditEngine
+    Analysis/                 DedupeKey (shift-proof), DiffIndex, AnchorResolver, DiffBlockSplit,
+                              homoglyph analyzer, LineEditEngine, PathSafety
     Reasoning/                NativeReviewAgent, RepoReadTools, prompt building, RuleBook,
                               embedded prompts (native-review-system.md, fix-pass-system.md)
     AutoFix/                  fixer registry + deterministic fixers, fix-pass prompt, applied-fix rows
@@ -212,18 +212,7 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
   store row (`Completed`/`Failed`), and expired claims are counted by
   `reviewforge.queue.reclaimed_total`. In-flight PR claims remain in-memory for now — a
   restarted run is re-acquired idempotently at dequeue.
-- `Review:Sharding` — map-reduce sharding for large diffs. `Enabled` (default `false`)
-  turns it on; when the planned shard count is at least two, stage 6 runs one agent per
-  shard concurrently and merges findings into the single run collector. `ShardMaxChars`
-  (default 30000) is the cumulative diff budget per shard — a file larger than the budget
-  gets a shard of its own and is never split across shards. `MaxShards` (default 8) caps the
-  shard count: overflow falls back to the legacy truncated single-agent path, never a run
-  failure (`reviewforge.shard.fallback_total` counts it). `ShardConcurrency` (default 2)
-  bounds concurrent shard agents and is also bounded by the LLM governor's global cap.
-  Runs report their shard count under the `shards` metric tag; per-shard durations land in
-  `reviewforge.shard.duration_ms`. Accepted v1 limitation: cross-file findings confined to
-  no single shard can be missed — every shard still sees the full file manifest and per-file
-  diff headers, so interface-level reasoning is preserved.
+- `Review:Sharding` was removed (unused); large diffs use the `MaxDiffChars` truncation path.
 - `Reasoning:FollowUpModel` — optional cheaper/faster model for the Fast tier: follow-up
   reviews and `/rf fix` passes route to it; full reviews keep `Reasoning:Model`. Must carry
   the same provider routing prefix (`openai-codex:…` with `openai-codex:…`); mismatches fail
@@ -259,9 +248,15 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
 - `Host:OtlpEnabled` — opt-in switch enabling OTLP export without an env endpoint;
   the standard `OTEL_EXPORTER_OTLP_*` variables alone also turn export on (per-signal
   variants included). Never hardcode an endpoint in configuration.
-- `RepoReadTools:GrepMaxMs` / `GrepMaxLines` — aggregate wall-clock (default 10 s) and
+- `Review:GrepMaxMs` / `Review:GrepMaxLines` — aggregate wall-clock (default 10 s) and
   line (default 200k) budgets for one agent Grep call; the call aborts with a truncation
   marker when either is hit.
+  Legacy `RepoReadTools:GrepMaxMs` / `GrepMaxLines` keys are ignored and trigger a
+  one-release startup warning; migrate them to the `Review` keys.
+- `Review:Enrichment:SymbolUsageEnabled` — enables symbol-usage context enrichment
+  (default false); move the former `Enrichment:SymbolUsageEnabled` key here.
+  `VerifyFindings` remains a separate option.
+- Legacy `Review:Sharding` keys are ignored and trigger a one-release startup warning.
 - Diff budgets: `Review:MaxDiffChars` (200k) / `MaxDiffCharsPerFile` (40k) and
   `MaxDiffBytes` (4 MiB) / `MaxDiffBytesPerFile` (256 KiB); oversized diffs are truncated
   with a marker. `Review:DiffExcludeGlobs` replaces the default exclusion set

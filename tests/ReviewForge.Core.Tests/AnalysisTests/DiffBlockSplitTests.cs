@@ -15,9 +15,8 @@ public sealed class DiffBlockSplitTests
         var a = Block("src/a.cs");
         var b = Block("src/b.cs");
 
-        var blocks = DiffBlockSplit.Split(a + b, out var unresolvable);
+        var blocks = DiffBlockSplit.Split(a + b);
 
-        Assert.False(unresolvable);
         Assert.Equal(2, blocks.Count);
         Assert.Equal("src/a.cs", blocks[0].File);
         Assert.Equal(a, blocks[0].Text);
@@ -29,9 +28,8 @@ public sealed class DiffBlockSplitTests
     [Fact]
     public void Split_EmptyDiff_ReturnsNoBlocks()
     {
-        var blocks = DiffBlockSplit.Split("", out var unresolvable);
+        var blocks = DiffBlockSplit.Split("");
 
-        Assert.False(unresolvable);
         Assert.Empty(blocks);
     }
 
@@ -41,9 +39,8 @@ public sealed class DiffBlockSplitTests
         var diff = "diff --git \"a/src/sp ace.cs\" \"b/src/sp ace.cs\"\n"
             + "--- \"a/src/sp ace.cs\"\n+++ \"b/src/sp ace.cs\"\n+added\n";
 
-        var blocks = DiffBlockSplit.Split(diff, out var unresolvable);
+        var blocks = DiffBlockSplit.Split(diff);
 
-        Assert.False(unresolvable);
         var block = Assert.Single(blocks);
         Assert.Equal("src/sp ace.cs", block.File);
         Assert.Equal(diff, block.Text);
@@ -56,9 +53,8 @@ public sealed class DiffBlockSplitTests
             + "--- a/src/old.cs\n+++ /dev/null\n-removed line\n";
         var keep = Block("src/keep.cs");
 
-        var blocks = DiffBlockSplit.Split(del + keep, out var unresolvable);
+        var blocks = DiffBlockSplit.Split(del + keep);
 
-        Assert.False(unresolvable);
         Assert.Equal(2, blocks.Count);
         Assert.Equal("src/old.cs", blocks[0].File);
         Assert.True(blocks[0].IsDeletion);
@@ -73,35 +69,22 @@ public sealed class DiffBlockSplitTests
         var preamble = "Some header line\nAnother header\n";
         var a = Block("src/a.cs");
 
-        var blocks = DiffBlockSplit.Split(preamble + a, out var unresolvable);
+        var blocks = DiffBlockSplit.Split(preamble + a);
 
-        Assert.False(unresolvable);
         Assert.Equal(2, blocks.Count);
         Assert.Null(blocks[0].File);
         Assert.Equal(preamble, blocks[0].Text);
         Assert.Equal("src/a.cs", blocks[1].File);
     }
 
-    [Fact]
-    public void Split_HunkWithoutResolvableFile_SetsUnresolvableHunks()
-    {
-        var diff = "diff --git /dev/null /dev/null\n+++ \n+orphan line\n";
-
-        var blocks = DiffBlockSplit.Split(diff, out var unresolvable);
-
-        Assert.True(unresolvable);
-        var block = Assert.Single(blocks);
-        Assert.Null(block.File);
-    }
 
     [Fact]
     public void Split_TrailingNewline_NotAnExtraBlock()
     {
         var a = Block("src/a.cs");
 
-        var blocks = DiffBlockSplit.Split(a, out var unresolvable);
+        var blocks = DiffBlockSplit.Split(a);
 
-        Assert.False(unresolvable);
         Assert.Single(blocks);
     }
 }

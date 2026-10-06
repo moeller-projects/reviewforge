@@ -227,6 +227,7 @@ public class ChatClientFactoryTests
             Provider = "openai-codex",
             Model = "openai-codex:gpt-5.6-luna",
             FollowUpModel = "openai:gpt-5-mini",
+            MaxConcurrentRequests = 1,
         };
 
         var results = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
@@ -245,6 +246,7 @@ public class ChatClientFactoryTests
             Provider = "openai-codex",
             Model = "openai-codex:gpt-5.6-luna",
             FollowUpModel = "openai-codex:gpt-5.6-luna-mini",
+            MaxConcurrentRequests = 1,
         };
 
         var results = new List<System.ComponentModel.DataAnnotations.ValidationResult>();

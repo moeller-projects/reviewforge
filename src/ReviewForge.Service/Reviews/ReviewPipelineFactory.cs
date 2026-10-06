@@ -16,7 +16,6 @@ public sealed class ReviewPipelineFactory(
     IChatClientFactory chatClientFactory,
     IOptions<ReviewOptions> options,
     IOptions<WorkspaceOptions> workspaceOptions,
-    IOptions<RepoReadToolsOptions> repoReadToolsOptions,
     ILoggerFactory loggerFactory,
     IContextEnricher? enricher = null,
     TimeProvider? clock = null,
@@ -29,7 +28,6 @@ public sealed class ReviewPipelineFactory(
     public ReviewPipeline Create()
     {
         var opts = options.Value;
-        var repoReadToolsOpts = repoReadToolsOptions.Value;
         var cleanVote = opts.CleanRunVote.Equals("None", StringComparison.OrdinalIgnoreCase)
             ? (ReviewerVote?) null
             : Enum.TryParse<ReviewerVote>(opts.CleanRunVote, ignoreCase: true, out var parsedVote)
@@ -45,8 +43,8 @@ public sealed class ReviewPipelineFactory(
             RuleSetsPath = opts.RuleSetsPath,
             Effort = opts.ReasoningEffort,
             DebugLogging = opts.AgentDebugLogging,
-            GrepMaxMs = repoReadToolsOpts.GrepMaxMs,
-            GrepMaxLines = repoReadToolsOpts.GrepMaxLines,
+            GrepMaxMs = opts.GrepMaxMs,
+            GrepMaxLines = opts.GrepMaxLines,
         }, loggerFactory.CreateLogger<NativeReviewAgent>());
 
         var fixers = findingFixers ?? [];
@@ -87,13 +85,8 @@ public sealed class ReviewPipelineFactory(
             new ClassifyRunStage(source),
             new EnrichContextStage(enricher, loggerFactory.CreateLogger<EnrichContextStage>()),
             new ExecuteReasoningStage(
-                agent, findingsDir,
-                maxDiffChars: opts.MaxDiffChars, maxDiffCharsPerFile: opts.MaxDiffCharsPerFile,
-                trivialDiffSkipEnabled: opts.TrivialDiffSkipEnabled,
-                shardingEnabled: opts.Sharding.Enabled,
-                shardMaxChars: opts.Sharding.ShardMaxChars,
-                maxShards: opts.Sharding.MaxShards,
-                shardConcurrency: opts.Sharding.ShardConcurrency),
+                agent, opts.MaxDiffChars, opts.MaxDiffCharsPerFile, findingsDir,
+                trivialDiffSkipEnabled: opts.TrivialDiffSkipEnabled),
             new ValidateFindingsStage(loggerFactory.CreateLogger<ValidateFindingsStage>()),
         };
 

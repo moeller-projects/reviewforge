@@ -16,7 +16,8 @@ public static partial class ServiceCollectionExtensions
 {
     private static IServiceCollection AddReviewForgePipeline(this IServiceCollection services, IConfiguration configuration)
     {
-        if (configuration.GetValue<bool>($"{EnrichmentOptions.SectionName}:{nameof(EnrichmentOptions.SymbolUsageEnabled)}"))
+        if (configuration.GetValue<bool>(
+                $"{ReviewOptions.SectionName}:Enrichment:{nameof(ReviewEnrichmentOptions.SymbolUsageEnabled)}"))
             services.AddSingleton<IContextEnricher, SymbolUsageEnricher>();
 
         services.AddSingleton<IFindingFixer>(_ => new HomoglyphIdentifierFixer("homoglyph/mixed-script-identifier"));
@@ -40,7 +41,7 @@ public static partial class ServiceCollectionExtensions
             sp.GetRequiredService<IPullRequestSource>(), sp.GetRequiredService<IFindingStore>(),
             sp.GetRequiredService<RepoCheckoutPool>(), sp.GetRequiredService<IChatClientFactory>(),
             sp.GetRequiredService<IOptions<ReviewOptions>>(), sp.GetRequiredService<IOptions<WorkspaceOptions>>(),
-            sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(), sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetRequiredService<ILoggerFactory>(),
             enricher: sp.GetService<IContextEnricher>(), clock: sp.GetRequiredService<TimeProvider>(),
             findingFixers: sp.GetRequiredService<IFindingFixer[]>(),
             autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>(),
@@ -52,14 +53,12 @@ public static partial class ServiceCollectionExtensions
                 sp.GetRequiredService<RepoCheckoutPool>(), sp.GetRequiredService<IChatClientFactory>(),
                 sp.GetRequiredService<IGitOps>(), sp.GetRequiredService<IProcessRunner>(),
                 sp.GetRequiredService<AutoFixOptions>(), sp.GetRequiredService<IOptions<ResolveOptions>>(),
-                sp.GetRequiredService<IOptions<ReviewOptions>>(), sp.GetRequiredService<IOptions<RepoReadToolsOptions>>(),
+                sp.GetRequiredService<IOptions<ReviewOptions>>(),
                 sp.GetRequiredService<ILoggerFactory>(), sp.GetRequiredService<TimeProvider>(),
                 sp.GetRequiredService<IOptions<AdoOptions>>().Value.Pat));
 
         services.AddHostedService<WorkspaceStartupTask>();
-        var hostOptions = configuration.GetSection(HostOptions.SectionName).Get<HostOptions>() ?? new HostOptions();
-        for (var i = 0; i < hostOptions.WorkerCount; i++)
-            services.AddSingleton<IHostedService>(sp => ActivatorUtilities.CreateInstance<ReviewWorker>(sp));
+        services.AddHostedService<ReviewWorker>();
         services.AddHostedService<DiscoverySweepWorker>();
         services.AddHostedService<CheckoutEvictionWorker>();
         services.AddHostedService<TelemetryGaugeRegistration>();

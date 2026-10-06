@@ -2,8 +2,8 @@ namespace ReviewForge.Infrastructure.Chat;
 
 /// <summary>
 /// Process-wide admission control for provider HTTP requests. Every chat transport
-/// (one per model tier) draws from this single pool, so WorkerCount × iterations (and
-/// later × shards) cannot burst the provider into 429s. Slots are acquired around each
+/// (one per model tier) draws from this single pool, so WorkerCount × iterations cannot burst
+/// the provider into 429s. Slots are acquired around each
 /// HTTP call, not each run — the function-invocation loop issues one call per iteration.
 /// </summary>
 public sealed class LlmGovernor : IDisposable

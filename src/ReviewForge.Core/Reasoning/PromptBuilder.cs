@@ -14,8 +14,8 @@ public sealed record PromptInput(
     string DiffText,
     string? Enrichment,
     IReadOnlyCollection<string> ContextNames,
-    int MaxDiffChars = 200_000,
-    int MaxDiffCharsPerFile = 40_000);
+    int MaxDiffChars,
+    int MaxDiffCharsPerFile);
 
 /// <summary>
 /// Builds the single user prompt for the review run. Deterministic sections so tests

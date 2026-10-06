@@ -13,10 +13,6 @@ public static class ReviewTelemetry
         ReviewForgeTelemetry.Meter.CreateHistogram<double>("reviewforge.review.duration_ms", "ms"); // tags: result
     public static readonly Counter<long> TrivialReviews =
         ReviewForgeTelemetry.Meter.CreateCounter<long>("reviewforge.reviews.trivial_total"); // LLM skipped: zero added reviewable lines
-    public static readonly Histogram<double> ShardDurationMilliseconds =
-        ReviewForgeTelemetry.Meter.CreateHistogram<double>("reviewforge.shard.duration_ms", "ms"); // per-shard agent duration
-    public static readonly Counter<long> ShardFallback =
-        ReviewForgeTelemetry.Meter.CreateCounter<long>("reviewforge.shard.fallback_total"); // shard-cap overflow → legacy single-agent path
     public static readonly Histogram<double> StageDurationMilliseconds =
         ReviewForgeTelemetry.Meter.CreateHistogram<double>("reviewforge.stage.duration_ms", "ms"); // tags: stage, result
     public static readonly Counter<long> EnrichmentFailures =

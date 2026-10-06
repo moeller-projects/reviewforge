@@ -1,9 +1,11 @@
 using ReviewForge.Service.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Reasoning;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
 using Xunit;
@@ -15,6 +17,7 @@ public class OptionsValidationTests
     private static ServiceProvider Build(params (string Key, string Value)[] config)
     {
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddReviewForge(new ConfigurationBuilder()
             .AddInMemoryCollection(config.ToDictionary(c => c.Key, c => (string?)c.Value))
             .Build());
@@ -47,6 +50,59 @@ public class OptionsValidationTests
         Assert.NotNull(provider.GetRequiredService<IOptions<HostOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<ApiDocsOptions>>().Value);
+    }
+
+    [Fact]
+    public void Computed_concurrency_defaults_are_resolved_in_options()
+    {
+        using var provider = Build([.. ValidConfig()]);
+
+        var host = provider.GetRequiredService<IOptions<HostOptions>>().Value;
+        var git = provider.GetRequiredService<IOptions<GitOptions>>().Value;
+        var chat = provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
+
+        Assert.Equal(Math.Clamp(Environment.ProcessorCount / 2, 2, 8), host.WorkerCount);
+        Assert.Equal(Math.Clamp(Environment.ProcessorCount / 2, 2, 4), git.MaxConcurrency);
+        Assert.Equal(host.WorkerCount * 2, chat.MaxConcurrentRequests);
+    }
+
+    [Fact]
+    public void Review_options_bind_grep_budgets_and_symbol_usage()
+    {
+        using var provider = Build([.. With(ValidConfig(),
+            ("Review:GrepMaxMs", "1234"),
+            ("Review:GrepMaxLines", "5678"),
+            ("Review:Enrichment:SymbolUsageEnabled", "true"))]);
+
+        var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
+
+        Assert.Equal(1234, options.GrepMaxMs);
+        Assert.Equal(5678, options.GrepMaxLines);
+        Assert.True(options.Enrichment.SymbolUsageEnabled);
+        Assert.IsType<SymbolUsageEnricher>(provider.GetRequiredService<IContextEnricher>());
+    }
+
+    [Fact]
+    public void Legacy_review_configuration_warns_and_does_not_override_new_defaults()
+    {
+        var messages = new List<string>();
+        var services = new ServiceCollection();
+        services.AddLogging(logging => logging.AddProvider(new CollectingLoggerProvider(messages)));
+        services.AddReviewForge(new ConfigurationBuilder()
+            .AddInMemoryCollection(With(ValidConfig(),
+                ("RepoReadTools:GrepMaxMs", "1"),
+                ("RepoReadTools:GrepMaxLines", "2"),
+                ("Review:Sharding:Enabled", "true"))
+                .ToDictionary(c => c.Item1, c => (string?)c.Item2))
+            .Build());
+        using var provider = services.BuildServiceProvider();
+
+        var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
+
+        Assert.Equal(10_000, options.GrepMaxMs);
+        Assert.Equal(200_000, options.GrepMaxLines);
+        Assert.Contains(messages, message => message.Contains("RepoReadTools grep settings are ignored", StringComparison.Ordinal));
+        Assert.Contains(messages, message => message.Contains("Review:Sharding configuration is obsolete", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -215,9 +271,11 @@ public class OptionsValidationTests
     {
         using var provider = Build([.. With(ValidConfig(), ("Host:WorkerCount", "3"))]);
 
+        var options = provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
+        Assert.Equal(6, options.MaxConcurrentRequests);
         var governor = provider.GetRequiredService<LlmGovernor>();
 
-        Assert.Equal(6, governor.MaxConcurrency); // WorkerCount × 2
+        Assert.Equal(options.MaxConcurrentRequests, governor.MaxConcurrency);
     }
 
     [Fact]
@@ -444,52 +502,6 @@ public class OptionsValidationTests
             () => provider.GetRequiredService<IOptions<AutoFixOptions>>().Value);
     }
 
-    [Fact]
-    public void Sharding_defaults_resolve_disabled()
-    {
-        using var provider = Build([.. ValidConfig()]);
-
-        var options = provider.GetRequiredService<IOptions<ReviewOptions>>().Value;
-
-        Assert.False(options.Sharding.Enabled);
-        Assert.Equal(30_000, options.Sharding.ShardMaxChars);
-        Assert.Equal(8, options.Sharding.MaxShards);
-        Assert.Equal(2, options.Sharding.ShardConcurrency);
-    }
-
-    [Fact]
-    public void Sharding_concurrency_above_max_shards_is_rejected()
-    {
-        using var provider = Build(
-        [
-            .. With(ValidConfig(),
-                ("Review:Sharding:Enabled", "true"),
-                ("Review:Sharding:MaxShards", "2"),
-                ("Review:Sharding:ShardConcurrency", "3")),
-        ]);
-
-        var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewOptions>>().Value);
-
-        Assert.Contains("ShardConcurrency must be between 1 and MaxShards", ex.Message);
-    }
-
-    [Theory]
-    [InlineData("ShardMaxChars", "999")]
-    [InlineData("MaxShards", "1")]
-    [InlineData("MaxShards", "33")]
-    public void Sharding_out_of_range_values_are_rejected(string key, string value)
-    {
-        using var provider = Build(
-        [
-            .. With(ValidConfig(),
-                ("Review:Sharding:Enabled", "true"),
-                ($"Review:Sharding:{key}", value)),
-        ]);
-
-        Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ReviewOptions>>().Value);
-    }
     [Fact]
     public void Resolve_enabled_without_allowed_authors_is_rejected()
     {

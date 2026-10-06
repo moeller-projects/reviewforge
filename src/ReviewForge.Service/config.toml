@@ -45,12 +45,12 @@ MaxDiffBytes = 4194304
 MaxDiffBytesPerFile = 262144
 AgentDebugLogging = false
 TrivialDiffSkipEnabled = true
+GrepMaxMs = 10000
+GrepMaxLines = 200000
 
-[Review.Sharding]
-Enabled = false
-ShardMaxChars = 30000
-MaxShards = 8
-ShardConcurrency = 2
+[Review.Enrichment]
+SymbolUsageEnabled = false
+
 
 [Git]
 MaxConcurrency = 4
@@ -106,8 +106,6 @@ ContextLines = 15
 TimeoutSeconds = 60
 MaxPromptChars = 24000
 
-[Enrichment]
-SymbolUsageEnabled = false
 
 [Discovery]
 TargetBranches = ["main", "develop"]
@@ -122,9 +120,6 @@ WarmupMaxPerSweep = 5
 FailureBackoffBase = "00:30:00"
 FailureBackoffMax = "08:00:00"
 
-[RepoReadTools]
-GrepMaxMs = 10000
-GrepMaxLines = 200000
 
 [Logging.LogLevel]
 Default = "Information"

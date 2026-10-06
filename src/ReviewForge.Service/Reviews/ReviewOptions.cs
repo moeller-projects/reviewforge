@@ -1,9 +1,11 @@
+using System.ComponentModel.DataAnnotations;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Reasoning;
 using ReasoningEffort = Microsoft.Extensions.AI.ReasoningEffort;
 
 namespace ReviewForge.Service;
 
-/// <summary>Review pipeline limits, prompts, output policy, and sharding settings.</summary>
+/// <summary>Review pipeline limits, prompts, output policy, and agent tool budgets.</summary>
 public sealed class ReviewOptions
 {
     public const string SectionName = "Review";
@@ -54,20 +56,18 @@ public sealed class ReviewOptions
     /// <summary>Skips the LLM call for iterations with no reviewable additions and no open threads.</summary>
     public bool TrivialDiffSkipEnabled { get; init; } = true;
 
-    public ShardingOptions Sharding { get; init; } = new();
+    /// <summary>Aggregate wall-clock budget (ms) for one agent Grep call.</summary>
+    [Range(1, 600_000)]
+    public int GrepMaxMs { get; init; } = RepoReadTools.DefaultGrepMaxMs;
+
+    /// <summary>Aggregate line budget for one agent Grep call.</summary>
+    [Range(1, 10_000_000)]
+    public int GrepMaxLines { get; init; } = RepoReadTools.DefaultGrepMaxLines;
+
+    public ReviewEnrichmentOptions Enrichment { get; init; } = new();
 }
 
-/// <summary>Map-reduce sharding for large diffs. Cap overflow falls back to the single-agent path.</summary>
-public sealed class ShardingOptions
+public sealed class ReviewEnrichmentOptions
 {
-    public bool Enabled { get; init; }
-
-    /// <summary>Cumulative diff chars per shard; a file larger than this gets a shard of its own.</summary>
-    public int ShardMaxChars { get; init; } = 30_000;
-
-    /// <summary>Shard cap. Overflow falls back to the legacy path, never a run failure.</summary>
-    public int MaxShards { get; init; } = 8;
-
-    /// <summary>Max concurrent shard agents (bounded by the LLM governor as well).</summary>
-    public int ShardConcurrency { get; init; } = 2;
+    public bool SymbolUsageEnabled { get; init; }
 }

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Infrastructure.Chat;
@@ -29,7 +30,15 @@ public static partial class ServiceCollectionExtensions
                 "Ado:OrgUrl must be an https:// URL — the PAT is sent to this endpoint.")
             .ValidateOnStart();
 
-        AddValidatedOptions<ChatProviderOptions>(services, configuration, ChatProviderOptions.SectionName);
+        services.AddOptions<ChatProviderOptions>()
+            .Bind(configuration.GetSection(ChatProviderOptions.SectionName))
+            .PostConfigure<IOptions<HostOptions>>((o, host) =>
+            {
+                if (configuration[$"{ChatProviderOptions.SectionName}:MaxConcurrentRequests"] is null)
+                    o.MaxConcurrentRequests = host.Value.WorkerCount * 2;
+            })
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
         AddValidatedOptions<WorkspaceOptions>(services, configuration, WorkspaceOptions.SectionName);
         services.AddOptions<PersistenceOptions>()
             .Bind(configuration.GetSection(PersistenceOptions.SectionName))
@@ -43,17 +52,37 @@ public static partial class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddOptions<ReviewOptions>()
             .Bind(configuration.GetSection(ReviewOptions.SectionName))
+            .PostConfigure<ILoggerFactory>((_, loggerFactory) =>
+            {
+                var logger = loggerFactory.CreateLogger<ReviewOptions>();
+                if (configuration["RepoReadTools:GrepMaxMs"] is not null
+                    || configuration["RepoReadTools:GrepMaxLines"] is not null)
+                    logger.LogWarning(
+                        "Legacy RepoReadTools grep settings are ignored; configure Review:GrepMaxMs and Review:GrepMaxLines.");
+                if (configuration.GetSection("Review:Sharding").Exists())
+                    logger.LogWarning(
+                        "Review:Sharding configuration is obsolete and ignored; large diffs use Review:MaxDiffChars truncation.");
+            })
             .ValidateDataAnnotations()
             .Validate(o => ReviewOptions.IsValidCleanRunVote(o.CleanRunVote),
                 "Review:CleanRunVote must be NoResponse | Approved | ApprovedWithSuggestions | None")
-            .Validate(o => o.Sharding.ShardMaxChars >= 1_000, "Review:Sharding:ShardMaxChars must be at least 1000")
-            .Validate(o => o.Sharding.MaxShards is >= 2 and <= 32, "Review:Sharding:MaxShards must be between 2 and 32")
-            .Validate(o => o.Sharding.ShardConcurrency >= 1 && o.Sharding.ShardConcurrency <= o.Sharding.MaxShards,
-                "Review:Sharding:ShardConcurrency must be between 1 and MaxShards")
             .ValidateOnStart();
-        AddValidatedOptions<GitOptions>(services, configuration, GitOptions.SectionName);
+        services.AddOptions<GitOptions>()
+            .Bind(configuration.GetSection(GitOptions.SectionName))
+            .PostConfigure(o =>
+            {
+                if (configuration[$"{GitOptions.SectionName}:MaxConcurrency"] is null)
+                    o.MaxConcurrency = Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
+            })
+            .Validate(o => o.MaxConcurrency >= 1, "Git:MaxConcurrency must be at least 1")
+            .ValidateOnStart();
         services.AddOptions<HostOptions>()
             .Bind(configuration.GetSection(HostOptions.SectionName))
+            .PostConfigure(o =>
+            {
+                if (configuration[$"{HostOptions.SectionName}:WorkerCount"] is null)
+                    o.WorkerCount = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+            })
             .Validate(o => o.WorkerCount is >= 1 and <= 64, "Host:WorkerCount must be between 1 and 64")
             .Validate(o => o.StaleShellMinutes > 0, "Host:StaleShellMinutes must be greater than 0")
             .ValidateOnStart();
@@ -72,7 +101,6 @@ public static partial class ServiceCollectionExtensions
                 "Resolve requires AutoFix:CommitAuthorName and AutoFix:CommitAuthorEmail")
             .ValidateOnStart();
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<ResolveOptions>>().Value);
-        AddValidatedOptions<RepoReadToolsOptions>(services, configuration, RepoReadToolsOptions.SectionName);
         services.AddOptions<AutoFixOptions>()
             .Bind(configuration.GetSection(AutoFixOptions.SectionName))
             .ValidateDataAnnotations()
@@ -87,7 +115,6 @@ public static partial class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<AutoFixOptions>>().Value);
         AddValidatedOptions<VerifyFindingsOptions>(services, configuration, VerifyFindingsOptions.SectionName);
-        AddValidatedOptions<EnrichmentOptions>(services, configuration, EnrichmentOptions.SectionName);
         AddValidatedOptions<ApiDocsOptions>(services, configuration, ApiDocsOptions.SectionName);
         services.AddOptions<DiscoveryOptions>()
             .Bind(configuration.GetSection(DiscoveryOptions.SectionName))

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Analysis;
@@ -488,6 +487,10 @@ public class StageTests : IDisposable
         Assert.Empty(throwing.ContextStore.Names);
     }
 
+    private static ExecuteReasoningStage ReasoningStage(
+        NativeReviewAgent agent, string? findingsDir = null, bool trivialDiffSkipEnabled = true)
+        => new(agent, 200_000, 40_000, findingsDir, trivialDiffSkipEnabled);
+
     [Fact]
     public async Task ExecuteReasoning_builds_prompt_and_collects_result()
     {
@@ -497,7 +500,7 @@ public class StageTests : IDisposable
         var ctx = Ctx();
         ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, ["known-key"]);
 
-        await new ExecuteReasoningStage(agent).ExecuteAsync(ctx, CancellationToken.None);
+        await ReasoningStage(agent).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.NotNull(ctx.Result);
         Assert.True(ctx.Collector.IsKnown("known-key"));
@@ -516,7 +519,7 @@ public class StageTests : IDisposable
         var ctx = Ctx();
         ctx.Kind = kind;
 
-        await new ExecuteReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+        await ReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Contains(expectedTier, factory.RequestedTiers);
         Assert.DoesNotContain(expectedTier == ChatTier.Fast ? ChatTier.Full : ChatTier.Fast, factory.RequestedTiers);
@@ -531,7 +534,7 @@ public class StageTests : IDisposable
         var ctx = Ctx();
         ctx.Kind = ReviewKind.FollowUp;
 
-        await new ExecuteReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+        await ReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Contains(script.ReceivedOptions, o => o?.ModelId == "fast-model");
     }
@@ -553,7 +556,7 @@ public class StageTests : IDisposable
         ctx.Diff = DiffIndex.Parse(ctx.DiffText);
         ctx.ReviewableFiles = ["src/A.cs"];
 
-        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, script.Calls);
@@ -578,7 +581,7 @@ public class StageTests : IDisposable
         ctx.Diff = DiffIndex.Parse(ctx.DiffText);
         ctx.ReviewableFiles = ["src/A.cs"];
 
-        await new ExecuteReasoningStage(
+        await ReasoningStage(
                 new NativeReviewAgent(new FakeChatClientFactory(script)), trivialDiffSkipEnabled: false)
             .ExecuteAsync(ctx, CancellationToken.None);
 
@@ -603,7 +606,7 @@ public class StageTests : IDisposable
         ctx.ReviewableFiles = ["src/A.cs"];
         ctx.PendingReplies = [new PendingReply(1, "k", "alice", "please fix")];
 
-        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.NotEqual(0, script.Calls);
@@ -626,7 +629,7 @@ public class StageTests : IDisposable
         ctx.Diff = DiffIndex.Parse(ctx.DiffText);
         ctx.ReviewableFiles = ["src/A.cs"];
 
-        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, script.Calls); // trivial: zero added lines in reviewable files
@@ -652,7 +655,7 @@ public class StageTests : IDisposable
             +var fileNаme = value;
             """;
 
-        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         var finding = Assert.Single(ctx.Collector.Findings);
@@ -679,7 +682,7 @@ public class StageTests : IDisposable
         // Run 1: establishes the finding and its dedupe key.
         var first = Ctx();
         first.DiffText = diff;
-        await new ExecuteReasoningStage(agent).ExecuteAsync(first, CancellationToken.None);
+        await ReasoningStage(agent).ExecuteAsync(first, CancellationToken.None);
         var key = Assert.Single(first.Collector.Findings).DedupeKey!;
 
         // Run 2: same diff; prior run knows the key; the live thread is Fixed → the
@@ -693,7 +696,7 @@ public class StageTests : IDisposable
                 [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]),
         ];
 
-        await new ExecuteReasoningStage(agent).ExecuteAsync(regressed, CancellationToken.None);
+        await ReasoningStage(agent).ExecuteAsync(regressed, CancellationToken.None);
 
         var finding = Assert.Single(regressed.Collector.Findings);
         Assert.True(finding.IsRegression);
@@ -711,7 +714,7 @@ public class StageTests : IDisposable
                 [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]),
         ];
 
-        await new ExecuteReasoningStage(agent).ExecuteAsync(active, CancellationToken.None);
+        await ReasoningStage(agent).ExecuteAsync(active, CancellationToken.None);
 
         Assert.Empty(active.Collector.Findings);
         Assert.Contains(key, active.Collector.RedetectedKeys);
@@ -737,7 +740,7 @@ public class StageTests : IDisposable
             var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
             var ctx = Ctx();
 
-            await new ExecuteReasoningStage(agent, findingsDir).ExecuteAsync(ctx, CancellationToken.None);
+            await ReasoningStage(agent, findingsDir).ExecuteAsync(ctx, CancellationToken.None);
 
             var file = Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl");
             Assert.True(File.Exists(file));
@@ -747,267 +750,6 @@ public class StageTests : IDisposable
         finally
         {
             Directory.Delete(findingsDir, recursive: true);
-        }
-    }
-
-    private static string ShardBlock(string file, string marker) =>
-        $"diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -0,0 +1,1 @@\n+{marker}\n";
-
-    private ReviewContext ShardedCtx(string diffText)
-    {
-        var ctx = Ctx();
-        ctx.DiffText = diffText;
-        ctx.Diff = DiffIndex.Parse(diffText);
-        return ctx;
-    }
-
-    private static ExecuteReasoningStage ShardedStage(NativeReviewAgent agent, int shardMaxChars, int maxShards = 4)
-        => new(agent, shardingEnabled: true, shardMaxChars: shardMaxChars, maxShards: maxShards, shardConcurrency: 2);
-
-    [Fact]
-    public async Task ExecuteReasoning_shards_large_diffs_and_merges_results()
-    {
-        var blockA = ShardBlock("src/A.cs", "alpha");
-        var blockB = ShardBlock("src/B.cs", "beta");
-        // Each shard signals its start and waits for the other: serial execution would
-        // deadlock and time out, so overlap is proven deterministically.
-        var client = new InterleaveChatClient();
-        var ctx = ShardedCtx(blockA + blockB);
-
-        await ShardedStage(new NativeReviewAgent(new FakeChatClientFactory(client)), blockA.Length)
-            .ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.NotNull(ctx.Result);
-        Assert.Equal("agentic tool loop (2 shards)", ctx.Result!.ReviewDepth);
-        Assert.Contains("shard A ok", ctx.Result.Narrative.ReviewSummary);
-        Assert.Contains("shard B ok", ctx.Result.Narrative.ReviewSummary);
-        Assert.Empty(ctx.Collector.Findings);
-    }
-
-    [Fact]
-    public async Task ExecuteReasoning_shard_findings_merge_into_the_run_collector()
-    {
-        var blockA = ShardBlock("src/A.cs", "alpha");
-        var blockB = ShardBlock("src/B.cs", "beta");
-        var client = new RecordThenDoneChatClient();
-        var findingsDir = Path.Combine(Path.GetTempPath(), "reviewforge-findings-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(findingsDir);
-        try
-        {
-            var ctx = ShardedCtx(blockA + blockB);
-
-            await new ExecuteReasoningStage(
-                    new NativeReviewAgent(new FakeChatClientFactory(client)),
-                    findingsDir,
-                    shardingEnabled: true, shardMaxChars: blockA.Length, shardConcurrency: 2)
-                .ExecuteAsync(ctx, CancellationToken.None);
-
-            Assert.Equal(2, ctx.Collector.Findings.Count);
-            Assert.Contains(ctx.Collector.Findings, f => f.Anchor?.FilePath == "src/A.cs");
-            Assert.Contains(ctx.Collector.Findings, f => f.Anchor?.FilePath == "src/B.cs");
-            // Single run-scoped JSONL sink: both shard findings stream from the primary collector.
-            var file = Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl");
-            var lines = File.ReadLines(file).ToList();
-            Assert.Single(lines, l => l.Contains("src/A.cs", StringComparison.Ordinal));
-            Assert.Single(lines, l => l.Contains("src/B.cs", StringComparison.Ordinal));
-        }
-        finally
-        {
-            Directory.Delete(findingsDir, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteReasoning_sharded_follow_up_runs_on_the_fast_tier()
-    {
-        var blockA = ShardBlock("src/A.cs", "alpha");
-        var blockB = ShardBlock("src/B.cs", "beta");
-        var factory = new TierRecordingFactory(new InterleaveChatClient());
-        var ctx = ShardedCtx(blockA + blockB);
-        ctx.Kind = ReviewKind.FollowUp;
-
-        await ShardedStage(new NativeReviewAgent(factory), blockA.Length).ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.Equal([ChatTier.Fast, ChatTier.Fast], factory.Tiers.OrderBy(t => t));
-    }
-
-    [Fact]
-    public async Task ExecuteReasoning_one_failing_shard_fails_the_run_and_publishes_nothing()
-    {
-        var blockA = ShardBlock("src/A.cs", "alpha");
-        var blockB = ShardBlock("src/B.cs", "beta");
-        var client = new FailShardChatClient();
-        var ctx = ShardedCtx(blockA + blockB);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => ShardedStage(new NativeReviewAgent(new FakeChatClientFactory(client)), blockA.Length)
-                .ExecuteAsync(ctx, CancellationToken.None));
-
-        Assert.Null(ctx.Result); // nothing downstream can publish
-        Assert.Empty(ctx.Collector.Findings);
-    }
-
-    [Fact]
-    public async Task ExecuteReasoning_shard_cap_overflow_falls_back_to_the_single_agent_path()
-    {
-        var blockA = ShardBlock("src/A.cs", "alpha");
-        var blockB = ShardBlock("src/B.cs", "beta");
-        var blockC = ShardBlock("src/C.cs", "gamma");
-        var script = new ScriptedChatClient(
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "legacy ok" })));
-        var ctx = ShardedCtx(blockA + blockB + blockC);
-
-        await new ExecuteReasoningStage(
-                new NativeReviewAgent(new FakeChatClientFactory(script)),
-                shardingEnabled: true, shardMaxChars: blockA.Length, maxShards: 2)
-            .ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.Equal(1, script.Calls); // single legacy agent, not three shards
-        Assert.Equal("agentic tool loop", ctx.Result!.ReviewDepth);
-        Assert.Equal("legacy ok", ctx.Result.Narrative.ReviewSummary);
-    }
-
-    [Fact]
-    public async Task ExecuteReasoning_single_shard_input_takes_the_legacy_path_even_when_enabled()
-    {
-        var blockA = ShardBlock("src/A.cs", "alpha");
-        var blockB = ShardBlock("src/B.cs", "beta");
-        var script = new ScriptedChatClient(
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "ok" })));
-        var ctx = ShardedCtx(blockA + blockB);
-
-        await new ExecuteReasoningStage(
-                new NativeReviewAgent(new FakeChatClientFactory(script)),
-                shardingEnabled: true, shardMaxChars: blockA.Length + blockB.Length + 1)
-            .ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.Equal(1, script.Calls);
-        Assert.Equal("agentic tool loop", ctx.Result!.ReviewDepth);
-    }
-
-    [Fact]
-    public async Task ExecuteReasoning_sharding_disabled_keeps_the_legacy_path()
-    {
-        var blockA = ShardBlock("src/A.cs", "alpha");
-        var blockB = ShardBlock("src/B.cs", "beta");
-        var script = new ScriptedChatClient(
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "ok" })));
-        var ctx = ShardedCtx(blockA + blockB);
-
-        await new ExecuteReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
-            .ExecuteAsync(ctx, CancellationToken.None);
-
-        Assert.Equal(1, script.Calls);
-    }
-
-    /// <summary>Proves shard concurrency: each shard's first model call signals its start and
-    /// waits for the other shard to start — serial execution would time out.</summary>
-    private sealed class InterleaveChatClient : IChatClient
-    {
-        private readonly TaskCompletionSource _AStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _BStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        {
-            var text = string.Join(" ", messages.SelectMany(m => m.Contents.OfType<TextContent>()).Select(c => c.Text));
-            var isA = text.Contains("src/A.cs", StringComparison.Ordinal) && !text.Contains("src/B.cs", StringComparison.Ordinal);
-            var mine = isA ? _AStarted : _BStarted;
-            var other = isA ? _BStarted : _AStarted;
-            mine.TrySetResult();
-            await other.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            return ScriptedChatClient.FunctionCalls(
-                ("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = isA ? "shard A ok" : "shard B ok" }));
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException("streaming not scripted");
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
-        }
-    }
-
-    /// <summary>Per shard: first model call records a finding on the shard's own file, second
-    /// call finishes the review. The per-shard changed-files guard must accept each file.</summary>
-    private sealed class RecordThenDoneChatClient : IChatClient
-    {
-        private readonly ConcurrentDictionary<string, int> _Calls = new(StringComparer.Ordinal);
-
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        {
-            var text = string.Join(" ", messages.SelectMany(m => m.Contents.OfType<TextContent>()).Select(c => c.Text));
-            var isA = text.Contains("src/A.cs", StringComparison.Ordinal) && !text.Contains("src/B.cs", StringComparison.Ordinal);
-            var file = isA ? "src/A.cs" : "src/B.cs";
-            var turn = _Calls.AddOrUpdate(file, 1, static (_, n) => n + 1);
-            ChatResponse response = turn == 1
-                ? ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
-                {
-                    ["ruleId"] = "csharp.null-deref", ["title"] = $"{file} may be null",
-                    ["severity"] = "high", ["category"] = "bug", ["description"] = "deref",
-                    ["snippet"] = "alpha", ["filePath"] = file, ["startLine"] = 1,
-                }))
-                : ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = $"{file} ok" }));
-            return Task.FromResult(response);
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException("streaming not scripted");
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
-        }
-    }
-
-    private sealed class FailShardChatClient : IChatClient
-    {
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        {
-            var text = string.Join(" ", messages.SelectMany(m => m.Contents.OfType<TextContent>()).Select(c => c.Text));
-            if (text.Contains("src/A.cs", StringComparison.Ordinal) && !text.Contains("src/B.cs", StringComparison.Ordinal))
-            {
-                return Task.FromException<ChatResponse>(new InvalidOperationException("shard A provider down"));
-            }
-
-            return Task.FromResult(ScriptedChatClient.FunctionCalls(
-                ("TaskDone", new Dictionary<string, object?> { ["reviewSummary"] = "shard B ok" })));
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException("streaming not scripted");
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
-        }
-    }
-
-    /// <summary>Thread-safe tier recorder: the stock fake's list races under concurrent shards.</summary>
-    private sealed class TierRecordingFactory(IChatClient client) : IChatClientFactory
-    {
-        private readonly object _Gate = new();
-        public List<ChatTier> Tiers { get; } = [];
-
-        public string ModelName(ChatTier tier) => "test-model";
-
-        public IChatClient Create(ChatTier tier)
-        {
-            lock (_Gate)
-            {
-                Tiers.Add(tier);
-            }
-
-            return client;
         }
     }
 
