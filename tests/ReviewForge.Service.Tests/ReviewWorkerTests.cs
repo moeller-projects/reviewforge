@@ -1,10 +1,9 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
+using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Workspaces;
 using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
@@ -28,36 +27,39 @@ public class ReviewWorkerTests
         public FakeFindingStore Store { get; }
         public ReviewWorker Worker { get; }
 
-        public ReviewPipelineFactory Factory { get; }
-
         public Harness(
             FakePullRequestSource? source = null,
             FakeGitOps? git = null,
             FakeFindingStore? store = null,
             string cleanVote = "Approved",
-            IResolveRunService? resolveService = null,
-            int workerCount = 1)
+            int workerCount = 1,
+            ResolveOptions? resolveOptions = null)
         {
             _WorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-worker-" + Guid.NewGuid().ToString("N"));
-            // The real host creates these at startup (P3-m); this direct-factory harness
-            // must prepare its own fixtures.
             Directory.CreateDirectory(Path.Combine(_WorkDir, "findings"));
             Claims = new InFlightClaims(Clock, Ttl);
             Store = store ?? new FakeFindingStore();
             Source = source ?? new FakePullRequestSource();
-            var options = Options.Create(new ReviewOptions {CleanRunVote = cleanVote});
-            Factory = new ReviewPipelineFactory(
+            var chatClientFactory = new FakeChatClientFactory(new ScriptedChatClient(
+                ScriptedChatClient.FunctionCalls(
+                    ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"}))));
+            var builder = PipelineBuilderTestFactory.Create(
                 Source,
                 Store,
-                new RepoCheckoutPool(git ?? new FakeGitOps(), new FakeWorkspaceFs(), _WorkDir),
-                new FakeChatClientFactory(new ScriptedChatClient(
-                    ScriptedChatClient.FunctionCalls(
-                        ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
-                options,
-                Options.Create(new WorkspaceOptions {WorkDir = _WorkDir}),
-                LoggerFactory.Create(_ => { }));
-            Worker = new ReviewWorker(Queue, Options.Create(new HostOptions {WorkerCount = workerCount}), Tracker, Factory, Claims, Store,
-                NullLogger<ReviewWorker>.Instance, Clock, resolveService);
+                git ?? new FakeGitOps(),
+                chatClientFactory,
+                _WorkDir,
+                new ReviewOptions {CleanRunVote = cleanVote},
+                resolveOptions);
+            Worker = new ReviewWorker(
+                Queue,
+                Options.Create(new HostOptions {WorkerCount = workerCount}),
+                Tracker,
+                builder,
+                Claims,
+                Store,
+                NullLogger<ReviewWorker>.Instance,
+                Clock);
         }
 
 
@@ -303,63 +305,40 @@ public class ReviewWorkerTests
     }
 
 
-    private sealed class CapturingResolveService(bool fail = false) : IResolveRunService
-    {
-        public ReviewRequest? Request { get; private set; }
-        public ReviewContext? Context { get; private set; }
-        public bool PublishGuardHeld { get; private set; }
-
-        public Task ExecuteAsync(ReviewRequest request, ReviewContext context, CancellationToken ct)
-        {
-            Request = request;
-            Context = context;
-            PublishGuardHeld = context.PublishGuard?.Invoke() == true;
-            if (fail)
-            {
-                throw new InvalidOperationException("resolve failed");
-            }
-
-            return Task.CompletedTask;
-        }
-    }
-
     [Fact]
-    public async Task Worker_dispatches_resolve_with_shared_claim_context_and_trigger()
+    public async Task Worker_runs_resolve_pipeline_through_shared_builder()
     {
-        var resolve = new CapturingResolveService();
-        using var h = new Harness(resolveService: resolve);
+        var source = new FakePullRequestSource();
+        using var h = new Harness(
+            source: source,
+            resolveOptions: new ResolveOptions {Enabled = true, AllowedAuthors = ["creator-1"]});
         var runId = Guid.NewGuid();
         Assert.True(h.Claims.TryClaim(Key, runId, out _));
-        var request = new ReviewRequest(
-            runId, Key, h.Clock.GetUtcNow(), HeadSha: "resolve-head",
-            Trigger: EnqueueTrigger.ResolveCommand, Kind: RunKind.Resolve);
-        Assert.True(h.Queue.TryEnqueue(request).Accepted);
+        Assert.True(h.Queue.TryEnqueue(new ReviewRequest(
+            runId,
+            Key,
+            h.Clock.GetUtcNow(),
+            HeadSha: source.Pr.SourceCommitSha,
+            Trigger: EnqueueTrigger.ResolveCommand,
+            Kind: RunKind.Resolve)).Accepted);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = h.Worker.StartAsync(cts.Token);
-        for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Completed; i++)
-        {
+        for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Skipped; i++)
             await Task.Delay(25);
-        }
 
-        Assert.Equal(RunState.Completed, h.Tracker.Get(runId)?.State);
-        Assert.Same(request, resolve.Request);
-        Assert.NotNull(resolve.Context);
-        Assert.Equal(runId, resolve.Context!.RunId);
-        Assert.Equal(RunKind.Resolve, resolve.Context.RunKind);
-        Assert.Equal(EnqueueTrigger.ResolveCommand, resolve.Context.Trigger);
-        Assert.True(resolve.PublishGuardHeld);
+        Assert.Equal(RunState.Skipped, h.Tracker.Get(runId)?.State);
         Assert.False(h.Claims.IsHeldBy(Key, runId));
+        Assert.Empty(h.Store.RecentRuns);
 
         await cts.CancelAsync();
         try { await workerTask; } catch (OperationCanceledException) { }
     }
 
     [Fact]
-    public async Task Worker_persists_resolve_failure_with_resolve_pipeline()
+    public async Task Worker_persists_resolve_disabled_failure()
     {
-        var resolve = new CapturingResolveService(fail: true);
-        using var h = new Harness(resolveService: resolve);
+        using var h = new Harness();
         var runId = Guid.NewGuid();
         Assert.True(h.Claims.TryClaim(Key, runId, out _));
         Assert.True(h.Queue.TryEnqueue(new ReviewRequest(
@@ -368,16 +347,12 @@ public class ReviewWorkerTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = h.Worker.StartAsync(cts.Token);
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
-        {
             await Task.Delay(25);
-        }
 
         Assert.Equal(RunState.Failed, h.Tracker.Get(runId)?.State);
         var failure = Assert.Single(h.Store.RecentRuns);
         Assert.False(failure.Success);
         Assert.Equal("Resolve", failure.Pipeline);
-        Assert.Equal(RunKind.Resolve, resolve.Context!.RunKind);
-        Assert.Equal(EnqueueTrigger.ResolveCommand, resolve.Context.Trigger);
 
         await cts.CancelAsync();
         try { await workerTask; } catch (OperationCanceledException) { }
@@ -429,44 +404,44 @@ public class ReviewWorkerTests
     }
 
     [Fact]
-    public void Factory_accepts_clean_run_vote_none()
+    public void Pipeline_definition_accepts_clean_run_vote_none()
     {
-        using var h = new Harness(cleanVote: "None");
-        Assert.NotNull(h.Factory.Create());
+        var definition = Pipelines.Review(
+            new ReviewOptions {CleanRunVote = "None"},
+            new AutoFixOptions(),
+            new VerifyFindingsOptions(),
+            hasGitOps: true);
+
+        Assert.Null(definition.Features.CleanRunVote);
     }
 
     [Fact]
-    public void FactoryCreate_does_not_touch_the_filesystem()
+    public void Pipeline_builder_does_not_create_findings_directory()
     {
         var root = Path.Combine(Path.GetTempPath(), "reviewforge-nofs-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var options = Options.Create(new ReviewOptions());
-            var factory = new ReviewPipelineFactory(
+            var builder = PipelineBuilderTestFactory.Create(
                 new FakePullRequestSource(),
                 new FakeFindingStore(),
-                new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), root),
-                new FakeChatClientFactory(
-                    new ScriptedChatClient(
-                        ScriptedChatClient.FunctionCalls(
-                            ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
-                options,
-                Options.Create(new WorkspaceOptions {WorkDir = root}),
-                LoggerFactory.Create(_ => { }));
+                new FakeGitOps(),
+                new FakeChatClientFactory(new ScriptedChatClient(
+                    ScriptedChatClient.FunctionCalls(
+                        ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
+                root);
+            var request = new ReviewRequest(Guid.NewGuid(), Key, DateTimeOffset.UtcNow);
+            using var context = new ReviewContext(Key, request.EnqueuedAt, request.RunId);
 
-            factory.Create();
-            factory.Create();
+            builder.Build(RunKind.Review, request, context);
+            builder.Build(RunKind.Review, request, context);
 
-            // Only the host startup (P3-m) may create the runtime directories; the per-run
-            // factory must not. (The pool itself creates checkouts/ + mirror/ on its own.)
+            // Runtime artifact directories belong to WorkspaceStartupTask, not pipeline assembly.
             Assert.False(Directory.Exists(Path.Combine(root, "findings")));
         }
         finally
         {
             if (Directory.Exists(root))
-            {
                 Directory.Delete(root, recursive: true);
-            }
         }
     }
 

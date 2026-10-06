@@ -15,6 +15,7 @@ using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.AutoFix.Fixers;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
@@ -150,26 +151,11 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             services.RemoveAll<IFindingStore>();
             services.RemoveAll<IGitOps>();
             services.RemoveAll<IChatClientFactory>();
-            services.RemoveAll<ReviewPipelineFactory>();
 
             services.AddSingleton<IPullRequestSource>(Source);
             services.AddSingleton<IFindingStore>(Store);
             services.AddSingleton<IGitOps>(Git);
             services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory(Chat));
-            services.AddSingleton(sp => new ReviewPipelineFactory(
-                sp.GetRequiredService<IPullRequestSource>(),
-                sp.GetRequiredService<IFindingStore>(),
-                sp.GetRequiredService<RepoCheckoutPool>(),
-                sp.GetRequiredService<IChatClientFactory>(),
-                sp.GetRequiredService<IOptions<ReviewOptions>>(),
-                sp.GetRequiredService<IOptions<WorkspaceOptions>>(),
-                sp.GetRequiredService<ILoggerFactory>(),
-                findingFixers:
-                [
-                    new BashUnquotedVarsFixer(), new BashSetEMissingFixer(),
-                    new PythonMutableDefaultArgFixer(), new DockerAddToCopyFixer(),
-                ],
-                autoFixOptions: sp.GetRequiredService<IOptions<AutoFixOptions>>()));
         });
     }
 
@@ -384,17 +370,16 @@ public class ServiceTests : IAsyncLifetime
         var tracker = new RunTracker();
         var standaloneWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-failing-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(standaloneWorkDir);
-        var reviewOptions = Options.Create(new ReviewOptions());
-        var workspaceOptions = Options.Create(new WorkspaceOptions {WorkDir = standaloneWorkDir});
+        var reviewOptions = new ReviewOptions();
         var failingGit = new ExplosiveGitOps(standaloneWorkDir);
-        var failingFactory = new ReviewPipelineFactory(
-            _Factory.Source, _Factory.Store,
-            new RepoCheckoutPool(failingGit, new FakeWorkspaceFs(), standaloneWorkDir),
+        var failingBuilder = PipelineBuilderTestFactory.Create(
+            _Factory.Source,
+            _Factory.Store,
+            failingGit,
             new FakeChatClientFactory(_Factory.Chat),
-            reviewOptions,
-            workspaceOptions,
-            LoggerFactory.Create(b => { }));
-        var worker = new ReviewWorker(queue, Options.Create(new HostOptions {WorkerCount = 1}), tracker, failingFactory, new InFlightClaims(),
+            standaloneWorkDir,
+            reviewOptions);
+        var worker = new ReviewWorker(queue, Options.Create(new HostOptions {WorkerCount = 1}), tracker, failingBuilder, new InFlightClaims(),
             _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -859,7 +844,9 @@ public class DiWiringTests
             Assert.NotNull(provider.GetRequiredService<IChatClientFactory>());
             Assert.NotNull(provider.GetRequiredService<IFindingStore>());
             Assert.NotNull(provider.GetRequiredService<IPullRequestSource>());
-            Assert.NotNull(provider.GetRequiredService<ReviewPipelineFactory>().Create());
+            var request = new ReviewRequest(Guid.NewGuid(), new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow);
+            using var context = new ReviewContext(request.Pr, request.EnqueuedAt, request.RunId);
+            Assert.NotNull(provider.GetRequiredService<IPipelineBuilder>().Build(RunKind.Review, request, context));
         });
     }
 
@@ -928,23 +915,9 @@ public class DiWiringTests
     [Fact]
     public void Invalid_clean_run_vote_fails_fast()
     {
-        WithPat(() =>
-        {
-            var reviewOptions = Options.Create(new ReviewOptions {CleanRunVote = "Bogus"});
-            var workspaceOptions = Options.Create(new WorkspaceOptions
-            {
-                WorkDir = Path.Combine(Path.GetTempPath(), "rf-clean-" + Guid.NewGuid().ToString("N")),
-            });
-            var factory = new ReviewPipelineFactory(
-                new FakePullRequestSource(), new FakeFindingStore(),
-                new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), Path.GetTempPath()),
-                new FakeChatClientFactory(new ScriptedChatClient()),
-                reviewOptions,
-                workspaceOptions,
-                LoggerFactory.Create(_ => { }));
-
-            Assert.Throws<InvalidOperationException>(() => factory.Create());
-        });
+        var reviewOptions = new ReviewOptions {CleanRunVote = "Bogus"};
+        Assert.Throws<InvalidOperationException>(() =>
+            Pipelines.Review(reviewOptions, new AutoFixOptions(), new VerifyFindingsOptions(), hasGitOps: true));
     }
 
     [Fact]
