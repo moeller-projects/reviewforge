@@ -29,7 +29,7 @@ public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? cl
 
     private async Task<IReadOnlyList<ReviewThread>> ResolveThreadsAsync(ReviewContext ctx, CancellationToken ct)
     {
-        if (ctx.PendingThreadsRefresh is { } refresh)
+        if (ctx.Repository.PendingThreadsRefresh is { } refresh)
         {
             // In-flight must be sampled BEFORE the await: after it, the task is always
             // complete and "now" would wrongly stamp a long-finished (possibly stale)
@@ -55,7 +55,7 @@ public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? cl
             // at/after preparation.
             var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : (DateTimeOffset?)null);
             if (overlapped is not null && completedAt is { } receivedAt
-                && ctx.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
+                && ctx.Repository.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
             {
                 return overlapped;
             }

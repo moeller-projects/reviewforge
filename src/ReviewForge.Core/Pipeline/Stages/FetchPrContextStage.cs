@@ -33,7 +33,7 @@ public sealed class FetchPrContextStage(IPullRequestSource source, IFindingStore
         // wrapping is belt-and-suspenders and deliberately reused here.
         if (PriorReviewContextBuilder.Build(ctx.Fetch.PriorRun, ctx.Fetch.Threads) is { } memory)
         {
-            ctx.ContextStore.Put(PriorReviewContextBuilder.ContextName, memory);
+            ctx.Reasoning.ContextStore.Put(PriorReviewContextBuilder.ContextName, memory);
         }
     }
 }

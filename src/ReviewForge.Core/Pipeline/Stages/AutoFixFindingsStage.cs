@@ -118,7 +118,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 .ConfigureAwait(false);
         }
 
-        ctx.AppliedFixes = applied;
+        ctx.AutoFix = ctx.AutoFix with {AppliedFixes = applied};
     }
 
     /// <summary>Gate failure must not silently drop author commands: every scanned /fixit
@@ -134,16 +134,19 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
         var commands = FixCommandDetector.Scan(
             ctx.Fetch.Threads, ctx.RequirePullRequest().CreatorId, ctx.Fetch.PriorRun?.LastObservedCommentAt);
-        ctx.FixCommands = commands;
+        ctx.AutoFix = ctx.AutoFix with {FixCommands = commands};
         if (commands.Count == 0)
         {
             return;
         }
 
-        ctx.FixCommandReplies =
-        [
-            .. commands.OrderBy(c => c.ThreadId).Select(c => (c.ThreadId, reason)),
-        ];
+        ctx.AutoFix = ctx.AutoFix with
+        {
+            FixCommandReplies =
+            [
+                .. commands.OrderBy(c => c.ThreadId).Select(c => (c.ThreadId, reason)),
+            ],
+        };
     }
 
     private async Task RunDeterministicPassAsync(
@@ -162,7 +165,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         var proposalsByFile = new Dictionary<string, List<(RichFinding Finding, FixProposal Proposal, string[] Lines)>>(RepoPath.PathComparer);
         var guardSkipped = 0;
 
-        foreach (var finding in ctx.AcceptedFindings)
+        foreach (var finding in ctx.Validation.AcceptedFindings)
         {
             ct.ThrowIfCancellationRequested();
             if (getBudget() <= 0)
@@ -360,7 +363,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
     {
         var commands = FixCommandDetector.Scan(
             ctx.Fetch.Threads, ctx.RequirePullRequest().CreatorId, ctx.Fetch.PriorRun?.LastObservedCommentAt);
-        ctx.FixCommands = commands;
+        ctx.AutoFix = ctx.AutoFix with {FixCommands = commands};
         if (commands.Count == 0)
         {
             return;
@@ -440,7 +443,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 var pass = await _Agent.RunWithEditToolsAsync(
                         prompt,
                         collector,
-                        ctx.ContextStore,
+                        ctx.Reasoning.ContextStore,
                         repoDir,
                         new HashSet<string>(RepoPath.PathComparer) {path},
                         _Options.FixPassMaxIterations,
@@ -499,7 +502,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             }
         }
 
-        ctx.FixCommandReplies = replies;
+        ctx.AutoFix = ctx.AutoFix with {FixCommandReplies = replies};
         if (watermarkSkipped > 0)
         {
             AutoFixTelemetry.CommandedWatermarkSkipped.Add(watermarkSkipped);

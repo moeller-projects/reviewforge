@@ -34,18 +34,18 @@ public sealed class VerifyFindingsStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        if (!options.Enabled || ctx.AcceptedFindings.Count == 0)
+        if (!options.Enabled || ctx.Validation.AcceptedFindings.Count == 0)
         {
             return;
         }
 
-        if (ctx.Result?.ReviewDepth == "trivial diff — no agent run")
+        if (ctx.Reasoning.Result?.ReviewDepth == "trivial diff — no agent run")
         {
             return;
         }
 
         // Deterministic findings (homoglyph/*) need no model challenge.
-        var candidates = ctx.AcceptedFindings
+        var candidates = ctx.Validation.AcceptedFindings
             .Where(f => !f.RuleId.StartsWith("homoglyph/", StringComparison.Ordinal))
             .OrderByDescending(SeverityRank) // critical/high verified first
             .Take(options.MaxFindings)
@@ -83,7 +83,7 @@ public sealed class VerifyFindingsStage(
             FindingsTelemetry.FindingsVerifierDurationMilliseconds.Record(stopwatch.ElapsedMilliseconds);
         }
 
-        var rejected = ctx.AcceptedFindings
+        var rejected = ctx.Validation.AcceptedFindings
             .Where(f => f.DedupeKey is { } k
                         && verdicts.TryGetValue(k, out var v)
                         && v.Rejected)
@@ -96,7 +96,7 @@ public sealed class VerifyFindingsStage(
             logger.LogInformation("finding {Key} rejected by verifier: {Reason}", finding.DedupeKey, reason);
         }
 
-        ctx.AcceptedFindings = ctx.AcceptedFindings.Except(rejected).ToList();
+        ctx.Validation = ctx.Validation with {AcceptedFindings = ctx.Validation.AcceptedFindings.Except(rejected).ToList()};
     }
 
     /// <summary>One retry with a JSON-only nudge; a second malformed reply fails open (all kept).</summary>

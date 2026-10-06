@@ -23,7 +23,7 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
             var pass = await agent.RunWithEditToolsAsync(
                 ResolvePromptBuilder.BuildFixPrompt([fix], ctx.Fetch.WorkItems),
                 collector,
-                ctx.ContextStore,
+                ctx.Reasoning.ContextStore,
                 ctx.RequireRepoDir(),
                 fix.CandidateFiles.ToHashSet(RepoPath.PathComparer),
                 maxIterations,
