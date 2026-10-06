@@ -123,14 +123,15 @@ public class NativeReviewAgentCoverageTests : IDisposable
     public void Dispose() => Directory.Delete(_Root, recursive: true);
 
     [Fact]
-    public async Task Public_create_agent_overload_runs_the_native_loop()
+    public async Task Public_create_agent_with_request_runs_the_native_loop()
     {
         var chat = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(
                 ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "created"})));
         var collector = new ReviewCollector();
-        var created = new NativeReviewAgent(new FakeChatClientFactory(chat))
-            .CreateAgent(collector, new ContextStore(), _Root);
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(chat));
+        var created = agent.CreateAgent(new AgentRunRequest(
+            "review", collector, new ContextStore(), _Root, ToolProfile.Review));
 
         await created.RunAsync(
             [new ChatMessage(ChatRole.User, "review")], cancellationToken: CancellationToken.None);
@@ -139,8 +140,9 @@ public class NativeReviewAgentCoverageTests : IDisposable
         Assert.Equal("created", collector.ToResult("unused", null).Narrative.ReviewSummary);
     }
 
+
     [Fact]
-    public async Task Rulebook_overload_runs_the_native_loop()
+    public async Task Request_based_review_runs_the_native_loop()
     {
         var chat = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(
@@ -148,37 +150,27 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var collector = new ReviewCollector();
 
         var result = await new NativeReviewAgent(new FakeChatClientFactory(chat)).RunAsync(
-            "review", collector, new ContextStore(), _Root, ruleBook: null, ct: CancellationToken.None);
+            new AgentRunRequest("review", collector, new ContextStore(), _Root, ToolProfile.Review), CancellationToken.None);
 
         Assert.True(collector.Done);
         Assert.Equal("agentic tool loop", result.ReviewDepth);
     }
 
     [Fact]
-    public async Task Private_agent_builder_registers_extra_tools()
+    public async Task Public_agent_builder_creates_profile_agent()
     {
         var chat = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(
-                ("Echo", new Dictionary<string, object?> {["value"] = "payload"})),
-            ScriptedChatClient.FunctionCalls(
-                ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "extra tool"})));
+                ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "created"})));
         var agent = new NativeReviewAgent(new FakeChatClientFactory(chat));
         var collector = new ReviewCollector();
-        var createAgent = typeof(NativeReviewAgent).GetMethods(
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            .Single(method => method.Name == "CreateAgent" && method.GetParameters().Length == 10);
-        var extraTool = AIFunctionFactory.Create((Func<string, string>)Echo, "Echo", null, null);
+        var created = agent.CreateAgent(new AgentRunRequest(
+            "review", collector, new ContextStore(), _Root, ToolProfile.Review));
 
-        var created = (AIAgent)createAgent.Invoke(agent,
-            [collector, new ContextStore(), _Root, null, null, null, null, null, ChatTier.Full, new[] {extraTool}])!;
         await created.RunAsync(
             [new ChatMessage(ChatRole.User, "review")], cancellationToken: CancellationToken.None);
 
-        var functionResult = chat.Received.SelectMany(messages => messages)
-            .SelectMany(message => message.Contents)
-            .OfType<FunctionResultContent>()
-            .Single(content => content.Result?.ToString() == "echo:payload");
-        Assert.Equal("echo:payload", functionResult.Result?.ToString());
+        Assert.True(collector.Done);
     }
 
     [Fact]
@@ -233,6 +225,68 @@ public class NativeReviewAgentCoverageTests : IDisposable
     }
 
     [Fact]
+    public async Task Agent_profiles_isolate_tools_tiers_and_prompt_overrides()
+    {
+        var overridePath = Path.Combine(_Root, "review-override.md");
+        const string overrideText = "review-only prompt override marker";
+        File.WriteAllText(overridePath, overrideText);
+        var options = new AgentOptions { PromptOverridePath = overridePath };
+        static string[] Names(ScriptedChatClient chat)
+            => chat.ReceivedOptions.First()!.Tools!.Select(tool => tool.Name).ToArray();
+
+        var reviewChat = new ScriptedChatClient(ScriptedChatClient.FunctionCalls(
+            ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "review"})));
+        var reviewFactory = new FakeChatClientFactory(reviewChat, model: "full-model", fastModel: "fast-model");
+        await new NativeReviewAgent(reviewFactory, options).RunAsync(
+            new AgentRunRequest("review", new ReviewCollector(), new ContextStore(), _Root,
+                ToolProfile.Review, Tier: ChatTier.Fast),
+            CancellationToken.None);
+
+        Assert.Equal(
+            ["ReadFile", "List", "Grep", "repo_file_diff", "FindReferences", "ReadContext",
+                "GetRulebook", "RecordFinding", "RecordUncertainty", "TaskDone"],
+            Names(reviewChat));
+        Assert.Equal([ChatTier.Fast], reviewFactory.RequestedTiers);
+        Assert.Contains(overrideText, reviewChat.ReceivedOptions.First()!.Instructions);
+
+        var triageChat = new ScriptedChatClient(
+            ScriptedChatClient.FunctionCalls(("RecordVerdict", new Dictionary<string, object?>
+            {
+                ["threadId"] = 1, ["verdict"] = "OutOfScope", ["evidence"] = "not applicable",
+                ["confidence"] = "low",
+            })),
+            ScriptedChatClient.FunctionCalls(
+                ("TaskDone", new Dictionary<string, object?> {["summary"] = "triaged"})));
+        var triageFactory = new FakeChatClientFactory(triageChat, model: "full-model", fastModel: "fast-model");
+        await new NativeReviewAgent(triageFactory, options).RunAsync(
+            new AgentRunRequest("triage", new ReviewCollector(), new ContextStore(), _Root,
+                ToolProfile.Triage, AllowedThreadIds: new HashSet<long> {1}, Tier: ChatTier.Fast),
+            CancellationToken.None);
+
+        Assert.Equal(
+            ["ReadFile", "List", "Grep", "repo_file_diff", "FindReferences", "ReadContext",
+                "RecordVerdict", "TaskDone"],
+            Names(triageChat));
+        Assert.Equal([ChatTier.Full], triageFactory.RequestedTiers);
+        Assert.Contains("resolve-triage agent", triageChat.ReceivedOptions.First()!.Instructions);
+        Assert.DoesNotContain(overrideText, triageChat.ReceivedOptions.First()!.Instructions);
+
+        var fixChat = new ScriptedChatClient(ScriptedChatClient.FunctionCalls(
+            ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "fixed"})));
+        var fixFactory = new FakeChatClientFactory(fixChat, model: "full-model", fastModel: "fast-model");
+        await new NativeReviewAgent(fixFactory, options).RunAsync(
+            new AgentRunRequest("fix", new ReviewCollector(), new ContextStore(), _Root,
+                ToolProfile.Fix, WritablePaths: new HashSet<string> {"script.sh"},
+                MaxIterationsOverride: 1, Tier: ChatTier.Full),
+            CancellationToken.None);
+
+        Assert.Equal(["ReadFileWithHashes", "EditFile", "TaskDone"], Names(fixChat));
+        Assert.Equal([ChatTier.Fast], fixFactory.RequestedTiers);
+        Assert.Contains("constrained fix-pass agent", fixChat.ReceivedOptions.First()!.Instructions);
+        Assert.DoesNotContain(overrideText, fixChat.ReceivedOptions.First()!.Instructions);
+    }
+
+    [Fact]
     public async Task Streaming_usage_is_recorded_and_updates_are_forwarded()
     {
         const string model = "streaming-usage-model";
@@ -243,7 +297,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var usage = Activator.CreateInstance(tokenUsageType, nonPublic: true)!;
         var createPipeline = typeof(NativeReviewAgent).GetMethod(
             "CreatePipeline", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var pipeline = (IChatClient)createPipeline.Invoke(agent, [collector, usage, ChatTier.Full])!;
+        var pipeline = (IChatClient)createPipeline.Invoke(agent, [collector, usage, ChatTier.Full, 30])!;
         var updates = new List<ChatResponseUpdate>();
 
         long cached = 0;
