@@ -104,7 +104,7 @@ public class RepoReadTools
             return $"no text diff for '{relative}' ({kind} change)";
         }
 
-        _DiffBlocks ??= DiffBlockSplit.Split(_DiffText ?? string.Empty, out _);
+        _DiffBlocks ??= DiffBlockSplit.Split(_DiffText ?? string.Empty);
         var block = _DiffBlocks.FirstOrDefault(b =>
             b.File is not null && string.Equals(RepoPath.Normalize(b.File), relative, RepoPath.PathComparison));
         if (block.File is null)

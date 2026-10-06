@@ -5,7 +5,7 @@ public sealed class HostOptions
 {
     public const string SectionName = "Host";
 
-    public int WorkerCount { get; init; } = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+    public int WorkerCount { get; set; }
 
     /// <summary>Older in-flight run shells are finalized as failures during startup recovery.</summary>
     public int StaleShellMinutes { get; init; } = 10;

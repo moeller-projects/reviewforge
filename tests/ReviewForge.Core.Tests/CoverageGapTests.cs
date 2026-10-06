@@ -37,7 +37,7 @@ public class CoverageGapTests : IDisposable
             new PrepareRepositoryStage(new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), _PoolRoot), NullLogger<PrepareRepositoryStage>.Instance),
             new ClassifyRunStage(source),
             new EnrichContextStage(null, NullLogger<EnrichContextStage>.Instance),
-            new ExecuteReasoningStage(agent),
+            new ExecuteReasoningStage(agent, 200_000, 40_000),
             new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance),
             new BeginRunStage(store),
             new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance),

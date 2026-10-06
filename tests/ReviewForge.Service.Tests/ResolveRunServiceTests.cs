@@ -68,7 +68,6 @@ public sealed class ResolveRunServiceTests : IDisposable
             new AutoFixOptions { CommitAuthorName = "ReviewForge", CommitAuthorEmail = "bot@example.test" },
             Options.Create(options),
             Options.Create(new ReviewOptions()),
-            Options.Create(new RepoReadToolsOptions()),
             NullLoggerFactory.Instance,
             TimeProvider.System,
             pushPat: null);

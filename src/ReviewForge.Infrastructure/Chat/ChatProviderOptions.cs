@@ -29,11 +29,10 @@ public sealed class ChatProviderOptions : IValidatableObject
 
     /// <summary>
     /// Process-wide cap on concurrent provider HTTP requests (across both model tiers).
-    /// Null (default) resolves to Host:WorkerCount × 2 — permissive on purpose;
-    /// tighten from the reviewforge.llm.governor.wait_ms histogram.
+    /// Defaults to Host:WorkerCount × 2 during options post-configuration.
     /// </summary>
     [Range(1, 10_000)]
-    public int? MaxConcurrentRequests { get; init; }
+    public int MaxConcurrentRequests { get; set; }
 
     /// <summary>Seconds a request waits for a governor slot before the run fails with a
     /// visible <see cref="LlmGovernorTimeoutException"/>. Default 300.</summary>

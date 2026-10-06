@@ -24,5 +24,4 @@ public static class ReviewForgeTelemetry
     public const string TagReason = "reason";
     public const string TagWarmed = "warmed"; // true when a discovery mirror warmup prefetched this head
     public const string TagKind = "kind"; // pooled | private (checkout metrics)
-    public const string TagShards = "shards"; // shard count on sharded review run metrics
 }

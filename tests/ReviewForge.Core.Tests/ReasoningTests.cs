@@ -142,54 +142,6 @@ public class ReviewCollectorTests
         Assert.Empty(result.Findings);
     }
 
-    [Fact]
-    public void MergeFrom_appends_findings_uncertainties_and_key_state()
-    {
-        var primary = new ReviewCollector();
-        var shard = new ReviewCollector();
-        shard.AddFinding(Finding("k1"));
-        shard.MarkRedetected("r1");
-        shard.MarkRegressed("g1");
-        shard.AddUncertainty(new ReviewUncertainty("t", "q", null));
-
-        primary.MergeFrom(shard);
-
-        Assert.Single(primary.Findings);
-        Assert.True(primary.IsKnown("k1"));
-        Assert.Contains("r1", primary.RedetectedKeys);
-        Assert.Contains("g1", primary.RegressedKeys);
-        Assert.Single(primary.Uncertainties);
-        Assert.False(primary.Done); // the shard's task_done must not complete the run collector
-    }
-
-    [Fact]
-    public void MergeFrom_drops_findings_already_known_cross_shard()
-    {
-        var primary = new ReviewCollector();
-        primary.AddFinding(Finding("dup"));
-        var shard = new ReviewCollector();
-        shard.AddFinding(Finding("dup")); // same dedupe key produced independently
-        shard.AddFinding(Finding("fresh"));
-
-        primary.MergeFrom(shard);
-
-        Assert.Equal(2, primary.Findings.Count);
-        Assert.Single(primary.Findings, f => f.DedupeKey == "fresh");
-    }
-
-    [Fact]
-    public void MergeFrom_keeps_prior_key_regressions_from_shards()
-    {
-        // A shard accepted a finding whose key the prior run already knew: that is a
-        // regression and must survive the merge, not be dropped as "already known".
-        var primary = new ReviewCollector(["prior-key"]);
-        var shard = new ReviewCollector(["prior-key"]);
-        shard.AddFinding(Finding("prior-key"));
-
-        primary.MergeFrom(shard);
-
-        Assert.Single(primary.Findings, f => f.DedupeKey == "prior-key");
-    }
 }
 
 public class ReviewToolsTests
@@ -434,7 +386,7 @@ public class PromptBuilderTests
         PendingReplies: [],
         DiffText: "+++ b/src/A.cs",
         Enrichment: null,
-        ContextNames: []);
+        ContextNames: [], MaxDiffChars: 200_000, MaxDiffCharsPerFile: 40_000);
 
     [Fact]
     public void Full_review_prompt_contains_pr_and_diff()

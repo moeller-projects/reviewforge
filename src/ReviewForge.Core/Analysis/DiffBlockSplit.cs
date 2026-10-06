@@ -13,13 +13,9 @@ public readonly record struct DiffBlock(string? File, string Text, bool IsDeleti
 /// </summary>
 public static class DiffBlockSplit
 {
-    /// <summary>Splits a unified diff into per-file blocks. A hunk-bearing block whose file
-    /// cannot be resolved sets <paramref name="unresolvableHunks"/> so the caller can fail
-    /// closed instead of silently dropping it.</summary>
-    public static IReadOnlyList<DiffBlock> Split(string unifiedDiff, out bool unresolvableHunks)
+    /// <summary>Splits a unified diff into per-file blocks.</summary>
+    public static IReadOnlyList<DiffBlock> Split(string unifiedDiff)
     {
-        var unattributable = false; // captured by Flush; copied to the out param at the end
-        unresolvableHunks = false;
         var blocks = new List<DiffBlock>();
         if (string.IsNullOrEmpty(unifiedDiff))
         {
@@ -28,24 +24,16 @@ public static class DiffBlockSplit
 
         var current = new StringBuilder();
         string? file = null;
-        var hasAddedLine = false;
         var isDeletion = false;
         void Flush()
         {
             if (file is not null || current.Length > 0)
             {
-                if (file is null && hasAddedLine)
-                {
-                    // Added content we cannot attribute to a file: never shard it away silently.
-                    unattributable = true;
-                }
-
                 blocks.Add(new DiffBlock(file, current.ToString(), isDeletion));
             }
 
             current.Clear();
             file = null;
-            hasAddedLine = false;
             isDeletion = false;
         }
 
@@ -81,16 +69,10 @@ public static class DiffBlockSplit
                 }
             }
 
-            if (line.Length > 0 && line[0] == '+' && !line.StartsWith("+++", StringComparison.Ordinal))
-            {
-                hasAddedLine = true;
-            }
-
             current.Append(line).Append('\n');
         }
 
         Flush();
-        unresolvableHunks = unattributable;
         return blocks;
     }
 

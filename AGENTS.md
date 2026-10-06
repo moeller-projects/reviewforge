@@ -16,7 +16,7 @@ replies → persist. See `README.md` for the stage table.
 src/
   ReviewForge.Core/            pure domain + pipeline + agent loop. NO IO adapters, NO vendor SDKs.
     Domain/                    models, ReviewGate, RunClassifier, ThreadTriage, FailureBackoff
-    Analysis/                  DedupeKey (shift-proof), DiffIndex, AnchorResolver, ShardPlanner,
+    Analysis/                  DedupeKey (shift-proof), DiffIndex, AnchorResolver, DiffBlockSplit,
                                homoglyph analyzer, LineEditEngine, PathSafety
     Reasoning/                 NativeReviewAgent, RepoReadTools, RepoPathGuard, prompt building,
                                RuleBook + embedded rule-pack JSONs, embedded system prompts

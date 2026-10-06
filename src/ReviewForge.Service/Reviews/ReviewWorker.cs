@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
@@ -7,12 +8,12 @@ using ReviewForge.Service.Queue;
 namespace ReviewForge.Service;
 
 /// <summary>
-/// Worker draining the bounded ingest queue. A failed run is logged, marked Failed, and
-/// persisted as a failure record (so discovery backoff has memory) — the worker keeps
-/// draining (no poison-message shutdown).
+/// Configured consumers drain the bounded ingest queue concurrently. A failed run is logged,
+/// marked Failed, and persisted; a failed review does not stop the remaining consumers.
 /// </summary>
 public sealed class ReviewWorker(
     IReviewQueue queue,
+    IOptions<HostOptions> hostOptions,
     RunTracker tracker,
     ReviewPipelineFactory pipelineFactory,
     InFlightClaims claims,
@@ -23,7 +24,18 @@ public sealed class ReviewWorker(
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var workers = new Task[hostOptions.Value.WorkerCount];
+        // Schedule consumers independently so a synchronous provider call cannot prevent
+        // later consumers from starting.
+        for (var i = 0; i < workers.Length; i++)
+            workers[i] = Task.Run(() => ProcessQueueAsync(stoppingToken), stoppingToken);
+
+        return Task.WhenAll(workers);
+    }
+
+    private async Task ProcessQueueAsync(CancellationToken stoppingToken)
     {
         await foreach (var request in queue.ReadAllAsync(stoppingToken))
         {

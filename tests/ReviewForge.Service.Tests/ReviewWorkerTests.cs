@@ -35,7 +35,8 @@ public class ReviewWorkerTests
             FakeGitOps? git = null,
             FakeFindingStore? store = null,
             string cleanVote = "Approved",
-            IResolveRunService? resolveService = null)
+            IResolveRunService? resolveService = null,
+            int workerCount = 1)
         {
             _WorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-worker-" + Guid.NewGuid().ToString("N"));
             // The real host creates these at startup (P3-m); this direct-factory harness
@@ -54,9 +55,9 @@ public class ReviewWorkerTests
                         ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
                 Options.Create(new WorkspaceOptions {WorkDir = _WorkDir}),
-                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
-            Worker = new ReviewWorker(Queue, Tracker, Factory, Claims, Store, NullLogger<ReviewWorker>.Instance, Clock, resolveService);
+            Worker = new ReviewWorker(Queue, Options.Create(new HostOptions {WorkerCount = workerCount}), Tracker, Factory, Claims, Store,
+                NullLogger<ReviewWorker>.Instance, Clock, resolveService);
         }
 
 
@@ -72,6 +73,35 @@ public class ReviewWorkerTests
                 {
                 }
             }
+        }
+    }
+
+    [Fact]
+    public async Task Configured_worker_count_processes_queue_requests_concurrently()
+    {
+        using var barrier = new Barrier(3);
+        var source = new FakePullRequestSource {WorkItemBarrier = barrier};
+        using var h = new Harness(source: source, workerCount: 3);
+        for (var i = 0; i < 3; i++)
+        {
+            var request = new ReviewRequest(Guid.NewGuid(), Key with {PrId = i + 1}, h.Clock.GetUtcNow());
+            Assert.True(h.Queue.TryEnqueue(request).Accepted);
+        }
+
+        using var cts = new CancellationTokenSource();
+        await h.Worker.StartAsync(cts.Token);
+        try
+        {
+            for (var i = 0; i < 200 && barrier.CurrentPhaseNumber == 0; i++)
+                await Task.Delay(10);
+
+            Assert.Equal(1, barrier.CurrentPhaseNumber);
+            Assert.Equal(3, source.WorkItemFetches);
+        }
+        finally
+        {
+            cts.Cancel();
+            await h.Worker.StopAsync(CancellationToken.None);
         }
     }
 
@@ -422,7 +452,6 @@ public class ReviewWorkerTests
                             ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})))),
                 options,
                 Options.Create(new WorkspaceOptions {WorkDir = root}),
-                Options.Create(new RepoReadToolsOptions()),
                 LoggerFactory.Create(_ => { }));
 
             factory.Create();
