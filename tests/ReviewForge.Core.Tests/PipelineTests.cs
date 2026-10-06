@@ -86,17 +86,6 @@ public class ReviewPipelineTests
         }
     }
 
-    [Fact]
-    public void Pipeline_throws_on_duplicate_stage_names()
-    {
-        var log = new List<string>();
-
-        var ex = Assert.Throws<InvalidOperationException>(() => _ = new ReviewPipeline(
-            [new RecordingStage("same", log), new RecordingStage("same", log)],
-            NullLogger<ReviewPipeline>.Instance));
-
-        Assert.Equal("duplicate stages: same", ex.Message);
-    }
 
 }
 

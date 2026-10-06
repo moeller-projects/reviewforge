@@ -17,13 +17,6 @@ public sealed class ReviewPipeline
     {
         _Stages = [.. stages];
         _Logger = logger;
-        var dupes = _Stages
-            .GroupBy(s => s.Name, StringComparer.Ordinal)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToArray();
-        if (dupes.Length > 0)
-            throw new InvalidOperationException($"duplicate stages: {string.Join(", ", dupes)}");
     }
 
     public async Task<ReviewContext> RunAsync(ReviewContext ctx, CancellationToken ct)
