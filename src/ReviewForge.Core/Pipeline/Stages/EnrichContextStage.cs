@@ -21,7 +21,7 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
             return;
         }
 
-        if (ctx.RepoDir is not { } repoDir)
+        if (ctx.Repository.RepoDir is not { } repoDir)
         {
             logger.LogWarning("enrichment skipped: repository not prepared");
             return;
@@ -31,7 +31,7 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
         {
             // Stage 3 may already have the call in flight (started once RepoDir+DiffText
             // existed); awaiting it here preserves the exact fail-safe contract.
-            var payload = await (ctx.PendingEnrichment ?? enricher.EnrichAsync(repoDir, ctx.DiffText, ct))
+            var payload = await (ctx.PendingEnrichment ?? enricher.EnrichAsync(repoDir, ctx.Repository.DiffText, ct))
                 .ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(payload))
             {

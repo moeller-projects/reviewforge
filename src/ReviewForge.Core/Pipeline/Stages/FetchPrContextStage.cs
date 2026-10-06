@@ -20,16 +20,18 @@ public sealed class FetchPrContextStage(IPullRequestSource source, IFindingStore
 
         await Task.WhenAll(prTask, workItemsTask, filesTask, threadsTask, userTask, priorRunTask);
 
-        ctx.PullRequest = await prTask;
-
-        ctx.WorkItems = await workItemsTask;
-        ctx.ChangedFileManifest = await filesTask;
-        ctx.Threads = await threadsTask;
-        ctx.CurrentUser = await userTask;
-        ctx.PriorRun = await priorRunTask;
+        ctx.Fetch = new FetchOutcome
+        {
+            PullRequest = await prTask,
+            WorkItems = await workItemsTask,
+            ChangedFileManifest = await filesTask,
+            Threads = await threadsTask,
+            CurrentUser = await userTask,
+            PriorRun = await priorRunTask
+        };
         // Prior findings are bot-authored, not PR-supplied; read_context's <pr-supplied-data>
         // wrapping is belt-and-suspenders and deliberately reused here.
-        if (PriorReviewContextBuilder.Build(ctx.PriorRun, ctx.Threads) is { } memory)
+        if (PriorReviewContextBuilder.Build(ctx.Fetch.PriorRun, ctx.Fetch.Threads) is { } memory)
         {
             ctx.ContextStore.Put(PriorReviewContextBuilder.ContextName, memory);
         }

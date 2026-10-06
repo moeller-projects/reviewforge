@@ -21,7 +21,7 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix pass on thread {fix.ThreadId}");
             var collector = new ReviewCollector();
             var pass = await agent.RunWithEditToolsAsync(
-                ResolvePromptBuilder.BuildFixPrompt([fix], ctx.WorkItems),
+                ResolvePromptBuilder.BuildFixPrompt([fix], ctx.Fetch.WorkItems),
                 collector,
                 ctx.ContextStore,
                 ctx.RequireRepoDir(),

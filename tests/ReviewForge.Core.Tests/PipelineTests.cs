@@ -109,11 +109,14 @@ public class StageTests : IDisposable
             src.ChangedFiles.Add(new ChangedFile("src/A.cs", ChangedFileType.Edit));
         return new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = src.Pr,
-            CurrentUser = src.User,
-            Threads = src.Threads,
-            ChangedFileManifest = src.ChangedFiles,
-            RepoDir = _RepoDir,
+            Fetch = new FetchOutcome
+            {
+                PullRequest = src.Pr,
+                CurrentUser = src.User,
+                Threads = src.Threads,
+                ChangedFileManifest = src.ChangedFiles,
+            },
+            Repository = new RepoPreparation {RepoDir = _RepoDir},
         };
     }
 
@@ -141,14 +144,14 @@ public class StageTests : IDisposable
     public void ChangedFiles_is_cached_until_manifest_reassigned()
     {
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow);
-        ctx.ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)];
+        ctx.Fetch = new FetchOutcome {ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)]};
 
-        var first = ctx.ChangedFiles;
-        var second = ctx.ChangedFiles;
+        var first = ctx.Fetch.ChangedFiles;
+        var second = ctx.Fetch.ChangedFiles;
         Assert.Same(first, second); // cached projection
 
-        ctx.ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Edit)];
-        var third = ctx.ChangedFiles;
+        ctx.Fetch = ctx.Fetch with {ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Edit)]};
+        var third = ctx.Fetch.ChangedFiles;
         Assert.NotSame(first, third);
         Assert.Equal(["b.cs"], third);
     }
@@ -164,11 +167,11 @@ public class StageTests : IDisposable
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow);
         await new FetchPrContextStage(source, store).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(source.Pr, ctx.PullRequest);
-        Assert.Single(ctx.WorkItems);
-        Assert.Single(ctx.ChangedFiles);
-        Assert.Equal(source.User, ctx.CurrentUser);
-        Assert.Equal(store.LastRun, ctx.PriorRun);
+        Assert.Equal(source.Pr, ctx.Fetch.PullRequest);
+        Assert.Single(ctx.Fetch.WorkItems);
+        Assert.Single(ctx.Fetch.ChangedFiles);
+        Assert.Equal(source.User, ctx.Fetch.CurrentUser);
+        Assert.Equal(store.LastRun, ctx.Fetch.PriorRun);
     }
 
     [Fact]

@@ -16,12 +16,12 @@ public sealed class CollectCommentsStage(
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var resolve = ctx.RequireResolveState();
-        ctx.Threads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false);
+        ctx.Fetch = ctx.Fetch with {Threads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false)};
         var priorByThread = (await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false))
             .ToDictionary(action => action.ThreadId);
         var authorOnly = allowedCommenters.Count == 0;
         var comments = new List<ResolvableComment>();
-        foreach (var thread in ctx.Threads)
+        foreach (var thread in ctx.Fetch.Threads)
         {
             priorByThread.TryGetValue(thread.Id, out var previousAction);
             var deferred = previousAction?.Outcome == ResolutionOutcome.Deferred;

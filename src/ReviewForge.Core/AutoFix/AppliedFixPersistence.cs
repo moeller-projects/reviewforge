@@ -40,7 +40,7 @@ internal static class AppliedFixPersistence
             // Carry-forward from P0-1: prior keys remain known identities. Commanded-fix
             // audit rows ("thread-") are NOT identities — they must never re-enter the
             // known-key set or the carry-forward chain.
-            .Concat((ctx.PriorRun?.Findings ?? [])
+            .Concat((ctx.Fetch.PriorRun?.Findings ?? [])
                 .Where(p => !acceptedKeys.Contains(p.DedupeKey)
                             && !p.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
                 .Select(p => p with {AppliedFixJson = null}))
