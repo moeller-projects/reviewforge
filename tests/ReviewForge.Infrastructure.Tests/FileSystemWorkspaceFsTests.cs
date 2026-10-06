@@ -35,7 +35,7 @@ public sealed class FileSystemWorkspaceFsTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteDirectory_retries_a_windows_sharing_violation_until_the_handle_closes()
+    public void DeleteDirectory_retries_a_windows_sharing_violation_until_the_handle_closes()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -47,12 +47,19 @@ public sealed class FileSystemWorkspaceFsTests : IDisposable
         Directory.CreateDirectory(directory);
         var packedIndex = Path.Combine(directory, "pack-test.idx");
         File.WriteAllText(packedIndex, "idx");
-        var held = new FileStream(packedIndex, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var releaseHandle = Task.Run(async () =>
+        using var held = new FileStream(packedIndex, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        // Release from a dedicated thread, not the thread pool: on a loaded CI machine a
+        // Task.Run continuation can be scheduled long after its delay elapses, exhausting
+        // DeleteDirectory's bounded retry budget (50+100+200 ms) while the handle is open.
+        var releaseHandle = new Thread(() =>
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(80));
+            Thread.Sleep(TimeSpan.FromMilliseconds(80));
             held.Dispose();
-        });
+        })
+        {
+            IsBackground = true,
+        };
+        releaseHandle.Start();
 
         try
         {
@@ -60,7 +67,7 @@ public sealed class FileSystemWorkspaceFsTests : IDisposable
         }
         finally
         {
-            await releaseHandle;
+            Assert.True(releaseHandle.Join(TimeSpan.FromSeconds(30)), "timed out waiting for the held handle to release");
         }
 
         Assert.False(Directory.Exists(directory));

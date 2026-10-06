@@ -8,7 +8,6 @@ namespace ReviewForge.Core.Pipeline.Stages;
 public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IReviewStage
 {
     public string Name => "plan-fixes";
-    public int Order => 55;
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -56,7 +55,7 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
         {
             outcomes[threadId] = ResolutionOutcome.Deferred;
             details[threadId] = reason;
-            ReviewForgeTelemetry.ResolveDeferred.Add(1, new TagList { { "reason", reason } });
+            ResolveTelemetry.ResolveDeferred.Add(1, new TagList { { "reason", reason } });
         }
         ctx.ThreadVerdicts = verdicts;
         ctx.ResolvePlan = plan;

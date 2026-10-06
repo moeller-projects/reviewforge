@@ -16,7 +16,6 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
 
     public string Name => "persist-run";
 
-    public int Order => 100;
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {

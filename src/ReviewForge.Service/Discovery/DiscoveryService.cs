@@ -54,7 +54,7 @@ public sealed class DiscoveryService(
         using var sweepActivity = ReviewForgeTelemetry.Source.StartActivity("discovery.sweep");
         var sweepStart = Stopwatch.GetTimestamp();
         var candidates = await source.GetOpenPullRequestsAsync(ct);
-        ReviewForgeTelemetry.DiscoveryCandidates.Add(candidates.Count);
+        DiscoveryTelemetry.DiscoveryCandidates.Add(candidates.Count);
         var enqueued = new ConcurrentQueue<PrKey>();
         var skipped = new ConcurrentQueue<SkippedPr>();
         var interesting = 0;
@@ -64,7 +64,7 @@ public sealed class DiscoveryService(
         void Skip(PrKey pr, string reason)
         {
             skipped.Enqueue(new SkippedPr(pr, reason));
-            ReviewForgeTelemetry.DiscoverySkipped.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, NormalizeReason(reason)}});
+            DiscoveryTelemetry.DiscoverySkipped.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, NormalizeReason(reason)}});
         }
 
         // Phase 1 — cheap rules only (draft/branch/creator), no I/O.
@@ -100,7 +100,7 @@ public sealed class DiscoveryService(
                 {
                     // Sweeps are best-effort discovery: one faulting candidate becomes a
                     // skip, never a sweep failure — the per-run gate remains the net.
-                    ReviewForgeTelemetry.DiscoveryCandidateErrors.Add(1);
+                    DiscoveryTelemetry.DiscoveryCandidateErrors.Add(1);
                     logger?.LogWarning(ex, "discovery candidate {Pr} faulted; isolated as a skip", candidate.Key);
                     Skip(candidate.Key, $"error: {ex.GetType().Name}");
                 }
@@ -137,7 +137,7 @@ public sealed class DiscoveryService(
             await Task.WhenAll(warmups).ConfigureAwait(false);
         }
 
-        ReviewForgeTelemetry.DiscoverySweepDurationMilliseconds.Record(
+        DiscoveryTelemetry.DiscoverySweepDurationMilliseconds.Record(
             Stopwatch.GetElapsedTime(sweepStart).TotalMilliseconds);
 
         // Retention tail (P2-26): prune the store at most once per hour, after the sweep's
@@ -245,7 +245,7 @@ public sealed class DiscoveryService(
                     candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha, token);
                 if (headInfo is not null && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
                 {
-                    ReviewForgeTelemetry.LoopGuardSkips.Add(1, new TagList {{"source", "discovery"}});
+                    ReviewTelemetry.LoopGuardSkips.Add(1, new TagList {{"source", "discovery"}});
                     Skip(candidate.Key, "bot-authored head");
                     return;
                 }
@@ -310,7 +310,7 @@ public sealed class DiscoveryService(
                     return;
                 }
 
-                ReviewForgeTelemetry.DiscoveryEnqueued.Add(1);
+                DiscoveryTelemetry.DiscoveryEnqueued.Add(1);
                 enqueued.Enqueue(candidate.Key);
                 if (resolveCommand is not null) resolveAckRunId = runId;
 
@@ -360,12 +360,12 @@ public sealed class DiscoveryService(
                 }
 
                 _Pool.MarkWarmed(candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha);
-                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList {{ReviewForgeTelemetry.TagResult, "completed"}});
+                DiscoveryTelemetry.DiscoveryWarmup.Add(1, new TagList {{ReviewForgeTelemetry.TagResult, "completed"}});
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Warmup is an optimization only: the run's own fetch remains the correctness path.
-                ReviewForgeTelemetry.DiscoveryWarmup.Add(1, new TagList {{ReviewForgeTelemetry.TagResult, "failed"}});
+                DiscoveryTelemetry.DiscoveryWarmup.Add(1, new TagList {{ReviewForgeTelemetry.TagResult, "failed"}});
                 logger?.LogWarning(ex, "mirror warmup for {Pr} failed; the run's own fetch remains the correctness path", candidate.Key);
             }
         }

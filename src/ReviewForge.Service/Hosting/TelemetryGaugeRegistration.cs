@@ -18,12 +18,12 @@ public sealed class TelemetryGaugeRegistration(
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        ReviewForgeTelemetry.RegisterGauges(
+        QueueTelemetry.RegisterGauges(
             () => queue.ApproximateDepth,
-            () => queue.Capacity,
-            () => claims.ActiveCount,
-            () => pool.CheckoutDirectoryCount(),
-            () => governor.Inflight);
+            () => queue.Capacity);
+        ClaimsTelemetry.RegisterGauges(() => claims.ActiveCount);
+        CheckoutTelemetry.RegisterGauges(() => pool.CheckoutDirectoryCount());
+        LlmTelemetry.RegisterGauges(() => governor.Inflight);
         return Task.CompletedTask;
     }
 

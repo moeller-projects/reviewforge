@@ -13,19 +13,10 @@ public sealed class ReviewPipeline
     private readonly IReadOnlyList<IReviewStage> _Stages;
     private readonly ILogger<ReviewPipeline> _Logger;
 
-public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
+    public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
     {
         _Stages = [.. stages];
         _Logger = logger;
-        for (var i = 1; i < _Stages.Count; i++)
-        {
-            if (_Stages[i].Order <= _Stages[i - 1].Order)
-            {
-                throw new InvalidOperationException(
-                    $"stage ordering violation: '{_Stages[i].Name}' (Order {_Stages[i].Order}) must come after " +
-                    $"'{_Stages[i - 1].Name}' (Order {_Stages[i - 1].Order})");
-            }
-        }
     }
 
     public async Task<ReviewContext> RunAsync(ReviewContext ctx, CancellationToken ct)
@@ -86,7 +77,7 @@ public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> 
                 finally
                 {
                     sw.Stop();
-                    ReviewForgeTelemetry.StageDurationMilliseconds.Record(
+                    ReviewTelemetry.StageDurationMilliseconds.Record(
                         sw.ElapsedMilliseconds,
                         new TagList
                         {

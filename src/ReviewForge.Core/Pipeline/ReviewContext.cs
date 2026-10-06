@@ -109,10 +109,10 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     // Stage 7 — validation output: findings accepted for posting
     public IReadOnlyList<RichFinding> AcceptedFindings { get; set; } = [];
 
-    // Stage 7.2 — auto-fix: suggestion fixes that passed all gates (deterministic + commanded)
+    // Stage 8 — auto-fix: suggestion fixes that passed all gates (deterministic + commanded)
     public IReadOnlyList<AutoFix.AppliedFix> AppliedFixes { get; set; } = [];
 
-    /// <summary>Set by stage 7.7 after a successful CommitOnHead push: the new PR head created
+    /// <summary>Set by stage 10 after a successful CommitOnHead push: the new PR head created
     /// by THIS run. Publish's head-unchanged check accepts it as the expected head — the run's
     /// own push is the one legal head movement; anything beyond it still fails the run.</summary>
     public string? PushedHeadSha { get; set; }

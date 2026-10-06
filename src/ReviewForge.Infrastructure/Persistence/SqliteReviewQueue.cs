@@ -73,7 +73,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             var unclaimed = Convert.ToInt32(count.ExecuteScalar());
             if (unclaimed >= _Capacity)
             {
-                ReviewForgeTelemetry.QueueRejected.Add(1);
+                QueueTelemetry.QueueRejected.Add(1);
                 return new EnqueueResult(false, unclaimed);
             }
         }
@@ -186,7 +186,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         transaction.Commit();
         if (reclaimed)
         {
-            ReviewForgeTelemetry.QueueReclaimed.Add(1);
+            QueueTelemetry.QueueReclaimed.Add(1);
         }
 
         return request;

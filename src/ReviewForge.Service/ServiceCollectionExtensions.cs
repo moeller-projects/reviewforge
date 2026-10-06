@@ -32,34 +32,19 @@ public static class ServiceCollectionExtensions
 
         // Ingest queue backing: memory channel (default) or durable SQLite rows on the store's
         // database file (Persistence:QueueMode). Worker and endpoints only see IReviewQueue.
-        // Enum.TryParse accepts undefined numeric values, so definedness is checked here at
-        // compose time too — "2" must never silently become Memory and disable durability.
-        var queueModeText = configuration.GetValue<string>($"{PersistenceOptions.SectionName}:QueueMode");
-        if (queueModeText is not null
-            && (!Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var queueMode) || !Enum.IsDefined(queueMode)))
+        services.AddSingleton<ReviewQueue>();
+        services.AddSingleton<IReviewQueue>(sp =>
         {
-            throw new InvalidOperationException(
-                $"Persistence:QueueMode must be one of {string.Join(" | ", Enum.GetNames<QueueMode>())} (got '{queueModeText}')");
-        }
-
-        if (Enum.TryParse<QueueMode>(queueModeText, ignoreCase: true, out var parsedQueueMode)
-            && parsedQueueMode == QueueMode.Sqlite)
-        {
-            services.AddSingleton<IReviewQueue>(sp =>
+            var opts = sp.GetRequiredService<IOptions<PersistenceOptions>>().Value;
+            return ParseDefinedEnum<QueueMode>(opts.QueueMode, "Persistence:QueueMode") switch
             {
-                var opts = sp.GetRequiredService<IOptions<PersistenceOptions>>().Value;
-                return new SqliteReviewQueue(
+                QueueMode.Sqlite => new SqliteReviewQueue(
                     opts.StoreConnectionString,
-                    journalMode: Enum.Parse<StoreJournalMode>(opts.JournalMode, ignoreCase: true));
-            });
-        }
-        else
-        {
-            // Concrete registration is the test seam for queue-failure behavior
-            // (ReviewQueue.Complete); production traffic only resolves IReviewQueue.
-            services.AddSingleton<ReviewQueue>();
-            services.AddSingleton<IReviewQueue>(sp => sp.GetRequiredService<ReviewQueue>());
-        }
+                    journalMode: ParseDefinedEnum<StoreJournalMode>(opts.JournalMode, "Persistence:JournalMode")),
+                QueueMode.Memory => sp.GetRequiredService<ReviewQueue>(),
+                _ => throw new InvalidOperationException("Unsupported Persistence:QueueMode."),
+            };
+        });
 
         // Runtime directories are created once at composition time; the per-run pipeline
         // factory must not touch the filesystem (P3-m).
@@ -257,7 +242,7 @@ public static class ServiceCollectionExtensions
             var opts = sp.GetRequiredService<IOptions<PersistenceOptions>>().Value;
             return new SqliteFindingStore(
                 opts.StoreConnectionString,
-                Enum.Parse<StoreJournalMode>(opts.JournalMode, ignoreCase: true));
+                ParseDefinedEnum<StoreJournalMode>(opts.JournalMode, "Persistence:JournalMode"));
         });
 
         services.AddSingleton(sp => new ReviewPipelineFactory(
@@ -414,6 +399,22 @@ public static class ServiceCollectionExtensions
             }
         });
         return services;
+    }
+
+    internal static T ParseDefinedEnum<T>(string? value, string settingPath) where T : struct, Enum
+    {
+        if (value is null)
+        {
+            throw new InvalidOperationException($"{settingPath} is required here");
+        }
+
+        if (!Enum.TryParse<T>(value, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+        {
+            throw new InvalidOperationException(
+                $"{settingPath} must be one of {string.Join(" | ", Enum.GetNames<T>())} (got '{value}')");
+        }
+
+        return parsed;
     }
 
     internal static bool ShouldEnableOtlpExporter(

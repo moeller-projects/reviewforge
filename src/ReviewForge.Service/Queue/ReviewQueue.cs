@@ -65,7 +65,7 @@ public sealed class ReviewQueue : IReviewQueue
         if (!accepted)
         {
             _Pending.TryRemove(request.RunId, out _);
-            ReviewForgeTelemetry.QueueRejected.Add(1);
+            QueueTelemetry.QueueRejected.Add(1);
         }
 
         return new EnqueueResult(accepted, depth);

@@ -31,7 +31,6 @@ public sealed class VerifyFindingsStage(
 
     public string Name => "verify-findings";
 
-    public int Order => 71; // after validate (70), before auto-fix (72)
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -74,14 +73,14 @@ public sealed class VerifyFindingsStage(
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            ReviewForgeTelemetry.FindingsVerifierFailures.Add(
+            FindingsTelemetry.FindingsVerifierFailures.Add(
                 1, new TagList { { ReviewForgeTelemetry.TagReason, ex.GetType().Name } });
             logger.LogWarning(ex, "findings verifier failed — keeping all findings (fail-open)");
             return; // host shutdown cancellation still throws
         }
         finally
         {
-            ReviewForgeTelemetry.FindingsVerifierDurationMilliseconds.Record(stopwatch.ElapsedMilliseconds);
+            FindingsTelemetry.FindingsVerifierDurationMilliseconds.Record(stopwatch.ElapsedMilliseconds);
         }
 
         var rejected = ctx.AcceptedFindings
@@ -92,7 +91,7 @@ public sealed class VerifyFindingsStage(
         foreach (var finding in rejected)
         {
             var reason = verdicts[finding.DedupeKey!].Reason;
-            ReviewForgeTelemetry.FindingsVerifierRejected.Add(
+            FindingsTelemetry.FindingsVerifierRejected.Add(
                 1, new TagList { { "rule", finding.RuleId } });
             logger.LogInformation("finding {Key} rejected by verifier: {Reason}", finding.DedupeKey, reason);
         }
@@ -111,7 +110,7 @@ public sealed class VerifyFindingsStage(
             return verdicts;
         }
 
-        ReviewForgeTelemetry.FindingsVerifierFailures.Add(
+        FindingsTelemetry.FindingsVerifierFailures.Add(
             1, new TagList { { ReviewForgeTelemetry.TagReason, "unparseable" } });
         logger.LogWarning("findings verifier returned malformed output twice — keeping all findings (fail-open)");
         return new Dictionary<string, FindingsVerifierPrompt.Verdict>(StringComparer.Ordinal);

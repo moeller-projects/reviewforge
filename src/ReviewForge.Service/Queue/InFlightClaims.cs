@@ -42,18 +42,18 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
             if (_Claims.TryGetValue(pr, out var existing) && now - existing.ClaimedAt <= _Ttl)
             {
                 holder = existing.RunId;
-                ReviewForgeTelemetry.ClaimRejected.Add(1);
+                ClaimsTelemetry.ClaimRejected.Add(1);
                 return false;
             }
 
             if (_Claims.ContainsKey(pr))
             {
-                ReviewForgeTelemetry.ClaimExpired.Add(1); // expired entry being replaced
+                ClaimsTelemetry.ClaimExpired.Add(1); // expired entry being replaced
             }
 
             _Claims[pr] = new ClaimEntry(runId, now);
             holder = null;
-            ReviewForgeTelemetry.ClaimAcquired.Add(1);
+            ClaimsTelemetry.ClaimAcquired.Add(1);
             return true;
         }
     }
@@ -83,7 +83,7 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
 
                 if (_Clock.GetUtcNow() - existing.ClaimedAt > _Ttl)
                 {
-                    ReviewForgeTelemetry.ClaimExpired.Add(1);
+                    ClaimsTelemetry.ClaimExpired.Add(1);
                 }
             }
 
@@ -113,11 +113,11 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
             if (_Claims.TryGetValue(pr, out var existing) && existing.RunId == runId)
             {
                 _Claims[pr] = existing with {ClaimedAt = _Clock.GetUtcNow()};
-                ReviewForgeTelemetry.ClaimRenewed.Add(1);
+                ClaimsTelemetry.ClaimRenewed.Add(1);
                 return true;
             }
 
-            ReviewForgeTelemetry.ClaimRenewalFailed.Add(1);
+            ClaimsTelemetry.ClaimRenewalFailed.Add(1);
             return false;
         }
     }

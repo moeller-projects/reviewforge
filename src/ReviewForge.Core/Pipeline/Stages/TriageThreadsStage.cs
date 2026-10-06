@@ -19,7 +19,6 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 {
     public string Name => "triage-threads";
 
-    public int Order => 80;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -89,7 +88,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
                 else
                 {
                     await source.ReplyToThreadAsync(ctx.Pr, op.ThreadId, text, ct).ConfigureAwait(false);
-                    ReviewForgeTelemetry.ThreadsReplied.Add(1);
+                    ReviewTelemetry.ThreadsReplied.Add(1);
                 }
             }
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before status write on thread {op.ThreadId}");
@@ -99,7 +98,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
                 await source.SetThreadStatusAsync(ctx.Pr, op.ThreadId, status, ct).ConfigureAwait(false);
                 if (status == ReviewThreadStatus.Fixed)
                 {
-                    ReviewForgeTelemetry.ThreadsResolved.Add(1);
+                    ReviewTelemetry.ThreadsResolved.Add(1);
                 }
             }
 

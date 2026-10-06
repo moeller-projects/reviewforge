@@ -11,7 +11,6 @@ public sealed class VerifyBuildStage(
     bool singleCommit) : IReviewStage
 {
     public string Name => "verify-build";
-    public int Order => 65;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -65,12 +64,12 @@ public sealed class VerifyBuildStage(
                 outcomes[item.ThreadId] = ResolutionOutcome.VerifyFailed;
                 details[item.ThreadId] = detail;
             }
-            ReviewForgeTelemetry.ResolveVerifyFailed.Add(surviving.Count);
+            ResolveTelemetry.ResolveVerifyFailed.Add(surviving.Count);
             surviving.Clear();
         }
         foreach (var (items, detail) in failed)
         {
-            ReviewForgeTelemetry.ResolveVerifyFailed.Add(items.Length);
+            ResolveTelemetry.ResolveVerifyFailed.Add(items.Length);
             foreach (var item in items)
             {
                 outcomes[item.ThreadId] = ResolutionOutcome.VerifyFailed;

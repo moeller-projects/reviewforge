@@ -54,7 +54,7 @@ public sealed class ReviewWorker(
             tracker.Set(request.RunId, request.Pr, RunState.Running, kind: request.Kind);
             logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
             var repoTag = new TagList { { ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId }, { "kind", request.Kind.ToString().ToLowerInvariant() } };
-            ReviewForgeTelemetry.ReviewsStarted.Add(1, repoTag);
+            ReviewTelemetry.ReviewsStarted.Add(1, repoTag);
             var runStart = Stopwatch.GetTimestamp();
             ReviewContext? ctx = null;
             try
@@ -109,8 +109,8 @@ public sealed class ReviewWorker(
                     request.RunId, state, ctx?.TerminationReason ?? "ok");
                 var tags = repoTag;
                 tags.Add(ReviewForgeTelemetry.TagResult, ctx?.Terminated == true ? "skipped" : "completed");
-                ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);
-                ReviewForgeTelemetry.ReviewDurationMilliseconds.Record(
+                ReviewTelemetry.ReviewsCompleted.Add(1, tags);
+                ReviewTelemetry.ReviewDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -143,8 +143,8 @@ public sealed class ReviewWorker(
                 tracker.Set(request.RunId, request.Pr, RunState.Failed, "internal error — see run log", request.Kind);
                 var tags = repoTag;
                 tags.Add(ReviewForgeTelemetry.TagResult, "failed");
-                ReviewForgeTelemetry.ReviewsCompleted.Add(1, tags);
-                ReviewForgeTelemetry.ReviewDurationMilliseconds.Record(
+                ReviewTelemetry.ReviewsCompleted.Add(1, tags);
+                ReviewTelemetry.ReviewDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
                 await PersistFailureAsync(request, ctx, TimeSpan.FromSeconds(5));
             }

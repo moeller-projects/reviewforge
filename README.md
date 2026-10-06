@@ -36,8 +36,9 @@ tests/
 
 ## The review pipeline
 
-10 numbered stages plus three inserts (7.2 auto-fix, 7.5 begin-run, 7.7 commit-fixes); every stage is a class in
-`Core/Pipeline/Stages/` and a failed stage fails the run.
+13 stages run in the injected list order; stage numbering is rebased to clean integers
+(fractional numbers retired). Every stage is a class in `Core/Pipeline/Stages/` and a
+failed stage fails the run.
 
 | #  | Stage              | What it does                                                                                                                                               |
 |----|--------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -48,12 +49,12 @@ tests/
 | 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                      |
 | 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files |
 | 7  | validate-findings  | re-anchors via snippet (AnchorResolver), downgrades unverifiable/out-of-diff anchors to general comments                                                   |
-| 7.2| auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; published as suggestions (default) or committed by stage 7.7 (`AutoFix:PublishMode=CommitOnHead`) |
-| 7.5| begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService |
-| 7.7| commit-fixes       | CommitOnHead only (no-op otherwise): commits the materialized fixes in the run's private checkout, pushes fast-forward-only to the PR source branch (claim check + head pin + server-side CAS), persists pushed_fixes rows before any reply |
-| 8  | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
-| 9  | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `Review:CleanRunVote` (default NoResponse) |
-| 10 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
+| 8  | auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; published as suggestions (default) or committed by stage 10 (`AutoFix:PublishMode=CommitOnHead`) |
+| 9  | begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService |
+| 10 | commit-fixes       | CommitOnHead only (no-op otherwise): commits the materialized fixes in the run's private checkout, pushes fast-forward-only to the PR source branch (claim check + head pin + server-side CAS), persists pushed_fixes rows before any reply |
+| 11 | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
+| 12 | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `Review:CleanRunVote` (default NoResponse) |
+| 13 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
 
 ## Run it
 
@@ -88,9 +89,10 @@ visible across host restarts; with the default `Memory` mode in-flight status is
 restart) · `POST /resolutions` (opt-in autonomous comment resolution) · `POST /reviews/discover` ·
 `GET /health` (store-backed, unauthenticated) · `GET /alive` (liveness, unauthenticated). Rate limiting runs before API-key auth (auth is
 an endpoint filter, the limiter is middleware), so rejected requests still consume rate
-budget. The limiter partitions by `X-Api-Key` when keys are configured, by remote IP
-otherwise — deploying behind a reverse proxy requires forwarded-headers support, otherwise
-every key-less client shares the proxy's single partition.
+budget. The limiter always partitions by remote IP — never by the presented `X-Api-Key`,
+which is unauthenticated input and would give each key guess a fresh permit budget. Deploying
+behind a reverse proxy requires forwarded-headers support, otherwise every client shares
+the proxy's single partition.
 
 ## Autonomous comment resolution
 
@@ -106,6 +108,7 @@ checkout. Optional `Resolve:VerifyCommand` runs on the host as argv (never throu
 Commits are pushed only while the PR claim is held and the remote branch still matches the
 reviewed head. The bot replies with per-thread outcomes; human threads remain open unless
 `Resolve:SetFixedStatus=true`.
+Resolve stages likewise follow their injected list order; fractional stage numbering is retired.
 
 `VerifyCommand` is configured by the operator but executes against PR-controlled checkout
 content with the service account's host permissions and inherited environment. It is not
@@ -243,7 +246,7 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
   unanswered threads): `NoResponse` (default) | `Approved` | `ApprovedWithSuggestions` |
   `None` (leave the vote untouched).
 - `Host:StaleShellMinutes` — 10 by default. At startup, in-flight run shells
-  (persisted by begin-run, never finalized — a crash between stages 7.5 and 10) older than
+  (persisted by begin-run, never finalized — a crash between stages 9 and 13) older than
   this are reaped and finalized as failures so a crashed head can be re-reviewed after a
   bounded window.
 - `Persistence:Retention:Days` / `MinRunsPerPr` — 30 / 5. Old store runs are pruned at the
@@ -270,7 +273,7 @@ In the default **Suggestion** mode every fix ReviewForge produces is an ADO ` ``
 block the PR author applies with one click; the pipeline performs zero checkout writes and
 the PAT keeps comment-only permissions. In **CommitOnHead** mode
 (`AutoFix:PublishMode=CommitOnHead`) accepted fixes are committed in a run-scoped private
-checkout and pushed fast-forward-only to the PR source branch (stage 7.7: claim re-check
+checkout and pushed fast-forward-only to the PR source branch (stage 10: claim re-check
 immediately before push, remote-tip pin, server-side compare-and-swap — never a force-push).
 CommitOnHead additionally requires the PAT to have **Contribute** on the target repos, and a
 branch-policy rejection fails the run visibly (a configuration fact, not a transient error).

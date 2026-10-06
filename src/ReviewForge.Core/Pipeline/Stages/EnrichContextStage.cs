@@ -13,7 +13,6 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
     public string Name => "enrich-context";
 
 
-    public int Order => 50;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -41,7 +40,7 @@ public sealed class EnrichContextStage(IContextEnricher? enricher, ILogger<Enric
         }
         catch (Exception ex)
         {
-            ReviewForgeTelemetry.EnrichmentFailures.Add(1,
+            ReviewTelemetry.EnrichmentFailures.Add(1,
                 new TagList { { ReviewForgeTelemetry.TagReason, ex.GetType().Name } });
             logger.LogWarning(ex, "context enrichment failed — continuing without it");
         }

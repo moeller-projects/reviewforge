@@ -100,12 +100,11 @@ public sealed record AppliedFix(
     public const string CommandKeyPrefix = "thread-";
 
     /// <summary>CommitOnHead only: the edit was materialized in the private checkout and is
-    /// pending commit by stage 7.7. False in Suggestion mode and for degraded fixes.</summary>
+    /// pending commit by stage 10. False in Suggestion mode and for degraded fixes.</summary>
     public bool AppliedToTree { get; set; }
 
-    /// <summary>Set by stage 7.7 after the commit landed; null = publish as suggestion.</summary>
+    /// <summary>Set by stage 10 after the commit landed; null = publish as suggestion.</summary>
     public string? CommitSha { get; set; }
-
     /// <summary>Subject line of <see cref="CommitSha"/> (reply bodies).</summary>
     public string? CommitSubject { get; set; }
 }

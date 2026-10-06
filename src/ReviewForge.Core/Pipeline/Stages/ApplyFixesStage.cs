@@ -7,7 +7,6 @@ namespace ReviewForge.Core.Pipeline.Stages;
 public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) : IReviewStage
 {
     public string Name => "apply-fixes";
-    public int Order => 60;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -39,7 +38,7 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
             }
             if (files.Length == 0)
             {
-                ReviewForgeTelemetry.ResolveFixesDeclined.Add(fix.ThreadIds.Count);
+                ResolveTelemetry.ResolveFixesDeclined.Add(fix.ThreadIds.Count);
                 foreach (var threadId in fix.ThreadIds)
                 {
                     outcomes[threadId] = ResolutionOutcome.AgentDeclined;
@@ -54,7 +53,7 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
                 details[threadId] = detail;
                 editors[threadId] = pass.Editor;
             }
-            ReviewForgeTelemetry.ResolveFixesApplied.Add(fix.ThreadIds.Count);
+            ResolveTelemetry.ResolveFixesApplied.Add(fix.ThreadIds.Count);
         }
         ctx.AppliedResolutions = applied;
         ctx.ResolutionOutcomes = outcomes;

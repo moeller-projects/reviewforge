@@ -65,7 +65,7 @@ public sealed class ArchitectureTests
             .ToArray();
         var approvedValueTypes = new HashSet<string>(StringComparer.Ordinal)
         {
-            "ChatTier", "DiffBudget", "EnqueueTrigger", "InstrumentedPullRequestSource",
+            "ChatTier", "DiffBudget", "EnqueueTrigger",
             "PushedFix", "ReviewRequest", "EnqueueResult", "TipCommitInfo", "ProcessRunResult",
         };
 

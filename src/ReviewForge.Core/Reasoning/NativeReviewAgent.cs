@@ -180,10 +180,10 @@ public sealed class NativeReviewAgent(
         await agent.RunAsync(userPrompt, cancellationToken: ct);
         _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         var modelTag = new TagList {{"model", chatClientFactory.ModelName(tier)}, {"tier", tier.ToString().ToLowerInvariant()}};
-        ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
+        LlmTelemetry.AgentIterations.Record(usage.Turns, modelTag);
         if (!collector.Done)
         {
-            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
+            LlmTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
         }
 
         return collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", ruleBook?.VersionHash);
@@ -244,12 +244,12 @@ public sealed class NativeReviewAgent(
             {"model", chatClientFactory.ModelName(ChatTier.Full)},
             {"tier", "full"},
         };
-        ReviewForgeTelemetry.AgentIterations.Record(usage.Turns, modelTag);
+        LlmTelemetry.AgentIterations.Record(usage.Turns, modelTag);
         if (!collector.Done)
         {
             // Preserve verdicts already recorded: the stage supplies deterministic
             // defaults for threads the model did not finish.
-            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
+            LlmTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
         }
 
         return collector.ThreadVerdicts;
@@ -307,7 +307,7 @@ public sealed class NativeReviewAgent(
             usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         if (!collector.Done)
         {
-            ReviewForgeTelemetry.AgentTaskDoneMissing.Add(1, new TagList
+            LlmTelemetry.AgentTaskDoneMissing.Add(1, new TagList
             {
                 {"model", chatClientFactory.ModelName(ChatTier.Fast)},
                 {"tier", "fast"},
@@ -353,17 +353,17 @@ public sealed class NativeReviewAgent(
             var response = await base.GetResponseAsync(messages, options, cancellationToken);
             usage.Add(response.Usage);
             var model = options?.ModelId ?? "default";
-            ReviewForgeTelemetry.LlmRequests.Add(1, new TagList {{"model", model}});
+            LlmTelemetry.LlmRequests.Add(1, new TagList {{"model", model}});
             var inputTokens = response.Usage?.InputTokenCount ?? 0;
             var outputTokens = response.Usage?.OutputTokenCount ?? 0;
             if (inputTokens > 0)
             {
-                ReviewForgeTelemetry.LlmTokens.Add(inputTokens, new TagList {{"token_type", "input"}, {"model", model}});
+                LlmTelemetry.LlmTokens.Add(inputTokens, new TagList {{"token_type", "input"}, {"model", model}});
             }
 
             if (outputTokens > 0)
             {
-                ReviewForgeTelemetry.LlmTokens.Add(outputTokens, new TagList {{"token_type", "output"}, {"model", model}});
+                LlmTelemetry.LlmTokens.Add(outputTokens, new TagList {{"token_type", "output"}, {"model", model}});
             }
 
             // Prompt-cache measurement: emitted only when the provider reports cached
@@ -371,7 +371,7 @@ public sealed class NativeReviewAgent(
             var cachedTokens = response.Usage?.CachedInputTokenCount ?? 0;
             if (cachedTokens > 0)
             {
-                ReviewForgeTelemetry.LlmCachedTokens.Add(cachedTokens, new TagList {{"model", model}});
+                LlmTelemetry.LlmCachedTokens.Add(cachedTokens, new TagList {{"model", model}});
             }
 
             logger?.LogDebug(
@@ -406,7 +406,7 @@ public sealed class NativeReviewAgent(
                     var cachedTokens = usageContent.Details?.CachedInputTokenCount ?? 0;
                     if (cachedTokens > 0)
                     {
-                        ReviewForgeTelemetry.LlmCachedTokens.Add(
+                        LlmTelemetry.LlmCachedTokens.Add(
                             cachedTokens,
                             new TagList {{"model", options?.ModelId ?? "default"}});
                     }

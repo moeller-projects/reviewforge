@@ -16,7 +16,6 @@ public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? cl
 
     public string Name => "classify-run";
 
-    public int Order => 40;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {

@@ -1,11 +1,10 @@
 using System.Diagnostics.Metrics;
 using ReviewForge.Core.Domain;
-using ReviewForge.Core.Ports;
-using ReviewForge.Core.Pipeline;
+using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Testing;
 using Xunit;
 
-namespace ReviewForge.Core.Tests;
+namespace ReviewForge.Infrastructure.Tests;
 
 public sealed class InstrumentedPullRequestSourceTests
 {

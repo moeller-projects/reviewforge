@@ -4,7 +4,7 @@ using ReviewForge.Core.Domain;
 namespace ReviewForge.Core.AutoFix;
 
 /// <summary>
-/// Pure builder for the conventional-commit messages stage 7.7 pushes in CommitOnHead mode.
+/// Pure builder for the conventional-commit messages stage 10 pushes in CommitOnHead mode.
 /// No IO, no clock, no randomness — the same inputs always produce the same message.
 /// Layout: <c>type(scope): description</c> subject (≤72 chars), a blank line, one bullet per
 /// fix (wrapped at 72), a blank line, then the trailer block: <c>ReviewForge-Run: {guid}</c>
