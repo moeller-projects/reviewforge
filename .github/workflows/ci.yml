@@ -56,15 +56,11 @@ jobs:
         if: runner.os == 'Windows'
         run: reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f
 
-      # CollectCoverage=true enforces the per-project 95% line-coverage gate
-      # (coverlet.msbuild Threshold in each test csproj). A failed test or a
-      # coverage miss exits non-zero and fails the job.
+      # CollectCoverage=true enforces each project's 95% line-coverage threshold.
+      # Per-project invocation keeps TRX files distinct and continues after failures.
       - name: Test
         shell: bash
         run: |
-          # Per-project invocation: a single slnx run with a fixed LogFileName makes
-          # every project overwrite the same trx (last writer wins). Keep going after
-          # a failure so all results are collected; fail at the end.
           failed=0
           for proj in tests/*/; do
             name="$(basename "$proj")"
@@ -74,6 +70,46 @@ jobs:
               --results-directory TestResults || failed=1
           done
           exit "$failed"
+
+      # Collect XPlat reports for the union-of-lines check in build-and-test.ps1.
+      # This is separate from coverlet.msbuild, which enforces per-project thresholds.
+      - name: Collect line coverage
+        if: always()
+        shell: bash
+        run: |
+          failed=0
+          for proj in tests/*/; do
+            dotnet test "$proj" --no-build --configuration Release \
+              --collect:"XPlat Code Coverage" --settings coverage.runsettings \
+              --results-directory CoverageResults || failed=1
+          done
+          exit "$failed"
+
+      - name: Summarize line coverage
+        if: always()
+        shell: pwsh
+        run: |
+          $lines = @{}
+          Get-ChildItem CoverageResults -Filter coverage.cobertura.xml -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            [xml]$doc = Get-Content $_.FullName
+            foreach ($class in $doc.SelectNodes('//class')) {
+              foreach ($line in $class.SelectNodes('lines/line')) {
+                $key = "$($class.filename)|$($line.number)"
+                $lines[$key] = ($lines[$key] -eq $true) -or ([int]$line.hits -gt 0)
+              }
+            }
+          }
+
+          $valid = $lines.Count
+          $covered = @($lines.Values | Where-Object { $_ }).Count
+          if ($valid -eq 0) {
+            Write-Error "Line coverage: no data (is coverlet.collector installed?)"
+            exit 1
+          }
+
+          $summary = "Line coverage: {0:N1}% ({1}/{2})" -f ($covered / $valid * 100), $covered, $valid
+          Write-Host $summary
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
 
       - name: Publish test results
         if: always()
@@ -92,7 +128,7 @@ jobs:
         if: always() && matrix.os == 'ubuntu-latest'
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
-          filename: "**/coverage.cobertura.xml"
+          filename: "tests/**/coverage.cobertura.xml"
           badge: "true"
           format: "markdown"
           output: "both"
