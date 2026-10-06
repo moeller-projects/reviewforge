@@ -18,14 +18,10 @@ builder.Configuration.AddEnvironmentVariables();
 builder.Configuration.AddCommandLine(args);
 builder.Logging.AddConsole(options => options.FormatterName = CompactConsoleFormatter.FormatterName);
 builder.Logging.AddConsoleFormatter<CompactConsoleFormatter, ConsoleFormatterOptions>();
-var commonOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
-var logOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
-var traceOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
-var metricOtlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT");
-var otlpConfigured = builder.Configuration.GetValue<bool?>($"{HostOptions.SectionName}:OtlpEnabled") is true;
-var otlpLogsEnabled = ServiceCollectionExtensions.ShouldEnableOtlpExporter(otlpConfigured, commonOtlpEndpoint, logOtlpEndpoint);
-var otlpTracesEnabled = ServiceCollectionExtensions.ShouldEnableOtlpExporter(otlpConfigured, commonOtlpEndpoint, traceOtlpEndpoint);
-var otlpMetricsEnabled = ServiceCollectionExtensions.ShouldEnableOtlpExporter(otlpConfigured, commonOtlpEndpoint, metricOtlpEndpoint);
+var otlpStatus = ServiceCollectionExtensions.ComputeOtlpStatus(builder.Configuration);
+var otlpLogsEnabled = otlpStatus.LogsEnabled;
+var otlpTracesEnabled = otlpStatus.TracesEnabled;
+var otlpMetricsEnabled = otlpStatus.MetricsEnabled;
 builder.Logging.AddOpenTelemetry(options =>
 {
     options.IncludeFormattedMessage = true;
@@ -54,16 +50,17 @@ var app = builder.Build();
     }
 }
 
+var effectiveOtlpStatus = app.Services.GetRequiredService<OtlpStatus>();
 app.Logger.LogInformation(
     "OTLP logs exporter enabled: {LogsEnabled}; endpoint: {LogsEndpoint}; " +
     "traces exporter enabled: {TracesEnabled}; endpoint: {TracesEndpoint}; " +
     "metrics exporter enabled: {MetricsEnabled}; endpoint: {MetricsEndpoint}",
-    otlpLogsEnabled,
-    otlpLogsEnabled ? logOtlpEndpoint ?? commonOtlpEndpoint ?? "(SDK default)" : "(none)",
-    otlpTracesEnabled,
-    otlpTracesEnabled ? traceOtlpEndpoint ?? commonOtlpEndpoint ?? "(SDK default)" : "(none)",
-    otlpMetricsEnabled,
-    otlpMetricsEnabled ? metricOtlpEndpoint ?? commonOtlpEndpoint ?? "(SDK default)" : "(none)");
+    effectiveOtlpStatus.LogsEnabled,
+    effectiveOtlpStatus.LogsEnabled ? effectiveOtlpStatus.EffectiveLogsEndpoint ?? "(SDK default)" : "(none)",
+    effectiveOtlpStatus.TracesEnabled,
+    effectiveOtlpStatus.TracesEnabled ? effectiveOtlpStatus.EffectiveTracesEndpoint ?? "(SDK default)" : "(none)",
+    effectiveOtlpStatus.MetricsEnabled,
+    effectiveOtlpStatus.MetricsEnabled ? effectiveOtlpStatus.EffectiveMetricsEndpoint ?? "(SDK default)" : "(none)");
 app.UseRateLimiter();
 app.Use(async (ctx, next) =>
 {
