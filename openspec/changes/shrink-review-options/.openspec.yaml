@@ -1,4 +1,0 @@
-schema: spec-driven
-created: 2026-10-06
-goal: Delete unused review sharding, consolidate small options into owning
-  sections, and resolve computed defaults at options configuration time.
