@@ -1,8 +1,6 @@
 using System.Diagnostics;
-using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
-using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline;
 
@@ -24,46 +22,6 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public FetchOutcome Fetch { get; set; } = new();
 
-    // Temporary forwarding properties; removed when all stages and fixtures consume Fetch.
-    public PullRequest? PullRequest
-    {
-        get => Fetch.PullRequest;
-        set => Fetch = Fetch with {PullRequest = value};
-    }
-    public IReadOnlyList<WorkItem> WorkItems
-    {
-        get => Fetch.WorkItems;
-        set => Fetch = Fetch with {WorkItems = value};
-    }
-    public IReadOnlyList<ReviewThread> Threads
-    {
-        get => Fetch.Threads;
-        set => Fetch = Fetch with {Threads = value};
-    }
-    public IReadOnlyList<ChangedFile> ChangedFileManifest
-    {
-        get => Fetch.ChangedFileManifest;
-        set => Fetch = Fetch with {ChangedFileManifest = value};
-    }
-    public IReadOnlyList<string> ChangedFiles => Fetch.ChangedFiles;
-    public CurrentUser? CurrentUser
-    {
-        get => Fetch.CurrentUser;
-        set => Fetch = Fetch with {CurrentUser = value};
-    }
-    public PriorRun? PriorRun
-    {
-        get => Fetch.PriorRun;
-        set => Fetch = Fetch with {PriorRun = value};
-    }
-
-    /// <summary>DedupeKeys whose live threads are Fixed/Closed in the fetched snapshot.</summary>
-    public IReadOnlySet<string> ResolvedKeys
-    {
-        get => Fetch.ResolvedKeys;
-        set => Fetch = Fetch with {ResolvedKeys = value};
-    }
-
     // Stage 2 — gate
     // Gate state shared by review and resolve runs.
     public RunKind RunKind { get; set; } = RunKind.Review;
@@ -72,100 +30,13 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public RepoPreparation Repository { get; set; } = new();
     public IDisposable? RepoLease { get; set; }
-    public string? RepoDir
-    {
-        get => Repository.RepoDir;
-        set => Repository = Repository with {RepoDir = value};
-    }
-    public string DiffText
-    {
-        get => Repository.DiffText;
-        set => Repository = Repository with {DiffText = value};
-    }
-    public DiffIndex? Diff
-    {
-        get => Repository.Diff;
-        set => Repository = Repository with {Diff = value};
-    }
 
-    /// <summary>Manifest ∩ diff files that carry reviewable text (set by stage 3).</summary>
-    public IReadOnlyCollection<string>? ReviewableFiles
-    {
-        get => Repository.ReviewableFiles;
-        set => Repository = Repository with {ReviewableFiles = value};
-    }
-
-    // Temporary forwarding properties; overlap ownership moves to RepoPreparation in this phase.
-    public ThreadsRefreshOverlap? PendingThreadsRefresh
-    {
-        get => Repository.PendingThreadsRefresh;
-        set => Repository = Repository with {PendingThreadsRefresh = value};
-    }
-    public DateTimeOffset? RepoPreparedAt
-    {
-        get => Repository.RepoPreparedAt;
-        set => Repository = Repository with {RepoPreparedAt = value};
-    }
-    public Task<string?>? PendingEnrichment
-    {
-        get => Repository.PendingEnrichment;
-        set => Repository = Repository with {PendingEnrichment = value};
-    }
-
-    // Stage 4 — classify
-    public ReviewKind Kind { get; set; } = ReviewKind.Full;
-    public IReadOnlyList<PendingReply> PendingReplies { get; set; } = [];
-
+    public Classification Classification { get; set; } = new();
     public ReasoningOutcome Reasoning { get; set; } = new();
-    public ContextStore ContextStore => Reasoning.ContextStore;
-    public ReviewCollector Collector
-    {
-        get => Reasoning.Collector;
-        set => Reasoning = Reasoning with {Collector = value};
-    }
-    public ReviewResult? Result
-    {
-        get => Reasoning.Result;
-        set => Reasoning = Reasoning with {Result = value};
-    }
-
-    // Stage 7 — validation output.
     public ValidationOutcome Validation { get; set; } = new();
-    public IReadOnlyList<RichFinding> AcceptedFindings
-    {
-        get => Validation.AcceptedFindings;
-        set => Validation = Validation with {AcceptedFindings = value};
-    }
-
-    // Stage 8 — auto-fix output.
     public AutoFixOutcome AutoFix { get; set; } = new();
-    public IReadOnlyList<AutoFix.AppliedFix> AppliedFixes
-    {
-        get => AutoFix.AppliedFixes;
-        set => AutoFix = AutoFix with {AppliedFixes = value};
-    }
-    public string? PushedHeadSha
-    {
-        get => AutoFix.PushedHeadSha;
-        set => AutoFix = AutoFix with {PushedHeadSha = value};
-    }
-    public IReadOnlyList<AutoFix.FixCommand> FixCommands
-    {
-        get => AutoFix.FixCommands;
-        set => AutoFix = AutoFix with {FixCommands = value};
-    }
-    public IReadOnlyList<(int ThreadId, string Text)> FixCommandReplies
-    {
-        get => AutoFix.FixCommandReplies;
-        set => AutoFix = AutoFix with {FixCommandReplies = value};
-    }
-
-    // Stage 8 — triage
-    public IReadOnlyList<TriageOperation> TriagePlan { get; set; } = [];
-    public IReadOnlyList<int> UnansweredThreads { get; set; } = [];
-
-    // Stage 9 — publish
-    public IReadOnlyDictionary<string, int> PostedThreadIds { get; set; } = new Dictionary<string, int>();
+    public TriageOutcome Triage { get; set; } = new();
+    public PublishOutcome Published { get; set; } = new();
 
     /// <summary>True once a stage ended the run early (always a successful outcome).</summary>
     public bool Terminated { get; private set; }
@@ -190,7 +61,7 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
         if (Repository.RepoDir is not { } dir)
         {
             throw new InvalidOperationException(
-                $"stage ordering violation: {nameof(RepoDir)} is null but required");
+                $"stage ordering violation: {nameof(Repository.RepoDir)} is null but required");
         }
 
         return dir;
@@ -202,7 +73,7 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public ReviewResult RequireResult()
         => Reasoning.Result ?? throw new InvalidOperationException(
-            $"stage ordering violation: {nameof(Result)} is null but required (reasoning stage must run first)");
+            $"stage ordering violation: {nameof(Reasoning.Result)} is null but required (reasoning stage must run first)");
 
     public ResolveState RequireResolveState()
         => Resolve ?? throw new InvalidOperationException("resolve state is not initialized for this run");

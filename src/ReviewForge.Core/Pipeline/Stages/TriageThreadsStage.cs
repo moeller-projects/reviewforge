@@ -37,8 +37,8 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 
         // Only findings validated in this run count as current. Prior keys remain in
         // persistence for deduplication, but must not keep stale bot threads alive.
-        var currentKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
-        currentKeys.UnionWith(ctx.Collector.RedetectedKeys);
+        var currentKeys = ctx.Validation.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
+        currentKeys.UnionWith(ctx.Reasoning.Collector.RedetectedKeys);
 
         var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
         var reviewed = ctx.Fetch.PullRequest!.SourceCommitSha;
@@ -47,25 +47,28 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
             throw new PrHeadChangedException(reviewed, current.SourceCommitSha);
         }
 
-        ctx.TriagePlan = ThreadTriage.Plan(
-            botThreads,
-            currentKeys,
-            agentActions,
-            CommentFormatter.WithBotPreamble,
-            ctx.Collector.RegressedKeys.ToHashSet(StringComparer.Ordinal),
-            ctx.Fetch.PullRequest!.SourceCommitSha);
-        ctx.UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions);
-        var opCount = ctx.TriagePlan.Count(o => o.Op != TriageOp.None);
-        logger.LogInformation("triage plan: {BotThreads} bot threads, {Actions} agent actions, {Ops} ops, {Unanswered} unanswered", botThreads.Count, agentActions.Length, opCount, ctx.UnansweredThreads.Count);
+        ctx.Triage = ctx.Triage with
+        {
+            Plan = ThreadTriage.Plan(
+                botThreads,
+                currentKeys,
+                agentActions,
+                CommentFormatter.WithBotPreamble,
+                ctx.Reasoning.Collector.RegressedKeys.ToHashSet(StringComparer.Ordinal),
+                ctx.Fetch.PullRequest!.SourceCommitSha),
+            UnansweredThreads = ThreadTriage.Unanswered(botThreads, agentActions),
+        };
+        var opCount = ctx.Triage.Plan.Count(o => o.Op != TriageOp.None);
+        logger.LogInformation("triage plan: {BotThreads} bot threads, {Actions} agent actions, {Ops} ops, {Unanswered} unanswered", botThreads.Count, agentActions.Length, opCount, ctx.Triage.UnansweredThreads.Count);
 
         // Threads are independent; only reply-then-status per thread must stay sequential.
         using var gate = new SemaphoreSlim(4, 4);
-        var tasks = ctx.TriagePlan
+        var tasks = ctx.Triage.Plan
             .Where(op => op.Op != TriageOp.None)
             .Select(op => ApplyAsync(ctx, op, gate, ct));
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
-        foreach (var threadId in ctx.UnansweredThreads)
+        foreach (var threadId in ctx.Triage.UnansweredThreads)
         {
             logger.LogWarning("thread {ThreadId} has a pending human reply the agent did not answer", threadId);
         }

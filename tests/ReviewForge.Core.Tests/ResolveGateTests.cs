@@ -79,8 +79,11 @@ public sealed class ResolveGateTests
     {
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
         {
-            PullRequest = Pr() with { SourceCommitSha = "current" },
-            Threads = [Thread(1, Human("creator", DateTimeOffset.UtcNow))],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = Pr() with { SourceCommitSha = "current" },
+                Threads = [Thread(1, Human("creator", DateTimeOffset.UtcNow))],
+            },
             Resolve = new ResolveState {RequestedHeadSha = "requested"},
         };
 
@@ -99,8 +102,11 @@ public sealed class ResolveGateTests
             LastObservedCommentAt: Watermark, Pipeline: "Resolve"), CancellationToken.None);
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), Watermark.AddDays(1))
         {
-            PullRequest = Pr(),
-            Threads = [Thread(1, Human("reviewer", Watermark))],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = Pr(),
+                Threads = [Thread(1, Human("reviewer", Watermark))],
+            },
             RunKind = RunKind.Resolve,
             Trigger = EnqueueTrigger.Manual,
             Resolve = new ResolveState(),
@@ -127,8 +133,11 @@ public sealed class ResolveGateTests
                 null, true, Watermark.AddMinutes(1))], CancellationToken.None);
         var ctx = new ReviewContext(pr, Watermark.AddDays(1))
         {
-            PullRequest = Pr(),
-            Threads = [Thread(1, Human("creator", Watermark.AddMinutes(-1)))],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = Pr(),
+                Threads = [Thread(1, Human("creator", Watermark.AddMinutes(-1)))],
+            },
             RunKind = RunKind.Resolve,
             Trigger = EnqueueTrigger.Discovery,
             Resolve = new ResolveState(),
@@ -146,8 +155,11 @@ public sealed class ResolveGateTests
     {
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), Watermark)
         {
-            PullRequest = Pr(),
-            Threads = [Thread(1, Human("creator", Watermark.AddDays(1)))],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = Pr(),
+                Threads = [Thread(1, Human("creator", Watermark.AddDays(1)))],
+            },
             RunKind = RunKind.Resolve,
             Trigger = EnqueueTrigger.Discovery,
             Resolve = new ResolveState(),

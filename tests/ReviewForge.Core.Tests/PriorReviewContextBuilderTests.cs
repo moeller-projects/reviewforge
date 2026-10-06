@@ -116,17 +116,17 @@ public sealed class PriorReviewContextBuilderTests
 
         await new FetchPrContextStage(source, store).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Contains("[fixed] security/sql-injection at src/A.cs:30", ctx.ContextStore.Read(PriorReviewContextBuilder.ContextName));
+        Assert.Contains("[fixed] security/sql-injection at src/A.cs:30", ctx.Reasoning.ContextStore.Read(PriorReviewContextBuilder.ContextName));
 
         store.LastRun = null;
         var withoutPrior = new ReviewContext(Key, DateTimeOffset.UtcNow);
         await new FetchPrContextStage(source, store).ExecuteAsync(withoutPrior, CancellationToken.None);
-        Assert.Null(withoutPrior.ContextStore.Read(PriorReviewContextBuilder.ContextName));
+        Assert.Null(withoutPrior.Reasoning.ContextStore.Read(PriorReviewContextBuilder.ContextName));
 
         store.LastRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, [finding.DedupeKey]);
         var keysOnly = new ReviewContext(Key, DateTimeOffset.UtcNow);
         await new FetchPrContextStage(source, store).ExecuteAsync(keysOnly, CancellationToken.None);
-        Assert.Null(keysOnly.ContextStore.Read(PriorReviewContextBuilder.ContextName));
+        Assert.Null(keysOnly.Reasoning.ContextStore.Read(PriorReviewContextBuilder.ContextName));
     }
 
     private static StoredFinding Finding(string key, string rule, string file, int line, int? threadId)

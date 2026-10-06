@@ -60,7 +60,7 @@ public class ReviewPipelineTests
         var log = new List<string>();
         var pipeline = new ReviewPipeline(
             [
-                new RecordingStage("fetch", log, ctx => ctx.PullRequest = new PullRequest(1, "t", null, "head-sha", "base", "url", false, "creator-1", "PR Author")),
+                new RecordingStage("fetch", log, ctx => ctx.Fetch = ctx.Fetch with { PullRequest = new PullRequest(1, "t", null, "head-sha", "base", "url", false, "creator-1", "PR Author") }),
                 new RecordingStage("after", log),
             ],
             NullLogger<ReviewPipeline>.Instance);
@@ -69,7 +69,7 @@ public class ReviewPipelineTests
         await pipeline.RunAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["fetch", "after"], log);
-        Assert.Equal("head-sha", ctx.PullRequest!.SourceCommitSha);
+        Assert.Equal("head-sha", ctx.Fetch.PullRequest!.SourceCommitSha);
     }
 
     private sealed class RecordingStage(
@@ -221,8 +221,8 @@ public class StageTests : IDisposable
 
         Assert.Equal(["head-sha"], git.Checkouts);
         Assert.Equal([("base-sha", "head-sha")], git.EnsuredCommits);
-        Assert.True(ctx.Diff!.Contains("src/A.cs", 2));
-        Assert.False(ctx.Diff.Contains("src/A.cs", 1));
+        Assert.True(ctx.Repository.Diff!.Contains("src/A.cs", 2));
+        Assert.False(ctx.Repository.Diff.Contains("src/A.cs", 1));
     }
 
     [Fact]
@@ -243,8 +243,8 @@ public class StageTests : IDisposable
             NullLogger<PrepareRepositoryStage>.Instance,
             DiffBudget.Default).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Contains("src/A.cs", ctx.ReviewableFiles!);
-        Assert.DoesNotContain("package-lock.json", ctx.ReviewableFiles!);
+        Assert.Contains("src/A.cs", ctx.Repository.ReviewableFiles!);
+        Assert.DoesNotContain("package-lock.json", ctx.Repository.ReviewableFiles!);
     }
 
     [Fact]
@@ -254,13 +254,13 @@ public class StageTests : IDisposable
         source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
             [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
         var ctx = Ctx(source);
-        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
+        ctx.Fetch = ctx.Fetch with { PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []) };
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(1, source.ThreadFetches);
-        Assert.Equal(ReviewKind.FollowUp, ctx.Kind);
-        Assert.Single(ctx.PendingReplies);
+        Assert.Equal(ReviewKind.FollowUp, ctx.Classification.Kind);
+        Assert.Single(ctx.Classification.PendingReplies);
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public class StageTests : IDisposable
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, source.ThreadFetches); // the in-flight fetch was consumed
-        Assert.Single(ctx.PendingReplies);
+        Assert.Single(ctx.Classification.PendingReplies);
     }
 
     [Fact]
@@ -459,7 +459,7 @@ public class StageTests : IDisposable
             new FakeEnricher(throws: true), NullLogger<EnrichContextStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal("graph", ctx.ContextStore.Read("crg"));
+        Assert.Equal("graph", ctx.Reasoning.ContextStore.Read("crg"));
     }
 
     [Fact]
@@ -472,7 +472,7 @@ public class StageTests : IDisposable
             new FakeEnricher("unused"), NullLogger<EnrichContextStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.ContextStore.Names);
+        Assert.Empty(ctx.Reasoning.ContextStore.Names);
     }
 
     private sealed class SyncThrowingEnricher : IContextEnricher
@@ -488,19 +488,19 @@ public class StageTests : IDisposable
 
         var noEnricher = Ctx();
         await new EnrichContextStage(null, logger).ExecuteAsync(noEnricher, CancellationToken.None);
-        Assert.Empty(noEnricher.ContextStore.Names);
+        Assert.Empty(noEnricher.Reasoning.ContextStore.Names);
 
         var withPayload = Ctx();
         await new EnrichContextStage(new FakeEnricher("graph"), logger).ExecuteAsync(withPayload, CancellationToken.None);
-        Assert.Equal("graph", withPayload.ContextStore.Read("crg"));
+        Assert.Equal("graph", withPayload.Reasoning.ContextStore.Read("crg"));
 
         var empty = Ctx();
         await new EnrichContextStage(new FakeEnricher(" "), logger).ExecuteAsync(empty, CancellationToken.None);
-        Assert.Empty(empty.ContextStore.Names);
+        Assert.Empty(empty.Reasoning.ContextStore.Names);
 
         var throwing = Ctx();
         await new EnrichContextStage(new FakeEnricher(throws: true), logger).ExecuteAsync(throwing, CancellationToken.None);
-        Assert.Empty(throwing.ContextStore.Names);
+        Assert.Empty(throwing.Reasoning.ContextStore.Names);
     }
 
     private static ExecuteReasoningStage ReasoningStage(
@@ -514,12 +514,12 @@ public class StageTests : IDisposable
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
         var ctx = Ctx();
-        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, ["known-key"]);
+        ctx.Fetch = ctx.Fetch with { PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, ["known-key"]) };
 
         await ReasoningStage(agent).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.NotNull(ctx.Result);
-        Assert.True(ctx.Collector.IsKnown("known-key"));
+        Assert.NotNull(ctx.Reasoning.Result);
+        Assert.True(ctx.Reasoning.Collector.IsKnown("known-key"));
         var prompt = script.Received[0].Last().Text;
         Assert.Contains("full code review", prompt);
     }
@@ -533,7 +533,7 @@ public class StageTests : IDisposable
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var factory = new FakeChatClientFactory(script);
         var ctx = Ctx();
-        ctx.Kind = kind;
+        ctx.Classification = ctx.Classification with { Kind = kind };
 
         await ReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -548,7 +548,7 @@ public class StageTests : IDisposable
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var factory = new FakeChatClientFactory(script, model: "strong-model", fastModel: "fast-model");
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.FollowUp;
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.FollowUp };
 
         await ReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -560,24 +560,24 @@ public class StageTests : IDisposable
     {
         var script = new ScriptedChatClient();
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.FollowUp;
-        ctx.DiffText = """
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.FollowUp };
+        ctx.Repository = ctx.Repository with { DiffText = """
             diff --git a/src/A.cs b/src/A.cs
             --- a/src/A.cs
             +++ b/src/A.cs
             @@ -1,2 +1,0 @@
             -line one
             -line two
-            """;
-        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
-        ctx.ReviewableFiles = ["src/A.cs"];
+            """ };
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse(ctx.Repository.DiffText) };
+        ctx.Repository = ctx.Repository with { ReviewableFiles = ["src/A.cs"] };
 
         await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, script.Calls);
-        Assert.NotNull(ctx.Result);
-        Assert.Equal("trivial diff — no agent run", ctx.Result.ReviewDepth);
+        Assert.NotNull(ctx.Reasoning.Result);
+        Assert.Equal("trivial diff — no agent run", ctx.Reasoning.Result.ReviewDepth);
     }
 
     [Fact]
@@ -586,16 +586,16 @@ public class StageTests : IDisposable
         var script = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var ctx = Ctx();
-        ctx.DiffText = """
+        ctx.Repository = ctx.Repository with { DiffText = """
             diff --git a/src/A.cs b/src/A.cs
             --- a/src/A.cs
             +++ b/src/A.cs
             @@ -1,2 +1,0 @@
             -line one
             -line two
-            """;
-        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
-        ctx.ReviewableFiles = ["src/A.cs"];
+            """ };
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse(ctx.Repository.DiffText) };
+        ctx.Repository = ctx.Repository with { ReviewableFiles = ["src/A.cs"] };
 
         await ReasoningStage(
                 new NativeReviewAgent(new FakeChatClientFactory(script)), trivialDiffSkipEnabled: false)
@@ -610,17 +610,17 @@ public class StageTests : IDisposable
         var script = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var ctx = Ctx();
-        ctx.DiffText = """
+        ctx.Repository = ctx.Repository with { DiffText = """
             diff --git a/src/A.cs b/src/A.cs
             --- a/src/A.cs
             +++ b/src/A.cs
             @@ -1,2 +1,0 @@
             -line one
             -line two
-            """;
-        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
-        ctx.ReviewableFiles = ["src/A.cs"];
-        ctx.PendingReplies = [new PendingReply(1, "k", "alice", "please fix")];
+            """ };
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse(ctx.Repository.DiffText) };
+        ctx.Repository = ctx.Repository with { ReviewableFiles = ["src/A.cs"] };
+        ctx.Classification = ctx.Classification with { PendingReplies = [new PendingReply(1, "k", "alice", "please fix")] };
 
         await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -635,25 +635,25 @@ public class StageTests : IDisposable
         // analyzer sees the raw diff, the trivial predicate sees only reviewable files.
         var script = new ScriptedChatClient();
         var ctx = Ctx();
-        ctx.DiffText = """
+        ctx.Repository = ctx.Repository with { DiffText = """
             diff --git a/src/gen/logo.gen.cs b/src/gen/logo.gen.cs
             --- a/src/gen/logo.gen.cs
             +++ b/src/gen/logo.gen.cs
             @@ -1,0 +2,1 @@
             +var fileNаme = value;
-            """;
-        ctx.Diff = DiffIndex.Parse(ctx.DiffText);
-        ctx.ReviewableFiles = ["src/A.cs"];
+            """ };
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse(ctx.Repository.DiffText) };
+        ctx.Repository = ctx.Repository with { ReviewableFiles = ["src/A.cs"] };
 
         await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, script.Calls); // trivial: zero added lines in reviewable files
-        var finding = Assert.Single(ctx.Collector.Findings); // homoglyph finding still recorded
+        var finding = Assert.Single(ctx.Reasoning.Collector.Findings); // homoglyph finding still recorded
         Assert.NotNull(finding.DedupeKey);
-        // Downstream stages consume ctx.Result, not the collector: the finding must survive
+        // Downstream stages consume ctx.Reasoning.Result, not the collector: the finding must survive
         // into the synthetic trivial result or validate/publish would never see it.
-        var resultFinding = Assert.Single(ctx.Result!.Findings);
+        var resultFinding = Assert.Single(ctx.Reasoning.Result!.Findings);
         Assert.Equal(finding.DedupeKey, resultFinding.DedupeKey);
     }
 
@@ -663,18 +663,18 @@ public class StageTests : IDisposable
         var script = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var ctx = Ctx();
-        ctx.DiffText = """
+        ctx.Repository = ctx.Repository with { DiffText = """
             diff --git a/src/A.cs b/src/A.cs
             --- a/src/A.cs
             +++ b/src/A.cs
             @@ -0,0 +1,1 @@
             +var fileNаme = value;
-            """;
+            """ };
 
         await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        var finding = Assert.Single(ctx.Collector.Findings);
+        var finding = Assert.Single(ctx.Reasoning.Collector.Findings);
         Assert.NotNull(finding.DedupeKey);
         Assert.Equal(
             DedupeKey.Compute(finding.RuleId, finding.Anchor!.FilePath, finding.Snippet),
@@ -697,44 +697,42 @@ public class StageTests : IDisposable
 
         // Run 1: establishes the finding and its dedupe key.
         var first = Ctx();
-        first.DiffText = diff;
+        first.Repository = first.Repository with { DiffText = diff };
         await ReasoningStage(agent).ExecuteAsync(first, CancellationToken.None);
-        var key = Assert.Single(first.Collector.Findings).DedupeKey!;
+        var key = Assert.Single(first.Reasoning.Collector.Findings).DedupeKey!;
 
         // Run 2: same diff; prior run knows the key; the live thread is Fixed → the
         // verbatim re-detection resurfaces as a regression instead of staying deduped.
         var regressed = Ctx();
-        regressed.DiffText = diff;
-        regressed.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [key]);
-        regressed.Threads =
-        [
+        regressed.Repository = regressed.Repository with { DiffText = diff };
+        regressed.Fetch = regressed.Fetch with { PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [key]) };
+        regressed.Fetch = regressed.Fetch with { Threads = [
             new ReviewThread(7, key, ReviewThreadStatus.Fixed,
                 [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]),
-        ];
+        ] };
 
         await ReasoningStage(agent).ExecuteAsync(regressed, CancellationToken.None);
 
-        var finding = Assert.Single(regressed.Collector.Findings);
+        var finding = Assert.Single(regressed.Reasoning.Collector.Findings);
         Assert.True(finding.IsRegression);
-        Assert.Contains(key, regressed.Collector.RegressedKeys);
-        Assert.Empty(regressed.Collector.RedetectedKeys);
-        Assert.Contains(key, regressed.ResolvedKeys);
+        Assert.Contains(key, regressed.Reasoning.Collector.RegressedKeys);
+        Assert.Empty(regressed.Reasoning.Collector.RedetectedKeys);
+        Assert.Contains(key, regressed.Fetch.ResolvedKeys);
 
         // Run 3: same diff but the thread is still Active → plain redetection, silent.
         var active = Ctx();
-        active.DiffText = diff;
-        active.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [key]);
-        active.Threads =
-        [
+        active.Repository = active.Repository with { DiffText = diff };
+        active.Fetch = active.Fetch with { PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [key]) };
+        active.Fetch = active.Fetch with { Threads = [
             new ReviewThread(7, key, ReviewThreadStatus.Active,
                 [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]),
-        ];
+        ] };
 
         await ReasoningStage(agent).ExecuteAsync(active, CancellationToken.None);
 
-        Assert.Empty(active.Collector.Findings);
-        Assert.Contains(key, active.Collector.RedetectedKeys);
-        Assert.Empty(active.Collector.RegressedKeys);
+        Assert.Empty(active.Reasoning.Collector.Findings);
+        Assert.Contains(key, active.Reasoning.Collector.RedetectedKeys);
+        Assert.Empty(active.Reasoning.Collector.RegressedKeys);
     }
 
     [Fact]
@@ -787,22 +785,22 @@ public class StageTests : IDisposable
         prLevel.DedupeKey = "k-pr";
 
         var ctx = Ctx();
-        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
-        ctx.Result = new ReviewResult
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n") };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative(),
             Findings = [verified, reanchored, outsideDiff, gone, prLevel],
             Uncertainties = [],
-        };
+        } };
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(2, ctx.AcceptedFindings.Count);
+        Assert.Equal(2, ctx.Validation.AcceptedFindings.Count);
         Assert.False(verified.AnchorDowngraded);
         Assert.False(reanchored.AnchorDowngraded);
         Assert.Equal(2, reanchored.Anchor!.StartLine);
-        Assert.DoesNotContain(outsideDiff, ctx.AcceptedFindings);
-        Assert.DoesNotContain(gone, ctx.AcceptedFindings);
+        Assert.DoesNotContain(outsideDiff, ctx.Validation.AcceptedFindings);
+        Assert.DoesNotContain(gone, ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -810,12 +808,12 @@ public class StageTests : IDisposable
     {
         var finding = FindingOnLine(2, "}");
         var ctx = Ctx();
-        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n") };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        var accepted = Assert.Single(ctx.AcceptedFindings);
+        var accepted = Assert.Single(ctx.Validation.AcceptedFindings);
         Assert.True(accepted.AnchorDowngraded);
         Assert.Equal(2, accepted.Anchor!.StartLine);
     }
@@ -825,12 +823,12 @@ public class StageTests : IDisposable
     {
         var finding = FindingOnLine(3, "}");
         var ctx = Ctx();
-        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n") };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AcceptedFindings);
+        Assert.Empty(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -839,16 +837,16 @@ public class StageTests : IDisposable
         var finding = FindingOnLine(1);
         finding.Anchor = new FindingAnchor("src/Large.cs", 1, 1);
         var ctx = Ctx();
-        ctx.Diff = DiffIndex.Parse(
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse(
             "diff --git a/src/Large.cs b/src/Large.cs\n" +
             "--- a/src/Large.cs\n+++ b/src/Large.cs\n" +
-            "…[file diff skipped — 300 bytes exceeds the per-file budget; use repo_read_file]\n");
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+            "…[file diff skipped — 300 bytes exceeds the per-file budget; use repo_read_file]\n") };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AcceptedFindings);
+        Assert.Empty(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -868,18 +866,18 @@ public class StageTests : IDisposable
         var f2 = FindingOnLine(2);
         f2.DedupeKey = "k2";
         var ctx = Ctx();
-        ctx.Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n");
-        ctx.Result = new ReviewResult
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse("+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n") };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative(),
             Findings = [f1, f2],
             Uncertainties = [],
-        };
+        } };
 
         await stage.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Single(reads);
-        Assert.Equal(2, ctx.AcceptedFindings.Count);
+        Assert.Equal(2, ctx.Validation.AcceptedFindings.Count);
     }
 
     [Fact]
@@ -888,10 +886,10 @@ public class StageTests : IDisposable
         var finding = FindingOnLine(1);
         finding.Anchor = new FindingAnchor("missing.cs", 1, 1);
         var ctx = Ctx();
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
-        Assert.Empty(ctx.AcceptedFindings);
+        Assert.Empty(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -905,17 +903,17 @@ public class StageTests : IDisposable
             var finding = FindingOnLine(1, "bad code here");
             finding.Anchor = new FindingAnchor($"../{Path.GetFileName(sibling)}/evil.cs", 1, 1);
             var ctx = Ctx();
-            ctx.Result = new ReviewResult
+            ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
             {
                 Narrative = new ReviewNarrative(),
                 Findings = [finding],
                 Uncertainties = [],
-            };
+            } };
 
             await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance)
                 .ExecuteAsync(ctx, CancellationToken.None);
 
-            Assert.Empty(ctx.AcceptedFindings);
+            Assert.Empty(ctx.Validation.AcceptedFindings);
         }
         finally
         {
@@ -928,13 +926,13 @@ public class StageTests : IDisposable
     {
         var finding = FindingOnLine(2);
         var ctx = Ctx();
-        ctx.Diff = DiffIndex.Parse(
-            "+++ b/src/Other.cs\n@@ -0,0 +1,1 @@\n+changed\n");
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse(
+            "+++ b/src/Other.cs\n@@ -0,0 +1,1 @@\n+changed\n") };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AcceptedFindings);
+        Assert.Empty(ctx.Validation.AcceptedFindings);
     }
 
     [Fact]
@@ -946,8 +944,11 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
-            ChangedFileManifest = [new ChangedFile("src/A.cs", ChangedFileType.Edit)],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("src/A.cs", ChangedFileType.Edit)],
+            },
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -964,14 +965,17 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
-            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
+            },
         };
 
         await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
+        Assert.Equal(["a.cs"], ctx.Repository.ReviewableFiles!.Order());
     }
 
     [Fact]
@@ -983,14 +987,17 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
-            ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Rename)],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("b.cs", ChangedFileType.Rename)],
+            },
         };
 
         await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.ReviewableFiles!);
+        Assert.Empty(ctx.Repository.ReviewableFiles!);
     }
 
     [Fact]
@@ -1003,14 +1010,17 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
-            ChangedFileManifest = [new ChangedFile("café.cs", ChangedFileType.Edit)],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("café.cs", ChangedFileType.Edit)],
+            },
         };
 
         await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(["café.cs"], ctx.ReviewableFiles!.Order());
+        Assert.Equal(["café.cs"], ctx.Repository.ReviewableFiles!.Order());
     }
 
     [Fact]
@@ -1023,14 +1033,17 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
-            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("logo.png", ChangedFileType.Edit)],
+            },
         };
 
         await new PrepareRepositoryStage(new RepoCheckoutPool(git, new FakeWorkspaceFs(), _RepoDir), NullLogger<PrepareRepositoryStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(["a.cs"], ctx.ReviewableFiles!.Order());
+        Assert.Equal(["a.cs"], ctx.Repository.ReviewableFiles!.Order());
     }
 
     [Fact]
@@ -1043,8 +1056,11 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
-            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit)],
+            },
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -1060,8 +1076,11 @@ public class StageTests : IDisposable
         };
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
-            ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("ghost.cs", ChangedFileType.Edit)],
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(7, "title", null, "head", "base", "url", false, "creator-1", "PR Author"),
+                ChangedFileManifest = [new ChangedFile("a.cs", ChangedFileType.Edit), new ChangedFile("ghost.cs", ChangedFileType.Edit)],
+            },
         };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -1080,20 +1099,20 @@ public class StageTests : IDisposable
             [new ThreadComment("b", "bot", true, "finding", t0)]));
 
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Resolve, "fixed")]},
             Findings = [],
             Uncertainties = [],
-        };
-        ctx.AcceptedFindings = [];
+        } };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Contains(source.Replies, r => r.ThreadId == 1 && r.Text == CommentFormatter.WithBotPreamble("fixed"));
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 1 && s.Status == ReviewThreadStatus.Fixed);
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 2 && s.Status == ReviewThreadStatus.Fixed); // stale auto-resolved
-        Assert.Empty(ctx.UnansweredThreads);
+        Assert.Empty(ctx.Triage.UnansweredThreads);
     }
 
     [Fact]
@@ -1105,9 +1124,9 @@ public class StageTests : IDisposable
             [new ThreadComment("b", "bot", true, "finding", t0)]));
 
         var ctx = Ctx(source);
-        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k"]);
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
-        ctx.AcceptedFindings = [];
+        ctx.Fetch = ctx.Fetch with { PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k"]) };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []} };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1125,9 +1144,9 @@ public class StageTests : IDisposable
             [new ThreadComment("b", "bot", true, "finding", t0)]));
 
         var ctx = Ctx(source);
-        ctx.Collector.MarkRedetected("k");
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []};
-        ctx.AcceptedFindings = [];
+        ctx.Reasoning.Collector.MarkRedetected("k");
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []} };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1148,13 +1167,13 @@ public class StageTests : IDisposable
         regressed.IsRegression = true;
 
         var ctx = Ctx(source);
-        ctx.Collector.MarkRegressed("k");
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [regressed], Uncertainties = []};
-        ctx.AcceptedFindings = [regressed];
+        ctx.Reasoning.Collector.MarkRegressed("k");
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [regressed], Uncertainties = []} };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [regressed] };
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        var op = Assert.Single(ctx.TriagePlan, o => o.Op != TriageOp.None);
+        var op = Assert.Single(ctx.Triage.Plan, o => o.Op != TriageOp.None);
         Assert.Equal(TriageOp.Reopen, op.Op);
         Assert.Contains(source.Replies, r => r.ThreadId == 7 && r.Text.Contains("Regressed in head-sh"));
         Assert.Contains(source.StatusChanges, s => s.ThreadId == 7 && s.Status == ReviewThreadStatus.Active);
@@ -1176,15 +1195,15 @@ public class StageTests : IDisposable
         regressed.IsRegression = true;
 
         var ctx = Ctx(source);
-        ctx.Collector.MarkRegressed("k");
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [regressed], Uncertainties = []};
-        ctx.AcceptedFindings = [regressed];
+        ctx.Reasoning.Collector.MarkRegressed("k");
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [regressed], Uncertainties = []} };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [regressed] };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.DoesNotContain(source.PostedFindings, p => p.Finding.DedupeKey == "k");
-        Assert.Equal(7, ctx.PostedThreadIds["k"]);
+        Assert.Equal(7, ctx.Published.PostedThreadIds["k"]);
     }
 
     [Fact]
@@ -1197,10 +1216,10 @@ public class StageTests : IDisposable
         general.DedupeKey = "k-gen";
 
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.WorkItems = [new WorkItem(1, "wi", "Bug", null, "AC", "Active")];
-        ctx.AcceptedFindings = [inline, general];
-        ctx.Result = new ReviewResult
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Fetch = ctx.Fetch with { WorkItems = [new WorkItem(1, "wi", "Bug", null, "AC", "Active")] };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [inline, general] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative
             {
@@ -1209,12 +1228,12 @@ public class StageTests : IDisposable
             },
             Findings = [inline, general],
             Uncertainties = [new ReviewUncertainty("t", "q", null)],
-        };
+        } };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Single(source.PostedFindings);
-        Assert.Equal(1000, ctx.PostedThreadIds["k2"]);
+        Assert.Equal(1000, ctx.Published.PostedThreadIds["k2"]);
         Assert.Equal(2, source.GeneralComments.Count); // downgraded finding + summary
         Assert.Equal("k-gen", source.GeneralCommentDedupeKeys[0]);
         Assert.Null(source.GeneralCommentDedupeKeys[1]);
@@ -1229,12 +1248,12 @@ public class StageTests : IDisposable
     {
         var ctx = Ctx(new FakePullRequestSource());
         ctx.PublishGuard = () => false;
-        ctx.Result = new ReviewResult
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ReviewSummary = "sum"},
             Findings = [],
             Uncertainties = [],
-        };
+        } };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new PublishFindingsStage(new FakePullRequestSource(), new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
@@ -1246,14 +1265,14 @@ public class StageTests : IDisposable
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [FindingOnLine(2)];
-        ctx.Result = new ReviewResult
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [FindingOnLine(2)] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ReviewSummary = "sum"},
-            Findings = ctx.AcceptedFindings,
+            Findings = ctx.Validation.AcceptedFindings,
             Uncertainties = [],
-        };
+        } };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1266,8 +1285,8 @@ public class StageTests : IDisposable
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
-        ctx.AcceptedFindings = [];
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []} };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1282,8 +1301,8 @@ public class StageTests : IDisposable
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
-        ctx.AcceptedFindings = [];
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []} };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, ReviewerVote.Approved)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -1296,8 +1315,8 @@ public class StageTests : IDisposable
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []};
-        ctx.AcceptedFindings = [];
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []} };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, cleanVote: null)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -1311,9 +1330,9 @@ public class StageTests : IDisposable
         var source = new FakePullRequestSource();
         var finding = FindingOnLine(2);
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [finding];
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [finding] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance, ReviewerVote.Approved)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -1327,14 +1346,14 @@ public class StageTests : IDisposable
         var source = new SlowFakePullRequestSource(delayMs: 50);
         var findings = Enumerable.Range(0, 8).Select(i => FindingOnLine(2 + i)).ToArray();
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = findings;
-        ctx.Result = new ReviewResult
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = findings };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ReviewSummary = "sum"},
             Findings = findings,
             Uncertainties = [],
-        };
+        } };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1348,14 +1367,14 @@ public class StageTests : IDisposable
         var source = new SlowFakePullRequestSource();
         var findings = Enumerable.Range(0, 8).Select(i => FindingOnLine(2 + i)).ToArray();
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = findings;
-        ctx.Result = new ReviewResult
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = findings };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ReviewSummary = "sum"},
             Findings = findings,
             Uncertainties = [],
-        };
+        } };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1370,9 +1389,9 @@ public class StageTests : IDisposable
         var store = new FakeFindingStore();
         var finding = FindingOnLine(2);
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [finding];
-        ctx.PostedThreadIds = new Dictionary<string, int> {["k2"] = 1000};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [finding] };
+        ctx.Published = ctx.Published with { PostedThreadIds = new Dictionary<string, int> {["k2"] = 1000} };
 
         await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1389,11 +1408,11 @@ public class StageTests : IDisposable
         var store = new FakeFindingStore();
         var accepted = FindingOnLine(3);
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [accepted];
-        ctx.PostedThreadIds = new Dictionary<string, int> {["k3"] = 1000};
-        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
-            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [accepted] };
+        ctx.Published = ctx.Published with { PostedThreadIds = new Dictionary<string, int> {["k3"] = 1000} };
+        ctx.Fetch = ctx.Fetch with { PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]) };
 
         await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1411,11 +1430,11 @@ public class StageTests : IDisposable
         var store = new FakeFindingStore();
         var accepted = FindingOnLine(2);
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [accepted];
-        ctx.PostedThreadIds = new Dictionary<string, int> {["k2"] = 1000};
-        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
-            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [accepted] };
+        ctx.Published = ctx.Published with { PostedThreadIds = new Dictionary<string, int> {["k2"] = 1000} };
+        ctx.Fetch = ctx.Fetch with { PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]) };
 
         await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1431,10 +1450,10 @@ public class StageTests : IDisposable
         var store = new FakeFindingStore();
         var accepted = FindingOnLine(3); // k3
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [accepted];
-        ctx.PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
-            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]);
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [accepted] };
+        ctx.Fetch = ctx.Fetch with { PriorRun = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, ["k2"],
+            [new StoredFinding("k2", "r", "high", "t", "src/A.cs", 2, 42)]) };
 
         await new BeginRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1454,9 +1473,9 @@ public class StageTests : IDisposable
         var f1 = FindingOnLine(2); // k2
         var f2 = FindingOnLine(3); // k3
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [f1, f2];
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [f1, f2] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []} };
 
         await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1474,9 +1493,9 @@ public class StageTests : IDisposable
         source.Threads.Add(new ReviewThread(1000, "k2", ReviewThreadStatus.Active,
             [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]));
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [finding];
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [finding] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1492,9 +1511,9 @@ public class StageTests : IDisposable
         source.Threads.Add(new ReviewThread(1000, "k2", ReviewThreadStatus.Fixed,
             [new ThreadComment("b", "bot", true, "finding", DateTimeOffset.UtcNow)]));
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [finding];
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [finding] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1509,9 +1528,9 @@ public class StageTests : IDisposable
         var f1 = FindingOnLine(2); // k2 posts
         var f2 = FindingOnLine(3); // k3 throws
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [f1, f2];
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [f1, f2] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [f1, f2], Uncertainties = []} };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new PublishFindingsStage(source, store, NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
@@ -1527,16 +1546,15 @@ public class StageTests : IDisposable
         var t1 = DateTimeOffset.UtcNow.AddMinutes(-5);
         var t2 = DateTimeOffset.UtcNow;
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.Full;
-        ctx.Threads =
-        [
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Fetch = ctx.Fetch with { Threads = [
             new ReviewThread(1, "k1", ReviewThreadStatus.Active,
                 [new ThreadComment("b", "bot", true, "note", t1)]),
             new ReviewThread(2, null, ReviewThreadStatus.Active,
                 [new ThreadComment("u", "human", false, "reply", t2)]),
-        ];
-        ctx.AcceptedFindings = [];
-        ctx.PostedThreadIds = new Dictionary<string, int>();
+        ] };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
+        ctx.Published = ctx.Published with { PostedThreadIds = new Dictionary<string, int>() };
 
         await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1548,10 +1566,10 @@ public class StageTests : IDisposable
     {
         var store = new FakeFindingStore();
         var ctx = Ctx();
-        ctx.Kind = ReviewKind.Full;
-        ctx.Threads = [];
-        ctx.AcceptedFindings = [];
-        ctx.PostedThreadIds = new Dictionary<string, int>();
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Fetch = ctx.Fetch with { Threads = [] };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
+        ctx.Published = ctx.Published with { PostedThreadIds = new Dictionary<string, int>() };
 
         await new PersistRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1563,7 +1581,7 @@ public class StageTests : IDisposable
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult { Narrative = new ReviewNarrative(), Findings = [], Uncertainties = [] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult { Narrative = new ReviewNarrative(), Findings = [], Uncertainties = [] } };
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance)
@@ -1613,13 +1631,13 @@ public class StageTests : IDisposable
 
         var ctx = Ctx(source);
         ctx.PublishGuard = () => false;
-        ctx.Result = new ReviewResult
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Answer, "answer")]},
             Findings = [],
             Uncertainties = [],
-        };
-        ctx.AcceptedFindings = [];
+        } };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None));
@@ -1639,7 +1657,7 @@ public class StageTests : IDisposable
             [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "reply", t0)]));
 
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative
             {
@@ -1651,8 +1669,8 @@ public class StageTests : IDisposable
             },
             Findings = [],
             Uncertainties = [],
-        };
-        ctx.AcceptedFindings = [];
+        } };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         var guardCalls = 0;
         ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-triage + one op pass
@@ -1676,13 +1694,13 @@ public class StageTests : IDisposable
         ]));
 
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Resolve, "answer")]},
             Findings = [],
             Uncertainties = [],
-        };
-        ctx.AcceptedFindings = [];
+        } };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1699,13 +1717,13 @@ public class StageTests : IDisposable
             [new ThreadComment("b", "bot", true, "finding", t0), new ThreadComment("u", "human", false, "why?", t0)]));
 
         var ctx = Ctx(source);
-        ctx.Result = new ReviewResult
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult
         {
             Narrative = new ReviewNarrative {ThreadActions = [new ThreadAction(1, ThreadActionKind.Resolve, "answer")]},
             Findings = [],
             Uncertainties = [],
-        };
-        ctx.AcceptedFindings = [];
+        } };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [] };
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -1720,9 +1738,9 @@ public class StageTests : IDisposable
         var store = new FakeFindingStore();
         var findings = Enumerable.Range(0, 3).Select(i => FindingOnLine(2 + i)).ToArray();
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = findings;
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = findings, Uncertainties = []};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = findings };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = findings, Uncertainties = []} };
 
         var guardCalls = 0;
         ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-publish + one post pass
@@ -1742,9 +1760,9 @@ public class StageTests : IDisposable
         var store = new FakeFindingStore();
         var finding = FindingOnLine(2);
         var ctx = Ctx(source);
-        ctx.Kind = ReviewKind.Full;
-        ctx.AcceptedFindings = [finding];
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Classification = ctx.Classification with { Kind = ReviewKind.Full };
+        ctx.Validation = ctx.Validation with { AcceptedFindings = [finding] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         var guardCalls = 0;
         ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2; // before-publish + post pass, summary fails
@@ -1773,15 +1791,21 @@ public class StageTests : IDisposable
     {
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = Pr(reviewedHead),
-            CurrentUser = new CurrentUser("user-1", "reviewforge bot"),
-            Kind = ReviewKind.Full,
-            AcceptedFindings = [FindingOnLine(2)],
-            Result = new ReviewResult
+            Fetch = new FetchOutcome
             {
-                Narrative = new ReviewNarrative {ReviewSummary = "sum"},
-                Findings = [FindingOnLine(2)],
-                Uncertainties = [],
+                PullRequest = Pr(reviewedHead),
+                CurrentUser = new CurrentUser("user-1", "reviewforge bot"),
+            },
+            Classification = new Classification { Kind = ReviewKind.Full },
+            Validation = new ValidationOutcome { AcceptedFindings = [FindingOnLine(2)] },
+            Reasoning = new ReasoningOutcome
+            {
+                Result = new ReviewResult
+                {
+                    Narrative = new ReviewNarrative {ReviewSummary = "sum"},
+                    Findings = [FindingOnLine(2)],
+                    Uncertainties = [],
+                },
             },
         };
         return ctx;
@@ -1886,11 +1910,11 @@ public class StageTests : IDisposable
 
             var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("linked/secret.txt", 1, 1), Snippet = "MARKER-UNIQUE-SECRET"};
             var ctx = Ctx();
-            ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+            ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
             await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-            Assert.Empty(ctx.AcceptedFindings);
+            Assert.Empty(ctx.Validation.AcceptedFindings);
         }
         finally
         {
@@ -1915,13 +1939,13 @@ public class StageTests : IDisposable
 
         var finding = FindingOnLine(2) with {Anchor = new FindingAnchor("a/b.txt", 1, 1), Snippet = "MARKER-INSIDE"};
         var ctx = Ctx();
-        ctx.Diff = DiffIndex.Parse("+++ b/a/b.txt\n@@ -0,0 +1,1 @@\n+MARKER-INSIDE\n");
-        ctx.ChangedFileManifest = [new ChangedFile("a/b.txt", ChangedFileType.Edit)];
-        ctx.Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []};
+        ctx.Repository = ctx.Repository with { Diff = DiffIndex.Parse("+++ b/a/b.txt\n@@ -0,0 +1,1 @@\n+MARKER-INSIDE\n") };
+        ctx.Fetch = ctx.Fetch with { ChangedFileManifest = [new ChangedFile("a/b.txt", ChangedFileType.Edit)] };
+        ctx.Reasoning = ctx.Reasoning with { Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []} };
 
         await new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Single(ctx.AcceptedFindings);
+        Assert.Single(ctx.Validation.AcceptedFindings);
     }
 
     private sealed class CompetitorRepliedSource : FakePullRequestSource

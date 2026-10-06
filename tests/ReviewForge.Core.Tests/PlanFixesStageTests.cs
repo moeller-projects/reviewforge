@@ -75,13 +75,16 @@ public sealed class PlanFixesStageTests
     private static ReviewContext Context(params ResolvableComment[] comments)
         => new(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
         {
-            PullRequest = new PullRequest(1, "title", null, "head", "base", "clone", false, "creator", "Creator"),
-            RepoDir = Path.GetTempPath(),
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new PullRequest(1, "title", null, "head", "base", "clone", false, "creator", "Creator"),
+                ChangedFileManifest = [
+                    new ChangedFile("src/a.cs", ChangedFileType.Edit),
+                    new ChangedFile("src/b.cs", ChangedFileType.Edit),
+                    new ChangedFile(".env", ChangedFileType.Edit)]
+            },
+            Repository = new RepoPreparation {RepoDir = Path.GetTempPath()},
             Resolve = new ResolveState {ResolvableComments = comments},
-            ChangedFileManifest = [
-                new ChangedFile("src/a.cs", ChangedFileType.Edit),
-                new ChangedFile("src/b.cs", ChangedFileType.Edit),
-                new ChangedFile(".env", ChangedFileType.Edit)]
         };
 
     private static ResolvableComment Comment(int id, string? file, bool allowed = true)

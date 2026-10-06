@@ -67,13 +67,13 @@ public class CoverageGapTests : IDisposable
                 PullRequest = source.Pr,
                 Threads = source.Threads,
             },
-            Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
-            AcceptedFindings = [],
+            Reasoning = new ReasoningOutcome {Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []}},
+            Validation = new ValidationOutcome {AcceptedFindings = []},
         };
 
         await new TriageThreadsStage(source, NullLogger<TriageThreadsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal([9], ctx.UnansweredThreads);
+        Assert.Equal([9], ctx.Triage.UnansweredThreads);
         Assert.Empty(source.Replies); // Op.None writes nothing
         Assert.Empty(source.StatusChanges);
     }
@@ -93,8 +93,8 @@ public class CoverageGapTests : IDisposable
         {
             var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
             {
-                RepoDir = repoDir,
-                Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []},
+                Repository = new RepoPreparation {RepoDir = repoDir},
+                Reasoning = new ReasoningOutcome {Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [finding], Uncertainties = []}},
             };
 
             var stage = new ValidateFindingsStage(
@@ -102,7 +102,7 @@ public class CoverageGapTests : IDisposable
                 lineReader: _ => throw new IOException("disk gone"));
             await stage.ExecuteAsync(ctx, CancellationToken.None);
 
-            Assert.Empty(ctx.AcceptedFindings);
+            Assert.Empty(ctx.Validation.AcceptedFindings);
         }
         finally
         {
@@ -115,13 +115,13 @@ public class CoverageGapTests : IDisposable
     {
         var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
         {
-            RepoDir = null,
+            Repository = new RepoPreparation {RepoDir = null},
         };
 
         await new EnrichContextStage(new FakeEnricher("graph"), NullLogger<EnrichContextStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.ContextStore.Names);
+        Assert.Empty(ctx.Reasoning.ContextStore.Names);
     }
 
     [Fact]

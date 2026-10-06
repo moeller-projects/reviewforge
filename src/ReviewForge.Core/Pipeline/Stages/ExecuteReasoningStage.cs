@@ -81,7 +81,7 @@ public sealed class ExecuteReasoningStage(
         // above has already run, so its findings are still recorded. Unknown reviewability
         // (stage-3 fields unset, e.g. stage unit tests) never skips.
         if (trivialDiffSkipEnabled && ctx.Repository.ReviewableFiles is { } reviewable
-            && TrivialDiff.IsTrivial(ctx.Repository.Diff ?? DiffIndex.Parse(ctx.Repository.DiffText), ctx.PendingReplies, reviewable))
+            && TrivialDiff.IsTrivial(ctx.Repository.Diff ?? DiffIndex.Parse(ctx.Repository.DiffText), ctx.Classification.PendingReplies, reviewable))
         {
             ReviewTelemetry.TrivialReviews.Add(1);
             // The synthetic result must carry the collector's findings: the homoglyph
@@ -104,15 +104,15 @@ public sealed class ExecuteReasoningStage(
 
         var ruleBook = agent.ComposeRuleBook(ctx.Fetch.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
-            Pr: ctx.RequirePullRequest(), Kind: ctx.Kind, WorkItems: ctx.Fetch.WorkItems, ChangedFiles: ctx.Fetch.ChangedFiles,
-            PendingReplies: ctx.PendingReplies, DiffText: ctx.Repository.DiffText, Enrichment: null, ContextNames: ctx.Reasoning.ContextStore.Names,
+            Pr: ctx.RequirePullRequest(), Kind: ctx.Classification.Kind, WorkItems: ctx.Fetch.WorkItems, ChangedFiles: ctx.Fetch.ChangedFiles,
+            PendingReplies: ctx.Classification.PendingReplies, DiffText: ctx.Repository.DiffText, Enrichment: null, ContextNames: ctx.Reasoning.ContextStore.Names,
             MaxDiffChars: maxDiffChars, MaxDiffCharsPerFile: maxDiffCharsPerFile));
         ctx.Reasoning = ctx.Reasoning with
         {
             Result = await agent.RunAsync(new AgentRunRequest(
                 prompt, ctx.Reasoning.Collector, ctx.Reasoning.ContextStore, repoDir, ToolProfile.Review,
                 ruleBook, ctx.Fetch.ChangedFiles.ToHashSet(RepoPath.PathComparer), ctx.Repository.Diff, ctx.Repository.DiffText,
-                ctx.Fetch.ResolvedKeys, Tier: ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct),
+                ctx.Fetch.ResolvedKeys, Tier: ctx.Classification.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct),
         };
     }
 

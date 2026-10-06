@@ -31,10 +31,16 @@ public class AutoFixPublishTests
     private static ReviewContext Ctx(FakePullRequestSource source)
         => new(Key, DateTimeOffset.UtcNow)
         {
-            PullRequest = source.Pr,
-            CurrentUser = source.User,
-            Threads = source.Threads,
-            Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
+            Fetch = new()
+            {
+                PullRequest = source.Pr,
+                CurrentUser = source.User,
+                Threads = source.Threads,
+            },
+            Reasoning = new()
+            {
+                Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [], Uncertainties = []},
+            },
         };
 
     [Fact]
@@ -42,7 +48,7 @@ public class AutoFixPublishTests
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.AcceptedFindings = [Fixable()];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Fixable()]};
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -66,7 +72,7 @@ public class AutoFixPublishTests
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
             [new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow)]));
         var ctx = Ctx(source);
-        ctx.AcceptedFindings = [Fixable()];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Fixable()]};
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -85,7 +91,7 @@ public class AutoFixPublishTests
         var oldComment = new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow);
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active, [oldComment]));
         var ctx = Ctx(source);
-        ctx.AcceptedFindings = [Fixable()];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Fixable()]};
         var stage = new PublishFindingsStage(
             source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance);
 
@@ -111,11 +117,14 @@ public class AutoFixPublishTests
             "script.sh", 3, 3, "echo \"$name\"", "Quoted as requested.",
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var ctx = Ctx(source);
-        ctx.AppliedFixes =
-        [
-            new AppliedFix("thread-42", proposal),
-        ];
-        ctx.FixCommands = [new FixCommand(42, new ThreadAnchor("script.sh", 3, 3), null, "please quote this")];
+        ctx.AutoFix = ctx.AutoFix with
+        {
+            AppliedFixes =
+            [
+                new AppliedFix("thread-42", proposal),
+            ],
+            FixCommands = [new FixCommand(42, new ThreadAnchor("script.sh", 3, 3), null, "please quote this")],
+        };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -146,8 +155,11 @@ public class AutoFixPublishTests
             900, null, ReviewThreadStatus.Active,
             [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)], anchor));
         var ctx = Ctx(source);
-        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal)];
-        ctx.FixCommands = [new FixCommand(42, anchor, null, "please quote this")];
+        ctx.AutoFix = ctx.AutoFix with
+        {
+            AppliedFixes = [new AppliedFix("thread-42", proposal)],
+            FixCommands = [new FixCommand(42, anchor, null, "please quote this")],
+        };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -165,8 +177,11 @@ public class AutoFixPublishTests
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var anchor = new ThreadAnchor("script.sh", 3, 3);
         var ctx = Ctx(source);
-        ctx.AppliedFixes = [new AppliedFix("thread-42", proposal)];
-        ctx.FixCommands = [new FixCommand(42, anchor, null, "please quote this")];
+        ctx.AutoFix = ctx.AutoFix with
+        {
+            AppliedFixes = [new AppliedFix("thread-42", proposal)],
+            FixCommands = [new FixCommand(42, anchor, null, "please quote this")],
+        };
         var guardCalls = 0;
         ctx.PublishGuard = () => Interlocked.Increment(ref guardCalls) <= 2;
 
@@ -183,7 +198,7 @@ public class AutoFixPublishTests
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.FixCommandReplies = [(42, "I couldn't derive a safe fix for this one.")];
+        ctx.AutoFix = ctx.AutoFix with {FixCommandReplies = [(42, "I couldn't derive a safe fix for this one.")]};
 
         var stage = new PublishFindingsStage(
             source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance);
@@ -212,7 +227,7 @@ public class AutoFixPublishTests
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
             [new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow)]));
         var ctx = Ctx(source);
-        ctx.AcceptedFindings = [Fixable()];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [Fixable()]};
 
         await Assert.ThrowsAsync<PrHeadChangedException>(() =>
             new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
@@ -309,7 +324,7 @@ public class AutoFixPublishTests
         finding.AnchorDowngraded = true;
         finding.AppliedFix!.CommitSha = "abcdef123456";
         finding.AppliedFix.CommitSubject = "fix(src): quote variable";
-        ctx.AcceptedFindings = [finding];
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [finding]};
         var store = new FakeFindingStore();
         store.PushedFixes.Add(new PushedFix(
             1, ctx.RunId, "k1", "abcdef123456", "fix(src): quote variable", null,
@@ -329,13 +344,17 @@ public class AutoFixPublishTests
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.AcceptedFindings = [Fixable()];
-        ctx.AppliedFixes =
-        [
-            Fixable().AppliedFix!, new AppliedFix(
-                "thread-42",
-                new FixProposal("a.sh", 1, 1, "x", "r", FixOrigin.LlmCommanded, 42))
-        ];
+        var finding = Fixable();
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [finding]};
+        ctx.AutoFix = ctx.AutoFix with
+        {
+            AppliedFixes =
+            [
+                finding.AppliedFix!, new AppliedFix(
+                    "thread-42",
+                    new FixProposal("a.sh", 1, 1, "x", "r", FixOrigin.LlmCommanded, 42))
+            ],
+        };
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
@@ -353,9 +372,9 @@ public class AutoFixPublishTests
         var finding = Fixable();
         finding.IsRegression = true;
         var ctx = Ctx(source);
-        ctx.Collector.MarkRegressed("k1");
-        ctx.AcceptedFindings = [finding];
-        ctx.AppliedFixes = [finding.AppliedFix!];
+        ctx.Reasoning.Collector.MarkRegressed("k1");
+        ctx.Validation = ctx.Validation with {AcceptedFindings = [finding]};
+        ctx.AutoFix = ctx.AutoFix with {AppliedFixes = [finding.AppliedFix!]};
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);

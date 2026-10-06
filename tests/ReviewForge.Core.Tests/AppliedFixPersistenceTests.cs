@@ -17,7 +17,7 @@ public class AppliedFixPersistenceTests
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            AppliedFixes = [new AppliedFix("thread-42", proposal)],
+            AutoFix = new AutoFixOutcome {AppliedFixes = [new AppliedFix("thread-42", proposal)]},
         };
 
         var row = Assert.Single(AppliedFixPersistence.BuildFinalRows(ctx, _ => null));
@@ -35,7 +35,7 @@ public class AppliedFixPersistenceTests
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            AppliedFixes = [new AppliedFix("thread-42", proposal)],
+            AutoFix = new AutoFixOutcome {AppliedFixes = [new AppliedFix("thread-42", proposal)]},
         };
 
         var row = Assert.Single(AppliedFixPersistence.BuildFinalRows(ctx, _ => 99));
@@ -50,8 +50,11 @@ public class AppliedFixPersistenceTests
             "k1", "rule", "high", "title", "script.sh", 3, 17, "{\"fix\":true}");
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
-            PriorRun = new PriorRun(
-                Key, "old-head", DateTimeOffset.UtcNow.AddMinutes(-5), ["k1"], [prior]),
+            Fetch = new FetchOutcome
+            {
+                PriorRun = new PriorRun(
+                    Key, "old-head", DateTimeOffset.UtcNow.AddMinutes(-5), ["k1"], [prior]),
+            },
         };
 
         var row = Assert.Single(AppliedFixPersistence.BuildFinalRows(ctx, _ => null));

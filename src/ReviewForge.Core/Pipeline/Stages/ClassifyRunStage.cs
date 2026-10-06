@@ -23,8 +23,11 @@ public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? cl
         {
             Threads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false)
         };
-        ctx.Kind = RunClassifier.Classify(ctx.Fetch.PriorRun);
-        ctx.PendingReplies = RunClassifier.PendingReplies(ctx.Fetch.Threads);
+        ctx.Classification = ctx.Classification with
+        {
+            Kind = RunClassifier.Classify(ctx.Fetch.PriorRun),
+            PendingReplies = RunClassifier.PendingReplies(ctx.Fetch.Threads),
+        };
     }
 
     private async Task<IReadOnlyList<ReviewThread>> ResolveThreadsAsync(ReviewContext ctx, CancellationToken ct)

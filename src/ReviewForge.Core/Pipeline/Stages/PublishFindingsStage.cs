@@ -74,18 +74,18 @@ public sealed class PublishFindingsStage(
 
         var regressedThreadIds = ctx.Fetch.Threads
             .Where(t => t.DedupeKey is not null
-                        && ctx.Collector.RegressedKeys.Contains(t.DedupeKey)
+                        && ctx.Reasoning.Collector.RegressedKeys.Contains(t.DedupeKey)
                         && t.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
             .ToDictionary(t => t.DedupeKey!, t => t.Id, StringComparer.Ordinal);
 
-        var toPost = ctx.AcceptedFindings
+        var toPost = ctx.Validation.AcceptedFindings
             .Where(f => f.DedupeKey is null
                         || (!liveThreadKeys.Contains(f.DedupeKey) && !regressedThreadIds.ContainsKey(f.DedupeKey)))
             .ToList();
 
         // Fixed findings with a live bot thread are NOT suppressed: the fix lands as a
         // reply on the existing thread (Mechanism B would otherwise swallow it).
-        var liveFixedReplies = ctx.AcceptedFindings
+        var liveFixedReplies = ctx.Validation.AcceptedFindings
             .Where(f => f.AppliedFix is not null
                         && f.DedupeKey is not null
                         && liveThreadKeys.Contains(f.DedupeKey)
@@ -95,12 +95,12 @@ public sealed class PublishFindingsStage(
                           Body: CommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
             .ToList();
 
-        foreach (var suppressed in ctx.AcceptedFindings.Where(f => f.DedupeKey is not null && liveThreadKeys.Contains(f.DedupeKey)))
+        foreach (var suppressed in ctx.Validation.AcceptedFindings.Where(f => f.DedupeKey is not null && liveThreadKeys.Contains(f.DedupeKey)))
         {
             logger.LogInformation("suppressing finding {Key}: live bot thread already exists", suppressed.DedupeKey);
         }
 
-        foreach (var finding in ctx.AcceptedFindings)
+        foreach (var finding in ctx.Validation.AcceptedFindings)
         {
             if (finding.DedupeKey is { } key && regressedThreadIds.TryGetValue(key, out var threadId))
             {
@@ -242,13 +242,13 @@ public sealed class PublishFindingsStage(
         // to triage and publish suppression), plus a link reply on the command thread.
         // CommitOnHead: committed commanded fixes skip this entirely — stage 10 queued a
         // "Fixed in {sha}" reply instead of a suggestion.
-        foreach (var fix in ctx.AppliedFixes.Where(f => f.Proposal.SourceThreadId is not null && f.CommitSha is null))
+        foreach (var fix in ctx.AutoFix.AppliedFixes.Where(f => f.Proposal.SourceThreadId is not null && f.CommitSha is null))
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before fix suggestion");
             var commandThreadId = fix.Proposal.SourceThreadId!.Value;
             var anchor = new ThreadAnchor(
                 fix.Proposal.FilePath, fix.Proposal.StartLine, fix.Proposal.EndLine);
-            var excerpt = ctx.FixCommands.FirstOrDefault(c => c.ThreadId == commandThreadId)?.QuotedComment
+            var excerpt = ctx.AutoFix.FixCommands.FirstOrDefault(c => c.ThreadId == commandThreadId)?.QuotedComment
                           ?? string.Empty;
             var body = CommentFormatter.FormatFixedFinding(fix.Proposal, excerpt);
             if (await SuggestionAlreadyPostedAsync(ctx, anchor, body, ct).ConfigureAwait(false))
@@ -277,7 +277,7 @@ public sealed class PublishFindingsStage(
         // and, in CommitOnHead mode, stage 10's "Fixed in {sha}" replies. A reply that has a
         // pushed-fix row ("thread-{id}" key) marks it replied — including the already-posted
         // skip path (exactly-once convergence).
-        foreach (var (threadId, text) in ctx.FixCommandReplies)
+        foreach (var (threadId, text) in ctx.AutoFix.FixCommandReplies)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix command reply on thread {threadId}");
             var body = CommentFormatter.WithBotPreamble(text);
@@ -302,21 +302,21 @@ public sealed class PublishFindingsStage(
                 await store.MarkPushedFixRepliedAsync(rowId, ct).ConfigureAwait(false);
             }
         }
-        ctx.PostedThreadIds = posted;
+        ctx.Published = ctx.Published with { PostedThreadIds = posted };
 
         // Summary must post AFTER findings (readers of the PR see findings first).
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before summary");
         await source.PostGeneralCommentAsync(
                 ctx.Pr,
                 CommentFormatter.FormatSummary(
-                    ctx.RequireResult(), ctx.Fetch.WorkItems, ctx.UnansweredThreads, ctx.Kind,
+                    ctx.RequireResult(), ctx.Fetch.WorkItems, ctx.Triage.UnansweredThreads, ctx.Classification.Kind,
                     appliedFixCount: publishedFixCount),
                 dedupeKey: null,
                 ct: ct)
             .ConfigureAwait(false);
 
         var acUnmet = (ctx.RequireResult().Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);
-        var needsAttention = ctx.AcceptedFindings.Count > 0 || acUnmet || ctx.UnansweredThreads.Count > 0;
+        var needsAttention = ctx.Validation.AcceptedFindings.Count > 0 || acUnmet || ctx.Triage.UnansweredThreads.Count > 0;
         if (needsAttention)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before vote");
@@ -400,11 +400,11 @@ public sealed class PublishFindingsStage(
     private Task PersistCommandAuditAsync(ReviewContext ctx, CancellationToken ct)
     {
         var findings = AppliedFixPersistence.BuildFinalRows(
-            ctx, key => ctx.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
+            ctx, key => ctx.Published.PostedThreadIds.TryGetValue(key, out var id) ? id : null);
         var pr = ctx.RequirePullRequest();
         return store.SaveRunAsync(
             new ReviewRun(
-                ctx.RunId, ctx.Pr, pr.SourceCommitSha, ctx.Kind,
+                ctx.RunId, ctx.Pr, pr.SourceCommitSha, ctx.Classification.Kind,
                 ctx.StartedAt, CompletedAt: null, Success: false, findings),
             ct);
     }
@@ -414,7 +414,7 @@ public sealed class PublishFindingsStage(
         var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
         // CommitOnHead: the run's own push (stage 10) is the one legal head movement —
         // publish happens against the pushed head. Any movement BEYOND it still fails the run.
-        var reviewed = ctx.PushedHeadSha ?? ctx.RequirePullRequest().SourceCommitSha;
+        var reviewed = ctx.AutoFix.PushedHeadSha ?? ctx.RequirePullRequest().SourceCommitSha;
         if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogWarning("PR head changed during run ({Reviewed} → {Current}); aborting before publication",
