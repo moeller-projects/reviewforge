@@ -13,8 +13,9 @@ public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize =
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        var comments = ctx.ResolvableComments;
-        if (comments.Count == 0) { ctx.ThreadVerdicts = []; return; }
+        var resolve = ctx.RequireResolveState();
+        var comments = resolve.ResolvableComments;
+        if (comments.Count == 0) { resolve.ThreadVerdicts = []; return; }
         var all = new List<ThreadVerdict>();
         foreach (var batch in comments.Chunk(batchSize))
         {
@@ -54,8 +55,8 @@ public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize =
                 ResolveTelemetry.ResolveEvidenceDowngrades.Add(1);
             }
         }
-        ctx.ThreadVerdicts = accepted.Values.OrderBy(v => v.ThreadId).ToArray();
-        foreach (var verdict in ctx.ThreadVerdicts)
+        resolve.ThreadVerdicts = accepted.Values.OrderBy(v => v.ThreadId).ToArray();
+        foreach (var verdict in resolve.ThreadVerdicts)
             ResolveTelemetry.ResolveThreadsTriaged.Add(1, new TagList
             {
                 { "verdict", verdict.Verdict.ToString().ToLowerInvariant() },

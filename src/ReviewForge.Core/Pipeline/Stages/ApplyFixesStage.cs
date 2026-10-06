@@ -10,11 +10,12 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var resolve = ctx.RequireResolveState();
         var applied = new List<AppliedResolution>();
-        var outcomes = new Dictionary<int, ResolutionOutcome>(ctx.ResolutionOutcomes);
-        var details = new Dictionary<int, string>(ctx.ResolutionDetails);
+        var outcomes = new Dictionary<int, ResolutionOutcome>(resolve.ResolutionOutcomes);
+        var details = new Dictionary<int, string>(resolve.ResolutionDetails);
         var editors = new Dictionary<int, HashLineEditor>();
-        foreach (var fix in ctx.ResolvePlan?.Fixes ?? [])
+        foreach (var fix in resolve.ResolvePlan?.Fixes ?? [])
         {
             ct.ThrowIfCancellationRequested();
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix pass on thread {fix.ThreadId}");
@@ -55,9 +56,9 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
             }
             ResolveTelemetry.ResolveFixesApplied.Add(fix.ThreadIds.Count);
         }
-        ctx.AppliedResolutions = applied;
-        ctx.ResolutionOutcomes = outcomes;
-        ctx.ResolutionDetails = details;
-        ctx.ResolutionEditors = editors;
+        resolve.AppliedResolutions = applied;
+        resolve.ResolutionOutcomes = outcomes;
+        resolve.ResolutionDetails = details;
+        resolve.ResolutionEditors = editors;
     }
 }

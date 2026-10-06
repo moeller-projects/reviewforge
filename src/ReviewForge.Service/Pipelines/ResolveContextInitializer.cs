@@ -12,7 +12,7 @@ public sealed class ResolveContextInitializer
             throw new ArgumentException("The request must be a resolve run.", nameof(request));
 
         context.RunKind = RunKind.Resolve;
-        context.RequestedHeadSha = request.HeadSha;
+        context.Resolve = new ResolveState {RequestedHeadSha = request.HeadSha};
         context.Trigger = request.Trigger;
         context.EnqueueContext = request.EnqueueContext;
     }

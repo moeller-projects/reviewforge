@@ -4,16 +4,17 @@ using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
-public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> allowedAuthors, string? requestedHeadSha, ILogger<ResolveGateStage>? logger = null) : IReviewStage
+public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> allowedAuthors, ILogger<ResolveGateStage>? logger = null) : IReviewStage
 {
     public string Name => "resolve-gate";
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var resolve = ctx.RequireResolveState();
         var pr = ctx.RequirePullRequest();
-        if (!string.IsNullOrWhiteSpace(requestedHeadSha)
-            && !string.Equals(requestedHeadSha, pr.SourceCommitSha, StringComparison.OrdinalIgnoreCase))
-            throw new PrHeadChangedException(requestedHeadSha, pr.SourceCommitSha);
+        if (!string.IsNullOrWhiteSpace(resolve.RequestedHeadSha)
+            && !string.Equals(resolve.RequestedHeadSha, pr.SourceCommitSha, StringComparison.OrdinalIgnoreCase))
+            throw new PrHeadChangedException(resolve.RequestedHeadSha, pr.SourceCommitSha);
         var apiManual = ctx.RunKind == RunKind.Resolve && ctx.Trigger == EnqueueTrigger.Manual;
         var lastResolveRun = apiManual ? null : await store.GetLastCompletedResolveRunAsync(ctx.Pr, ct).ConfigureAwait(false);
         var priorActions = await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false);
@@ -25,11 +26,11 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
             .Where(action => action.Outcome == ResolutionOutcome.Deferred && activeThreads.Contains(action.ThreadId))
             .Select(action => action.ThreadId)
             .ToHashSet();
-        ctx.ResolveWatermark = apiManual || deferredThreadIds.Count > 0
+        resolve.ResolveWatermark = apiManual || deferredThreadIds.Count > 0
             ? null
             : lastResolveRun?.LastObservedCommentAt ?? lastResolveRun?.CompletedAt;
         var decision = ResolveGate.Evaluate(
-            pr, ctx.Threads, ctx.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds);
+            pr, ctx.Threads, resolve.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds);
         if (decision != ResolveGateDecision.Continue)
         {
             logger?.LogInformation("resolve gate terminated run: {Decision}", decision);

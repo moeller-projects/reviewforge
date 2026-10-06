@@ -22,20 +22,21 @@ public sealed class ResolveCommitPushStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        var applied = ctx.AppliedResolutions.ToArray();
+        var resolve = ctx.RequireResolveState();
+        var applied = resolve.AppliedResolutions.ToArray();
         if (applied.Length > 0)
         {
             var pr = ctx.RequirePullRequest();
             if (pr.SourceRefName is not { } refName || !refName.StartsWith("refs/heads/", StringComparison.Ordinal))
             {
-                ctx.ResolutionOutcomes = ctx.ResolutionOutcomes.ToDictionary(
+                resolve.ResolutionOutcomes = resolve.ResolutionOutcomes.ToDictionary(
                     item => item.Key,
                     item => item.Value == ResolutionOutcome.Fixed ? ResolutionOutcome.OutOfScope : item.Value);
-                var details = ctx.ResolutionDetails.ToDictionary(pair => pair.Key, pair => pair.Value);
+                var details = resolve.ResolutionDetails.ToDictionary(pair => pair.Key, pair => pair.Value);
                 foreach (var item in applied)
                     details[item.ThreadId] = "The fix could not be committed because this pull request has no source branch reference.";
-                ctx.ResolutionDetails = details;
-                ctx.AppliedResolutions = [];
+                resolve.ResolutionDetails = details;
+                resolve.AppliedResolutions = [];
                 logger?.LogWarning("resolve push unavailable: source ref is missing or not a branch for {Pr}", ctx.Pr);
             }
             else
@@ -49,6 +50,7 @@ public sealed class ResolveCommitPushStage(
     private async Task CommitAndPushAsync(
         ReviewContext ctx, AppliedResolution[] applied, PullRequest pr, string branch, CancellationToken ct)
     {
+        var resolve = ctx.RequireResolveState();
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before resolve commit");
         var single = string.Equals(commitGranularity, "Single", StringComparison.OrdinalIgnoreCase);
         var groups = single
@@ -60,7 +62,7 @@ public sealed class ResolveCommitPushStage(
             foreach (var group in groups)
             {
                 var representative = group[0];
-                var verdict = ctx.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == representative.ThreadId);
+                var verdict = resolve.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == representative.ThreadId);
                 var threadIds = group.Select(r => r.ThreadId).Order().ToArray();
                 var message = ConventionalCommitBuilder.BuildResolve(
                     ctx.RunId, ctx.Pr.PrId, representative.ThreadId, verdict?.Category ?? "bug",
@@ -96,38 +98,40 @@ public sealed class ResolveCommitPushStage(
             throw;
         }
         ResolveTelemetry.ResolveCommitsPushed.Add(groups.Length);
-        ctx.AppliedResolutions = applied;
+        resolve.AppliedResolutions = applied;
     }
 
     private async Task PersistPushFailureAsync(ReviewContext ctx, AppliedResolution[] applied, CancellationToken ct)
     {
-        var outcomes = new Dictionary<int, ResolutionOutcome>(ctx.ResolutionOutcomes);
-        var details = new Dictionary<int, string>(ctx.ResolutionDetails);
+        var resolve = ctx.RequireResolveState();
+        var outcomes = new Dictionary<int, ResolutionOutcome>(resolve.ResolutionOutcomes);
+        var details = new Dictionary<int, string>(resolve.ResolutionDetails);
         foreach (var item in applied)
         {
             outcomes[item.ThreadId] = ResolutionOutcome.PushFailed;
             details[item.ThreadId] = "the resolution was not published because local commit creation or branch push failed";
         }
-        ctx.ResolutionOutcomes = outcomes;
-        ctx.ResolutionDetails = details;
-        ctx.AppliedResolutions = applied;
+        resolve.ResolutionOutcomes = outcomes;
+        resolve.ResolutionDetails = details;
+        resolve.AppliedResolutions = applied;
         await PersistActionsAsync(ctx, ct).ConfigureAwait(false);
     }
 
     private async Task PersistActionsAsync(ReviewContext ctx, CancellationToken ct)
     {
-        var verdicts = ctx.ThreadVerdicts.ToDictionary(v => v.ThreadId);
-        var resolutions = ctx.AppliedResolutions.ToDictionary(r => r.ThreadId);
-        var actions = ctx.ResolvableComments.Select(comment =>
+        var resolve = ctx.RequireResolveState();
+        var verdicts = resolve.ThreadVerdicts.ToDictionary(v => v.ThreadId);
+        var resolutions = resolve.AppliedResolutions.ToDictionary(r => r.ThreadId);
+        var actions = resolve.ResolvableComments.Select(comment =>
         {
             var verdict = verdicts.GetValueOrDefault(comment.ThreadId)
                           ?? new ThreadVerdict(comment.ThreadId, TriageVerdict.OutOfScope, "no verdict", "low");
-            var outcome = ctx.ResolutionOutcomes.GetValueOrDefault(comment.ThreadId, ResolutionOutcome.OutOfScope);
+            var outcome = resolve.ResolutionOutcomes.GetValueOrDefault(comment.ThreadId, ResolutionOutcome.OutOfScope);
             var commit = resolutions.GetValueOrDefault(comment.ThreadId)?.CommitSha;
             if (outcome == ResolutionOutcome.Fixed && commit is null) outcome = ResolutionOutcome.OutOfScope;
             return new ResolveAction(0, ctx.RunId, comment.ThreadId, verdict.Verdict, outcome, commit, false, _Clock.GetUtcNow());
         }).ToArray();
         await store.SaveResolveActionsAsync(ctx.Pr, ctx.RunId, actions, ct).ConfigureAwait(false);
-        ctx.ResolveActions = await store.GetResolveActionsAsync(ctx.Pr, actions.Select(a => a.ThreadId).ToArray(), ct).ConfigureAwait(false);
+        resolve.ResolveActions = await store.GetResolveActionsAsync(ctx.Pr, actions.Select(a => a.ThreadId).ToArray(), ct).ConfigureAwait(false);
     }
 }

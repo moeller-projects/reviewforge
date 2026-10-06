@@ -11,15 +11,16 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        var comments = ctx.ResolvableComments.ToDictionary(c => c.ThreadId);
+        var resolve = ctx.RequireResolveState();
+        var comments = resolve.ResolvableComments.ToDictionary(c => c.ThreadId);
         var changed = ctx.ChangedFiles.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
         // The writable plan must respect the same deny policy as the editor: an anchored
         // comment on .env/.git/secrets must be rejected HERE, not fail the agent pass later.
         var guard = new RepoPathGuard(ctx.RequireRepoDir());
-        var verdicts = new List<ThreadVerdict>(ctx.ThreadVerdicts.Count);
+        var verdicts = new List<ThreadVerdict>(resolve.ThreadVerdicts.Count);
         var outcomes = new Dictionary<int, ResolutionOutcome>();
         var details = new Dictionary<int, string>();
-        foreach (var verdict in ctx.ThreadVerdicts)
+        foreach (var verdict in resolve.ThreadVerdicts)
         {
             if (!comments.TryGetValue(verdict.ThreadId, out var comment)) continue;
             if (verdict.Verdict != TriageVerdict.Actionable)
@@ -50,17 +51,17 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
             }
             verdicts.Add(verdict);
         }
-        var plan = ResolvePlanner.Plan(ctx.ResolvableComments, verdicts, changed.ToArray(), maxThreads, maxWritableFiles);
+        var plan = ResolvePlanner.Plan(resolve.ResolvableComments, verdicts, changed.ToArray(), maxThreads, maxWritableFiles);
         foreach (var (threadId, reason) in plan.Deferred)
         {
             outcomes[threadId] = ResolutionOutcome.Deferred;
             details[threadId] = reason;
             ResolveTelemetry.ResolveDeferred.Add(1, new TagList { { "reason", reason } });
         }
-        ctx.ThreadVerdicts = verdicts;
-        ctx.ResolvePlan = plan;
-        ctx.ResolutionOutcomes = outcomes;
-        ctx.ResolutionDetails = details;
+        resolve.ThreadVerdicts = verdicts;
+        resolve.ResolvePlan = plan;
+        resolve.ResolutionOutcomes = outcomes;
+        resolve.ResolutionDetails = details;
         return Task.CompletedTask;
     }
 }

@@ -16,10 +16,11 @@ public sealed class ReplyCommentsStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        var resolve = ctx.RequireResolveState();
         var unresolved = await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false);
         var actions = unresolved.Where(a => !a.ReplyPosted).OrderBy(a => a.RunId == ctx.RunId ? 1 : 0).ThenBy(a => a.Id).ToArray();
         var threads = ctx.Threads.ToDictionary(t => t.Id);
-        var applied = ctx.AppliedResolutions.ToDictionary(r => r.ThreadId);
+        var applied = resolve.AppliedResolutions.ToDictionary(r => r.ThreadId);
         var replies = 0;
         foreach (var pendingAction in actions)
         {
@@ -61,7 +62,7 @@ public sealed class ReplyCommentsStage(
             foreach (var group in current.Where(a => a.CommitSha is not null)
                          .GroupBy(a => a.CommitSha!, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
             {
-                var subject = ctx.AppliedResolutions.FirstOrDefault(item => item.CommitSha == group.Key)?.CommitSubject;
+                var subject = resolve.AppliedResolutions.FirstOrDefault(item => item.CommitSha == group.Key)?.CommitSubject;
                 summary.Append("- Commit: ").Append(group.Key[..Math.Min(7, group.Key.Length)]);
                 if (!string.IsNullOrWhiteSpace(subject)) summary.Append(" — ").Append(subject);
                 summary.AppendLine();
@@ -69,7 +70,7 @@ public sealed class ReplyCommentsStage(
 
             var deferred = current.Where(a => a.Outcome == ResolutionOutcome.Deferred).Select(a => $"#{a.ThreadId}").ToArray();
             if (deferred.Length > 0) summary.Append("- Deferred: ").AppendLine(string.Join(", ", deferred));
-            summary.Append("- Verification: ").AppendLine(ctx.ResolveVerificationStatus);
+            summary.Append("- Verification: ").AppendLine(resolve.ResolveVerificationStatus);
             await source.PostGeneralCommentAsync(ctx.Pr, summary.ToString().TrimEnd(), summaryKey, ct).ConfigureAwait(false);
         }
 
@@ -87,14 +88,15 @@ public sealed class ReplyCommentsStage(
 
     private static string FormatOutcome(ReviewContext ctx, ResolveAction action, IReadOnlyDictionary<int, AppliedResolution> applied)
     {
-        var evidence = ctx.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == action.ThreadId)?.Evidence;
-        var detail = ctx.ResolutionDetails.GetValueOrDefault(action.ThreadId);
+        var resolve = ctx.RequireResolveState();
+        var evidence = resolve.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == action.ThreadId)?.Evidence;
+        var detail = resolve.ResolutionDetails.GetValueOrDefault(action.ThreadId);
         return action.Outcome switch
         {
             ResolutionOutcome.Fixed when action.CommitSha is { } sha => $"Fixed in {sha[..Math.Min(7, sha.Length)]} — {applied.GetValueOrDefault(action.ThreadId)?.CommitSubject ?? "applied the requested correction"}. {detail}",
             ResolutionOutcome.AgentDeclined => $"I looked into this — {detail ?? "I could not identify a safe change"}. No change made.",
             ResolutionOutcome.NonIssue => $"I don't think this is an issue: {evidence ?? "the current code does not reproduce the concern"}. Happy to revisit if I'm missing context.",
-            ResolutionOutcome.Question => ctx.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == action.ThreadId)?.Answer ?? evidence ?? "I need more context to answer this question.",
+            ResolutionOutcome.Question => resolve.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == action.ThreadId)?.Answer ?? evidence ?? "I need more context to answer this question.",
             ResolutionOutcome.AlreadyFixed => $"This already holds on {ctx.RequirePullRequest().SourceCommitSha[..Math.Min(7, ctx.RequirePullRequest().SourceCommitSha.Length)]}: {evidence ?? "the current head contains the requested behavior"}.",
             ResolutionOutcome.PushFailed => "The resolution could not be published; no change from this fix was published.",
             ResolutionOutcome.Deferred => $"This run's budget is exhausted; re-queued for the next resolve run.",

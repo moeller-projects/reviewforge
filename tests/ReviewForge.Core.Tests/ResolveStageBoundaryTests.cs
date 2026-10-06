@@ -19,7 +19,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
 
     private ReviewContext Context(Guid? runId = null)
     {
-        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow, runId) { RepoDir = _root };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow, runId) { RepoDir = _root, Resolve = new ResolveState() };
         ctx.PullRequest = new PullRequest(1, "title", null, "head-sha", "base", "https://clone", false, "creator", "Creator", "refs/heads/feature");
         return ctx;
     }
@@ -36,15 +36,15 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             ("RecordVerdict", new Dictionary<string, object?> { ["threadId"] = 999, ["verdict"] = "Actionable", ["evidence"] = "A.cs:1", ["confidence"] = "high" }),
             ("TaskDone", new Dictionary<string, object?> { ["summary"] = "triaged" })));
         var ctx = Context();
-        ctx.ResolvableComments = [Comment(1), Comment(2)];
+        ctx.Resolve!.ResolvableComments = [Comment(1), Comment(2)];
 
         await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat))).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(2, ctx.ThreadVerdicts.Count);
-        Assert.Equal(TriageVerdict.OutOfScope, ctx.ThreadVerdicts[0].Verdict);
-        Assert.Equal("duplicate verdict", ctx.ThreadVerdicts[0].Evidence);
-        Assert.Equal(TriageVerdict.OutOfScope, ctx.ThreadVerdicts[1].Verdict);
-        Assert.DoesNotContain(ctx.ThreadVerdicts, v => v.ThreadId == 999);
+        Assert.Equal(2, ctx.Resolve!.ThreadVerdicts.Count);
+        Assert.Equal(TriageVerdict.OutOfScope, ctx.Resolve!.ThreadVerdicts[0].Verdict);
+        Assert.Equal("duplicate verdict", ctx.Resolve!.ThreadVerdicts[0].Evidence);
+        Assert.Equal(TriageVerdict.OutOfScope, ctx.Resolve!.ThreadVerdicts[1].Verdict);
+        Assert.DoesNotContain(ctx.Resolve!.ThreadVerdicts, v => v.ThreadId == 999);
     }
 
     [Fact]
@@ -55,13 +55,13 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             ("RecordVerdict", new Dictionary<string, object?> { ["threadId"] = 2, ["verdict"] = "NonIssue", ["evidence"] = "src/A.cs:12 contradicts this", ["confidence"] = "high" }),
             ("TaskDone", new Dictionary<string, object?> { ["summary"] = "done" })));
         var ctx = Context();
-        ctx.ResolvableComments = [Comment(1), Comment(2)];
+        ctx.Resolve!.ResolvableComments = [Comment(1), Comment(2)];
 
         await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat))).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(TriageVerdict.OutOfScope, ctx.ThreadVerdicts[0].Verdict);
-        Assert.Equal("evidence did not include a file:line citation", ctx.ThreadVerdicts[0].Evidence);
-        Assert.Equal(TriageVerdict.NonIssue, ctx.ThreadVerdicts[1].Verdict);
+        Assert.Equal(TriageVerdict.OutOfScope, ctx.Resolve!.ThreadVerdicts[0].Verdict);
+        Assert.Equal("evidence did not include a file:line citation", ctx.Resolve!.ThreadVerdicts[0].Evidence);
+        Assert.Equal(TriageVerdict.NonIssue, ctx.Resolve!.ThreadVerdicts[1].Verdict);
     }
 
     [Fact]
@@ -73,14 +73,14 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var chat = new ScriptedChatClient(ScriptedChatClient.FunctionCalls(
             ("EditFile", new Dictionary<string, object?> { ["path"] = "A.cs", ["edits"] = new[] { new LineEdit(hash, null, null, null, "new") } })));
         var ctx = Context();
-        ctx.ResolvePlan = new ResolvePlan([new PlannedFix(1, new ThreadAnchor("A.cs", 1, 1), "fix", "A.cs:1", ["A.cs"])], new HashSet<string> { "A.cs" }, []);
+        ctx.Resolve!.ResolvePlan = new ResolvePlan([new PlannedFix(1, new ThreadAnchor("A.cs", 1, 1), "fix", "A.cs:1", ["A.cs"])], new HashSet<string> { "A.cs" }, []);
 
         await new ApplyFixesStage(new NativeReviewAgent(new FakeChatClientFactory(chat)), 2).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal("old\n", File.ReadAllText(path));
-        Assert.Equal(ResolutionOutcome.AgentDeclined, ctx.ResolutionOutcomes[1]);
-        Assert.Contains("did not complete task_done", ctx.ResolutionDetails[1]);
-        Assert.Empty(ctx.AppliedResolutions);
+        Assert.Equal(ResolutionOutcome.AgentDeclined, ctx.Resolve!.ResolutionOutcomes[1]);
+        Assert.Contains("did not complete task_done", ctx.Resolve!.ResolutionDetails[1]);
+        Assert.Empty(ctx.Resolve!.AppliedResolutions);
     }
 
     [Fact]
@@ -94,16 +94,16 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         e1.EditFile("A.cs", [new LineEdit(HashLine.Of("a"), null, null, null, "A")]);
         e2.EditFile("B.cs", [new LineEdit(HashLine.Of("b"), null, null, null, "B")]);
         var ctx = Context();
-        ctx.AppliedResolutions = [new AppliedResolution(1, "a", ["A.cs"]), new AppliedResolution(2, "b", ["B.cs"] )];
-        ctx.ResolutionEditors = new Dictionary<int, HashLineEditor> { [1] = e1, [2] = e2 };
-        ctx.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed, [2] = ResolutionOutcome.Fixed };
-        ctx.ResolutionDetails = new Dictionary<int, string>();
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "a", ["A.cs"]), new AppliedResolution(2, "b", ["B.cs"] )];
+        ctx.Resolve!.ResolutionEditors = new Dictionary<int, HashLineEditor> { [1] = e1, [2] = e2 };
+        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed, [2] = ResolutionOutcome.Fixed };
+        ctx.Resolve!.ResolutionDetails = new Dictionary<int, string>();
 
         await new VerifyBuildStage(new ProcessRunner(false), ["build"], TimeSpan.FromSeconds(1), singleCommit: true).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Empty(ctx.AppliedResolutions);
-        Assert.Equal(ResolutionOutcome.VerifyFailed, ctx.ResolutionOutcomes[1]);
-        Assert.Equal(ResolutionOutcome.VerifyFailed, ctx.ResolutionOutcomes[2]);
+        Assert.Empty(ctx.Resolve!.AppliedResolutions);
+        Assert.Equal(ResolutionOutcome.VerifyFailed, ctx.Resolve!.ResolutionOutcomes[1]);
+        Assert.Equal(ResolutionOutcome.VerifyFailed, ctx.Resolve!.ResolutionOutcomes[2]);
         Assert.Equal("a\n", File.ReadAllText(first));
         Assert.Equal("b\n", File.ReadAllText(second));
     }
@@ -113,24 +113,24 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     {
         var store = new FakeFindingStore(); var git = new FakeGitOps();
         var ctx = Context(); ctx.PullRequest = ctx.PullRequest! with { SourceRefName = null };
-        ctx.ResolvableComments = [Comment(1)];
-        ctx.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
-        ctx.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
-        ctx.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed };
+        ctx.Resolve!.ResolvableComments = [Comment(1)];
+        ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
+        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed };
 
         await new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example", null).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(git.Commits);
-        Assert.Empty(ctx.AppliedResolutions);
-        Assert.Equal(ResolutionOutcome.OutOfScope, ctx.ResolutionOutcomes[1]);
+        Assert.Empty(ctx.Resolve!.AppliedResolutions);
+        Assert.Equal(ResolutionOutcome.OutOfScope, ctx.Resolve!.ResolutionOutcomes[1]);
     }
 
     [Fact]
     public async Task Commit_push_rejects_claim_loss_and_remote_pin_mismatch_before_push()
     {
         var store = new FakeFindingStore(); var git = new FakeGitOps();
-        var ctx = Context(); ctx.ResolvableComments = [Comment(1)]; ctx.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
-        ctx.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )]; ctx.PublishGuard = () => false;
+        var ctx = Context(); ctx.Resolve!.ResolvableComments = [Comment(1)]; ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )]; ctx.PublishGuard = () => false;
         await Assert.ThrowsAsync<InvalidOperationException>(() => new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
         Assert.Empty(git.Commits);
 
@@ -146,8 +146,8 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     public async Task Commit_push_rejects_claim_loss_at_the_push_boundary()
     {
         var store = new FakeFindingStore(); var git = new FakeGitOps();
-        var ctx = Context(); ctx.ResolvableComments = [Comment(1)]; ctx.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
-        ctx.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
+        var ctx = Context(); ctx.Resolve!.ResolvableComments = [Comment(1)]; ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
         var calls = 0;
         ctx.PublishGuard = () => ++calls < 2; // holds "before resolve commit", lost "at resolve push"
 
@@ -165,10 +165,10 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var store = new FakeFindingStore();
         var git = new FakeGitOps { ThrowOnCommit = new InvalidOperationException("commit failed") };
         var ctx = Context();
-        ctx.ResolvableComments = [Comment(1)];
-        ctx.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
-        ctx.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
-        ctx.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed };
+        ctx.Resolve!.ResolvableComments = [Comment(1)];
+        ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
+        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example")
@@ -227,7 +227,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             [new ResolveAction(0, run, 4, TriageVerdict.Question, ResolutionOutcome.Question,
                 null, false, DateTimeOffset.UtcNow)], CancellationToken.None);
         var ctx = Context(run);
-        ctx.ThreadVerdicts = [new ThreadVerdict(4, TriageVerdict.Question, "please explain", "high",
+        ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(4, TriageVerdict.Question, "please explain", "high",
             Answer: "The API is async.")];
 
         await new ReplyCommentsStage(source, store, setFixedStatus: false).ExecuteAsync(ctx, CancellationToken.None);
@@ -280,13 +280,13 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             })),
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["summary"] = "done" })));
         var ctx = Context();
-        ctx.ResolvableComments = [Comment(1)];
+        ctx.Resolve!.ResolvableComments = [Comment(1)];
 
         await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal("original\n", File.ReadAllText(file));
-        Assert.Single(ctx.ThreadVerdicts);
+        Assert.Single(ctx.Resolve!.ThreadVerdicts);
     }
     private sealed class ProcessRunner(bool success) : IProcessRunner
     {

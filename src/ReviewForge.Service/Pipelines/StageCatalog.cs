@@ -99,7 +99,6 @@ public sealed class StageCatalog
             StageId.ResolveGate => new ResolveGateStage(
                 _Store,
                 _ResolveOptions.AllowedAuthors.ToHashSet(StringComparer.OrdinalIgnoreCase),
-                build.Request.HeadSha,
                 _LoggerFactory.CreateLogger<ResolveGateStage>()),
             StageId.PrepareRepository => new PrepareRepositoryStage(
                 _CheckoutPool,
