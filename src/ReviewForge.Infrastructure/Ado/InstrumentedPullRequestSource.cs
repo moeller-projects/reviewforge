@@ -1,17 +1,17 @@
 using System.Diagnostics;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Ports;
 
-namespace ReviewForge.Core.Ports;
+namespace ReviewForge.Infrastructure.Ado;
 
 /// <summary>
-/// Records ADO-call latency and failures for every <see cref="IPullRequestSource"/> method.
+/// Records pull-request-source latency and failures for every <see cref="IPullRequestSource"/> method.
 /// Provider-neutral: wraps any adapter so the pipeline's instrumentation does not change per host.
 /// </summary>
 public sealed class InstrumentedPullRequestSource(IPullRequestSource inner) : IPullRequestSource
 {
-    private const string OperationTag = "ado.operation";
-
+    private const string OperationTag = "pr.operation";
     public Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
         => RecordAsync("get_pull_request", () => inner.GetPullRequestAsync(pr, ct));
 
@@ -57,12 +57,12 @@ public sealed class InstrumentedPullRequestSource(IPullRequestSource inner) : IP
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            ReviewForgeTelemetry.AdoCallFailed.Add(1, new TagList { { OperationTag, operation } });
+            AdoTelemetry.AdoCallFailed.Add(1, new TagList { { OperationTag, operation } });
             throw;
         }
         finally
         {
-            ReviewForgeTelemetry.AdoCallDurationMilliseconds.Record(
+            AdoTelemetry.AdoCallDurationMilliseconds.Record(
                 sw.ElapsedMilliseconds,
                 new TagList { { OperationTag, operation } });
         }
@@ -77,12 +77,12 @@ public sealed class InstrumentedPullRequestSource(IPullRequestSource inner) : IP
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            ReviewForgeTelemetry.AdoCallFailed.Add(1, new TagList { { OperationTag, operation } });
+            AdoTelemetry.AdoCallFailed.Add(1, new TagList { { OperationTag, operation } });
             throw;
         }
         finally
         {
-            ReviewForgeTelemetry.AdoCallDurationMilliseconds.Record(
+            AdoTelemetry.AdoCallDurationMilliseconds.Record(
                 sw.ElapsedMilliseconds,
                 new TagList { { OperationTag, operation } });
         }

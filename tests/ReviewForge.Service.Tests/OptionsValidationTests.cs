@@ -145,6 +145,7 @@ public class OptionsValidationTests
 
     [Theory]
     [InlineData("Persistence:JournalMode", "2")] // Enum.TryParse accepts undefined numerics —
+    [InlineData("Persistence:QueueMode", "2")]
     public void Undefined_numeric_enum_values_are_rejected_at_startup(string key, string value)
     {
         using var provider = Build([.. With(ValidConfig(), (key, value))]);
@@ -155,21 +156,6 @@ public class OptionsValidationTests
         Assert.Contains(key.Split(':')[1], ex.Message);
     }
 
-    [Fact]
-    public void Undefined_numeric_queue_mode_is_rejected_at_compose_time()
-    {
-        // The queue backing is selected while the service collection is composed, before
-        // ValidateOnStart runs — the compose-time check is what stops "2" from silently
-        // selecting the memory queue.
-        var services = new ServiceCollection();
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(With(ValidConfig(), ("Persistence:QueueMode", "2"))
-                .ToDictionary(c => c.Item1, c => (string?)c.Item2))
-            .Build();
-
-        var ex = Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(config));
-        Assert.Contains("QueueMode must be one of", ex.Message);
-    }
 
     [Fact]
     public void Followup_model_with_mismatched_provider_prefix_is_rejected()
@@ -256,18 +242,13 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void Invalid_queue_mode_is_rejected_at_compose_time()
+    public void Invalid_queue_mode_is_rejected_at_options_validation()
     {
-        // The queue backing is selected while the service collection is composed, so an
-        // invalid QueueMode must fail there — never fall through to the memory queue.
-        var services = new ServiceCollection();
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(With(ValidConfig(), ("Persistence:QueueMode", "Bogus"))
-                .ToDictionary(c => c.Item1, c => (string?)c.Item2))
-            .Build();
+        using var provider = Build([.. With(ValidConfig(), ("Persistence:QueueMode", "Bogus"))]);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => services.AddReviewForge(config));
-        Assert.Contains("QueueMode must be one of", ex.Message);
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<PersistenceOptions>>().Value);
+        Assert.Contains("QueueMode must be Memory | Sqlite", ex.Message);
     }
 
     [Fact]

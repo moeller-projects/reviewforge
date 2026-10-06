@@ -246,12 +246,11 @@ public sealed class VerifyFindingsStageTests : IDisposable
     }
 
     [Fact]
-    public void Stage_order_sits_between_validate_and_autofix()
+    public void Stage_exposes_expected_name()
     {
         var stage = Stage(new ScriptedChatClient());
 
-        Assert.Equal(71, stage.Order);
-        Assert.True(stage.Order > new ValidateFindingsStage(NullLogger<ValidateFindingsStage>.Instance).Order);
+        Assert.Equal("verify-findings", stage.Name);
     }
 
     [Fact]

@@ -12,7 +12,6 @@ public sealed class CollectCommentsStage(
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     public string Name => "collect-comments";
-    public int Order => 40;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {

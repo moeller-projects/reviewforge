@@ -74,12 +74,8 @@ public class ReviewPipelineTests
     }
 
     private sealed class RecordingStage(
-        string name, List<string> log, Action<ReviewContext>? act = null, int? order = null) : IReviewStage
+        string name, List<string> log, Action<ReviewContext>? act = null) : IReviewStage
     {
-        private static int _NextOrder;
-
-        public int Order { get; } = order ?? Interlocked.Increment(ref _NextOrder);
-
         public string Name => name;
 
         public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
@@ -91,27 +87,17 @@ public class ReviewPipelineTests
     }
 
     [Fact]
-    public void Pipeline_throws_on_out_of_order_stages()
+    public void Pipeline_throws_on_duplicate_stage_names()
     {
         var log = new List<string>();
 
         var ex = Assert.Throws<InvalidOperationException>(() => _ = new ReviewPipeline(
-            [new RecordingStage("later", log, order: 30), new RecordingStage("earlier", log, order: 10)],
+            [new RecordingStage("same", log), new RecordingStage("same", log)],
             NullLogger<ReviewPipeline>.Instance));
 
-        Assert.Contains("stage ordering violation", ex.Message);
-        Assert.Contains("earlier", ex.Message);
+        Assert.Equal("duplicate stages: same", ex.Message);
     }
 
-    [Fact]
-    public void Pipeline_throws_on_duplicate_orders()
-    {
-        var log = new List<string>();
-
-        Assert.Throws<InvalidOperationException>(() => _ = new ReviewPipeline(
-            [new RecordingStage("a", log, order: 10), new RecordingStage("b", log, order: 10)],
-            NullLogger<ReviewPipeline>.Instance));
-    }
 }
 
 public class StageTests : IDisposable

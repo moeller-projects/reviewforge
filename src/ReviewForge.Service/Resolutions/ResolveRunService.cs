@@ -64,7 +64,7 @@ public sealed class ResolveRunService(
         if (opts.VerifyCommand is {Length: > 0})
             stages.Add(new VerifyBuildStage(processRunner, opts.VerifyCommand, TimeSpan.FromSeconds(opts.VerifyTimeoutSeconds),
                 opts.CommitGranularity.Equals("Single", StringComparison.OrdinalIgnoreCase)));
-        stages.Add(new BeginRunStage(store, clock, order: 68));
+        stages.Add(new BeginRunStage(store, clock));
         stages.Add(new ResolveCommitPushStage(git, store, opts.CommitGranularity,
             autoFix.CommitAuthorName!, autoFix.CommitAuthorEmail!, pushPat,
             loggerFactory.CreateLogger<ResolveCommitPushStage>(), clock));

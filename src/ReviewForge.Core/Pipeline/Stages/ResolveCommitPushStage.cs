@@ -19,7 +19,6 @@ public sealed class ResolveCommitPushStage(
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     public string Name => "resolve-commit-push";
-    public int Order => 70;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -86,17 +85,17 @@ public sealed class ResolveCommitPushStage(
         }
         catch (PrHeadChangedException)
         {
-            ReviewForgeTelemetry.ResolvePushFailures.Add(1, new TagList { { "reason", "pin" } });
+            ResolveTelemetry.ResolvePushFailures.Add(1, new TagList { { "reason", "pin" } });
             await PersistPushFailureAsync(ctx, applied, ct).ConfigureAwait(false);
             throw;
         }
         catch
         {
-            ReviewForgeTelemetry.ResolvePushFailures.Add(1, new TagList { { "reason", "rejected" } });
+            ResolveTelemetry.ResolvePushFailures.Add(1, new TagList { { "reason", "rejected" } });
             await PersistPushFailureAsync(ctx, applied, ct).ConfigureAwait(false);
             throw;
         }
-        ReviewForgeTelemetry.ResolveCommitsPushed.Add(groups.Length);
+        ResolveTelemetry.ResolveCommitsPushed.Add(groups.Length);
         ctx.AppliedResolutions = applied;
     }
 

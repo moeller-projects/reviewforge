@@ -10,7 +10,6 @@ public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize =
 {
     private static readonly Regex EvidenceCitation = new(@"(?:^|\s|\()([^\s():]+):([1-9][0-9]*)(?:\b|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     public string Name => "triage-comments";
-    public int Order => 50;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -32,7 +31,7 @@ public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize =
         }
         var validIds = comments.Select(c => c.ThreadId).ToHashSet();
         var unknownVerdicts = all.Count(verdict => !validIds.Contains(verdict.ThreadId));
-        if (unknownVerdicts > 0) ReviewForgeTelemetry.ResolveUnknownVerdicts.Add(unknownVerdicts);
+        if (unknownVerdicts > 0) ResolveTelemetry.ResolveUnknownVerdicts.Add(unknownVerdicts);
         var accepted = new Dictionary<int, ThreadVerdict>();
         foreach (var group in all.Where(v => validIds.Contains(v.ThreadId)).GroupBy(v => v.ThreadId))
         {
@@ -52,12 +51,12 @@ public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize =
                 && !EvidenceCitation.IsMatch(verdict.Evidence))
             {
                 accepted[id] = verdict with { Verdict = TriageVerdict.OutOfScope, Evidence = "evidence did not include a file:line citation" };
-                ReviewForgeTelemetry.ResolveEvidenceDowngrades.Add(1);
+                ResolveTelemetry.ResolveEvidenceDowngrades.Add(1);
             }
         }
         ctx.ThreadVerdicts = accepted.Values.OrderBy(v => v.ThreadId).ToArray();
         foreach (var verdict in ctx.ThreadVerdicts)
-            ReviewForgeTelemetry.ResolveThreadsTriaged.Add(1, new TagList
+            ResolveTelemetry.ResolveThreadsTriaged.Add(1, new TagList
             {
                 { "verdict", verdict.Verdict.ToString().ToLowerInvariant() },
                 { "confidence", verdict.Confidence.ToLowerInvariant() },

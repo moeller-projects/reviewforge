@@ -153,7 +153,6 @@ public sealed class ResolveGateTests
         await stage.ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal("resolve-gate", stage.Name);
-        Assert.Equal(20, stage.Order);
         Assert.Equal(ResolveGateDecision.AuthorNotAllowed.ToString(), ctx.TerminationReason);
     }
 

@@ -19,7 +19,6 @@ public sealed class ValidateFindingsStage(
 
     public string Name => "validate-findings";
 
-    public int Order => 70;
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -33,7 +32,7 @@ public sealed class ValidateFindingsStage(
             if (finding.Anchor is null)
             {
                 logger.LogDebug("finding {Key} rejected because it has no changed-line anchor", finding.DedupeKey);
-                ReviewForgeTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "no-anchor" } });
+                FindingsTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "no-anchor" } });
                 continue;
             }
 
@@ -43,7 +42,7 @@ public sealed class ValidateFindingsStage(
                 logger.LogInformation(
                     "finding {Key} rejected because file {Path} is non-reviewable ({Kind})",
                     finding.DedupeKey, path, nonReviewableKind);
-                ReviewForgeTelemetry.FindingsRejected.Add(
+                FindingsTelemetry.FindingsRejected.Add(
                     1, new TagList { { ReviewForgeTelemetry.TagReason, $"non-reviewable-{nonReviewableKind.ToString().ToLowerInvariant()}" } });
                 continue;
             }
@@ -51,7 +50,7 @@ public sealed class ValidateFindingsStage(
             if (!TryReanchor(finding, repoDir))
             {
                 logger.LogDebug("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
-                ReviewForgeTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "anchor-unverified" } });
+                FindingsTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "anchor-unverified" } });
                 continue;
             }
 
@@ -59,11 +58,11 @@ public sealed class ValidateFindingsStage(
                 (ctx.Diff is not null && !ctx.Diff.Contains(path, finding.Anchor.StartLine)))
             {
                 logger.LogInformation("finding {Key} rejected because its anchor is outside the current PR diff", finding.DedupeKey);
-                ReviewForgeTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "not-in-diff" } });
+                FindingsTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "not-in-diff" } });
                 continue;
             }
 
-            ReviewForgeTelemetry.FindingsAccepted.Add(1);
+            FindingsTelemetry.FindingsAccepted.Add(1);
             accepted.Add(finding);
         }
 

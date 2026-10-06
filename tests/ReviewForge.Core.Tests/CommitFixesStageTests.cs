@@ -59,12 +59,11 @@ public sealed class CommitFixesStageTests
         => new(git, store, options, NullLogger<CommitFixesStage>.Instance);
 
     [Fact]
-    public void Stage_exposes_expected_name_and_order()
+    public void Stage_exposes_expected_name()
     {
         var stage = Stage(new FakeGitOps(), new FakeFindingStore(), Options());
 
         Assert.Equal("commit-fixes", stage.Name);
-        Assert.Equal(77, stage.Order);
     }
 
     [Fact]

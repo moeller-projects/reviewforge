@@ -109,12 +109,11 @@ public sealed class AutoFixStageTests : IDisposable
     }
 
     [Fact]
-    public void Stage_exposes_expected_name_and_order()
+    public void Stage_exposes_expected_name()
     {
         var stage = Stage(Options());
 
         Assert.Equal("auto-fix-findings", stage.Name);
-        Assert.Equal(72, stage.Order);
     }
 
     private sealed class CorruptingRestoreEditor(

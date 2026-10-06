@@ -114,7 +114,7 @@ public sealed class ReviewPipelineFactory(
             new BeginRunStage(store, clock),
         ]);
 
-        // Stage 7.7: registered whenever the git write surface is available; it no-ops unless
+        // Stage 10: registered whenever the git write surface is available; it no-ops unless
         // CommitOnHead is active. CommitOnHead without IGitOps is a composition error — fail fast.
         if (gitOps is not null)
         {

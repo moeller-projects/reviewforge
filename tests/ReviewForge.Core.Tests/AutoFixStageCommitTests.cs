@@ -12,7 +12,7 @@ using Xunit;
 
 namespace ReviewForge.Core.Tests;
 
-/// <summary>Stage 7.2 CommitOnHead materialization: deterministic drift-guarded apply and
+/// <summary>Stage 8 CommitOnHead materialization: deterministic drift-guarded apply and
 /// the commanded pass's conditional revert.</summary>
 public sealed class AutoFixStageCommitTests : IDisposable
 {
@@ -148,7 +148,7 @@ public sealed class AutoFixStageCommitTests : IDisposable
 
         var fix = Assert.Single(ctx.AppliedFixes);
         Assert.True(fix.AppliedToTree);
-        Assert.Null(fix.CommitSha); // stage 7.7 stamps it, not 7.2
+        Assert.Null(fix.CommitSha); // stage 10 stamps it, not 8
         Assert.Equal("echo \"$name\"", File.ReadAllText(abs).TrimEnd('\n'));
         Assert.Same(fix, ctx.AcceptedFindings[0].AppliedFix);
     }
@@ -238,7 +238,7 @@ public sealed class AutoFixStageCommitTests : IDisposable
         var fix = Assert.Single(ctx.AppliedFixes);
         Assert.True(fix.AppliedToTree);
         Assert.Equal("echo \"$name\"", File.ReadAllText(abs).TrimEnd('\n')); // NOT reverted
-        Assert.Empty(ctx.FixCommandReplies); // 7.7 queues the "Fixed in" reply, not 7.2
+        Assert.Empty(ctx.FixCommandReplies); // 10 queues the "Fixed in" reply, not 8
     }
 
     [Fact]

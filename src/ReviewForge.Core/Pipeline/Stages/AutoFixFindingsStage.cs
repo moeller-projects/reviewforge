@@ -9,7 +9,7 @@ using ReviewForge.Core.Reasoning;
 namespace ReviewForge.Core.Pipeline.Stages;
 
 /// <summary>
-/// Stage 7.2 (between validate and begin-run): produces fixes.
+/// Stage 8 (between validate and begin-run): produces fixes.
 /// Pass 1 is deterministic — validated findings with a registered, eligible fixer get a
 /// pure proposal. Pass 2 is commanded — the PR author replied "/fixit" on a thread, and a
 /// constrained agent pass (one-file writable set, hash-anchored edits, no findings tools)
@@ -18,7 +18,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// author's accept-click is the verification step) and never leaves workspace writes behind;
 /// "CommitOnHead" materializes accepted fixes into the run's PRIVATE checkout
 /// (drift-guarded range apply for deterministic fixes; kept agent edits for commanded fixes)
-/// and stage 7.7 commits and pushes them. Never remove a fixed finding from
+/// and stage 10 commits and pushes them. Never remove a fixed finding from
 /// AcceptedFindings — triage depends on its key staying current (fixed findings must not
 /// trigger "no longer reproduces" auto-resolve).
 ///
@@ -59,7 +59,6 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
     public string Name => "auto-fix-findings";
 
-    public int Order => 72;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -159,7 +158,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
     {
         // Per file: proposals collected in finding order. Suggestion mode publishes them
         // without workspace writes; CommitOnHead materializes them into the private checkout
-        // (drift-guarded range apply) so stage 7.7 can commit the edits.
+        // (drift-guarded range apply) so stage 10 can commit the edits.
         var proposalsByFile = new Dictionary<string, List<(RichFinding Finding, FixProposal Proposal, string[] Lines)>>(RepoPath.PathComparer);
         var guardSkipped = 0;
 
@@ -208,7 +207,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             if (proposal is null)
             {
                 _Logger.LogInformation("auto-fix: fixer for {Rule} declined finding {Key}", finding.RuleId, finding.DedupeKey);
-                ReviewForgeTelemetry.FixesDeclined.Add(1, FixTags(FixOrigin.Deterministic, finding.RuleId));
+                AutoFixTelemetry.FixesDeclined.Add(1, FixTags(FixOrigin.Deterministic, finding.RuleId));
                 continue;
             }
 
@@ -224,7 +223,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
         if (guardSkipped > 0)
         {
-            ReviewForgeTelemetry.DeterministicGuardSkipped.Add(guardSkipped);
+            AutoFixTelemetry.DeterministicGuardSkipped.Add(guardSkipped);
             _Logger.LogInformation("auto-fix deterministic summary: guard_skipped={GuardSkipped}", guardSkipped);
         }
 
@@ -323,7 +322,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 {
                     // No silent fallback in CommitOnHead: the author asked for a committed
                     // fix; a fix that cannot be materialized fails the run visibly.
-                    ReviewForgeTelemetry.AutoFixApplyFailed.Add(
+                    AutoFixTelemetry.AutoFixApplyFailed.Add(
                         1, new TagList {{"rule", finding.RuleId}});
                     throw new InvalidOperationException(
                         $"auto-fix commit: could not materialize the fix for rule {finding.RuleId} on {path} — {result.Error ?? "apply failed"}");
@@ -340,7 +339,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         _Logger.LogWarning(
             "auto-fix commit: {Rule} on {Path} degraded to suggestion — {Reason}",
             finding.RuleId, path, reason);
-        ReviewForgeTelemetry.AutoFixApplyFailed.Add(
+        AutoFixTelemetry.AutoFixApplyFailed.Add(
             1, new TagList {{"rule", finding.RuleId}});
     }
 
@@ -503,7 +502,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         ctx.FixCommandReplies = replies;
         if (watermarkSkipped > 0)
         {
-            ReviewForgeTelemetry.CommandedWatermarkSkipped.Add(watermarkSkipped);
+            AutoFixTelemetry.CommandedWatermarkSkipped.Add(watermarkSkipped);
         }
     }
 

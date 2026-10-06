@@ -34,7 +34,6 @@ public sealed class PrepareRepositoryStage(
 
     public string Name => "prepare-repository";
 
-    public int Order => 30;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -66,7 +65,7 @@ public sealed class PrepareRepositoryStage(
             && autoFix is not null
             && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
         {
-            ReviewForgeTelemetry.LoopGuardSkips.Add(
+            ReviewTelemetry.LoopGuardSkips.Add(
                 1, new TagList { { "source", "gate" } });
             logger.LogInformation(
                 "loop guard: discovery-triggered run on bot-authored head {Sha} suppressed (run {RunId})",

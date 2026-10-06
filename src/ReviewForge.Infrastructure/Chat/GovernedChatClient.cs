@@ -53,7 +53,7 @@ public sealed class GovernedChatClient(
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            ReviewForgeTelemetry.LlmGovernorTimeouts.Add(1);
+            LlmTelemetry.LlmGovernorTimeouts.Add(1);
             throw new LlmGovernorTimeoutException(
                 $"timed out after {acquireTimeoutSeconds}s waiting for an LLM concurrency slot " +
                 $"({governor.Inflight} in flight, cap {governor.MaxConcurrency})");
@@ -64,7 +64,7 @@ public sealed class GovernedChatClient(
             // timed-out and caller-cancelled ones, which are exactly the saturation
             // signal. (Immediate acquisition records ~0; Timeout.TotalMilliseconds is
             // never negative, so no zero-spam guard is needed.)
-            ReviewForgeTelemetry.LlmGovernorWait.Record(sw.Elapsed.TotalMilliseconds);
+            LlmTelemetry.LlmGovernorWait.Record(sw.Elapsed.TotalMilliseconds);
         }
     }
 }

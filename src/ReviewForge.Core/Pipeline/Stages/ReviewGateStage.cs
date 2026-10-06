@@ -10,7 +10,6 @@ public sealed class ReviewGateStage(TimeProvider? clock = null, ILogger<ReviewGa
 
     public string Name => "review-gate";
 
-    public int Order => 20;
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {

@@ -5,7 +5,7 @@ Guidance for coding agents working in this repository. Read this before editing.
 ## What this is
 
 Automated PR review and autonomous comment resolution as a service (.NET 10, ASP.NET
-minimal API). Review requests run the 12-stage review pipeline; opt-in resolution requests
+minimal API). Review requests run the 13-stage review pipeline; opt-in resolution requests
 run a separate pipeline that fetches context → gates → prepares a private checkout →
 collects comments → read-only triage → bounded edits → verification → commit/push →
 replies → persist. See `README.md` for the stage table.
@@ -41,9 +41,9 @@ tests/
                                FakeEnricher, FakeChatClientFactory) + ScriptedChatClient
   ReviewForge.{Core,Infrastructure,Service}.Tests/
   ReviewForge.Architecture.Tests/  assembly-boundary tests; no coverlet gate by design
-prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prompt; the review
-                               prompt override is Review:PromptOverridePath, and the embedded
-                               default lives in src/ReviewForge.Core/Reasoning/Prompts/
+Prompts are embedded resources under src/ReviewForge.Core/Reasoning/Prompts/. Only the review
+prompt is overridable via Review:PromptOverridePath; fix-pass and resolve-triage prompts are
+intentionally not overridable.
 ```
 
 ## Hard rules (do not violate)
@@ -81,7 +81,7 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
    additionally limited to a per-run writable set (a single anchored file for fix passes).
    `HashLineEditor` writes are reverted in Suggestion mode. In CommitOnHead mode
    (`AutoFix:PublishMode`), accepted fixes are NOT reverted — they are committed by stage
-   7.7. CommitOnHead runs use a private run-scoped checkout
+   10. CommitOnHead runs use a private run-scoped checkout
    (`RepoCheckoutPool.AcquirePrivateAsync`); the pooled per-head checkout never sees writes.
    The writable-set, containment, deny-regex and hash-anchor disciplines are unchanged.
    Resolve runs use the same `HashLineEditor` discipline in a private run-scoped checkout,
@@ -98,7 +98,7 @@ prompts/fix-pass-system.md     human-editable copy of the embedded fix-pass prom
    the run's private checkout and pushed fast-forward-only to the PR source branch, and then
    only when (c) the run holds its PR claim immediately before push, the remote branch tip
    equals the pinned head at the pre-read, and the push itself is a fast-forward-only
-   compare-and-swap (stage 7.7). Pushed outcomes are persisted before any reply is attempted
+   compare-and-swap (stage 10). Pushed outcomes are persisted before any reply is attempted
    (pushed_fixes), and a later run reconciles missing replies. ReviewForge never force-pushes,
    never rebases, never opens pull requests. AI-drafted fixes are always labeled as such.
    Resolve fixes are committed only after triage and bounded writable-set planning, then only

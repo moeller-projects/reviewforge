@@ -21,7 +21,9 @@ public sealed class TelemetryTests
             readings[instrument.Name] = measurement);
         listener.Start();
 
-        ReviewForgeTelemetry.RegisterGauges(() => depth, () => 100, () => 7, () => 2);
+        QueueTelemetry.RegisterGauges(() => depth, () => 100);
+        ClaimsTelemetry.RegisterGauges(() => 7);
+        CheckoutTelemetry.RegisterGauges(() => 2);
         listener.RecordObservableInstruments();
         Assert.Equal(0, readings["reviewforge.queue.depth"]);
         Assert.Equal(100, readings["reviewforge.queue.capacity"]);
@@ -116,7 +118,6 @@ public sealed class TelemetryTests
     private sealed class CancellingStage : IReviewStage
     {
         public string Name => "cancel";
-        public int Order => 10;
         public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -127,7 +128,6 @@ public sealed class TelemetryTests
     private sealed class NoOpStage : IReviewStage
     {
         public string Name => "noop";
-        public int Order => 10;
         public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct) => Task.CompletedTask;
     }
 }

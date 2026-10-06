@@ -13,19 +13,17 @@ public sealed class ReviewPipeline
     private readonly IReadOnlyList<IReviewStage> _Stages;
     private readonly ILogger<ReviewPipeline> _Logger;
 
-public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
+    public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
     {
         _Stages = [.. stages];
         _Logger = logger;
-        for (var i = 1; i < _Stages.Count; i++)
-        {
-            if (_Stages[i].Order <= _Stages[i - 1].Order)
-            {
-                throw new InvalidOperationException(
-                    $"stage ordering violation: '{_Stages[i].Name}' (Order {_Stages[i].Order}) must come after " +
-                    $"'{_Stages[i - 1].Name}' (Order {_Stages[i - 1].Order})");
-            }
-        }
+        var dupes = _Stages
+            .GroupBy(s => s.Name, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToArray();
+        if (dupes.Length > 0)
+            throw new InvalidOperationException($"duplicate stages: {string.Join(", ", dupes)}");
     }
 
     public async Task<ReviewContext> RunAsync(ReviewContext ctx, CancellationToken ct)
@@ -86,7 +84,7 @@ public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> 
                 finally
                 {
                     sw.Stop();
-                    ReviewForgeTelemetry.StageDurationMilliseconds.Record(
+                    ReviewTelemetry.StageDurationMilliseconds.Record(
                         sw.ElapsedMilliseconds,
                         new TagList
                         {

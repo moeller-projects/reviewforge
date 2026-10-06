@@ -13,7 +13,6 @@ public sealed class ReplyCommentsStage(
     ILogger<ReplyCommentsStage>? logger = null) : IReviewStage
 {
     public string Name => "reply-comments";
-    public int Order => 80;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -39,7 +38,7 @@ public sealed class ReplyCommentsStage(
             {
                 if (MayMarkFixed(threads, action))
                     await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
-                ReviewForgeTelemetry.ResolveRepliesDeduped.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
+                ResolveTelemetry.ResolveRepliesDeduped.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
                 await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
                 continue;
             }
@@ -48,7 +47,7 @@ public sealed class ReplyCommentsStage(
             if (MayMarkFixed(threads, action))
                 await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
             await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
-            ReviewForgeTelemetry.ResolveRepliesPosted.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
+            ResolveTelemetry.ResolveRepliesPosted.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
             replies++;
         }
 

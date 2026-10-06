@@ -7,7 +7,6 @@ namespace ReviewForge.Core.Pipeline.Stages;
 public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> allowedAuthors, string? requestedHeadSha, ILogger<ResolveGateStage>? logger = null) : IReviewStage
 {
     public string Name => "resolve-gate";
-    public int Order => 20;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {

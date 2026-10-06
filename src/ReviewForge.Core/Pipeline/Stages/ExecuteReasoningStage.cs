@@ -33,7 +33,6 @@ public sealed class ExecuteReasoningStage(
 
     public string Name => "execute-reasoning";
 
-    public int Order => 60;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -92,7 +91,7 @@ public sealed class ExecuteReasoningStage(
         if (trivialDiffSkipEnabled && ctx.ReviewableFiles is { } reviewable
             && TrivialDiff.IsTrivial(ctx.Diff ?? DiffIndex.Parse(ctx.DiffText), ctx.PendingReplies, reviewable))
         {
-            ReviewForgeTelemetry.TrivialReviews.Add(1);
+            ReviewTelemetry.TrivialReviews.Add(1);
             // The synthetic result must carry the collector's findings: the homoglyph
             // analyzer ran above and downstream stages (validate/publish/summary/vote)
             // consume ctx.Result, not the collector.
@@ -113,7 +112,7 @@ public sealed class ExecuteReasoningStage(
             if (candidate.Overflowed)
             {
                 // Cap overflow falls back to the legacy truncated single-agent path — never a run failure.
-                ReviewForgeTelemetry.ShardFallback.Add(1);
+                ReviewTelemetry.ShardFallback.Add(1);
                 logger?.LogWarning(
                     "diff of {DiffChars} chars overflows {MaxShards} shards of {ShardMaxChars} chars; falling back to the single-agent path",
                     ctx.DiffText.Length, maxShards, shardMaxChars);
@@ -195,7 +194,7 @@ public sealed class ExecuteReasoningStage(
                     token,
                     tier);
                 shardNarratives[i] = result.Narrative;
-                ReviewForgeTelemetry.ShardDurationMilliseconds.Record(
+                ReviewTelemetry.ShardDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(shardStart).TotalMilliseconds,
                     new KeyValuePair<string, object?>(ReviewForgeTelemetry.TagShards, shards.Count));
             }).ConfigureAwait(false);

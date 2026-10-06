@@ -8,8 +8,7 @@ using ReviewForge.Core.Ports;
 namespace ReviewForge.Core.Pipeline.Stages;
 
 /// <summary>
-/// Stage 7.7 (after begin-run, before triage): commits the fixes stage 7.2 materialized in
-/// the run's private checkout and pushes them fast-forward-only to the PR source branch.
+/// Stage 10 (after begin-run, before triage): commits the fixes stage 8 materialized in
 /// Push is the run's point of no return: the claim is re-checked immediately before it, the
 /// remote tip must equal the reviewed head at the pre-read, and the server-side
 /// non-fast-forward rejection is the compare-and-swap for any movement after that. The
@@ -28,7 +27,6 @@ public sealed class CommitFixesStage(
 {
     public string Name => "commit-fixes";
 
-    public int Order => 77;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -55,7 +53,7 @@ public sealed class CommitFixesStage(
             logger.LogWarning(
                 "commit-fixes: SourceRefName '{SourceRefName}' is not a {Prefix} ref — all {Count} fixes degrade to suggestion mode",
                 pr.SourceRefName ?? "(null)", headsPrefix, pending.Count);
-            ReviewForgeTelemetry.AutoFixDegradedToSuggestion.Add(
+            AutoFixTelemetry.AutoFixDegradedToSuggestion.Add(
                 pending.Count, new TagList { { ReviewForgeTelemetry.TagReason, "no_source_ref" } });
             return;
         }
@@ -110,20 +108,20 @@ public sealed class CommitFixesStage(
             }
 
             committed.Add((group, sha, subject));
-            ReviewForgeTelemetry.AutoFixCommits.Add(
+            AutoFixTelemetry.AutoFixCommits.Add(
                 1, new TagList { { "granularity", options.CommitGranularity } });
         }
 
         if (degraded > 0)
         {
-            ReviewForgeTelemetry.AutoFixDegradedToSuggestion.Add(
+            AutoFixTelemetry.AutoFixDegradedToSuggestion.Add(
                 degraded, new TagList { { ReviewForgeTelemetry.TagReason, "commit_failed" } });
         }
 
         if (committed.Count == 0)
         {
             // Everything degraded; publish handles a pure-suggestion run.
-            ReviewForgeTelemetry.AutoFixDegradedToSuggestion.Add(
+            AutoFixTelemetry.AutoFixDegradedToSuggestion.Add(
                 1, new TagList { { ReviewForgeTelemetry.TagReason, "all_degraded" } });
             return;
         }
@@ -136,7 +134,7 @@ public sealed class CommitFixesStage(
         var tip = await git.GetRemoteTipAsync(repoDir, pr.CloneUrl, branch, pat, ct).ConfigureAwait(false);
         if (!string.Equals(tip, pr.SourceCommitSha, StringComparison.OrdinalIgnoreCase))
         {
-            ReviewForgeTelemetry.AutoFixPushFailures.Add(
+            AutoFixTelemetry.AutoFixPushFailures.Add(
                 1, new TagList { { ReviewForgeTelemetry.TagReason, "pin" } });
             throw new PrHeadChangedException(pr.SourceCommitSha, tip ?? "(branch missing on remote)");
         }
@@ -169,7 +167,7 @@ public sealed class CommitFixesStage(
         }
         catch (PrHeadChangedException)
         {
-            ReviewForgeTelemetry.AutoFixPushFailures.Add(
+            AutoFixTelemetry.AutoFixPushFailures.Add(
                 1, new TagList { { ReviewForgeTelemetry.TagReason, "pin" } });
             await AbandonPushIntentAsync(ctx, ct).ConfigureAwait(false);
             throw;
@@ -178,7 +176,7 @@ public sealed class CommitFixesStage(
         {
             // Policy/auth rejection: the run fails visibly; the committed work dies with the
             // private checkout and is never retried with force.
-            ReviewForgeTelemetry.AutoFixPushFailures.Add(
+            AutoFixTelemetry.AutoFixPushFailures.Add(
                 1, new TagList { { ReviewForgeTelemetry.TagReason, "rejected" } });
             logger.LogError(ex, "commit-fixes: push of {Count} commit(s) to {Branch} was rejected", committed.Count, branch);
             await AbandonPushIntentAsync(ctx, ct).ConfigureAwait(false);
@@ -190,7 +188,7 @@ public sealed class CommitFixesStage(
         // reconciles missing "Fixed in {sha}" replies from these rows alone.
         await store.ConfirmPushedFixesAsync(ctx.Pr, ctx.RunId, ct).ConfigureAwait(false);
 
-        ReviewForgeTelemetry.AutoFixPushes.Add(1);
+        AutoFixTelemetry.AutoFixPushes.Add(1);
         logger.LogInformation(
             "commit-fixes: pushed {Count} commit(s) to {Branch} for run {RunId}",
             committed.Count, branch, ctx.RunId);
@@ -198,8 +196,7 @@ public sealed class CommitFixesStage(
         // The run's own push is the one legal head movement; publish accepts this head.
         ctx.PushedHeadSha = committed[^1].Sha;
 
-        // Commanded fixes: the "Fixed in {sha7}" reply on the command thread is queued here
-        // (7.2 queues no success replies in CommitOnHead mode); publish posts it.
+        // (stage 8 queues no success replies in CommitOnHead mode); publish posts it.
         var commandReplies = committed
             .SelectMany(c => c.Fixes)
             .Where(f => f.Proposal.SourceThreadId is not null)

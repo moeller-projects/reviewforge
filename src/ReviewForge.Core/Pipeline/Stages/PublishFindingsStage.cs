@@ -25,7 +25,6 @@ public sealed class PublishFindingsStage(
 
     public string Name => "publish-findings";
 
-    public int Order => 90;
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -145,11 +144,11 @@ public sealed class PublishFindingsStage(
                         : finding;
                     var threadId = await source.PostFindingThreadAsync(ctx.Pr, toPublish, ct).ConfigureAwait(false);
                     posted[finding.DedupeKey!] = threadId;
-                    ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "inline" } });
+                    FindingsTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "inline" } });
                     if (finding.AppliedFix is { } applied)
                     {
                         Interlocked.Increment(ref publishedFixCount);
-                        ReviewForgeTelemetry.FixesApplied.Add(
+                        AutoFixTelemetry.FixesApplied.Add(
                             1, FixTags(applied.Proposal.Origin, finding.RuleId));
                     }
                     if (finding.AppliedFix?.CommitSha is not null
@@ -193,7 +192,7 @@ public sealed class PublishFindingsStage(
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "before general finding");
                     await source.PostGeneralCommentAsync(ctx.Pr, body, finding.DedupeKey, ct)
                         .ConfigureAwait(false);
-                    ReviewForgeTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "general" } });
+                    FindingsTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "general" } });
                     if (committedRowId is { } postedRowId)
                     {
                         await store.MarkPushedFixRepliedAsync(postedRowId, ct).ConfigureAwait(false);
@@ -230,8 +229,8 @@ public sealed class PublishFindingsStage(
             }
 
             await source.ReplyToThreadAsync(ctx.Pr, threadId, body, ct).ConfigureAwait(false);
-            ReviewForgeTelemetry.ThreadsReplied.Add(1);
-            ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.Deterministic, "existing-thread"));
+            ReviewTelemetry.ThreadsReplied.Add(1);
+            AutoFixTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.Deterministic, "existing-thread"));
             Interlocked.Increment(ref publishedFixCount);
             if (pushedFixRowIds.TryGetValue(key, out var rowId))
             {
@@ -241,7 +240,7 @@ public sealed class PublishFindingsStage(
 
         // Commanded fixes: a new suggestion thread WITHOUT a dedupe property (invisible
         // to triage and publish suppression), plus a link reply on the command thread.
-        // CommitOnHead: committed commanded fixes skip this entirely — stage 7.7 queued a
+        // CommitOnHead: committed commanded fixes skip this entirely — stage 10 queued a
         // "Fixed in {sha}" reply instead of a suggestion.
         foreach (var fix in ctx.AppliedFixes.Where(f => f.Proposal.SourceThreadId is not null && f.CommitSha is null))
         {
@@ -264,18 +263,18 @@ public sealed class PublishFindingsStage(
                 .ConfigureAwait(false);
             await PersistCommandAuditAsync(ctx, ct).ConfigureAwait(false);
             Interlocked.Increment(ref publishedFixCount);
-            ReviewForgeTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
+            AutoFixTelemetry.FixesApplied.Add(1, FixTags(FixOrigin.LlmCommanded, "thread-command"));
             // This guard deliberately sits after the awaited suggestion write and directly
             // before the link reply, so a lost claim cannot add a second command-thread write.
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before fix command link on thread {commandThreadId}");
             var link = $"Fix posted above ⤴ (suggestion for {fix.Proposal.FilePath}:{fix.Proposal.StartLine}–{fix.Proposal.EndLine}).";
             await source.ReplyToThreadAsync(ctx.Pr, commandThreadId, CommentFormatter.WithBotPreamble(link), ct)
                 .ConfigureAwait(false);
-            ReviewForgeTelemetry.ThreadsReplied.Add(1);
+            ReviewTelemetry.ThreadsReplied.Add(1);
         }
 
         // Replies the auto-fix stage queued (declines, verifier failures, exhausted budget)
-        // and, in CommitOnHead mode, stage 7.7's "Fixed in {sha}" replies. A reply that has a
+        // and, in CommitOnHead mode, stage 10's "Fixed in {sha}" replies. A reply that has a
         // pushed-fix row ("thread-{id}" key) marks it replied — including the already-posted
         // skip path (exactly-once convergence).
         foreach (var (threadId, text) in ctx.FixCommandReplies)
@@ -297,7 +296,7 @@ public sealed class PublishFindingsStage(
             }
 
             await source.ReplyToThreadAsync(ctx.Pr, threadId, body, ct).ConfigureAwait(false);
-            ReviewForgeTelemetry.ThreadsReplied.Add(1);
+            ReviewTelemetry.ThreadsReplied.Add(1);
             if (markedRowId is { } rowId)
             {
                 await store.MarkPushedFixRepliedAsync(rowId, ct).ConfigureAwait(false);
@@ -379,11 +378,11 @@ public sealed class PublishFindingsStage(
 
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before reconciled fix reply on thread {liveThreadId}");
             await source.ReplyToThreadAsync(ctx.Pr, liveThreadId.Value, body, ct).ConfigureAwait(false);
-            ReviewForgeTelemetry.ThreadsReplied.Add(1);
+            ReviewTelemetry.ThreadsReplied.Add(1);
         }
 
         await store.MarkPushedFixRepliedAsync(fix.Id, ct).ConfigureAwait(false);
-        ReviewForgeTelemetry.AutoFixReconciledReplies.Add(1);
+        AutoFixTelemetry.AutoFixReconciledReplies.Add(1);
         logger.LogInformation(
             "pushed fix {Key} ({Sha}): reconciled missing reply from run {RunId}",
             fix.DedupeKey, fix.CommitSha, fix.RunId);
@@ -413,7 +412,7 @@ public sealed class PublishFindingsStage(
     private async Task EnsureHeadUnchangedAsync(ReviewContext ctx, CancellationToken ct)
     {
         var current = await source.GetPullRequestAsync(ctx.Pr, ct).ConfigureAwait(false);
-        // CommitOnHead: the run's own push (stage 7.7) is the one legal head movement —
+        // CommitOnHead: the run's own push (stage 10) is the one legal head movement —
         // publish happens against the pushed head. Any movement BEYOND it still fails the run.
         var reviewed = ctx.PushedHeadSha ?? ctx.RequirePullRequest().SourceCommitSha;
         if (!string.Equals(current.SourceCommitSha, reviewed, StringComparison.OrdinalIgnoreCase))

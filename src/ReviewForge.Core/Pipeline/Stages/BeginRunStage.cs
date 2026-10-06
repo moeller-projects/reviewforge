@@ -5,20 +5,19 @@ using ReviewForge.Core.Ports;
 namespace ReviewForge.Core.Pipeline.Stages;
 
 /// <summary>
-/// Stage 7.5 (between validate and triage): persist the in-flight run shell — run row with
+/// Stage 9 (between validate and triage): persist the in-flight run shell — run row with
 /// Success=false, CompletedAt=null, plus one finding row per known key (accepted this run
 /// plus carried-forward prior findings, ThreadId=null). Every later external write can now
 /// backfill against a durable row, and an interrupted run is visible as in-flight instead of
 /// vanishing. GetLastCompletedRunAsync filters on CompletedAt != null && Success, so the
 /// shell never seeds the next run's gate or dedupe.
 /// </summary>
-public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = null, int order = 75) : IReviewStage
+public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = null) : IReviewStage
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
     public string Name => "begin-run";
 
-    public int Order => order;
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         // Rows: accepted findings (with deterministic-fix JSON) + carry-forward prior
