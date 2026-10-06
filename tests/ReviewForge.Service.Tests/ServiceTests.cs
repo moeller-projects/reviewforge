@@ -13,11 +13,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
-using ReviewForge.Core.AutoFix.Fixers;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
-using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
@@ -38,6 +36,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
     private readonly EnvironmentVariableScope _Environment = new();
     private bool _WithoutWorkers;
     private List<string>? _LogSink;
+
     public ReviewForgeFactory()
     {
         // Minimal-hosting config must be visible before Program.cs runs — env vars are.
@@ -179,585 +178,585 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         }
     }
 
-[Collection("ReviewForge service host")]
-public class ServiceTests : IAsyncLifetime
-{
-    private readonly ReviewForgeFactory _Factory = new();
-
-
-    public Task InitializeAsync() => Task.CompletedTask;
-
-    public Task DisposeAsync()
+    [Collection("ReviewForge service host")]
+    public class ServiceTests : IAsyncLifetime
     {
-        _Factory.Dispose();
-        return Task.CompletedTask;
-    }
+        private readonly ReviewForgeFactory _Factory = new();
 
-    private async Task<RunStatus> WaitForState(Guid runId, params RunState[] final)
-    {
-        var tracker = _Factory.Services.GetRequiredService<RunTracker>();
-        for (var i = 0; i < 200; i++)
+
+        public Task InitializeAsync() => Task.CompletedTask;
+
+        public Task DisposeAsync()
         {
-            if (tracker.Get(runId) is { } status && final.Contains(status.State))
+            _Factory.Dispose();
+            return Task.CompletedTask;
+        }
+
+        private async Task<RunStatus> WaitForState(Guid runId, params RunState[] final)
+        {
+            var tracker = _Factory.Services.GetRequiredService<RunTracker>();
+            for (var i = 0; i < 200; i++)
             {
-                return status;
+                if (tracker.Get(runId) is { } status && final.Contains(status.State))
+                {
+                    return status;
+                }
+
+                await Task.Delay(50);
             }
 
-            await Task.Delay(50);
+            throw new TimeoutException($"run {runId} did not reach {string.Join("/", final)}");
         }
 
-        throw new TimeoutException($"run {runId} did not reach {string.Join("/", final)}");
-    }
-
-    [Fact]
-    public async Task Health_is_ok()
-    {
-        var response = await _Factory.CreateClient().GetAsync("/health");
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Environment_options_override_TOML_configuration()
-    {
-        var response = await _Factory.CreateClient().GetAsync("/alive");
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-
-        var workspace = _Factory.Services.GetRequiredService<IOptions<WorkspaceOptions>>().Value;
-        Assert.Equal(_Factory.WorkDir, workspace.WorkDir);
-        var host = _Factory.Services.GetRequiredService<IOptions<HostOptions>>().Value;
-        Assert.Equal(2, host.WorkerCount);
-        Assert.True(_Factory.Services.GetRequiredService<IOptions<GitOptions>>().Value.TargetedFetchEnabled);
-    }
-
-    [Fact]
-    public async Task Submit_validates_input()
-    {
-        var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
-            new {org = "", project = "p", repositoryId = "r", prId = 0});
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Submit_conflicts_when_review_already_in_flight()
-    {
-        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
-        var holder = Guid.NewGuid();
-        Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), holder, out _));
-
-        var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
-            new {org = "o", project = "p", repositoryId = "r", prId = 77});
-
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        var conflict = await response.Content.ReadFromJsonAsync<ConflictResponse>();
-        Assert.Equal("a run for this pull request is already in flight", conflict?.Error);
-        Assert.Equal(holder, conflict?.RunId);
-    }
-
-    [Fact]
-    public async Task Unknown_run_is_404()
-    {
-        var response = await _Factory.CreateClient().GetAsync($"/reviews/{Guid.NewGuid()}");
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Full_run_flows_submit_to_completed_with_posts()
-    {
-        var client = _Factory.CreateClient();
-        var submit = await client.PostAsJsonAsync("/reviews",
-            new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
-
-        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
-
-        Assert.Equal(RunState.Completed, status.State);
-        Assert.Contains(_Factory.Source.GeneralComments, c => c.Contains("full review"));
-        Assert.Single(_Factory.Store.Runs);
-
-        var statusResponse = await client.GetAsync(body.StatusUrl);
-
-        Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
-    }
-
-    [Fact]
-    public async Task Trivial_diff_run_skips_the_llm_and_publishes_a_clean_vote()
-    {
-        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
-        _Factory.Git.Diff = """
-            diff --git a/src/A.cs b/src/A.cs
-            --- a/src/A.cs
-            +++ b/src/A.cs
-            @@ -1,2 +1,0 @@
-            -line one
-            -line two
-            """;
-
-        var client = _Factory.CreateClient();
-        var submit = await client.PostAsJsonAsync("/reviews",
-            new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
-
-        Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
-        Assert.Equal(RunState.Completed, status.State);
-        Assert.Equal(0, _Factory.Chat.Calls); // zero LLM calls on the trivial path
-        Assert.Single(_Factory.Source.Votes);
-        Assert.Equal(ReviewerVote.NoResponse, _Factory.Source.Votes[0].Vote); // clean-run vote
-        var run = Assert.Single(_Factory.Store.Runs);
-        Assert.True(run.Success); // head is marked reviewed for the gate
-    }
-
-    [Fact]
-    public async Task Different_heads_in_same_repo_complete_concurrently()
-    {
-        var firstPr = new PrKey("o", "p", "r", 51);
-        var secondPr = new PrKey("o", "p", "r", 52);
-        _Factory.Source.PullRequestsByKey[firstPr] = new PullRequest(51, "one", null, "head-one", "base", "url", false, "creator-1", "PR Author");
-        _Factory.Source.PullRequestsByKey[secondPr] = new PullRequest(52, "two", null, "head-two", "base", "url", false, "creator-1", "PR Author");
-        _Factory.Git.CloneDelay = TimeSpan.FromMilliseconds(150);
-        try
+        [Fact]
+        public async Task Health_is_ok()
         {
-            var client = _Factory.CreateClient();
-            var first = await client.PostAsJsonAsync("/reviews",
-                new {org = "o", project = "p", repositoryId = "r", prId = 51});
-            var second = await client.PostAsJsonAsync("/reviews",
-                new {org = "o", project = "p", repositoryId = "r", prId = 52});
-            var firstBody = await first.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-            var secondBody = await second.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-
-            var statuses = await Task.WhenAll(
-                WaitForState(firstBody!.RunId, RunState.Completed),
-                WaitForState(secondBody!.RunId, RunState.Completed));
-
-            Assert.All(statuses, status => Assert.Equal(RunState.Completed, status.State));
-            Assert.True(_Factory.Git.MaxConcurrentClones > 1);
+            var response = await _Factory.CreateClient().GetAsync("/health");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
-        finally
+
+        [Fact]
+        public async Task Environment_options_override_TOML_configuration()
         {
-            _Factory.Source.PullRequestsByKey.Clear();
-            _Factory.Git.CloneDelay = TimeSpan.Zero;
+            var response = await _Factory.CreateClient().GetAsync("/alive");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var workspace = _Factory.Services.GetRequiredService<IOptions<WorkspaceOptions>>().Value;
+            Assert.Equal(_Factory.WorkDir, workspace.WorkDir);
+            var host = _Factory.Services.GetRequiredService<IOptions<HostOptions>>().Value;
+            Assert.Equal(2, host.WorkerCount);
+            Assert.True(_Factory.Services.GetRequiredService<IOptions<GitOptions>>().Value.TargetedFetchEnabled);
         }
-    }
 
+        [Fact]
+        public async Task Submit_validates_input()
+        {
+            var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
+                new {org = "", project = "p", repositoryId = "r", prId = 0});
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
 
-    [Fact]
-    public async Task Draft_pr_is_skipped()
-    {
-        _Factory.Source.Pr = _Factory.Source.Pr with {IsDraft = true};
-        try
+        [Fact]
+        public async Task Submit_conflicts_when_review_already_in_flight()
+        {
+            var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+            var holder = Guid.NewGuid();
+            Assert.True(claims.TryClaim(new PrKey("o", "p", "r", 77), holder, out _));
+
+            var response = await _Factory.CreateClient().PostAsJsonAsync("/reviews",
+                new {org = "o", project = "p", repositoryId = "r", prId = 77});
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var conflict = await response.Content.ReadFromJsonAsync<ConflictResponse>();
+            Assert.Equal("a run for this pull request is already in flight", conflict?.Error);
+            Assert.Equal(holder, conflict?.RunId);
+        }
+
+        [Fact]
+        public async Task Unknown_run_is_404()
+        {
+            var response = await _Factory.CreateClient().GetAsync($"/reviews/{Guid.NewGuid()}");
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task Full_run_flows_submit_to_completed_with_posts()
         {
             var client = _Factory.CreateClient();
             var submit = await client.PostAsJsonAsync("/reviews",
-                new {org = "o", project = "p", repositoryId = "r", prId = 43});
+                new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+
             var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
 
-            var status = await WaitForState(body!.RunId, RunState.Skipped, RunState.Failed);
-            Assert.Equal(RunState.Skipped, status.State);
-            Assert.Equal("PR is a draft", status.Detail);
-        }
-        finally
-        {
-            _Factory.Source.Pr = _Factory.Source.Pr with {IsDraft = false};
-        }
-    }
+            Assert.Equal(RunState.Completed, status.State);
+            Assert.Contains(_Factory.Source.GeneralComments, c => c.Contains("full review"));
+            Assert.Single(_Factory.Store.Runs);
 
-    [Fact]
-    public async Task Failed_run_marks_status_and_worker_keeps_draining()
-    {
-        // Standalone worker with its own queue — no race with the hosted worker.
-        var queue = new ReviewQueue();
-        var tracker = new RunTracker();
-        var standaloneWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-failing-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(standaloneWorkDir);
-        var reviewOptions = new ReviewOptions();
-        var failingGit = new ExplosiveGitOps(standaloneWorkDir);
-        var failingBuilder = PipelineBuilderTestFactory.Create(
-            _Factory.Source,
-            _Factory.Store,
-            failingGit,
-            new FakeChatClientFactory(_Factory.Chat),
-            standaloneWorkDir,
-            reviewOptions);
-        var worker = new ReviewWorker(queue, Options.Create(new HostOptions {WorkerCount = 1}), tracker, failingBuilder, new InFlightClaims(),
-            _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
+            var statusResponse = await client.GetAsync(body.StatusUrl);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var workerTask = worker.StartAsync(cts.Token);
-
-        var pr = new PrKey("o", "p", "r", 44);
-        var first = Guid.NewGuid();
-        var second = Guid.NewGuid();
-        Assert.True(queue.TryEnqueue(new ReviewRequest(first, pr, DateTimeOffset.UtcNow)).Accepted);
-        Assert.True(queue.TryEnqueue(new ReviewRequest(second, pr, DateTimeOffset.UtcNow)).Accepted);
-
-        for (var i = 0; i < 200 && tracker.Get(second)?.State != RunState.Failed; i++)
-        {
-            await Task.Delay(50);
+            Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
         }
 
-        Assert.Equal(RunState.Failed, tracker.Get(first)?.State);
-        // Raw exception messages stay in the logs; the tracker exposes a generic reason.
-        Assert.Equal("internal error — see run log", tracker.Get(first)!.Detail);
-        Assert.Equal(RunState.Failed, tracker.Get(second)?.State); // poison message did not kill the worker
+        [Fact]
+        public async Task Trivial_diff_run_skips_the_llm_and_publishes_a_clean_vote()
+        {
+            _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+            _Factory.Git.Diff = """
+                                diff --git a/src/A.cs b/src/A.cs
+                                --- a/src/A.cs
+                                +++ b/src/A.cs
+                                @@ -1,2 +1,0 @@
+                                -line one
+                                -line two
+                                """;
 
-        await cts.CancelAsync();
-        try
-        {
-            await workerTask;
-        }
-        catch (OperationCanceledException)
-        {
-        }
+            var client = _Factory.CreateClient();
+            var submit = await client.PostAsJsonAsync("/reviews",
+                new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
 
-        try
-        {
-            Directory.Delete(standaloneWorkDir, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-    }
-
-    private static string CheckoutDir(string workDir, string repositoryId, string headSha)
-    {
-        static string KeyComponent(string id)
-        {
-            var readable = string.Concat(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
-            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id)))[..12].ToLowerInvariant();
-            return $"{readable}-{hash}";
+            Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
+            Assert.Equal(RunState.Completed, status.State);
+            Assert.Equal(0, _Factory.Chat.Calls); // zero LLM calls on the trivial path
+            Assert.Single(_Factory.Source.Votes);
+            Assert.Equal(ReviewerVote.NoResponse, _Factory.Source.Votes[0].Vote); // clean-run vote
+            var run = Assert.Single(_Factory.Store.Runs);
+            Assert.True(run.Success); // head is marked reviewed for the gate
         }
 
-        return Path.Combine(workDir, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));
-    }
-
-    [Fact]
-    public async Task Second_run_on_same_pr_does_not_resolve_or_repost()
-    {
-        var pr = new PrKey("o", "p", "r", 42);
-        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
-        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n";
-
-        // Pre-seed the checkout so the finding's anchor verifies against a real file.
-        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
-        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
-        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "line three"]);
-
-        static Dictionary<string, object?> FindingArgs() => new()
+        [Fact]
+        public async Task Different_heads_in_same_repo_complete_concurrently()
         {
-            ["ruleId"] = "general.other",
-            ["title"] = "bad code",
-            ["severity"] = "high",
-            ["category"] = "bug",
-            ["description"] = "bad code found",
-            ["snippet"] = "bad code here",
-            ["filePath"] = "src/A.cs",
-            ["startLine"] = 2,
-        };
-
-        // Run 1: record finding K then finish.
-        _Factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
-
-        var client = _Factory.CreateClient();
-        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        await WaitForState(body1!.RunId, RunState.Completed);
-
-        var run1 = Assert.Single(_Factory.Store.Runs);
-        var finding1 = Assert.Single(run1.Findings);
-        var key = finding1.DedupeKey;
-        var threadId = finding1.ThreadId!.Value;
-        Assert.Single(_Factory.Source.PostedFindings);
-
-        // Wait for the worker to release the claim before re-submitting the same PR.
-        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
-        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
-        {
-            await Task.Delay(25);
-        }
-
-        // Simulate the live ADO thread plus a new human comment (so run 2 clears the gate as FollowUp).
-        _Factory.Source.Threads.Add(new ReviewThread(threadId, key, ReviewThreadStatus.Active,
-        [
-            new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow.AddMinutes(-2)),
-            new ThreadComment("human", "author", false, "still failing?", DateTimeOffset.UtcNow),
-        ]));
-        _Factory.Store.LastRun = new PriorRun(pr, "head-sha", DateTimeOffset.UtcNow.AddMinutes(-1), [key],
-            [new StoredFinding(key, "general.other", "high", "bad code", "src/A.cs", 2, threadId)]);
-
-        // Run 2: re-record K (dedupe-rejected) and finish.
-        _Factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
-
-        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        await WaitForState(body2!.RunId, RunState.Completed);
-
-        Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
-        Assert.DoesNotContain(_Factory.Source.StatusChanges, s => s.Status == ReviewThreadStatus.Fixed);
-        Assert.Contains(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key); // carried forward
-    }
-
-    [Fact]
-    public async Task Regressed_resolved_finding_reopens_thread_instead_of_reposting()
-    {
-        // F1 scenario (P1-11): run 1 posts finding K → thread auto-resolved (Fixed) →
-        // run 2 re-detects K verbatim → thread 7 reopens with a regression note, exactly
-        // one visible ADO action, no duplicate thread, store row keeps thread id 7.
-        var pr = new PrKey("o", "p", "r", 42);
-        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
-        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n";
-
-        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
-        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
-        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "line three"]);
-
-        static Dictionary<string, object?> FindingArgs() => new()
-        {
-            ["ruleId"] = "general.other",
-            ["title"] = "bad code",
-            ["severity"] = "high",
-            ["category"] = "bug",
-            ["description"] = "bad code found",
-            ["snippet"] = "bad code here",
-            ["filePath"] = "src/A.cs",
-            ["startLine"] = 2,
-        };
-
-        // Run 1: record finding K then finish.
-        _Factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
-
-        var client = _Factory.CreateClient();
-        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        await WaitForState(body1!.RunId, RunState.Completed);
-
-        var run1 = Assert.Single(_Factory.Store.Runs);
-        var key = run1.Findings[0].DedupeKey;
-        var threadId = run1.Findings[0].ThreadId!.Value;
-        Assert.Single(_Factory.Source.PostedFindings);
-
-        // Wait for the worker to release the claim before re-submitting the same PR.
-        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
-        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
-        {
-            await Task.Delay(25);
-        }
-
-        // Simulate: the finding was auto-resolved (thread Fixed) and a human comment
-        // keeps the gate happy for the follow-up run.
-        _Factory.Source.Threads.Add(new ReviewThread(threadId, key, ReviewThreadStatus.Fixed,
-        [
-            new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow.AddMinutes(-3)),
-            new ThreadComment("bot", "bot", true, "Resolved: this finding no longer reproduces in the latest iteration.",
-                DateTimeOffset.UtcNow.AddMinutes(-2)),
-            new ThreadComment("human", "author", false, "why is this fixed?", DateTimeOffset.UtcNow),
-        ]));
-        _Factory.Store.LastRun = new PriorRun(pr, "head-sha", DateTimeOffset.UtcNow.AddMinutes(-1), [key],
-            [new StoredFinding(key, "general.other", "high", "bad code", "src/A.cs", 2, threadId)]);
-
-        // Run 2: agent re-detects K verbatim → accepted as regression → reopened.
-        _Factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
-
-        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        await WaitForState(body2!.RunId, RunState.Completed);
-
-        Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
-        Assert.Contains(_Factory.Source.StatusChanges, s => s.ThreadId == threadId && s.Status == ReviewThreadStatus.Active);
-        Assert.Contains(_Factory.Source.Replies, r => r.ThreadId == threadId && r.Text.Contains("Regressed in"));
-        var row = Assert.Single(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key);
-        Assert.Equal(threadId, row.ThreadId); // reopened thread id re-stamped
-    }
-
-    [Fact]
-    public async Task Rerun_after_partial_failure_posts_no_duplicates()
-    {
-        var pr = new PrKey("o", "p", "r", 42);
-        _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
-        _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,2 @@\n+bad code here\n+worse code here\n";
-
-        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
-        Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
-        File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "worse code here"]);
-
-        static Dictionary<string, object?> Finding(string snippet, int line) => new()
-        {
-            ["ruleId"] = "general.other",
-            ["title"] = "t",
-            ["severity"] = "high",
-            ["category"] = "bug",
-            ["description"] = "d",
-            ["snippet"] = snippet,
-            ["filePath"] = "src/A.cs",
-            ["startLine"] = line,
-        };
-
-        // Run 1: two findings; the second post throws mid-publish (partial failure).
-        _Factory.Source.ThrowOnNthPost = 2;
-        _Factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(
-                ("RecordFinding", Finding("bad code here", 2)),
-                ("RecordFinding", Finding("worse code here", 3))),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
-
-        var client = _Factory.CreateClient();
-        var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        await WaitForState(body1!.RunId, RunState.Failed);
-
-        var posted = Assert.Single(_Factory.Source.PostedFindings); // exactly one landed before the fault
-        var postedKey = posted.Finding.DedupeKey!;
-        var postedThreadId = posted.ThreadId;
-
-        var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
-        for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
-        {
-            await Task.Delay(25);
-        }
-
-        // The successfully-posted thread survives the failed run (ADO is the source of truth).
-        _Factory.Source.Threads.Add(new ReviewThread(postedThreadId, postedKey, ReviewThreadStatus.Active,
-            [new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow)]));
-
-        // Run 2: same two findings; the already-posted one is suppressed, only the other posts.
-        _Factory.Source.ThrowOnNthPost = null;
-        _Factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(
-                ("RecordFinding", Finding("bad code here", 2)),
-                ("RecordFinding", Finding("worse code here", 3))),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
-
-        var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        await WaitForState(body2!.RunId, RunState.Completed);
-
-        // Exactly two distinct threads ever created — one per finding, zero duplicates.
-        Assert.Equal(2, _Factory.Source.PostedFindings.Count);
-        Assert.Equal(2, _Factory.Source.PostedFindings.Select(p => p.Finding.DedupeKey).Distinct().Count());
-    }
-
-    private sealed class ExplosiveGitOps(string repoDir) : FakeGitOps
-    {
-        public override Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct, string? mirrorPath = null)
-            => Task.FromResult(repoDir);
-
-        public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
-            => throw new InvalidOperationException("git exploded");
-    }
-    [Fact]
-    public async Task AutoFix_disabled_by_default_posts_no_suggestions()
-    {
-        var pr = new PrKey("o", "p", "r", 42);
-        _Factory.Source.ChangedFiles = [new ChangedFile("script.sh", ChangedFileType.Edit)];
-        _Factory.Git.Diff = "+++ b/script.sh\n@@ -1,1 +2,1 @@\n+echo $name\n";
-
-        var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
-        Directory.CreateDirectory(checkoutDir);
-        var scriptPath = Path.Combine(checkoutDir, "script.sh");
-        File.WriteAllLines(scriptPath, ["#!/bin/sh", "echo $name"]);
-        var originalScript = File.ReadAllBytes(scriptPath);
-
-        _Factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
+            var firstPr = new PrKey("o", "p", "r", 51);
+            var secondPr = new PrKey("o", "p", "r", 52);
+            _Factory.Source.PullRequestsByKey[firstPr] = new PullRequest(51, "one", null, "head-one", "base", "url", false, "creator-1", "PR Author");
+            _Factory.Source.PullRequestsByKey[secondPr] = new PullRequest(52, "two", null, "head-two", "base", "url", false, "creator-1", "PR Author");
+            _Factory.Git.CloneDelay = TimeSpan.FromMilliseconds(150);
+            try
             {
-                ["ruleId"] = "bash.unquoted-vars",
-                ["title"] = "unquoted variable",
-                ["severity"] = "medium",
-                ["category"] = "bug",
-                ["description"] = "quote it",
-                ["snippet"] = "echo $name",
-                ["filePath"] = "script.sh",
-                ["startLine"] = 2,
-            })),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+                var client = _Factory.CreateClient();
+                var first = await client.PostAsJsonAsync("/reviews",
+                    new {org = "o", project = "p", repositoryId = "r", prId = 51});
+                var second = await client.PostAsJsonAsync("/reviews",
+                    new {org = "o", project = "p", repositoryId = "r", prId = 52});
+                var firstBody = await first.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+                var secondBody = await second.Content.ReadFromJsonAsync<SubmitReviewResponse>();
 
-        var client = _Factory.CreateClient();
-        var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-        await WaitForState(body!.RunId, RunState.Completed);
+                var statuses = await Task.WhenAll(
+                    WaitForState(firstBody!.RunId, RunState.Completed),
+                    WaitForState(secondBody!.RunId, RunState.Completed));
 
-        Assert.Single(_Factory.Source.PostedFindings); // plain finding, no fix label
-        Assert.DoesNotContain("Fix available", _Factory.Source.PostedFindingBodies[0]);
-        Assert.Empty(_Factory.Source.PostedSuggestions);
-        Assert.DoesNotContain(_Factory.Source.GeneralComments, c => c.Contains("Auto-fixes"));
-        // The checkout was untouched by the auto-fix stage.
-        Assert.Equal(originalScript, File.ReadAllBytes(scriptPath));
-    }
-
-    [Fact]
-    public async Task AutoFix_enabled_publishes_suggestion_for_allowlisted_rule()
-    {
-        await using var factory = new ReviewForgeFactory().WithAutoFix();
-        var pr = new PrKey("o", "p", "r", 42);
-        factory.Source.ChangedFiles = [new ChangedFile("script.sh", ChangedFileType.Edit)];
-        factory.Git.Diff = "+++ b/script.sh\n@@ -1,1 +2,1 @@\n+echo $name\n";
-
-        var checkoutDir = CheckoutDir(factory.WorkDir, "r", "head-sha");
-        Directory.CreateDirectory(checkoutDir);
-        var scriptPath = Path.Combine(checkoutDir, "script.sh");
-        File.WriteAllLines(scriptPath, ["#!/bin/sh", "echo $name"]);
-
-        factory.Chat.Reset(
-            ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
+                Assert.All(statuses, status => Assert.Equal(RunState.Completed, status.State));
+                Assert.True(_Factory.Git.MaxConcurrentClones > 1);
+            }
+            finally
             {
-                ["ruleId"] = "bash.unquoted-vars",
-                ["title"] = "unquoted variable",
-                ["severity"] = "medium",
-                ["category"] = "bug",
-                ["description"] = "quote it",
-                ["snippet"] = "echo $name",
-                ["filePath"] = "script.sh",
-                ["startLine"] = 2,
-            })),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+                _Factory.Source.PullRequestsByKey.Clear();
+                _Factory.Git.CloneDelay = TimeSpan.Zero;
+            }
+        }
 
-        var client = factory.CreateClient();
-        var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-        var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
 
-        var tracker = factory.Services.GetRequiredService<RunTracker>();
-        RunStatus? status = null;
-        for (var i = 0; i < 200; i++)
+        [Fact]
+        public async Task Draft_pr_is_skipped()
         {
-            if (tracker.Get(body!.RunId) is { } s
-                && s.State is RunState.Completed or RunState.Failed or RunState.Skipped)
+            _Factory.Source.Pr = _Factory.Source.Pr with {IsDraft = true};
+            try
             {
-                status = s;
-                break;
+                var client = _Factory.CreateClient();
+                var submit = await client.PostAsJsonAsync("/reviews",
+                    new {org = "o", project = "p", repositoryId = "r", prId = 43});
+                var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+
+                var status = await WaitForState(body!.RunId, RunState.Skipped, RunState.Failed);
+                Assert.Equal(RunState.Skipped, status.State);
+                Assert.Equal("PR is a draft", status.Detail);
+            }
+            finally
+            {
+                _Factory.Source.Pr = _Factory.Source.Pr with {IsDraft = false};
+            }
+        }
+
+        [Fact]
+        public async Task Failed_run_marks_status_and_worker_keeps_draining()
+        {
+            // Standalone worker with its own queue — no race with the hosted worker.
+            var queue = new ReviewQueue();
+            var tracker = new RunTracker();
+            var standaloneWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge-failing-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(standaloneWorkDir);
+            var reviewOptions = new ReviewOptions();
+            var failingGit = new ExplosiveGitOps(standaloneWorkDir);
+            var failingBuilder = PipelineBuilderTestFactory.Create(
+                _Factory.Source,
+                _Factory.Store,
+                failingGit,
+                new FakeChatClientFactory(_Factory.Chat),
+                standaloneWorkDir,
+                reviewOptions);
+            var worker = new ReviewWorker(queue, Options.Create(new HostOptions {WorkerCount = 1}), tracker, failingBuilder, new InFlightClaims(),
+                _Factory.Store, LoggerFactory.Create(b => { }).CreateLogger<ReviewWorker>());
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var workerTask = worker.StartAsync(cts.Token);
+
+            var pr = new PrKey("o", "p", "r", 44);
+            var first = Guid.NewGuid();
+            var second = Guid.NewGuid();
+            Assert.True(queue.TryEnqueue(new ReviewRequest(first, pr, DateTimeOffset.UtcNow)).Accepted);
+            Assert.True(queue.TryEnqueue(new ReviewRequest(second, pr, DateTimeOffset.UtcNow)).Accepted);
+
+            for (var i = 0; i < 200 && tracker.Get(second)?.State != RunState.Failed; i++)
+            {
+                await Task.Delay(50);
             }
 
-            await Task.Delay(50);
+            Assert.Equal(RunState.Failed, tracker.Get(first)?.State);
+            // Raw exception messages stay in the logs; the tracker exposes a generic reason.
+            Assert.Equal("internal error — see run log", tracker.Get(first)!.Detail);
+            Assert.Equal(RunState.Failed, tracker.Get(second)?.State); // poison message did not kill the worker
+
+            await cts.CancelAsync();
+            try
+            {
+                await workerTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            try
+            {
+                Directory.Delete(standaloneWorkDir, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
         }
 
-        Assert.NotNull(status);
-        Assert.Equal(RunState.Completed, status!.State);
+        private static string CheckoutDir(string workDir, string repositoryId, string headSha)
+        {
+            static string KeyComponent(string id)
+            {
+                var readable = string.Concat(id.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
+                var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id)))[..12].ToLowerInvariant();
+                return $"{readable}-{hash}";
+            }
 
-        var posted = Assert.Single(factory.Source.PostedFindings);
-        Assert.Equal(2, posted.Finding.Anchor!.StartLine); // anchored at the fix range
-        Assert.Contains("**Fix available**", factory.Source.PostedFindingBodies[0]);
-        Assert.Contains("```suggestion", factory.Source.PostedFindingBodies[0]);
-        Assert.Empty(factory.Source.PostedSuggestions);
-        Assert.Contains(factory.Source.GeneralComments, c => c.Contains("> **Auto-fixes:** 1 suggestion(s) posted"));
-        // Zero-write deterministic path — the file on disk is untouched.
-        Assert.Equal("echo $name", File.ReadAllLines(scriptPath)[1]);
-        // The store carries the applied-fix record forward.
-        var run = Assert.Single(factory.Store.Runs);
-        var row = Assert.Single(run.Findings, f => f.AppliedFixJson is not null);
-        var persisted = JsonSerializer.Deserialize<AppliedFix>(row.AppliedFixJson!);
-        Assert.NotNull(persisted);
-        Assert.Equal("script.sh", persisted!.Proposal.FilePath);
-        Assert.Equal(FixOrigin.Deterministic, persisted.Proposal.Origin);
+            return Path.Combine(workDir, "checkouts", KeyComponent(repositoryId), KeyComponent(headSha));
+        }
+
+        [Fact]
+        public async Task Second_run_on_same_pr_does_not_resolve_or_repost()
+        {
+            var pr = new PrKey("o", "p", "r", 42);
+            _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+            _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n";
+
+            // Pre-seed the checkout so the finding's anchor verifies against a real file.
+            var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+            Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+            File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "line three"]);
+
+            static Dictionary<string, object?> FindingArgs() => new()
+            {
+                ["ruleId"] = "general.other",
+                ["title"] = "bad code",
+                ["severity"] = "high",
+                ["category"] = "bug",
+                ["description"] = "bad code found",
+                ["snippet"] = "bad code here",
+                ["filePath"] = "src/A.cs",
+                ["startLine"] = 2,
+            };
+
+            // Run 1: record finding K then finish.
+            _Factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var client = _Factory.CreateClient();
+            var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            await WaitForState(body1!.RunId, RunState.Completed);
+
+            var run1 = Assert.Single(_Factory.Store.Runs);
+            var finding1 = Assert.Single(run1.Findings);
+            var key = finding1.DedupeKey;
+            var threadId = finding1.ThreadId!.Value;
+            Assert.Single(_Factory.Source.PostedFindings);
+
+            // Wait for the worker to release the claim before re-submitting the same PR.
+            var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+            for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+            {
+                await Task.Delay(25);
+            }
+
+            // Simulate the live ADO thread plus a new human comment (so run 2 clears the gate as FollowUp).
+            _Factory.Source.Threads.Add(new ReviewThread(threadId, key, ReviewThreadStatus.Active,
+            [
+                new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow.AddMinutes(-2)),
+                new ThreadComment("human", "author", false, "still failing?", DateTimeOffset.UtcNow),
+            ]));
+            _Factory.Store.LastRun = new PriorRun(pr, "head-sha", DateTimeOffset.UtcNow.AddMinutes(-1), [key],
+                [new StoredFinding(key, "general.other", "high", "bad code", "src/A.cs", 2, threadId)]);
+
+            // Run 2: re-record K (dedupe-rejected) and finish.
+            _Factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            await WaitForState(body2!.RunId, RunState.Completed);
+
+            Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
+            Assert.DoesNotContain(_Factory.Source.StatusChanges, s => s.Status == ReviewThreadStatus.Fixed);
+            Assert.Contains(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key); // carried forward
+        }
+
+        [Fact]
+        public async Task Regressed_resolved_finding_reopens_thread_instead_of_reposting()
+        {
+            // F1 scenario (P1-11): run 1 posts finding K → thread auto-resolved (Fixed) →
+            // run 2 re-detects K verbatim → thread 7 reopens with a regression note, exactly
+            // one visible ADO action, no duplicate thread, store row keeps thread id 7.
+            var pr = new PrKey("o", "p", "r", 42);
+            _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+            _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,1 @@\n+bad code here\n";
+
+            var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+            Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+            File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "line three"]);
+
+            static Dictionary<string, object?> FindingArgs() => new()
+            {
+                ["ruleId"] = "general.other",
+                ["title"] = "bad code",
+                ["severity"] = "high",
+                ["category"] = "bug",
+                ["description"] = "bad code found",
+                ["snippet"] = "bad code here",
+                ["filePath"] = "src/A.cs",
+                ["startLine"] = 2,
+            };
+
+            // Run 1: record finding K then finish.
+            _Factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var client = _Factory.CreateClient();
+            var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            await WaitForState(body1!.RunId, RunState.Completed);
+
+            var run1 = Assert.Single(_Factory.Store.Runs);
+            var key = run1.Findings[0].DedupeKey;
+            var threadId = run1.Findings[0].ThreadId!.Value;
+            Assert.Single(_Factory.Source.PostedFindings);
+
+            // Wait for the worker to release the claim before re-submitting the same PR.
+            var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+            for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+            {
+                await Task.Delay(25);
+            }
+
+            // Simulate: the finding was auto-resolved (thread Fixed) and a human comment
+            // keeps the gate happy for the follow-up run.
+            _Factory.Source.Threads.Add(new ReviewThread(threadId, key, ReviewThreadStatus.Fixed,
+            [
+                new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow.AddMinutes(-3)),
+                new ThreadComment("bot", "bot", true, "Resolved: this finding no longer reproduces in the latest iteration.",
+                    DateTimeOffset.UtcNow.AddMinutes(-2)),
+                new ThreadComment("human", "author", false, "why is this fixed?", DateTimeOffset.UtcNow),
+            ]));
+            _Factory.Store.LastRun = new PriorRun(pr, "head-sha", DateTimeOffset.UtcNow.AddMinutes(-1), [key],
+                [new StoredFinding(key, "general.other", "high", "bad code", "src/A.cs", 2, threadId)]);
+
+            // Run 2: agent re-detects K verbatim → accepted as regression → reopened.
+            _Factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(("RecordFinding", FindingArgs())),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            await WaitForState(body2!.RunId, RunState.Completed);
+
+            Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
+            Assert.Contains(_Factory.Source.StatusChanges, s => s.ThreadId == threadId && s.Status == ReviewThreadStatus.Active);
+            Assert.Contains(_Factory.Source.Replies, r => r.ThreadId == threadId && r.Text.Contains("Regressed in"));
+            var row = Assert.Single(_Factory.Store.Runs.Last().Findings, f => f.DedupeKey == key);
+            Assert.Equal(threadId, row.ThreadId); // reopened thread id re-stamped
+        }
+
+        [Fact]
+        public async Task Rerun_after_partial_failure_posts_no_duplicates()
+        {
+            var pr = new PrKey("o", "p", "r", 42);
+            _Factory.Source.ChangedFiles = [new ChangedFile("src/A.cs", ChangedFileType.Edit)];
+            _Factory.Git.Diff = "+++ b/src/A.cs\n@@ -1,1 +2,2 @@\n+bad code here\n+worse code here\n";
+
+            var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+            Directory.CreateDirectory(Path.Combine(checkoutDir, "src"));
+            File.WriteAllLines(Path.Combine(checkoutDir, "src", "A.cs"), ["line one", "bad code here", "worse code here"]);
+
+            static Dictionary<string, object?> Finding(string snippet, int line) => new()
+            {
+                ["ruleId"] = "general.other",
+                ["title"] = "t",
+                ["severity"] = "high",
+                ["category"] = "bug",
+                ["description"] = "d",
+                ["snippet"] = snippet,
+                ["filePath"] = "src/A.cs",
+                ["startLine"] = line,
+            };
+
+            // Run 1: two findings; the second post throws mid-publish (partial failure).
+            _Factory.Source.ThrowOnNthPost = 2;
+            _Factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(
+                    ("RecordFinding", Finding("bad code here", 2)),
+                    ("RecordFinding", Finding("worse code here", 3))),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var client = _Factory.CreateClient();
+            var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            await WaitForState(body1!.RunId, RunState.Failed);
+
+            var posted = Assert.Single(_Factory.Source.PostedFindings); // exactly one landed before the fault
+            var postedKey = posted.Finding.DedupeKey!;
+            var postedThreadId = posted.ThreadId;
+
+            var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
+            for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
+            {
+                await Task.Delay(25);
+            }
+
+            // The successfully-posted thread survives the failed run (ADO is the source of truth).
+            _Factory.Source.Threads.Add(new ReviewThread(postedThreadId, postedKey, ReviewThreadStatus.Active,
+                [new ThreadComment("bot", "bot", true, "finding", DateTimeOffset.UtcNow)]));
+
+            // Run 2: same two findings; the already-posted one is suppressed, only the other posts.
+            _Factory.Source.ThrowOnNthPost = null;
+            _Factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(
+                    ("RecordFinding", Finding("bad code here", 2)),
+                    ("RecordFinding", Finding("worse code here", 3))),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            await WaitForState(body2!.RunId, RunState.Completed);
+
+            // Exactly two distinct threads ever created — one per finding, zero duplicates.
+            Assert.Equal(2, _Factory.Source.PostedFindings.Count);
+            Assert.Equal(2, _Factory.Source.PostedFindings.Select(p => p.Finding.DedupeKey).Distinct().Count());
+        }
+
+        private sealed class ExplosiveGitOps(string repoDir) : FakeGitOps
+        {
+            public override Task<string> CloneOrOpenAsync(string cloneUrl, string workDir, string? pat, CancellationToken ct, string? mirrorPath = null)
+                => Task.FromResult(repoDir);
+
+            public override Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
+                => throw new InvalidOperationException("git exploded");
+        }
+
+        [Fact]
+        public async Task AutoFix_disabled_by_default_posts_no_suggestions()
+        {
+            var pr = new PrKey("o", "p", "r", 42);
+            _Factory.Source.ChangedFiles = [new ChangedFile("script.sh", ChangedFileType.Edit)];
+            _Factory.Git.Diff = "+++ b/script.sh\n@@ -1,1 +2,1 @@\n+echo $name\n";
+
+            var checkoutDir = CheckoutDir(_Factory.WorkDir, "r", "head-sha");
+            Directory.CreateDirectory(checkoutDir);
+            var scriptPath = Path.Combine(checkoutDir, "script.sh");
+            File.WriteAllLines(scriptPath, ["#!/bin/sh", "echo $name"]);
+            var originalScript = File.ReadAllBytes(scriptPath);
+
+            _Factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
+                {
+                    ["ruleId"] = "bash.unquoted-vars",
+                    ["title"] = "unquoted variable",
+                    ["severity"] = "medium",
+                    ["category"] = "bug",
+                    ["description"] = "quote it",
+                    ["snippet"] = "echo $name",
+                    ["filePath"] = "script.sh",
+                    ["startLine"] = 2,
+                })),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var client = _Factory.CreateClient();
+            var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            await WaitForState(body!.RunId, RunState.Completed);
+
+            Assert.Single(_Factory.Source.PostedFindings); // plain finding, no fix label
+            Assert.DoesNotContain("Fix available", _Factory.Source.PostedFindingBodies[0]);
+            Assert.Empty(_Factory.Source.PostedSuggestions);
+            Assert.DoesNotContain(_Factory.Source.GeneralComments, c => c.Contains("Auto-fixes"));
+            // The checkout was untouched by the auto-fix stage.
+            Assert.Equal(originalScript, File.ReadAllBytes(scriptPath));
+        }
+
+        [Fact]
+        public async Task AutoFix_enabled_publishes_suggestion_for_allowlisted_rule()
+        {
+            await using var factory = new ReviewForgeFactory().WithAutoFix();
+            var pr = new PrKey("o", "p", "r", 42);
+            factory.Source.ChangedFiles = [new ChangedFile("script.sh", ChangedFileType.Edit)];
+            factory.Git.Diff = "+++ b/script.sh\n@@ -1,1 +2,1 @@\n+echo $name\n";
+
+            var checkoutDir = CheckoutDir(factory.WorkDir, "r", "head-sha");
+            Directory.CreateDirectory(checkoutDir);
+            var scriptPath = Path.Combine(checkoutDir, "script.sh");
+            File.WriteAllLines(scriptPath, ["#!/bin/sh", "echo $name"]);
+
+            factory.Chat.Reset(
+                ScriptedChatClient.FunctionCalls(("RecordFinding", new Dictionary<string, object?>
+                {
+                    ["ruleId"] = "bash.unquoted-vars",
+                    ["title"] = "unquoted variable",
+                    ["severity"] = "medium",
+                    ["category"] = "bug",
+                    ["description"] = "quote it",
+                    ["snippet"] = "echo $name",
+                    ["filePath"] = "script.sh",
+                    ["startLine"] = 2,
+                })),
+                ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
+
+            var client = factory.CreateClient();
+            var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
+            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+
+            var tracker = factory.Services.GetRequiredService<RunTracker>();
+            RunStatus? status = null;
+            for (var i = 0; i < 200; i++)
+            {
+                if (tracker.Get(body!.RunId) is { } s
+                    && s.State is RunState.Completed or RunState.Failed or RunState.Skipped)
+                {
+                    status = s;
+                    break;
+                }
+
+                await Task.Delay(50);
+            }
+
+            Assert.NotNull(status);
+            Assert.Equal(RunState.Completed, status!.State);
+
+            var posted = Assert.Single(factory.Source.PostedFindings);
+            Assert.Equal(2, posted.Finding.Anchor!.StartLine); // anchored at the fix range
+            Assert.Contains("**Fix available**", factory.Source.PostedFindingBodies[0]);
+            Assert.Contains("```suggestion", factory.Source.PostedFindingBodies[0]);
+            Assert.Empty(factory.Source.PostedSuggestions);
+            Assert.Contains(factory.Source.GeneralComments, c => c.Contains("> **Auto-fixes:** 1 suggestion(s) posted"));
+            // Zero-write deterministic path — the file on disk is untouched.
+            Assert.Equal("echo $name", File.ReadAllLines(scriptPath)[1]);
+            // The store carries the applied-fix record forward.
+            var run = Assert.Single(factory.Store.Runs);
+            var row = Assert.Single(run.Findings, f => f.AppliedFixJson is not null);
+            var persisted = JsonSerializer.Deserialize<AppliedFix>(row.AppliedFixJson!);
+            Assert.NotNull(persisted);
+            Assert.Equal("script.sh", persisted!.Proposal.FilePath);
+            Assert.Equal(FixOrigin.Deterministic, persisted.Proposal.Origin);
+        }
     }
-}
-
 }
 
 [Collection("ReviewForge service host")]
@@ -851,6 +850,30 @@ public class DiWiringTests
     }
 
     [Fact]
+    public void WorkspaceStartupTask_is_registered_before_pipeline_workers()
+    {
+        WithPat(() =>
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddReviewForge(BuildConfig());
+
+            // Hosted services start in registration order; the startup task must create the
+            // work/findings directories before any worker can dequeue and build a pipeline.
+            var hosted = services
+                .Where(d => d.ServiceType == typeof(IHostedService))
+                .Select(d => d.ImplementationType)
+                .ToArray();
+            var startup = Array.IndexOf(hosted, typeof(WorkspaceStartupTask));
+
+            Assert.True(startup >= 0, "WorkspaceStartupTask is not registered");
+            Assert.True(Array.IndexOf(hosted, typeof(ReviewWorker)) > startup);
+            Assert.True(Array.IndexOf(hosted, typeof(DiscoverySweepWorker)) > startup);
+            Assert.True(Array.IndexOf(hosted, typeof(CheckoutEvictionWorker)) > startup);
+        });
+    }
+
+    [Fact]
     public void ChatClientFactory_is_singleton_and_disposed_with_provider()
     {
         WithPat(() =>
@@ -907,8 +930,7 @@ public class DiWiringTests
         services.AddReviewForge(config);
         using var provider = services.BuildServiceProvider();
 
-        var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<AdoOptions>>().Value);
+        var ex = Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<AdoOptions>>().Value);
         Assert.Contains("OrgUrl", ex.Message);
     }
 
@@ -1062,8 +1084,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         services.AddReviewForge(configuration);
         using var provider = services.BuildServiceProvider();
 
-        var ex = Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<HostOptions>>().Value);
+        var ex = Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<HostOptions>>().Value);
 
         Assert.Contains("WorkerCount must be between 1 and 64", ex.Message);
     }
@@ -1247,5 +1268,4 @@ public sealed class ApiDocsTests
             Environment.SetEnvironmentVariable("ApiDocs__Enabled", previous);
         }
     }
-
 }

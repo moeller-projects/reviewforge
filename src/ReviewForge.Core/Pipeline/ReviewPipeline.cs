@@ -16,13 +16,21 @@ public sealed class ReviewPipeline
     public ReviewPipeline(IEnumerable<IReviewStage> stages, ILogger<ReviewPipeline> logger)
     {
         _Stages = [.. stages];
+        // Stage names feed telemetry and log scopes; an accidental duplicate is the real
+        // failure mode now that the injected list is the only source of sequencing truth.
+        var dupes = _Stages.GroupBy(s => s.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToArray();
+        if (dupes.Length > 0)
+        {
+            throw new InvalidOperationException($"duplicate stages: {string.Join(", ", dupes)}");
+        }
+
         _Logger = logger;
     }
 
     public async Task<ReviewContext> RunAsync(ReviewContext ctx, CancellationToken ct)
     {
         var links = ctx.EnqueueContext is { } enqueueCtx
-            ? new[] { new ActivityLink(enqueueCtx) }
+            ? new[] {new ActivityLink(enqueueCtx)}
             : null;
 
         using var runActivity = ReviewForgeTelemetry.Source.StartActivity(
@@ -81,8 +89,8 @@ public sealed class ReviewPipeline
                         sw.ElapsedMilliseconds,
                         new TagList
                         {
-                            { ReviewForgeTelemetry.TagStage, stage.Name },
-                            { ReviewForgeTelemetry.TagResult, stageResult },
+                            {ReviewForgeTelemetry.TagStage, stage.Name},
+                            {ReviewForgeTelemetry.TagResult, stageResult},
                         });
                     _Logger.LogInformation("stage {Stage} done in {ElapsedMs} ms", stage.Name, sw.ElapsedMilliseconds);
                 }

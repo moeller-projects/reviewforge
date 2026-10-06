@@ -7,7 +7,6 @@
 work/
 artifacts/
 tests/
-prompts/
 *.md
 Dockerfile
 docker-compose.yml
