@@ -128,7 +128,7 @@ jobs:
         if: always() && matrix.os == 'ubuntu-latest'
         uses: irongut/CodeCoverageSummary@v1.3.0
         with:
-          filename: "tests/**/coverage.cobertura.xml"
+          filename: "CoverageResults/**/coverage.cobertura.xml"
           badge: "true"
           format: "markdown"
           output: "both"
