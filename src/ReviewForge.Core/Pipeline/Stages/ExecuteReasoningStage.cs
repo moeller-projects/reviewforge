@@ -135,18 +135,10 @@ public sealed class ExecuteReasoningStage(
             Pr: ctx.RequirePullRequest(), Kind: ctx.Kind, WorkItems: ctx.WorkItems, ChangedFiles: ctx.ChangedFiles,
             PendingReplies: ctx.PendingReplies, DiffText: ctx.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names,
             MaxDiffChars: maxDiffChars, MaxDiffCharsPerFile: maxDiffCharsPerFile));
-        ctx.Result = await agent.RunAsync(
-            prompt,
-            ctx.Collector,
-            ctx.ContextStore,
-            repoDir,
-            ruleBook,
-            ctx.ChangedFiles.ToHashSet(RepoPath.PathComparer),
-            ctx.Diff,
-            ctx.DiffText,
-            ctx.ResolvedKeys,
-            ct,
-            ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full);
+        ctx.Result = await agent.RunAsync(new AgentRunRequest(
+            prompt, ctx.Collector, ctx.ContextStore, repoDir, ToolProfile.Review,
+            ruleBook, ctx.ChangedFiles.ToHashSet(RepoPath.PathComparer), ctx.Diff, ctx.DiffText,
+            ctx.ResolvedKeys, Tier: ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct);
     }
 
     private async Task RunShardsAsync(
@@ -181,18 +173,11 @@ public sealed class ExecuteReasoningStage(
                     ChangedFiles: shard.Files, PendingReplies: ctx.PendingReplies, DiffText: shard.DiffText,
                     Enrichment: null, ContextNames: ctx.ContextStore.Names,
                     MaxDiffChars: Math.Max(shard.DiffText.Length, 1), MaxDiffCharsPerFile: maxDiffCharsPerFile));
-                var result = await agent.RunAsync(
-                    shardPrompt,
-                    shardCollector,
-                    SnapshotContext(ctx.ContextStore),
-                    repoDir,
+                var result = await agent.RunAsync(new AgentRunRequest(
+                    shardPrompt, shardCollector, SnapshotContext(ctx.ContextStore), repoDir, ToolProfile.Review,
                     agent.ComposeRuleBook(shard.Files, rootFiles),
-                    shard.Files.ToHashSet(RepoPath.PathComparer),
-                    DiffIndex.Parse(shard.DiffText),
-                    shard.DiffText,
-                    ctx.ResolvedKeys,
-                    token,
-                    tier);
+                    shard.Files.ToHashSet(RepoPath.PathComparer), DiffIndex.Parse(shard.DiffText), shard.DiffText,
+                    ctx.ResolvedKeys, Tier: tier), token);
                 shardNarratives[i] = result.Narrative;
                 ReviewTelemetry.ShardDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(shardStart).TotalMilliseconds,

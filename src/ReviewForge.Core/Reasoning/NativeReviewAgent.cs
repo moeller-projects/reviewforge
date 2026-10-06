@@ -36,7 +36,32 @@ public sealed record AgentOptions
     public bool DebugLogging { get; init; }
 }
 
-/// <summary>Builds and runs the native review agent with read and review tools.</summary>
+/// <summary>Available tool and prompt contracts for an agent run.</summary>
+public enum ToolProfile
+{
+    Review,
+    Triage,
+    Fix,
+}
+
+/// <summary>All inputs required to execute one native agent pass.</summary>
+public sealed record AgentRunRequest(
+    string UserPrompt,
+    ReviewCollector Collector,
+    ContextStore ContextStore,
+    string RepoDir,
+    ToolProfile Profile,
+    RuleBook? RuleBook = null,
+    IReadOnlySet<string>? ChangedFiles = null,
+    DiffIndex? Diff = null,
+    string? DiffText = null,
+    IReadOnlySet<string>? ResolvedKeys = null,
+    IReadOnlySet<long>? AllowedThreadIds = null,
+    IReadOnlySet<string>? WritablePaths = null,
+    int? MaxIterationsOverride = null,
+    ChatTier Tier = ChatTier.Full);
+
+/// <summary>Builds and runs the native review agent with profile-specific tools.</summary>
 public sealed class NativeReviewAgent(
     IChatClientFactory chatClientFactory,
     AgentOptions? options = null,
@@ -48,278 +73,182 @@ public sealed class NativeReviewAgent(
     public RuleBook ComposeRuleBook(IReadOnlyList<string> changedFiles, IReadOnlyList<string> repoRootFiles)
         => new RuleBookComposer().Compose(changedFiles, repoRootFiles, _Options.RuleSetsPath);
 
-    public AIAgent CreateAgent(ReviewCollector collector, ContextStore contextStore, string repoDir, RuleBook? ruleBook = null)
-        => CreateAgent(collector, contextStore, repoDir, ruleBook, null, null, null, null, ChatTier.Full);
-
-    private AIAgent CreateAgent(
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        RuleBook? ruleBook,
-        TokenUsage? usage,
-        IReadOnlySet<string>? changedFiles,
-        DiffIndex? diff,
-        IReadOnlySet<string>? resolvedKeys,
-        ChatTier tier,
-        IReadOnlyList<AITool>? extraTools = null)
-        => CreateAgentWithDiff(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, null, resolvedKeys, tier, extraTools);
-
-    private AIAgent CreateAgentWithDiff(
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        RuleBook? ruleBook,
-        TokenUsage? usage,
-        IReadOnlySet<string>? changedFiles,
-        DiffIndex? diff,
-        string? diffText,
-        IReadOnlySet<string>? resolvedKeys,
-        ChatTier tier,
-        IReadOnlyList<AITool>? extraTools = null)
+    public AIAgent CreateAgent(AgentRunRequest request)
     {
-        var repoTools = new RepoReadTools(
-            repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
-            grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines,
-            diffText: diffText, changedFiles: changedFiles, diff: diff);
-        var reviewTools = new ReviewTools(collector, contextStore, ruleBook, changedFiles, diff, resolvedKeys: resolvedKeys);
-        var tools = new List<AITool>
+        Validate(request);
+        return BuildAgent(request, new TokenUsage(), out _);
+    }
+
+    private AIAgent BuildAgent(AgentRunRequest request, TokenUsage usage, out HashLineEditor? editor)
+    {
+        editor = null;
+        var tools = new List<AITool>();
+        var instructions = request.Profile switch
         {
-            AIFunctionFactory.Create(repoTools.ReadFile), AIFunctionFactory.Create(repoTools.List),
-            AIFunctionFactory.Create(repoTools.Grep),
-            AIFunctionFactory.Create(repoTools.FileDiff, "repo_file_diff"),
-            AIFunctionFactory.Create(repoTools.FindReferences), AIFunctionFactory.Create(reviewTools.ReadContext),
-            AIFunctionFactory.Create(reviewTools.GetRulebook), AIFunctionFactory.Create(reviewTools.RecordFinding),
-            AIFunctionFactory.Create(reviewTools.RecordUncertainty), AIFunctionFactory.Create(reviewTools.TaskDone),
+            ToolProfile.Review => SystemPromptComposer.Compose(_Options.PromptOverridePath, request.RuleBook),
+            ToolProfile.Triage => SystemPromptComposer.ComposeTriage(),
+            ToolProfile.Fix => SystemPromptComposer.ComposeFixPass(),
+            _ => throw new ArgumentOutOfRangeException(nameof(request.Profile)),
         };
-        if (extraTools is not null)
+        var effectiveTier = EffectiveTier(request);
+        var maxIterations = request.MaxIterationsOverride ?? _Options.MaxIterations;
+
+        if (request.Profile == ToolProfile.Fix)
         {
-            tools.AddRange(extraTools);
+            editor = new HashLineEditor(new RepoPathGuard(request.RepoDir), request.WritablePaths!);
+            tools.Add(AIFunctionFactory.Create(editor.ReadFileWithHashes));
+            tools.Add(AIFunctionFactory.Create(editor.EditFile));
+            var fixTools = new ReviewTools(request.Collector, request.ContextStore);
+            tools.Add(AIFunctionFactory.Create(fixTools.TaskDone));
+        }
+        else
+        {
+            var repoTools = new RepoReadTools(
+                request.RepoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
+                grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines,
+                diffText: request.DiffText, changedFiles: request.ChangedFiles, diff: request.Diff);
+            tools.Add(AIFunctionFactory.Create(repoTools.ReadFile));
+            tools.Add(AIFunctionFactory.Create(repoTools.List));
+            tools.Add(AIFunctionFactory.Create(repoTools.Grep));
+            tools.Add(AIFunctionFactory.Create(repoTools.FileDiff, "repo_file_diff"));
+            tools.Add(AIFunctionFactory.Create(repoTools.FindReferences));
+            var reviewTools = new ReviewTools(request.Collector, request.ContextStore,
+                request.Profile == ToolProfile.Review ? request.RuleBook : null,
+                request.ChangedFiles, request.Diff, resolvedKeys: request.ResolvedKeys);
+            tools.Add(AIFunctionFactory.Create(reviewTools.ReadContext));
+            if (request.Profile == ToolProfile.Review)
+            {
+                tools.Add(AIFunctionFactory.Create(reviewTools.GetRulebook));
+                tools.Add(AIFunctionFactory.Create(reviewTools.RecordFinding));
+                tools.Add(AIFunctionFactory.Create(reviewTools.RecordUncertainty));
+                tools.Add(AIFunctionFactory.Create(reviewTools.TaskDone));
+            }
+            else
+            {
+                var triageTools = new TriageTools(request.Collector, request.AllowedThreadIds!);
+                tools.Add(AIFunctionFactory.Create(triageTools.RecordVerdict));
+                tools.Add(AIFunctionFactory.Create(triageTools.TaskDone));
+            }
         }
 
-        var tracked = CreatePipeline(collector, usage ?? new TokenUsage(), tier);
+        var tracked = CreatePipeline(request.Collector, usage, effectiveTier, maxIterations);
         return tracked.AsAIAgent(new ChatClientAgentOptions
         {
-            Name = "reviewforge-native",
+            Name = request.Profile switch
+            {
+                ToolProfile.Review => "reviewforge-native",
+                ToolProfile.Triage => "reviewforge-triage",
+                ToolProfile.Fix => "reviewforge-fix",
+                _ => "reviewforge-native",
+            },
             ChatOptions = new ChatOptions
             {
-                ModelId = chatClientFactory.ModelName(tier),
-                Instructions = SystemPromptComposer.Compose(_Options.PromptOverridePath, ruleBook),
-                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
+                ModelId = chatClientFactory.ModelName(effectiveTier),
+                Instructions = instructions,
+                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions { Effort = effort } : null,
                 Tools = tools,
             },
-            AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
+            AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(
+                CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
         });
     }
 
-    /// <summary>TaskDone-guarded, function-invoking, usage-tracked client pipeline shared by
-    /// the review run and the fix pass.</summary>
-    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier)
+    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier, int maxIterations)
     {
         IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(tier));
         IChatClient invoking = new ChatClientBuilder(guarded)
-            .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = _Options.MaxIterations)
+            .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)
             .Build();
         return new UsageTrackingChatClient(invoking, usage, _Logger, _Options.DebugLogging);
     }
 
-    public Task<ReviewResult> RunAsync(string userPrompt, ReviewCollector collector, ContextStore contextStore, string repoDir, CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, null, null, null, null, null, ct);
-
-    public Task<ReviewResult> RunAsync(
-        string userPrompt,
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        RuleBook? ruleBook,
-        CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, null, null, null, null, ct);
-
-    /// <summary>Binary-compatible full-tier overload retained for existing hosts.</summary>
-    public Task<ReviewResult> RunAsync(
-        string userPrompt,
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        RuleBook? ruleBook,
-        IReadOnlySet<string>? changedFiles,
-        DiffIndex? diff,
-        IReadOnlySet<string>? resolvedKeys,
-        CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, null, resolvedKeys, ct, ChatTier.Full);
-
-    /// <summary>Runs the review agent on the full tier.</summary>
-    public Task<ReviewResult> RunAsync(
-        string userPrompt,
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        RuleBook? ruleBook,
-        IReadOnlySet<string>? changedFiles,
-        DiffIndex? diff,
-        string? diffText,
-        IReadOnlySet<string>? resolvedKeys,
-        CancellationToken ct)
-        => RunAsync(userPrompt, collector, contextStore, repoDir, ruleBook, changedFiles, diff, diffText, resolvedKeys, ct, ChatTier.Full);
-
-    /// <summary>Runs the review agent on the selected model tier.</summary>
-    public async Task<ReviewResult> RunAsync(
-        string userPrompt,
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        RuleBook? ruleBook,
-        IReadOnlySet<string>? changedFiles,
-        DiffIndex? diff,
-        string? diffText,
-        IReadOnlySet<string>? resolvedKeys,
-        CancellationToken ct,
-        ChatTier tier)
+    public async Task<ReviewResult> RunAsync(AgentRunRequest request, CancellationToken ct)
     {
-        var usage = new TokenUsage();
-        var agent = CreateAgentWithDiff(collector, contextStore, repoDir, ruleBook, usage, changedFiles, diff, diffText, resolvedKeys, tier);
-        await agent.RunAsync(userPrompt, cancellationToken: ct);
-        _Logger?.LogInformation("review agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}", usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
-        var modelTag = new TagList {{"model", chatClientFactory.ModelName(tier)}, {"tier", tier.ToString().ToLowerInvariant()}};
-        LlmTelemetry.AgentIterations.Record(usage.Turns, modelTag);
-        if (!collector.Done)
-        {
-            LlmTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
-        }
-
-        return collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", ruleBook?.VersionHash);
+        return (await RunCoreAsync(request, ct).ConfigureAwait(false)).Result;
     }
 
-    /// <summary>Runs the read-only full-tier resolve-comment triage pass.
-    /// <paramref name="allowedThreadIds"/> confines verdict recording to the current batch's
-    /// threads — a verdict for a thread the model was never shown is rejected.</summary>
-    public async Task<IReadOnlyList<ThreadVerdict>> RunTriageAsync(
-        string userPrompt,
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        IReadOnlySet<string>? changedFiles,
-        DiffIndex? diff,
-        string? diffText,
-        IReadOnlySet<long>? allowedThreadIds,
-        CancellationToken ct)
+    private async Task<AgentRunOutcome> RunCoreAsync(AgentRunRequest request, CancellationToken ct)
     {
+        Validate(request);
         var usage = new TokenUsage();
-        var repoTools = new RepoReadTools(
-            repoDir, _Options.DenyPatterns, _Options.ReadMaxLines, _Options.GrepExcludeDirs,
-            grepMaxMs: _Options.GrepMaxMs, grepMaxLines: _Options.GrepMaxLines,
-            diffText: diffText, changedFiles: changedFiles, diff: diff);
-        var reviewTools = new ReviewTools(collector, contextStore);
-        var triageTools = new TriageTools(collector, allowedThreadIds);
-        var tools = new List<AITool>
-        {
-            AIFunctionFactory.Create(repoTools.ReadFile),
-            AIFunctionFactory.Create(repoTools.List),
-            AIFunctionFactory.Create(repoTools.Grep),
-            AIFunctionFactory.Create(repoTools.FileDiff, "repo_file_diff"),
-            AIFunctionFactory.Create(repoTools.FindReferences),
-            AIFunctionFactory.Create(reviewTools.ReadContext),
-            AIFunctionFactory.Create(triageTools.RecordVerdict),
-            AIFunctionFactory.Create(triageTools.TaskDone),
-        };
-        var tracked = CreatePipeline(collector, usage, ChatTier.Full);
-        var agent = tracked.AsAIAgent(new ChatClientAgentOptions
-        {
-            Name = "reviewforge-triage",
-            ChatOptions = new ChatOptions
-            {
-                ModelId = chatClientFactory.ModelName(ChatTier.Full),
-                Instructions = SystemPromptComposer.ComposeTriage(),
-                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
-                Tools = tools,
-            },
-            AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
-        });
+        var agent = BuildAgent(request, usage, out var editor);
+        await agent.RunAsync(request.UserPrompt, cancellationToken: ct).ConfigureAwait(false);
+        EmitTelemetry(request, usage);
+        var result = request.Collector.ToResult(
+            request.Collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing",
+            request.RuleBook?.VersionHash);
+        return new AgentRunOutcome(result, editor, request.Collector.ThreadVerdicts,
+            usage.InputTokens, usage.OutputTokens);
+    }
 
-        await agent.RunAsync(userPrompt, cancellationToken: ct);
-        _Logger?.LogInformation(
-            "triage agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}",
-            usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
+    private void EmitTelemetry(AgentRunRequest request, TokenUsage usage)
+    {
+        var tier = EffectiveTier(request);
         var modelTag = new TagList
         {
-            {"model", chatClientFactory.ModelName(ChatTier.Full)},
-            {"tier", "full"},
+            {"model", chatClientFactory.ModelName(tier)},
+            {"tier", tier.ToString().ToLowerInvariant()},
         };
+        _Logger?.LogInformation("{Profile} agent token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}",
+            request.Profile, usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
         LlmTelemetry.AgentIterations.Record(usage.Turns, modelTag);
-        if (!collector.Done)
-        {
-            // Preserve verdicts already recorded: the stage supplies deterministic
-            // defaults for threads the model did not finish.
-            LlmTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
-        }
-
-        return collector.ThreadVerdicts;
+        if (!request.Collector.Done) LlmTelemetry.AgentTaskDoneMissing.Add(1, modelTag);
     }
 
+    private static ChatTier EffectiveTier(AgentRunRequest request)
+        => request.Profile switch
+        {
+            ToolProfile.Review => request.Tier,
+            ToolProfile.Triage => ChatTier.Full,
+            ToolProfile.Fix => ChatTier.Fast,
+            _ => throw new ArgumentOutOfRangeException(nameof(request.Profile)),
+        };
 
-    /// <summary>
-    /// Runs a constrained fix pass for one author-commanded "/fixit": the agent gets ONLY
-    /// the hash-line editor tools (ReadFileWithHashes, EditFile) plus TaskDone — no
-    /// findings tools, no Grep — inside the same sandbox with a one-file writable set.
-    /// The returned <see cref="FixPassResult"/> exposes the editor so the caller can read
-    /// the merged session change and revert the file afterwards.
-    /// </summary>
-    public async Task<FixPassResult> RunWithEditToolsAsync(
-        string userPrompt,
-        ReviewCollector collector,
-        ContextStore contextStore,
-        string repoDir,
-        IReadOnlySet<string> writablePaths,
-        int maxIterations,
-        CancellationToken ct)
+    public async Task<IReadOnlyList<ThreadVerdict>> RunTriageAsync(
+        string userPrompt, ReviewCollector collector, ContextStore contextStore, string repoDir,
+        IReadOnlySet<string>? changedFiles, DiffIndex? diff, string? diffText,
+        IReadOnlySet<long>? allowedThreadIds, CancellationToken ct)
     {
-        var editor = new HashLineEditor(new RepoPathGuard(repoDir), writablePaths);
-        var reviewTools = new ReviewTools(collector, contextStore);
-        var usage = new TokenUsage();
-        // Fix passes always run on the Fast tier regardless of the run kind.
-        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(ChatTier.Fast));
-        IChatClient invoking = new ChatClientBuilder(guarded)
-            .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)
-            .Build();
-        IChatClient tracked = new UsageTrackingChatClient(invoking, usage, _Logger, _Options.DebugLogging);
-        var agent = tracked.AsAIAgent(new ChatClientAgentOptions
-        {
-            Name = "reviewforge-fix",
-            ChatOptions = new ChatOptions
-            {
-                ModelId = chatClientFactory.ModelName(ChatTier.Fast),
-                // Always the embedded fix-pass prompt: Review:PromptOverridePath targets
-                // the REVIEW system prompt, and substituting it here would hand the fix pass
-                // a contract for tools it does not have.
-                Instructions = SystemPromptComposer.ComposeFixPass(),
-                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
-                Tools =
-                [
-                    AIFunctionFactory.Create(editor.ReadFileWithHashes),
-                    AIFunctionFactory.Create(editor.EditFile),
-                    AIFunctionFactory.Create(reviewTools.TaskDone),
-                ],
-            },
-            AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
-        });
-        await agent.RunAsync(userPrompt, cancellationToken: ct);
-        _Logger?.LogInformation(
-            "fix pass token usage: input={InputTokens}, output={OutputTokens}, total={TotalTokens}",
-            usage.InputTokens, usage.OutputTokens, usage.TotalTokens);
-        if (!collector.Done)
-        {
-            LlmTelemetry.AgentTaskDoneMissing.Add(1, new TagList
-            {
-                {"model", chatClientFactory.ModelName(ChatTier.Fast)},
-                {"tier", "fast"},
-            });
-        }
-
-        return new FixPassResult(
-            collector.ToResult(collector.Done ? "agentic tool loop" : "iteration cap reached — task_done missing", null),
-            editor,
-            usage.InputTokens,
-            usage.OutputTokens);
+        var request = new AgentRunRequest(userPrompt, collector, contextStore, repoDir, ToolProfile.Triage,
+            ChangedFiles: changedFiles, Diff: diff, DiffText: diffText, AllowedThreadIds: allowedThreadIds);
+        return (await RunCoreAsync(request, ct).ConfigureAwait(false)).Verdicts;
     }
+
+    public async Task<FixPassResult> RunWithEditToolsAsync(
+        string userPrompt, ReviewCollector collector, ContextStore contextStore, string repoDir,
+        IReadOnlySet<string> writablePaths, int maxIterations, CancellationToken ct)
+    {
+        var request = new AgentRunRequest(userPrompt, collector, contextStore, repoDir, ToolProfile.Fix,
+            WritablePaths: writablePaths, MaxIterationsOverride: maxIterations);
+        var outcome = await RunCoreAsync(request, ct).ConfigureAwait(false);
+        return new FixPassResult(outcome.Result, outcome.Editor!,
+            outcome.UsageInputTokens, outcome.UsageOutputTokens);
+    }
+
+    private static void Validate(AgentRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.UserPrompt)) throw new ArgumentException("UserPrompt is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.RepoDir)) throw new ArgumentException("RepoDir is required.", nameof(request));
+        switch (request.Profile)
+        {
+            case ToolProfile.Review when request.AllowedThreadIds is not null
+                || request.WritablePaths is not null || request.MaxIterationsOverride is not null:
+                throw new ArgumentException("Review profile cannot specify triage or fix-only fields.", nameof(request));
+            case ToolProfile.Triage when request.AllowedThreadIds is null:
+                throw new ArgumentException("Triage profile requires AllowedThreadIds.", nameof(request));
+            case ToolProfile.Triage when request.WritablePaths is not null || request.MaxIterationsOverride is not null:
+                throw new ArgumentException("Triage profile cannot specify fix-only fields.", nameof(request));
+            case ToolProfile.Fix when request.WritablePaths is null:
+                throw new ArgumentException("Fix profile requires WritablePaths.", nameof(request));
+            case ToolProfile.Fix when request.AllowedThreadIds is not null:
+                throw new ArgumentException("Fix profile cannot specify AllowedThreadIds.", nameof(request));
+        }
+    }
+
+    private sealed record AgentRunOutcome(
+        ReviewResult Result, HashLineEditor? Editor, IReadOnlyList<ThreadVerdict> Verdicts,
+        long UsageInputTokens, long UsageOutputTokens);
 
     private sealed class TokenUsage
     {

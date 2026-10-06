@@ -99,7 +99,8 @@ public class AgentLoopTests : IDisposable
 
         var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
         var collector = new ReviewCollector();
-        var result = await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+        var result = await agent.RunAsync(new AgentRunRequest(
+            "review this", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         Assert.True(collector.Done);
         Assert.Equal("agentic tool loop", result.ReviewDepth);
@@ -121,7 +122,8 @@ public class AgentLoopTests : IDisposable
         var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
         var collector = new ReviewCollector();
 
-        var result = await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+        var result = await agent.RunAsync(new AgentRunRequest(
+            "review this", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         Assert.True(collector.Done);
         Assert.Equal("agentic tool loop", result.ReviewDepth);
@@ -167,7 +169,8 @@ public class AgentLoopTests : IDisposable
         });
         listener.Start();
 
-        await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+        await agent.RunAsync(new AgentRunRequest(
+            "review this", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         Assert.True(collector.Done);
         Assert.Equal(80, Interlocked.Read(ref cached));
@@ -207,7 +210,8 @@ public class AgentLoopTests : IDisposable
         });
         listener.Start();
 
-        await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+        await agent.RunAsync(new AgentRunRequest(
+            "review this", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         Assert.True(collector.Done);
         Assert.False(sawCachedMeasurement); // unsupported provider → silence, not zero-spam
@@ -224,7 +228,8 @@ public class AgentLoopTests : IDisposable
 
         var agent = new NativeReviewAgent(new FakeChatClientFactory(script), new AgentOptions {MaxIterations = 2});
         var collector = new ReviewCollector();
-        var result = await agent.RunAsync("review this", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+        var result = await agent.RunAsync(new AgentRunRequest(
+            "review this", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         Assert.False(collector.Done);
         Assert.Contains("task_done missing", result.ReviewDepth);
@@ -241,7 +246,8 @@ public class AgentLoopTests : IDisposable
 
         var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
         var collector = new ReviewCollector();
-        await agent.RunAsync("go", collector, new ContextStore(), _RepoDir, CancellationToken.None);
+        await agent.RunAsync(new AgentRunRequest(
+            "go", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         // The tool result fed back into the loop contains the numbered file content.
         var toolMessage = script.Received.SelectMany(m => m).SelectMany(m => m.Contents)
@@ -257,7 +263,8 @@ public class AgentLoopTests : IDisposable
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var agent = new NativeReviewAgent(new FakeChatClientFactory(script), new AgentOptions {Effort = ReasoningEffort.High});
 
-        await agent.RunAsync("go", new ReviewCollector(), new ContextStore(), _RepoDir, CancellationToken.None);
+        await agent.RunAsync(new AgentRunRequest(
+            "go", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         Assert.Contains(script.ReceivedOptions, o => o?.Reasoning?.Effort == ReasoningEffort.High);
     }
@@ -269,9 +276,39 @@ public class AgentLoopTests : IDisposable
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
         var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
 
-        await agent.RunAsync("go", new ReviewCollector(), new ContextStore(), _RepoDir, CancellationToken.None);
+        await agent.RunAsync(new AgentRunRequest(
+            "go", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
 
         Assert.NotEmpty(script.ReceivedOptions);
         Assert.All(script.ReceivedOptions, o => Assert.Null(o?.Reasoning));
+    }
+
+    [Fact]
+    public async Task Invalid_profile_fields_fail_before_model_call()
+    {
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(
+            new ScriptedChatClient(ScriptedChatClient.Text("unexpected"))));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => agent.RunAsync(
+            new AgentRunRequest("triage", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Triage),
+            CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => agent.RunAsync(
+            new AgentRunRequest("review", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Review,
+                WritablePaths: new HashSet<string>()),
+            CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => agent.RunAsync(
+            new AgentRunRequest("fix", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Fix),
+            CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => agent.RunAsync(
+            new AgentRunRequest("fix", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Fix,
+                AllowedThreadIds: new HashSet<long> {1}, WritablePaths: new HashSet<string>()),
+            CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => agent.RunAsync(
+            new AgentRunRequest("triage", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Triage,
+                AllowedThreadIds: new HashSet<long> {1}, MaxIterationsOverride: 1),
+            CancellationToken.None));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => agent.RunAsync(
+            new AgentRunRequest("review", new ReviewCollector(), new ContextStore(), _RepoDir, (ToolProfile)99),
+            CancellationToken.None));
     }
 }
