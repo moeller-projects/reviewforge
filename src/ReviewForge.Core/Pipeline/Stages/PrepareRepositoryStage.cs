@@ -44,9 +44,9 @@ public sealed class PrepareRepositoryStage(
         if (source is not null)
         {
             var overlap = new ThreadsRefreshOverlap(
-                source.GetThreadsAsync(ctx.Pr, LinkOverlapToken(ct, ctx.OverlapCts.Token)),
+                source.GetThreadsAsync(ctx.Pr, LinkOverlapToken(ct, ctx.Repository.OverlapCts.Token)),
                 _Clock.GetUtcNow());
-            ctx.PendingThreadsRefresh = overlap;
+            ctx.Repository = ctx.Repository with {PendingThreadsRefresh = overlap};
             _ = ObserveCompletionAsync(overlap);
         }
 
@@ -60,13 +60,12 @@ public sealed class PrepareRepositoryStage(
         // Loop-guard input: cheap local lookup, filled for every run so the gate rule and
         // tests observe the same value. Null (commit not found) reads as "proceed".
         var headCommitInfo = await pool.GetCommitInfoAsync(checkout.Path, pr.SourceCommitSha, ct).ConfigureAwait(false);
-        var repository = new RepoPreparation {RepoDir = checkout.Path, HeadCommitInfo = headCommitInfo};
+        ctx.Repository = ctx.Repository with {RepoDir = checkout.Path, HeadCommitInfo = headCommitInfo};
         if (ctx.Trigger == EnqueueTrigger.Discovery
             && headCommitInfo is { } headInfo
             && autoFix is not null
             && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
         {
-            ctx.Repository = repository;
             ReviewTelemetry.LoopGuardSkips.Add(
                 1, new TagList { { "source", "gate" } });
             logger.LogInformation(
@@ -117,23 +116,30 @@ public sealed class PrepareRepositoryStage(
                 $"provider changed-file scope does not match Git diff (provider: {reviewable.Count}, diff: {diffFiles.Count})");
         }
 
-        repository = repository with {DiffText = diffText, Diff = diff, ReviewableFiles = reviewable};
-        ctx.Repository = repository;
-        ctx.RepoPreparedAt = _Clock.GetUtcNow();
+        ctx.Repository = ctx.Repository with
+        {
+            DiffText = diffText,
+            Diff = diff,
+            ReviewableFiles = reviewable,
+            RepoPreparedAt = _Clock.GetUtcNow()
+        };
 
         // Enrichment needs only RepoDir + DiffText, both final now; stage 5 awaits the task
         // with its usual fail-safe catch. A contract-violating synchronous throw is captured
         // into the task so stage 5 handles it identically to an async failure.
-        if (enricher is not null && repository.RepoDir is not null)
+        if (enricher is not null && ctx.Repository.RepoDir is not null)
         {
             try
             {
-                ctx.PendingEnrichment = enricher.EnrichAsync(
-                    repository.RepoDir, repository.DiffText, LinkOverlapToken(ct, ctx.OverlapCts.Token));
+                ctx.Repository = ctx.Repository with
+                {
+                    PendingEnrichment = enricher.EnrichAsync(
+                        ctx.Repository.RepoDir, ctx.Repository.DiffText, LinkOverlapToken(ct, ctx.Repository.OverlapCts.Token))
+                };
             }
             catch (Exception ex)
             {
-                ctx.PendingEnrichment = Task.FromException<string?>(ex);
+                ctx.Repository = ctx.Repository with {PendingEnrichment = Task.FromException<string?>(ex)};
             }
         }
     }

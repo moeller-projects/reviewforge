@@ -66,7 +66,7 @@ public sealed class ValidateFindingsStage(
             accepted.Add(finding);
         }
 
-        ctx.AcceptedFindings = accepted;
+        ctx.Validation = ctx.Validation with {AcceptedFindings = accepted};
         return Task.CompletedTask;
     }
 

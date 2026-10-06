@@ -270,16 +270,17 @@ public class StageTests : IDisposable
         source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
             [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
         var ctx = Ctx(source);
-        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
+        ctx.Fetch = ctx.Fetch with {PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [])};
         var preparedAt = DateTimeOffset.UtcNow;
-        ctx.RepoPreparedAt = preparedAt;
-        // Response received after the clone window closed: as fresh as the refetch it
-        // replaces, so the in-flight fetch is consumed without a second round-trip.
-        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
-            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
-            preparedAt.AddSeconds(-30))
+        ctx.Repository = ctx.Repository with
         {
-            CompletedAt = preparedAt.AddSeconds(1),
+            RepoPreparedAt = preparedAt,
+            PendingThreadsRefresh = new ThreadsRefreshOverlap(
+                Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+                preparedAt.AddSeconds(-30))
+            {
+                CompletedAt = preparedAt.AddSeconds(1),
+            },
         };
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
@@ -297,14 +298,17 @@ public class StageTests : IDisposable
         source.Threads.Add(new ReviewThread(1, "k", ReviewThreadStatus.Active,
             [new ThreadComment("u", "human", false, "?", DateTimeOffset.UtcNow)]));
         var ctx = Ctx(source);
-        ctx.PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, []);
+        ctx.Fetch = ctx.Fetch with {PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, [])};
         var preparedAt = DateTimeOffset.UtcNow;
-        ctx.RepoPreparedAt = preparedAt;
-        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
-            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
-            preparedAt.AddSeconds(-30))
+        ctx.Repository = ctx.Repository with
         {
-            CompletedAt = preparedAt.AddSeconds(-1),
+            RepoPreparedAt = preparedAt,
+            PendingThreadsRefresh = new ThreadsRefreshOverlap(
+                Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+                preparedAt.AddSeconds(-30))
+            {
+                CompletedAt = preparedAt.AddSeconds(-1),
+            },
         };
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
@@ -320,10 +324,13 @@ public class StageTests : IDisposable
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
         var preparedAt = DateTimeOffset.UtcNow;
-        ctx.RepoPreparedAt = preparedAt;
-        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
-            Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
-            preparedAt.AddSeconds(-30)); // CompletedAt left null
+        ctx.Repository = ctx.Repository with
+        {
+            RepoPreparedAt = preparedAt,
+            PendingThreadsRefresh = new ThreadsRefreshOverlap(
+                Task.FromResult<IReadOnlyList<ReviewThread>>(source.Threads),
+                preparedAt.AddSeconds(-30)),
+        };
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -339,15 +346,18 @@ public class StageTests : IDisposable
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
         var preparedAt = DateTimeOffset.UtcNow;
-        ctx.RepoPreparedAt = preparedAt;
-        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
-            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("threads down")),
-            preparedAt.AddSeconds(-30));
+        ctx.Repository = ctx.Repository with
+        {
+            RepoPreparedAt = preparedAt,
+            PendingThreadsRefresh = new ThreadsRefreshOverlap(
+                Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("threads down")),
+                preparedAt.AddSeconds(-30)),
+        };
 
         await new ClassifyRunStage(source).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(1, source.ThreadFetches);
-        Assert.NotNull(ctx.Threads); // serial fetch supplied the threads
+        Assert.NotNull(ctx.Fetch.Threads); // serial fetch supplied the threads
     }
 
     [Fact]
@@ -357,15 +367,18 @@ public class StageTests : IDisposable
         // disposal cancels them (via OverlapCts) and observes late faults so they never
         // surface as unobserved-task exceptions.
         var ctx = Ctx();
-        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
-            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("late fault")),
-            DateTimeOffset.UtcNow);
-        ctx.PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("late fault"));
+        ctx.Repository = ctx.Repository with
+        {
+            PendingThreadsRefresh = new ThreadsRefreshOverlap(
+                Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("late fault")),
+                DateTimeOffset.UtcNow),
+            PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("late fault")),
+        };
 
         var ex = Record.Exception(() => ctx.Dispose());
 
         Assert.Null(ex); // late faults observed, not surfaced
-        Assert.True(ctx.OverlapCts.IsCancellationRequested);
+        Assert.True(ctx.Repository.OverlapCts.IsCancellationRequested);
     }
 
     [Fact]
@@ -386,10 +399,10 @@ public class StageTests : IDisposable
             source: source,
             enricher: new FakeEnricher("graph")).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.NotNull(ctx.PendingThreadsRefresh);
-        Assert.NotNull(ctx.PendingEnrichment);
-        Assert.NotNull(ctx.RepoPreparedAt);
-        Assert.True(ctx.PendingThreadsRefresh!.StartedAt <= ctx.RepoPreparedAt);
+        Assert.NotNull(ctx.Repository.PendingThreadsRefresh);
+        Assert.NotNull(ctx.Repository.PendingEnrichment);
+        Assert.NotNull(ctx.Repository.RepoPreparedAt);
+        Assert.True(ctx.Repository.PendingThreadsRefresh!.StartedAt <= ctx.Repository.RepoPreparedAt);
         Assert.Equal(1, source.ThreadFetches); // one fetch, launched by stage 3
     }
 
@@ -407,9 +420,9 @@ public class StageTests : IDisposable
             new RepoCheckoutPool(git, new FakeWorkspaceFs(), Path.GetTempPath(), "pat"),
             NullLogger<PrepareRepositoryStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Null(ctx.PendingThreadsRefresh);
-        Assert.Null(ctx.PendingEnrichment);
-        Assert.NotNull(ctx.RepoPreparedAt);
+        Assert.Null(ctx.Repository.PendingThreadsRefresh);
+        Assert.Null(ctx.Repository.PendingEnrichment);
+        Assert.NotNull(ctx.Repository.RepoPreparedAt);
     }
 
     [Fact]
@@ -427,19 +440,19 @@ public class StageTests : IDisposable
             NullLogger<PrepareRepositoryStage>.Instance,
             enricher: new SyncThrowingEnricher()).ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.NotNull(ctx.PendingEnrichment);
+        Assert.NotNull(ctx.Repository.PendingEnrichment);
         // Stage 5 applies its usual fail-safe handling to the captured task.
         await new EnrichContextStage(
             new SyncThrowingEnricher(), NullLogger<EnrichContextStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
-        Assert.Empty(ctx.ContextStore.Names);
+        Assert.Empty(ctx.Reasoning.ContextStore.Names);
     }
 
     [Fact]
     public async Task Enrich_consumes_the_pending_task_without_calling_the_enricher_again()
     {
         var ctx = Ctx();
-        ctx.PendingEnrichment = Task.FromResult<string?>("graph");
+        ctx.Repository = ctx.Repository with {PendingEnrichment = Task.FromResult<string?>("graph")};
 
         // The enricher would throw if called: success proves the pending task was consumed.
         await new EnrichContextStage(
@@ -453,7 +466,7 @@ public class StageTests : IDisposable
     public async Task Enrich_swallows_a_faulted_pending_task()
     {
         var ctx = Ctx();
-        ctx.PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("enricher down"));
+        ctx.Repository = ctx.Repository with {PendingEnrichment = Task.FromException<string?>(new InvalidOperationException("enricher down"))};
 
         await new EnrichContextStage(
             new FakeEnricher("unused"), NullLogger<EnrichContextStage>.Instance)

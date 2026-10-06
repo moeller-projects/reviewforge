@@ -58,7 +58,7 @@ public sealed class CollectCommentsStage(
 
     private async Task<IReadOnlyList<ReviewThread>> ResolveThreadsAsync(ReviewContext ctx, CancellationToken ct)
     {
-        if (ctx.PendingThreadsRefresh is { } refresh)
+        if (ctx.Repository.PendingThreadsRefresh is { } refresh)
         {
             var wasInFlight = !refresh.Task.IsCompleted;
             // No silent fallback: a failed overlap refresh fails the run. Refetching after a
@@ -67,7 +67,7 @@ public sealed class CollectCommentsStage(
             var overlapped = await refresh.Task.ConfigureAwait(false);
             var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : (DateTimeOffset?) null);
             if (completedAt is { } receivedAt
-                && ctx.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
+                && ctx.Repository.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
                 return overlapped;
         }
 

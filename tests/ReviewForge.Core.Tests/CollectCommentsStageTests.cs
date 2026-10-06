@@ -63,9 +63,12 @@ public sealed class CollectCommentsStageTests
     {
         var source = new FakePullRequestSource();
         var ctx = Context(source);
-        ctx.PendingThreadsRefresh = new ThreadsRefreshOverlap(
-            Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("ado down")),
-            Now);
+        ctx.Repository = ctx.Repository with
+        {
+            PendingThreadsRefresh = new ThreadsRefreshOverlap(
+                Task.FromException<IReadOnlyList<ReviewThread>>(new InvalidOperationException("ado down")),
+                Now),
+        };
 
         // No silent fallback to a second fetch: the provider failure fails the run visibly.
         await Assert.ThrowsAsync<InvalidOperationException>(() =>

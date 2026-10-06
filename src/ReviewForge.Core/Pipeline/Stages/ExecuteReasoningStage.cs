@@ -28,8 +28,11 @@ public sealed class ExecuteReasoningStage(
         using var findingsJsonl = findingsDir is null
             ? null
             : new StreamWriter(Path.Combine(findingsDir, $"{ctx.RunId:N}.jsonl"), append: true) {AutoFlush = true};
-        ctx.Collector = new ReviewCollector(
-            ctx.Fetch.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.Fetch.PullRequest?.SourceCommitSha);
+        ctx.Reasoning = ctx.Reasoning with
+        {
+            Collector = new ReviewCollector(
+                ctx.Fetch.PriorRun?.FindingKeys, findingsJsonl, ctx.RunId, ctx.Fetch.PullRequest?.SourceCommitSha),
+        };
 
         // Status-aware dedupe (P1-11): known keys whose live thread is Fixed/Closed
         // resurface when regressed verbatim; Active/Pending threads keep suppressing.
@@ -49,20 +52,20 @@ public sealed class ExecuteReasoningStage(
                 finding.RuleId,
                 finding.Anchor?.FilePath ?? "-",
                 finding.Snippet);
-            if (ctx.Collector.IsKnown(key))
+            if (ctx.Reasoning.Collector.IsKnown(key))
             {
-                if (ctx.Collector.WasKnownAtStart(key))
+                if (ctx.Reasoning.Collector.WasKnownAtStart(key))
                 {
-                    if (ctx.Fetch.ResolvedKeys.Contains(key) && !ctx.Collector.RegressedKeys.Contains(key))
+                    if (ctx.Fetch.ResolvedKeys.Contains(key) && !ctx.Reasoning.Collector.RegressedKeys.Contains(key))
                     {
                         finding.DedupeKey = key;
                         finding.IsRegression = true;
-                        ctx.Collector.AddFinding(finding);
-                        ctx.Collector.MarkRegressed(key);
+                        ctx.Reasoning.Collector.AddFinding(finding);
+                        ctx.Reasoning.Collector.MarkRegressed(key);
                     }
                     else
                     {
-                        ctx.Collector.MarkRedetected(key);
+                        ctx.Reasoning.Collector.MarkRedetected(key);
                     }
                 }
 
@@ -70,7 +73,7 @@ public sealed class ExecuteReasoningStage(
             }
 
             finding.DedupeKey = key;
-            ctx.Collector.AddFinding(finding);
+            ctx.Reasoning.Collector.AddFinding(finding);
         }
 
         // Trivial-diff fast path: zero added reviewable lines and nothing awaiting an
@@ -83,13 +86,16 @@ public sealed class ExecuteReasoningStage(
             ReviewTelemetry.TrivialReviews.Add(1);
             // The synthetic result must carry the collector's findings: the homoglyph
             // analyzer ran above and downstream stages (validate/publish/summary/vote)
-            // consume ctx.Result, not the collector.
-            ctx.Result = new ReviewResult
+            // consume ctx.Reasoning.Result, not the collector.
+            ctx.Reasoning = ctx.Reasoning with
             {
-                Narrative = new ReviewNarrative {ReviewSummary = "No reviewable changes in this iteration."},
-                Findings = ctx.Collector.Findings,
-                Uncertainties = ctx.Collector.Uncertainties,
-                ReviewDepth = "trivial diff — no agent run",
+                Result = new ReviewResult
+                {
+                    Narrative = new ReviewNarrative {ReviewSummary = "No reviewable changes in this iteration."},
+                    Findings = ctx.Reasoning.Collector.Findings,
+                    Uncertainties = ctx.Reasoning.Collector.Uncertainties,
+                    ReviewDepth = "trivial diff — no agent run",
+                },
             };
             return;
         }
@@ -99,12 +105,15 @@ public sealed class ExecuteReasoningStage(
         var ruleBook = agent.ComposeRuleBook(ctx.Fetch.ChangedFiles, rootFiles);
         var prompt = PromptBuilder.Build(new PromptInput(
             Pr: ctx.RequirePullRequest(), Kind: ctx.Kind, WorkItems: ctx.Fetch.WorkItems, ChangedFiles: ctx.Fetch.ChangedFiles,
-            PendingReplies: ctx.PendingReplies, DiffText: ctx.Repository.DiffText, Enrichment: null, ContextNames: ctx.ContextStore.Names,
+            PendingReplies: ctx.PendingReplies, DiffText: ctx.Repository.DiffText, Enrichment: null, ContextNames: ctx.Reasoning.ContextStore.Names,
             MaxDiffChars: maxDiffChars, MaxDiffCharsPerFile: maxDiffCharsPerFile));
-        ctx.Result = await agent.RunAsync(new AgentRunRequest(
-            prompt, ctx.Collector, ctx.ContextStore, repoDir, ToolProfile.Review,
-            ruleBook, ctx.Fetch.ChangedFiles.ToHashSet(RepoPath.PathComparer), ctx.Repository.Diff, ctx.Repository.DiffText,
-            ctx.Fetch.ResolvedKeys, Tier: ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct);
+        ctx.Reasoning = ctx.Reasoning with
+        {
+            Result = await agent.RunAsync(new AgentRunRequest(
+                prompt, ctx.Reasoning.Collector, ctx.Reasoning.ContextStore, repoDir, ToolProfile.Review,
+                ruleBook, ctx.Fetch.ChangedFiles.ToHashSet(RepoPath.PathComparer), ctx.Repository.Diff, ctx.Repository.DiffText,
+                ctx.Fetch.ResolvedKeys, Tier: ctx.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct),
+        };
     }
 
 }

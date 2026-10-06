@@ -35,7 +35,7 @@ public sealed class CommitFixesStage(
             return;
         }
 
-        var pending = ctx.AppliedFixes.Where(f => f.AppliedToTree).ToList();
+        var pending = ctx.AutoFix.AppliedFixes.Where(f => f.AppliedToTree).ToList();
         if (pending.Count == 0)
         {
             return;
@@ -64,7 +64,7 @@ public sealed class CommitFixesStage(
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before commit");
 
         var groups = Group(pending).ToArray();
-        var findingsByKey = ctx.AcceptedFindings
+        var findingsByKey = ctx.Validation.AcceptedFindings
             .Where(f => f.DedupeKey is not null)
             .GroupBy(f => f.DedupeKey!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
@@ -194,7 +194,7 @@ public sealed class CommitFixesStage(
             committed.Count, branch, ctx.RunId);
 
         // The run's own push is the one legal head movement; publish accepts this head.
-        ctx.PushedHeadSha = committed[^1].Sha;
+        ctx.AutoFix = ctx.AutoFix with {PushedHeadSha = committed[^1].Sha};
 
         // (stage 8 queues no success replies in CommitOnHead mode); publish posts it.
         var commandReplies = committed
@@ -206,7 +206,10 @@ public sealed class CommitFixesStage(
             .ToArray();
         if (commandReplies.Length > 0)
         {
-            ctx.FixCommandReplies = [.. ctx.FixCommandReplies, .. commandReplies];
+            ctx.AutoFix = ctx.AutoFix with
+            {
+                FixCommandReplies = [.. ctx.AutoFix.FixCommandReplies, .. commandReplies],
+            };
         }
     }
 

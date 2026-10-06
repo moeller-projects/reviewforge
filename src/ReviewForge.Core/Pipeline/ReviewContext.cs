@@ -95,44 +95,70 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
         set => Repository = Repository with {ReviewableFiles = value};
     }
 
-    /// <summary>Threads refresh overlap remains on the context until phase 3 relocates its protocol.</summary>
-    public ThreadsRefreshOverlap? PendingThreadsRefresh { get; set; }
-    public DateTimeOffset? RepoPreparedAt { get; set; }
-
-    /// <summary>Head-commit author/message read by stage 3; null when unavailable.</summary>
-    public TipCommitInfo? HeadCommitInfo
+    // Temporary forwarding properties; overlap ownership moves to RepoPreparation in this phase.
+    public ThreadsRefreshOverlap? PendingThreadsRefresh
     {
-        get => Repository.HeadCommitInfo;
-        set => Repository = Repository with {HeadCommitInfo = value};
+        get => Repository.PendingThreadsRefresh;
+        set => Repository = Repository with {PendingThreadsRefresh = value};
     }
-
-    /// <summary>Stage 3 starts enrichment when repository outputs are final; stage 5 awaits it.</summary>
-    public Task<string?>? PendingEnrichment { get; set; }
+    public DateTimeOffset? RepoPreparedAt
+    {
+        get => Repository.RepoPreparedAt;
+        set => Repository = Repository with {RepoPreparedAt = value};
+    }
+    public Task<string?>? PendingEnrichment
+    {
+        get => Repository.PendingEnrichment;
+        set => Repository = Repository with {PendingEnrichment = value};
+    }
 
     // Stage 4 — classify
     public ReviewKind Kind { get; set; } = ReviewKind.Full;
     public IReadOnlyList<PendingReply> PendingReplies { get; set; } = [];
 
-    // Stage 5/6 — reasoning
-    public ContextStore ContextStore { get; } = new();
-    public ReviewCollector Collector { get; set; } = new();
-    public ReviewResult? Result { get; set; }
+    public ReasoningOutcome Reasoning { get; set; } = new();
+    public ContextStore ContextStore => Reasoning.ContextStore;
+    public ReviewCollector Collector
+    {
+        get => Reasoning.Collector;
+        set => Reasoning = Reasoning with {Collector = value};
+    }
+    public ReviewResult? Result
+    {
+        get => Reasoning.Result;
+        set => Reasoning = Reasoning with {Result = value};
+    }
 
-    // Stage 7 — validation output: findings accepted for posting
-    public IReadOnlyList<RichFinding> AcceptedFindings { get; set; } = [];
+    // Stage 7 — validation output.
+    public ValidationOutcome Validation { get; set; } = new();
+    public IReadOnlyList<RichFinding> AcceptedFindings
+    {
+        get => Validation.AcceptedFindings;
+        set => Validation = Validation with {AcceptedFindings = value};
+    }
 
-    // Stage 8 — auto-fix: suggestion fixes that passed all gates (deterministic + commanded)
-    public IReadOnlyList<AutoFix.AppliedFix> AppliedFixes { get; set; } = [];
-
-    /// <summary>Set by stage 10 after a successful CommitOnHead push: the new PR head created
-    /// by THIS run. Publish's head-unchanged check accepts it as the expected head — the run's
-    /// own push is the one legal head movement; anything beyond it still fails the run.</summary>
-    public string? PushedHeadSha { get; set; }
-    public IReadOnlyList<AutoFix.FixCommand> FixCommands { get; set; } = [];
-
-    /// <summary>Replies queued by the auto-fix stage, posted by the publish stage (declines,
-    /// verifier failures, exhausted budget, links to posted suggestions).</summary>
-    public IReadOnlyList<(int ThreadId, string Text)> FixCommandReplies { get; set; } = [];
+    // Stage 8 — auto-fix output.
+    public AutoFixOutcome AutoFix { get; set; } = new();
+    public IReadOnlyList<AutoFix.AppliedFix> AppliedFixes
+    {
+        get => AutoFix.AppliedFixes;
+        set => AutoFix = AutoFix with {AppliedFixes = value};
+    }
+    public string? PushedHeadSha
+    {
+        get => AutoFix.PushedHeadSha;
+        set => AutoFix = AutoFix with {PushedHeadSha = value};
+    }
+    public IReadOnlyList<AutoFix.FixCommand> FixCommands
+    {
+        get => AutoFix.FixCommands;
+        set => AutoFix = AutoFix with {FixCommands = value};
+    }
+    public IReadOnlyList<(int ThreadId, string Text)> FixCommandReplies
+    {
+        get => AutoFix.FixCommandReplies;
+        set => AutoFix = AutoFix with {FixCommandReplies = value};
+    }
 
     // Stage 8 — triage
     public IReadOnlyList<TriageOperation> TriagePlan { get; set; } = [];
@@ -154,33 +180,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
 
     public void Dispose()
     {
-        // Stage 3 may still have the threads refresh or the enrichment call in flight when a
-        // later stage fails: cancel them so neither keeps running against a released
-        // checkout, and observe any late fault so it never surfaces as an unobserved-task
-        // exception. By disposal time no consumer cares about the results anymore.
-        OverlapCts.Cancel();
-        ObserveFault(PendingThreadsRefresh?.Task);
-        ObserveFault(PendingEnrichment);
+        Repository.Dispose();
         RepoLease?.Dispose();
         RepoLease = null;
-    }
-
-    /// <summary>Cancels stage-3 overlap work (threads refresh, enrichment) on disposal so a
-    /// failed or reaped run cannot leave fetches running against a released checkout.</summary>
-    internal CancellationTokenSource OverlapCts => field ??= new();
-
-    private static void ObserveFault(Task? task)
-    {
-        if (task is null)
-        {
-            return;
-        }
-
-        _ = task.ContinueWith(
-            static t => { _ = t.Exception; },
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
     }
 
     public string RequireRepoDir()
@@ -199,7 +201,7 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
             $"stage ordering violation: {nameof(PullRequest)} is null but required (fetch stage must run first)");
 
     public ReviewResult RequireResult()
-        => Result ?? throw new InvalidOperationException(
+        => Reasoning.Result ?? throw new InvalidOperationException(
             $"stage ordering violation: {nameof(Result)} is null but required (reasoning stage must run first)");
 
     public ResolveState RequireResolveState()
@@ -210,20 +212,4 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
         Terminated = true;
         TerminationReason = reason;
     }
-}
-
-/// <summary>
-/// Stage-3 threads-refresh overlap: the fetch task plus the stamp of when it was launched.
-/// <see cref="CompletedAt"/> is stamped by the completion continuation stage 3 attaches at
-/// kickoff; stage 4 consumes the result only when that stamp is at/after preparation time
-/// (a response received earlier predates the clone window and missed comments that arrived
-/// during it, so it takes the serial refetch exactly like the pre-overlap pipeline).
-/// </summary>
-public sealed record ThreadsRefreshOverlap(
-    Task<IReadOnlyList<ReviewThread>> Task,
-    DateTimeOffset StartedAt)
-{
-    /// <summary>Utc stamp of the received response; null while genuinely in flight. Stage 4
-    /// conservatively treats "already complete but unstamped" as unproven and re-fetches.</summary>
-    public DateTimeOffset? CompletedAt { get; internal set; }
 }

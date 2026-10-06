@@ -26,12 +26,12 @@ internal static class AppliedFixPersistence
     private static List<StoredFinding> BuildRows(
         ReviewContext ctx, bool includeCommandedAuditRows, Func<string, int?>? threadIdResolver)
     {
-        var fixJsonByKey = ctx.AppliedFixes
+        var fixJsonByKey = ctx.AutoFix.AppliedFixes
             .Where(a => a.Proposal.SourceThreadId is null)
             .ToDictionary(a => a.DedupeKey, a => JsonSerializer.Serialize(a, JsonOptions), StringComparer.Ordinal);
 
-        var acceptedKeys = ctx.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
-        var rows = ctx.AcceptedFindings
+        var acceptedKeys = ctx.Validation.AcceptedFindings.Select(f => f.DedupeKey!).ToHashSet(StringComparer.Ordinal);
+        var rows = ctx.Validation.AcceptedFindings
             .Select(f => new StoredFinding(
                 f.DedupeKey!, f.RuleId, f.Severity, f.Title,
                 f.Anchor?.FilePath, f.Anchor?.StartLine,
@@ -48,7 +48,7 @@ internal static class AppliedFixPersistence
 
         if (includeCommandedAuditRows)
         {
-            foreach (var fix in ctx.AppliedFixes.Where(a => a.Proposal.SourceThreadId is not null))
+            foreach (var fix in ctx.AutoFix.AppliedFixes.Where(a => a.Proposal.SourceThreadId is not null))
             {
                 rows.Add(new StoredFinding(
                     fix.DedupeKey,
