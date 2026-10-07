@@ -53,12 +53,10 @@ public sealed class CodexHttpDebugHandler : DelegatingHandler
         await _Output.WriteLineAsync($"[codex-http] request body {Truncate(Redact(requestBody))}");
 
         var response = await base.SendAsync(request, cancellationToken);
-        var responseContentType = response.Content?.Headers.ContentType?.ToString();
-        var responseBody = response.Content is null
-            ? string.Empty
-            : await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseContentType = response.Content.Headers.ContentType?.ToString();
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
-        await _Output.WriteLineAsync($"[codex-http] response {(int)response.StatusCode} {response.ReasonPhrase}");
+        await _Output.WriteLineAsync($"[codex-http] response {(int) response.StatusCode} {response.ReasonPhrase}");
         await _Output.WriteLineAsync($"[codex-http] response headers {SafeHeaders(response.Headers)}");
         await _Output.WriteLineAsync($"[codex-http] response body {Truncate(Redact(responseBody))}");
 

@@ -66,10 +66,8 @@ internal static class Program
             var pullRequestId = parseResult.GetValue(pr);
             var key = parseResult.GetValue(apiKey) ?? Environment.GetEnvironmentVariable("REVIEWFORGE_API_KEY");
 
-            using var http = new HttpClient
-            {
-                BaseAddress = new Uri(url)
-            };
+            using var http = new HttpClient();
+            http.BaseAddress = new Uri(url);
             if (!string.IsNullOrEmpty(key))
             {
                 http.DefaultRequestHeaders.Add("X-Api-Key", key);
@@ -107,10 +105,8 @@ internal static class Program
             var reviewRunId = parseResult.GetValue(runId);
             var key = parseResult.GetValue(apiKey) ?? Environment.GetEnvironmentVariable("REVIEWFORGE_API_KEY");
 
-            using var http = new HttpClient
-            {
-                BaseAddress = new Uri(url)
-            };
+            using var http = new HttpClient();
+            http.BaseAddress = new Uri(url);
             if (!string.IsNullOrEmpty(key))
             {
                 http.DefaultRequestHeaders.Add("X-Api-Key", key);

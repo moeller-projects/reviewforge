@@ -76,7 +76,9 @@ public sealed class ProcessRunner : IProcessRunner
             startInfo.ArgumentList.Add(argv[i]);
         }
 
-        using var process = new System.Diagnostics.Process {StartInfo = startInfo, EnableRaisingEvents = true};
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = startInfo;
+        process.EnableRaisingEvents = true;
         if (!process.Start())
         {
             throw new InvalidOperationException($"Unable to start process '{argv[0]}'.");

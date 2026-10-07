@@ -5,7 +5,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-
 using ReviewForge.Core.Analysis;
 
 namespace ReviewForge.Core.Reasoning.Rules;
@@ -118,7 +117,7 @@ public sealed class RuleBookComposer
         if (pack.Activation.Always) return true;
         var files = changedFiles.Select(RepoPath.Normalize).ToArray();
         return files.Any(file => pack.Activation.Extensions.Any(ext => file.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
-                                 || pack.Activation.PathPatterns.Any(pattern => files.Any(file => GlobMatch(pattern, file))))
+                                 || pack.Activation.PathPatterns.Any(pattern => files.Any(f => GlobMatch(pattern, f))))
                || rootFiles.Select(Path.GetFileName).Any(root => pack.Activation.RootFiles.Any(expected => string.Equals(root, expected, StringComparison.OrdinalIgnoreCase)));
     }
 
