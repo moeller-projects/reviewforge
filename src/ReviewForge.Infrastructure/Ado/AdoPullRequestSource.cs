@@ -231,7 +231,7 @@ public sealed class AdoPullRequestSource : IPullRequestSource
     {
         var git = await GitClientAsync(ct).ConfigureAwait(false);
         var botId = (await _Retry.ExecuteAsync(
-            attemptCt => CurrentIdentityAsync(attemptCt),
+            CurrentIdentityAsync,
             "CurrentIdentity",
             ct).ConfigureAwait(false)).Id;
         var threads = await _Retry.ExecuteAsync(
@@ -254,7 +254,8 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                             .Select(c => new ThreadComment(
                                 c.Author?.Id.ToString() ?? string.Empty,
                                 c.Author?.DisplayName ?? "unknown",
-                                string.Equals(c.Author?.Id.ToString(), botId, StringComparison.OrdinalIgnoreCase),
+                                AdoCommentBotClassifier.IsBot(
+                                    c.Author?.Id.ToString(), botId, c.Content),
                                 c.Content ?? string.Empty,
                                 AdoTime.ToUtc(c.PublishedDate)))
                     ],
