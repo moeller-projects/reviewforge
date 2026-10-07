@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.5.4">
+<Project Sdk="Aspire.AppHost.Sdk/13.6.1">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -12,10 +12,6 @@
     <ItemGroup>
         <!-- Enables the generated Projects.ReviewForge_Service type for typed AddProject. -->
         <ProjectReference Include="../ReviewForge.Service/ReviewForge.Service.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <PackageReference Include="Aspire.Hosting.AppHost"/>
     </ItemGroup>
 
 </Project>
