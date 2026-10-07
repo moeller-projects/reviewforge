@@ -51,7 +51,7 @@ public static class Endpoints
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("DiscoverPullRequests")
             .WithTags("Reviews")
-            .Produces<DiscoveryReport>(200);
+            .Produces<DiscoveryReport>();
 
         reviews.MapGet("/{runId:guid}", GetRunStatus)
             .RequireRateLimiting(ApiKeyOptions.StatusPolicy)

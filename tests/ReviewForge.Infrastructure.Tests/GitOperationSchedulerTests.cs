@@ -108,8 +108,7 @@ public class GitOperationSchedulerTests
         cts.Cancel();
         try
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => queued.WaitAsync(TimeSpan.FromSeconds(1)));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued.WaitAsync(TimeSpan.FromSeconds(1)));
             Assert.False(ran);
         }
         finally
@@ -163,7 +162,7 @@ public class GitOperationSchedulerTests
     {
         using var scheduler = new GitOperationScheduler(1);
         using var cts = new CancellationTokenSource();
-        var task = scheduler.RunAsync<bool>(() =>
+        var task = scheduler.RunAsync(() =>
         {
             cts.Cancel(); // the item observes its own cancellation and bails out
             cts.Token.ThrowIfCancellationRequested();

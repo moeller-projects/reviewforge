@@ -945,7 +945,7 @@ public class StageTests : IDisposable
         File.WriteAllText(Path.Combine(sibling, "evil.cs"), "bad code here");
         try
         {
-            var finding = FindingOnLine(1, "bad code here");
+            var finding = FindingOnLine(1);
             finding.Anchor = new FindingAnchor($"../{Path.GetFileName(sibling)}/evil.cs", 1, 1);
             var ctx = Ctx();
             ctx.Reasoning = ctx.Reasoning with

@@ -24,7 +24,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 ///
 /// <remarks>
 /// Direct System.IO by design — same exception as RepoReadTools/ValidateFindingsStage
-/// (see the IWorkspaceFs scope note). Reads via <paramref name="lineReader"/>; writes go
+/// (see the IWorkspaceFs scope note). Reads via the injected line reader; writes go
 /// through <see cref="HashLineEditor"/> (guard + writable set). Suggestion-mode writes are
 /// always reverted; CommitOnHead keeps accepted edits and reverts declined/failed passes.
 /// </remarks>

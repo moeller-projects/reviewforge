@@ -8,7 +8,7 @@ public sealed class ReferenceScannerTests
     [Fact]
     public void ScanLines_matches_boundaries_case_insensitively()
     {
-        var matches = ReferenceScanner.ScanLines(["Foo", "FooBar", "MyFoo", "x.Foo()"], "Foo", StringComparison.OrdinalIgnoreCase).ToArray();
+        var matches = ReferenceScanner.ScanLines(["Foo", "FooBar", "MyFoo", "x.Foo()"], "Foo").ToArray();
         Assert.Equal([1, 4], matches.Select(m => m.LineNo));
     }
 

@@ -46,6 +46,7 @@ public sealed class ProcessRunner : IProcessRunner
         {
             throw new ArgumentOutOfRangeException(nameof(timeout), "The process timeout must be positive.");
         }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var startInfo = new ProcessStartInfo
@@ -69,12 +70,13 @@ public sealed class ProcessRunner : IProcessRunner
                 startInfo.Environment[name] = value;
             }
         }
+
         for (var i = 1; i < argv.Count; i++)
         {
             startInfo.ArgumentList.Add(argv[i]);
         }
 
-        using var process = new System.Diagnostics.Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        using var process = new System.Diagnostics.Process {StartInfo = startInfo, EnableRaisingEvents = true};
         if (!process.Start())
         {
             throw new InvalidOperationException($"Unable to start process '{argv[0]}'.");
@@ -197,20 +199,20 @@ public sealed class ProcessRunner : IProcessRunner
 
     private sealed class OutputBudget(int maximum)
     {
-        private int _remaining = maximum;
+        private int _Remaining = maximum;
 
         public int Reserve(int requested)
         {
             while (true)
             {
-                var current = Volatile.Read(ref _remaining);
+                var current = Volatile.Read(ref _Remaining);
                 if (current == 0)
                 {
                     return 0;
                 }
 
                 var granted = Math.Min(current, requested);
-                if (Interlocked.CompareExchange(ref _remaining, current - granted, current) == current)
+                if (Interlocked.CompareExchange(ref _Remaining, current - granted, current) == current)
                 {
                     return granted;
                 }

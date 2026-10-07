@@ -65,7 +65,7 @@ public sealed class CollectCommentsStage(
             // discarded provider failure would hide the original error and let a failed
             // stage report success.
             var overlapped = await refresh.Task.ConfigureAwait(false);
-            var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : (DateTimeOffset?) null);
+            var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : null);
             if (completedAt is { } receivedAt
                 && ctx.Repository.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
                 return overlapped;

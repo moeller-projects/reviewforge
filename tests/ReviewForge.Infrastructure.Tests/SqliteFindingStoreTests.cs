@@ -49,8 +49,7 @@ public class SqliteFindingStoreTests : IDisposable
 
         // Schema ensure opens the connection eagerly: an unopenable path fails fast at
         // construction (visible at startup via StoreHealthCheck) instead of first use.
-        Assert.Throws<SqliteException>(
-            () => new SqliteFindingStore($"Data Source={Path.Combine(missingDir, "x.db")};Pooling=False"));
+        Assert.Throws<SqliteException>(() => new SqliteFindingStore($"Data Source={Path.Combine(missingDir, "x.db")};Pooling=False"));
     }
 
     [Fact]
@@ -105,8 +104,8 @@ public class SqliteFindingStoreTests : IDisposable
         await using (var transaction = writer.BeginTransaction())
         {
             await using (var write = new SqliteCommand(
-                "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, Pipeline, StartedAt, Success) " +
-                "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', 'Review', $started, 1)", writer, transaction))
+                             "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, Pipeline, StartedAt, Success) " +
+                             "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', 'Review', $started, 1)", writer, transaction))
             {
                 write.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
                 write.Parameters.AddWithValue("$started", DateTimeOffset.UtcNow.ToString("O"));
@@ -149,7 +148,7 @@ public class SqliteFindingStoreTests : IDisposable
         }
         finally
         {
-            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+            foreach (var suffix in new[] {"", "-wal", "-shm", "-journal"})
             {
                 if (File.Exists(dbPath + suffix))
                 {
@@ -316,18 +315,18 @@ public class SqliteFindingStoreTests : IDisposable
         var runId = Guid.NewGuid();
 
         await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, null, false,
-            [
-                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
-                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
-            ]), CancellationToken.None);
+        [
+            new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+            new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+        ]), CancellationToken.None);
 
         await _Store.SetThreadIdAsync(runId, "k1", 1000, CancellationToken.None);
 
         await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
-            [
-                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
-                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
-            ]), CancellationToken.None);
+        [
+            new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+            new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+        ]), CancellationToken.None);
 
         await using (var db = new FindingStoreDbContext(
                          new DbContextOptionsBuilder<FindingStoreDbContext>()
@@ -354,10 +353,10 @@ public class SqliteFindingStoreTests : IDisposable
 
         // Finalize introduces a finding the shell did not have; it must be merged.
         await _Store.SaveRunAsync(new ReviewRun(runId, Key, "head", ReviewKind.Full, t0, t0.AddMinutes(5), true,
-            [
-                new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
-                new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
-            ]), CancellationToken.None);
+        [
+            new StoredFinding("k1", "r", "high", "t1", "f.cs", 1, null),
+            new StoredFinding("k2", "r", "high", "t2", "f.cs", 2, null),
+        ]), CancellationToken.None);
 
         await using (var db = new FindingStoreDbContext(
                          new DbContextOptionsBuilder<FindingStoreDbContext>()
@@ -570,20 +569,19 @@ public class SqliteFindingStoreTests : IDisposable
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = """
-                    CREATE TABLE Runs (
-                        Id TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
-                        RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, HeadSha TEXT NOT NULL,
-                        Kind TEXT NOT NULL, StartedAt TEXT NOT NULL, CompletedAt TEXT NULL, Success INTEGER NOT NULL);
-                    CREATE TABLE Findings (
-                        Id INTEGER PRIMARY KEY AUTOINCREMENT, RunId TEXT NOT NULL, DedupeKey TEXT NOT NULL,
-                        RuleId TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
-                        FilePath TEXT NULL, Line INTEGER NULL, ThreadId INTEGER NULL);
-                    """;
+                                  CREATE TABLE Runs (
+                                      Id TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                                      RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, HeadSha TEXT NOT NULL,
+                                      Kind TEXT NOT NULL, StartedAt TEXT NOT NULL, CompletedAt TEXT NULL, Success INTEGER NOT NULL);
+                                  CREATE TABLE Findings (
+                                      Id INTEGER PRIMARY KEY AUTOINCREMENT, RunId TEXT NOT NULL, DedupeKey TEXT NOT NULL,
+                                      RuleId TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
+                                      FilePath TEXT NULL, Line INTEGER NULL, ThreadId INTEGER NULL);
+                                  """;
                 cmd.ExecuteNonQuery();
             }
 
-            await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(
-                () => new SqliteFindingStore($"Data Source={dbPath};Pooling=False"))));
+            await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => new SqliteFindingStore($"Data Source={dbPath};Pooling=False"))));
 
             using var check = new SqliteConnection($"Data Source={dbPath};Pooling=False");
             check.Open();
@@ -615,15 +613,15 @@ public class SqliteFindingStoreTests : IDisposable
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = """
-                    CREATE TABLE Runs (
-                        Id TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
-                        RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, HeadSha TEXT NOT NULL,
-                        Kind TEXT NOT NULL, StartedAt TEXT NOT NULL, CompletedAt TEXT NULL, Success INTEGER NOT NULL);
-                    CREATE TABLE Findings (
-                        Id INTEGER PRIMARY KEY AUTOINCREMENT, RunId TEXT NOT NULL, DedupeKey TEXT NOT NULL,
-                        RuleId TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
-                        FilePath TEXT NULL, Line INTEGER NULL, ThreadId INTEGER NULL);
-                    """;
+                                  CREATE TABLE Runs (
+                                      Id TEXT PRIMARY KEY, Org TEXT NOT NULL, Project TEXT NOT NULL,
+                                      RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, HeadSha TEXT NOT NULL,
+                                      Kind TEXT NOT NULL, StartedAt TEXT NOT NULL, CompletedAt TEXT NULL, Success INTEGER NOT NULL);
+                                  CREATE TABLE Findings (
+                                      Id INTEGER PRIMARY KEY AUTOINCREMENT, RunId TEXT NOT NULL, DedupeKey TEXT NOT NULL,
+                                      RuleId TEXT NOT NULL, Severity TEXT NOT NULL, Title TEXT NOT NULL,
+                                      FilePath TEXT NULL, Line INTEGER NULL, ThreadId INTEGER NULL);
+                                  """;
                 cmd.ExecuteNonQuery();
             }
 
@@ -691,7 +689,7 @@ public class SqliteFindingStoreTests : IDisposable
         Assert.Equal(["k5", "k6", "k7"], (await _Store.GetKnownDedupeKeysAsync(Key, CancellationToken.None)).Order().ToArray());
         var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.NotNull(last);
-        Assert.Equal("h7", last!.HeadSha);
+        Assert.Equal("h7", last.HeadSha);
         Assert.Equal(42, last.Findings!.Single(f => f.DedupeKey == "k7").ThreadId);
     }
 
@@ -721,7 +719,7 @@ public class SqliteFindingStoreTests : IDisposable
         Assert.Equal(2, recent.Count(r => r.CompletedAt is null));
         var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.NotNull(last);
-        Assert.Equal("old-done", last!.HeadSha);
+        Assert.Equal("old-done", last.HeadSha);
         Assert.Equal(["k-old"], last.FindingKeys);
     }
 
@@ -740,7 +738,7 @@ public class SqliteFindingStoreTests : IDisposable
 
         var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.NotNull(last);
-        Assert.Equal("h49", last!.HeadSha); // newest started; per-PR runs never overlap
+        Assert.Equal("h49", last.HeadSha); // newest started; per-PR runs never overlap
         Assert.Equal(t0.AddMinutes(49 * 10).AddMinutes(5), last.CompletedAt);
         Assert.Equal(["k49"], last.FindingKeys);
     }
@@ -762,7 +760,7 @@ public class SqliteFindingStoreTests : IDisposable
 
         var last = await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None);
         Assert.NotNull(last);
-        Assert.Equal("h299", last!.HeadSha);
+        Assert.Equal("h299", last.HeadSha);
         Assert.Equal(40, last.Findings!.Count);
 
         var recent = await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None);
@@ -797,57 +795,57 @@ public class SqliteFindingStoreTests : IDisposable
         var connectionString = $"Data Source={dbPath};Pooling=False";
         try
         {
-        await using (var connection = new SqliteConnection(connectionString))
-        {
-            await connection.OpenAsync();
-            await using var cmd = connection.CreateCommand();
-            cmd.CommandText = """
-                CREATE TABLE "Runs" (
-                    "Id" TEXT NOT NULL CONSTRAINT "PK_Runs" PRIMARY KEY,
-                    "Org" TEXT NOT NULL,
-                    "Project" TEXT NOT NULL,
-                    "RepositoryId" TEXT NOT NULL,
-                    "PrId" INTEGER NOT NULL,
-                    "HeadSha" TEXT NOT NULL,
-                    "Kind" TEXT NOT NULL,
-                    "StartedAt" TEXT NOT NULL,
-                    "CompletedAt" TEXT NULL,
-                    "LastObservedCommentAt" TEXT NULL,
-                    "Success" INTEGER NOT NULL
-                );
-                CREATE TABLE "Findings" (
-                    "Id" INTEGER NOT NULL CONSTRAINT "PK_Findings" PRIMARY KEY AUTOINCREMENT,
-                    "RunId" TEXT NOT NULL,
-                    "DedupeKey" TEXT NOT NULL,
-                    "RuleId" TEXT NOT NULL,
-                    "Severity" TEXT NOT NULL,
-                    "Title" TEXT NOT NULL,
-                    "FilePath" TEXT NULL,
-                    "Line" INTEGER NULL,
-                    "ThreadId" INTEGER NULL
-                );
-                """;
-            await cmd.ExecuteNonQueryAsync();
-        }
+            await using (var connection = new SqliteConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var cmd = connection.CreateCommand();
+                cmd.CommandText = """
+                                  CREATE TABLE "Runs" (
+                                      "Id" TEXT NOT NULL CONSTRAINT "PK_Runs" PRIMARY KEY,
+                                      "Org" TEXT NOT NULL,
+                                      "Project" TEXT NOT NULL,
+                                      "RepositoryId" TEXT NOT NULL,
+                                      "PrId" INTEGER NOT NULL,
+                                      "HeadSha" TEXT NOT NULL,
+                                      "Kind" TEXT NOT NULL,
+                                      "StartedAt" TEXT NOT NULL,
+                                      "CompletedAt" TEXT NULL,
+                                      "LastObservedCommentAt" TEXT NULL,
+                                      "Success" INTEGER NOT NULL
+                                  );
+                                  CREATE TABLE "Findings" (
+                                      "Id" INTEGER NOT NULL CONSTRAINT "PK_Findings" PRIMARY KEY AUTOINCREMENT,
+                                      "RunId" TEXT NOT NULL,
+                                      "DedupeKey" TEXT NOT NULL,
+                                      "RuleId" TEXT NOT NULL,
+                                      "Severity" TEXT NOT NULL,
+                                      "Title" TEXT NOT NULL,
+                                      "FilePath" TEXT NULL,
+                                      "Line" INTEGER NULL,
+                                      "ThreadId" INTEGER NULL
+                                  );
+                                  """;
+                await cmd.ExecuteNonQueryAsync();
+            }
 
-        // Opening the store must add the column; saving and reading back must work.
-        var legacyStore = new SqliteFindingStore(connectionString);
-        var completed = DateTimeOffset.UtcNow;
-        await legacyStore.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h", ReviewKind.Full,
-                completed.AddMinutes(-5), completed, Success: true,
-                [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42, "{}")]),
-            CancellationToken.None);
+            // Opening the store must add the column; saving and reading back must work.
+            var legacyStore = new SqliteFindingStore(connectionString);
+            var completed = DateTimeOffset.UtcNow;
+            await legacyStore.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "h", ReviewKind.Full,
+                    completed.AddMinutes(-5), completed, Success: true,
+                    [new StoredFinding("k1", "rule", "high", "title", "f.cs", 1, 42, "{}")]),
+                CancellationToken.None);
 
-        var last = await legacyStore.GetLastCompletedRunAsync(Key, CancellationToken.None);
-        Assert.Equal("{}", Assert.Single(last!.Findings!).AppliedFixJson);
+            var last = await legacyStore.GetLastCompletedRunAsync(Key, CancellationToken.None);
+            Assert.Equal("{}", Assert.Single(last!.Findings!).AppliedFixJson);
 
-        await using (var connection = new SqliteConnection(connectionString))
-        {
-            await connection.OpenAsync();
-            await using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'AppliedFixJson'";
-            Assert.Equal(1L, await cmd.ExecuteScalarAsync());
-        }
+            await using (var connection = new SqliteConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var cmd = connection.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'AppliedFixJson'";
+                Assert.Equal(1L, await cmd.ExecuteScalarAsync());
+            }
         }
         finally
         {
@@ -860,6 +858,7 @@ public class SqliteFindingStoreTests : IDisposable
             }
         }
     }
+
     [Fact]
     public async Task PruneAsync_returns_zero_when_nothing_is_prunable()
     {
@@ -868,6 +867,7 @@ public class SqliteFindingStoreTests : IDisposable
         Assert.Equal(0, pruned);
         Assert.Empty(await _Store.GetRecentRunsAsync(Key, 10, CancellationToken.None));
     }
+
     [Fact]
     public async Task Resolve_actions_round_trip_and_reply_state_persist()
     {
@@ -931,8 +931,10 @@ public class SqliteFindingStoreTests : IDisposable
         var migrated = new SqliteFindingStore(_ConnectionString);
         var runId = Guid.NewGuid();
         await migrated.SaveResolveActionsAsync(Key, runId,
-            [new ResolveAction(0, runId, 91, TriageVerdict.Question, ResolutionOutcome.Question,
-                null, false, DateTimeOffset.UtcNow, "clarify")], CancellationToken.None);
+        [
+            new ResolveAction(0, runId, 91, TriageVerdict.Question, ResolutionOutcome.Question,
+                null, false, DateTimeOffset.UtcNow, "clarify")
+        ], CancellationToken.None);
 
         var loaded = Assert.Single(await migrated.GetResolveActionsAsync(Key, [91], CancellationToken.None));
         Assert.Equal("clarify", loaded.ReplyText);
@@ -948,7 +950,7 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "failed", ReviewKind.Full,
             second.AddMinutes(-5), second, false, [], second, "Resolve"), CancellationToken.None);
         await _Store.SaveRunAsync(new ReviewRun(Guid.NewGuid(), Key, "review", ReviewKind.Full,
-            second.AddMinutes(1), second.AddMinutes(2), true, [], second.AddMinutes(2), "Review"), CancellationToken.None);
+            second.AddMinutes(1), second.AddMinutes(2), true, [], second.AddMinutes(2)), CancellationToken.None);
 
         var loaded = await _Store.GetLastCompletedResolveRunAsync(Key, CancellationToken.None);
 
@@ -957,5 +959,4 @@ public class SqliteFindingStoreTests : IDisposable
         Assert.Equal("Resolve", loaded.Pipeline);
         Assert.Equal(first.AddMinutes(-1), loaded.LastObservedCommentAt);
     }
-
 }

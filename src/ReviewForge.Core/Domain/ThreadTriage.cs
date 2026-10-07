@@ -26,6 +26,9 @@ public static class ThreadTriage
         IReadOnlyList<ThreadAction> agentActions)
         => Plan(botThreads, currentFindingKeys, agentActions, postedText => postedText, new HashSet<string>(StringComparer.Ordinal), null);
 
+    /// <param name="botThreads">Open bot threads carrying dedupe keys.</param>
+    /// <param name="currentFindingKeys">Keys of findings validated in this run.</param>
+    /// <param name="agentActions">Triage actions the agent returned for individual threads.</param>
     /// <param name="replyTextForMatch">Maps a planned comment to the exact text a previous
     /// attempt would have posted (e.g. CommentFormatter.WithBotPreamble).</param>
     /// <param name="regressedKeys">Accepted findings that are verbatim regressions of
@@ -117,7 +120,7 @@ public static class ThreadTriage
                 break;
         }
 
-        var alreadyPosted = thread.LastComment is { IsBot: true } last
+        var alreadyPosted = thread.LastComment is {IsBot: true} last
                             && string.Equals(last.Text.Trim(), replyTextForMatch(action.Comment).Trim(), StringComparison.Ordinal);
         return new TriageOperation(thread.Id, op, alreadyPosted ? null : action.Comment, status);
     }

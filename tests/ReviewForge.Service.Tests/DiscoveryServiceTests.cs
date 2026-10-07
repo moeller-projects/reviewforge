@@ -107,7 +107,7 @@ public class DiscoveryServiceTests
         Assert.Equal([candidate.Key], report.Enqueued);
         var queued = queue.TryGetQueued(Assert.Single(tracker.Snapshot()).RunId);
         Assert.NotNull(queued);
-        Assert.Equal(RunKind.Resolve, queued!.Kind);
+        Assert.Equal(RunKind.Resolve, queued.Kind);
         Assert.Equal(EnqueueTrigger.Discovery, queued.Trigger);
     }
 

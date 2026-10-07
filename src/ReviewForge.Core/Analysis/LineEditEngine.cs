@@ -5,11 +5,11 @@ namespace ReviewForge.Core.Analysis;
 /// <see cref="ToHash"/> is set and differs, the range from the from-line through the
 /// to-hash line is replaced. Either hash pair or the explicit line range must be given.</summary>
 public sealed record LineEdit(
-    string? FromHash,      // required unless FromLine+ToLine provided
-    string? ToHash,        // defaults to FromHash (single-line replace)
-    int? FromLine,         // disambiguator when the hash is not unique
+    string? FromHash, // required unless FromLine+ToLine provided
+    string? ToHash, // defaults to FromHash (single-line replace)
+    int? FromLine, // disambiguator when the hash is not unique
     int? ToLine,
-    string Replacement);   // "" deletes; may contain more/fewer lines than the range
+    string Replacement); // "" deletes; may contain more/fewer lines than the range
 
 /// <summary>Where one edit landed: the original (input-file) 1-based inclusive range and
 /// how many replacement lines it produced (0 = deleted).</summary>
@@ -99,8 +99,8 @@ public static class LineEditEngine
         var result = new List<string>(lines.Count);
         var cursor = lines.Count; // unprocessed tail is [cursor, lines.Count)
         foreach (var edit in resolved
-            .Select((r, i) => (r.From, r.To, r.Replacement, i))
-            .OrderByDescending(r => r.From))
+                     .Select((r, i) => (r.From, r.To, r.Replacement, i))
+                     .OrderByDescending(r => r.From))
         {
             result.InsertRange(0, lines.Skip(edit.To + 1).Take(cursor - edit.To - 1));
             result.InsertRange(0, edit.Replacement);
@@ -188,7 +188,7 @@ public static class LineEditEngine
                     }
                 }
 
-                if (toMatches is not { Count: > 0 })
+                if (toMatches is not {Count: > 0})
                 {
                     error = allToMatches.Count > 0
                         ? $"hash {toHash} must occur after start line {from + 1}"
@@ -196,7 +196,7 @@ public static class LineEditEngine
                     return false;
                 }
 
-                if (toMatches!.Count > 1)
+                if (toMatches.Count > 1)
                 {
                     if (edit.ToLine is not { } hint || !toMatches.Contains(hint - 1))
                     {

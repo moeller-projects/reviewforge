@@ -11,12 +11,12 @@ public class FakePullRequestSource : IPullRequestSource
 {
     private readonly object _Gate = new();
     private int _NextThreadId = 1000;
-    private int _openPullRequestsFetches;
-    private int _workItemFetches;
-    private int _threadFetches;
+    private int _OpenPullRequestsFetches;
+    private int _WorkItemFetches;
+    private int _ThreadFetches;
     public List<PullRequestCandidate> OpenPullRequests { get; set; } = [];
-    public int OpenPullRequestsFetches => _openPullRequestsFetches;
-    public int WorkItemFetches => _workItemFetches;
+    public int OpenPullRequestsFetches => _OpenPullRequestsFetches;
+    public int WorkItemFetches => _WorkItemFetches;
 
     public PullRequest Pr { get; set; } = new(
         1, "title", "desc", "head-sha", "base-sha", "https://clone", IsDraft: false,
@@ -27,10 +27,10 @@ public class FakePullRequestSource : IPullRequestSource
     public List<ChangedFile> ChangedFiles { get; set; } = [];
     public List<ReviewThread> Threads { get; set; } = [];
     public CurrentUser User { get; set; } = new("user-1", "reviewforge bot");
-    public int ThreadFetches => _threadFetches;
+    public int ThreadFetches => _ThreadFetches;
 
     /// <summary>Optional barrier armed to prove concurrency in discovery tests; trips when
-    /// <paramref name="WorkItems"/> is awaited by that many concurrent callers.</summary>
+    /// <see cref="WorkItems"/> is awaited by that many concurrent callers.</summary>
     public Barrier? WorkItemBarrier { get; set; }
 
     public List<(RichFinding Finding, int ThreadId)> PostedFindings { get; } = [];
@@ -73,7 +73,7 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
     {
-        Interlocked.Increment(ref _openPullRequestsFetches);
+        Interlocked.Increment(ref _OpenPullRequestsFetches);
         if (ThrowOnGetOpenPullRequests is { } error)
         {
             return Task.FromException<IReadOnlyList<PullRequestCandidate>>(error);
@@ -84,7 +84,7 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
     {
-        Interlocked.Increment(ref _workItemFetches);
+        Interlocked.Increment(ref _WorkItemFetches);
         if (ThrowOnGetLinkedWorkItems is { } error)
         {
             throw error;
@@ -102,7 +102,7 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual Task<IReadOnlyList<ReviewThread>> GetThreadsAsync(PrKey pr, CancellationToken ct)
     {
-        Interlocked.Increment(ref _threadFetches);
+        Interlocked.Increment(ref _ThreadFetches);
         return Task.FromResult<IReadOnlyList<ReviewThread>>(Threads);
     }
 
@@ -278,8 +278,8 @@ public class FakeFindingStore : IFindingStore
 {
     public List<ReviewRun> Runs { get; } = [];
     public PriorRun? LastRun { get; set; }
-    private int _lastRunFetches;
-    public int LastRunFetches => _lastRunFetches;
+    private int _LastRunFetches;
+    public int LastRunFetches => _LastRunFetches;
     public List<string> KnownKeys { get; set; } = [];
     public List<(Guid RunId, string Key, int ThreadId)> ThreadIdBackfills { get; } = [];
     public List<ReviewRun> RecentRuns { get; } = [];
@@ -293,7 +293,7 @@ public class FakeFindingStore : IFindingStore
 
     public virtual Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
     {
-        Interlocked.Increment(ref _lastRunFetches);
+        Interlocked.Increment(ref _LastRunFetches);
         return Task.FromResult(LastRun);
     }
 

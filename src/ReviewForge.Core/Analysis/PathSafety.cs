@@ -11,7 +11,7 @@ internal static class PathSafety
     /// real path. Does NOT check containment — pair with <see cref="PathContainment.IsContained"/>.</summary>
     public static string ResolveReal(string path) => ResolveLinks(path, out _);
 
-    /// <summary>As <see cref="ResolveReal"/>, additionally reporting how many symlink/junction
+    /// <summary>As <see cref="ResolveReal(string)"/>, additionally reporting how many symlink/junction
     /// components resolution traversed (used to refuse reads through committed links).</summary>
     public static string ResolveReal(string path, out int linksTraversed) => ResolveLinks(path, out linksTraversed);
 

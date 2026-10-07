@@ -18,10 +18,12 @@ public static class HomoglyphDetector
     {
         public int MinTokenLength { get; init; } = 3;
         public bool RequireAsciiContext { get; init; } = true;
+
         public IReadOnlySet<string> AllowedScripts { get; init; } = new HashSet<string>(StringComparer.Ordinal)
-            { "Latin" };
+            {"Latin"};
+
         public IReadOnlySet<string> AllowedAsciiKeywords { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "return", "import", "public", "static", "string", "class", "null" };
+            {"return", "import", "public", "static", "string", "class", "null"};
 
         /// <summary>Shared immutable default (P2-27): resolved once per scan instead of being
         /// allocated per line. Do not mutate the sets — construct an <see cref="Options"/>
@@ -106,7 +108,7 @@ public static class HomoglyphDetector
 
         // ASCII fast path (vectorized): a pure-ASCII line has exactly one script and a
         // skeleton identical to the token, so it can never flag — skip tokenizing entirely.
-        if (line.AsSpan().IndexOfAnyExceptInRange((char)0x00, (char)0x7F) < 0)
+        if (line.AsSpan().IndexOfAnyExceptInRange((char) 0x00, (char) 0x7F) < 0)
             return [];
 
         var tokens = TokenizeRanges(line, out var hasAsciiToken);
@@ -122,14 +124,14 @@ public static class HomoglyphDetector
 
             var token = line.AsSpan(start, length);
             var scripts = ScriptMask(token);
-            var mixed = BitOperations.PopCount((uint)scripts) > 1 && (scripts & ~allowedMask) != 0;
+            var mixed = BitOperations.PopCount((uint) scripts) > 1 && (scripts & ~allowedMask) != 0;
 
             // NFKC per token is required for parity on direct (unnormalized) input: fullwidth
             // "ｖａｒ" only reads as the "var" keyword because NFKC maps it to ASCII.
             var tokenText = line.Substring(start, length);
             var skeleton = Skeleton(tokenText);
             var hasKnownSkeleton = !string.Equals(skeleton, tokenText, StringComparison.Ordinal)
-                && opts.AllowedAsciiKeywords.Contains(skeleton);
+                                   && opts.AllowedAsciiKeywords.Contains(skeleton);
 
             if (hasKnownSkeleton)
             {
@@ -195,8 +197,8 @@ public static class HomoglyphDetector
         options ??= Options.Default;
         asciiSkeleton = Skeleton(token);
         return token.Length >= options.MinTokenLength
-            && !string.Equals(token, asciiSkeleton, StringComparison.Ordinal)
-            && asciiSkeleton.All(c => c <= 0x7F);
+               && !string.Equals(token, asciiSkeleton, StringComparison.Ordinal)
+               && asciiSkeleton.All(c => c <= 0x7F);
     }
 
     /// <summary>Token ranges with an inline all-ASCII flag — substrings are materialized only
@@ -237,8 +239,8 @@ public static class HomoglyphDetector
     private static string Skeleton(string token)
     {
         var builder = new StringBuilder(token.Length);
-        foreach (var c in token.Normalize(System.Text.NormalizationForm.FormKC))
-            builder.Append(Confusables.TryGetValue(c, out var mapped) ? mapped : c);
+        foreach (var c in token.Normalize(NormalizationForm.FormKC))
+            builder.Append(Confusables.GetValueOrDefault(c, c));
         return builder.ToString();
     }
 }

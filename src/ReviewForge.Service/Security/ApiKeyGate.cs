@@ -11,6 +11,9 @@ namespace ReviewForge.Service.Security;
 internal static class ApiKeyGate
 {
     /// <summary>Null when the request may proceed; otherwise the status code and error message.</summary>
+    /// <param name="options">Configured API keys and the development opt-out.</param>
+    /// <param name="environment">Host environment; gates the development opt-out.</param>
+    /// <param name="request">The incoming request to authenticate.</param>
     /// <param name="allowQueryKey">MCP only: also accept the key as the <c>api_key</c> query
     /// parameter for clients that cannot set headers. The header is preferred; either valid
     /// credential authenticates. Note the tradeoff: query strings appear in request logs, so

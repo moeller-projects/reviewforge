@@ -47,8 +47,10 @@ public class RepoReadTools
 
     /// <summary>Maximum characters returned by <see cref="FileDiff"/>.</summary>
     public const int MaxFileDiffChars = 20_000;
+
     /// <summary>Maximum unchanged-file references returned by <see cref="FindReferences"/>.</summary>
     public const int MaxReferenceResults = 20;
+
     /// <summary>Maximum serialized reference-search response size.</summary>
     public const int MaxReferenceChars = 20_000;
 
@@ -90,7 +92,7 @@ public class RepoReadTools
 
     /// <summary>Shows the diff hunks for one changed file.</summary>
     [Description("Show this pull request's diff hunks for one changed file (what changed, not "
-        + "just the current content). Works for deleted files, which repo_read_file cannot serve.")]
+                 + "just the current content). Works for deleted files, which repo_read_file cannot serve.")]
     public string FileDiff([Description("File path relative to repo root")] string path)
     {
         var relative = RepoPath.Normalize(path);
@@ -212,14 +214,16 @@ public class RepoReadTools
     }
 
     [Description("Search file contents for a regex pattern. Returns matching lines with file and line number. "
-        + "Stops with a \"…[truncated: budget-time]\" or \"…[truncated: budget-lines]\" marker when the aggregate "
-        + "time/line budget is reached — narrow the pattern or path and retry. \"…[pattern-fallback]\" means the "
-        + "pattern needed lookarounds/backreferences, so it runs with a per-line timeout instead of the "
-        + "linear-time engine.")]
+                 + "Stops with a \"…[truncated: budget-time]\" or \"…[truncated: budget-lines]\" marker when the aggregate "
+                 + "time/line budget is reached — narrow the pattern or path and retry. \"…[pattern-fallback]\" means the "
+                 + "pattern needed lookarounds/backreferences, so it runs with a per-line timeout instead of the "
+                 + "linear-time engine.")]
     public string Grep(
         [Description("Regex pattern")] string pattern,
-        [Description("Subdirectory to search; empty for whole repo")] string? path = null,
-        [Description("Optional file glob, e.g. *.cs")] string? glob = null,
+        [Description("Subdirectory to search; empty for whole repo")]
+        string? path = null,
+        [Description("Optional file glob, e.g. *.cs")]
+        string? glob = null,
         CancellationToken cancellationToken = default)
     {
         Regex matcher;
@@ -341,10 +345,11 @@ public class RepoReadTools
 
     /// <summary>Finds usages of an identifier across unchanged repository files.</summary>
     [Description("Find usages of an identifier across the repository's unchanged files. Use "
-        + "BEFORE claiming code is unused, unreferenced, or signature-mismatched. Files changed "
-        + "in this PR are excluded — inspect them with repo_file_diff / repo_read_file.")]
+                 + "BEFORE claiming code is unused, unreferenced, or signature-mismatched. Files changed "
+                 + "in this PR are excluded — inspect them with repo_file_diff / repo_read_file.")]
     public string FindReferences(
-        [Description("Identifier to find (e.g. ParseConfig or Config.Parse)")] string identifier,
+        [Description("Identifier to find (e.g. ParseConfig or Config.Parse)")]
+        string identifier,
         CancellationToken cancellationToken = default)
     {
         if (!ReferenceScanner.IsValidIdentifier(identifier))
@@ -393,7 +398,7 @@ public class RepoReadTools
                         break;
                     }
 
-                    foreach (var _ in ReferenceScanner.ScanLines([line], identifier, StringComparison.OrdinalIgnoreCase))
+                    foreach (var _ in ReferenceScanner.ScanLines([line], identifier))
                     {
                         if (changed)
                         {
@@ -403,6 +408,7 @@ public class RepoReadTools
                         {
                             total++;
                         }
+
                         if (!changed && shown < MaxReferenceResults)
                         {
                             sb.Append(rel).Append(':').Append(lineNo).Append(": ")
@@ -440,6 +446,7 @@ public class RepoReadTools
             {
                 sb.Append(" (+").Append(changedHits).Append(" in PR-changed files)");
             }
+
             sb.AppendLine();
         }
 

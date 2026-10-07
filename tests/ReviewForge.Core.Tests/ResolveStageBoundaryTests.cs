@@ -11,17 +11,17 @@ namespace ReviewForge.Core.Tests;
 
 public sealed class ResolveStageBoundaryTests : IDisposable
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "reviewforge-resolve-stage-" + Guid.NewGuid().ToString("N"));
+    private readonly string _Root = Path.Combine(Path.GetTempPath(), "reviewforge-resolve-stage-" + Guid.NewGuid().ToString("N"));
     private static readonly PrKey Key = new("o", "p", "r", 1);
 
-    public ResolveStageBoundaryTests() => Directory.CreateDirectory(_root);
-    public void Dispose() => Directory.Delete(_root, true);
+    public ResolveStageBoundaryTests() => Directory.CreateDirectory(_Root);
+    public void Dispose() => Directory.Delete(_Root, true);
 
     private ReviewContext Context(Guid? runId = null)
     {
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow, runId)
         {
-            Repository = new RepoPreparation {RepoDir = _root},
+            Repository = new RepoPreparation {RepoDir = _Root},
             Fetch = new FetchOutcome
             {
                 PullRequest = new PullRequest(1, "title", null, "head-sha", "base", "https://clone", false, "creator", "Creator", "refs/heads/feature"),
@@ -38,10 +38,10 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     public async Task Triage_normalizes_duplicate_missing_unknown_and_evidence_less_pushback()
     {
         var chat = new ScriptedChatClient(ScriptedChatClient.FunctionCalls(
-            ("RecordVerdict", new Dictionary<string, object?> { ["threadId"] = 1, ["verdict"] = "NonIssue", ["evidence"] = "no citation", ["confidence"] = "high" }),
-            ("RecordVerdict", new Dictionary<string, object?> { ["threadId"] = 1, ["verdict"] = "Actionable", ["evidence"] = "A.cs:1", ["confidence"] = "high" }),
-            ("RecordVerdict", new Dictionary<string, object?> { ["threadId"] = 999, ["verdict"] = "Actionable", ["evidence"] = "A.cs:1", ["confidence"] = "high" }),
-            ("TaskDone", new Dictionary<string, object?> { ["summary"] = "triaged" })));
+            ("RecordVerdict", new Dictionary<string, object?> {["threadId"] = 1, ["verdict"] = "NonIssue", ["evidence"] = "no citation", ["confidence"] = "high"}),
+            ("RecordVerdict", new Dictionary<string, object?> {["threadId"] = 1, ["verdict"] = "Actionable", ["evidence"] = "A.cs:1", ["confidence"] = "high"}),
+            ("RecordVerdict", new Dictionary<string, object?> {["threadId"] = 999, ["verdict"] = "Actionable", ["evidence"] = "A.cs:1", ["confidence"] = "high"}),
+            ("TaskDone", new Dictionary<string, object?> {["summary"] = "triaged"})));
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1), Comment(2)];
 
@@ -58,9 +58,9 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     public async Task Triage_downgrades_evidence_less_already_fixed_and_accepts_file_line_evidence()
     {
         var chat = new ScriptedChatClient(ScriptedChatClient.FunctionCalls(
-            ("RecordVerdict", new Dictionary<string, object?> { ["threadId"] = 1, ["verdict"] = "AlreadyFixed", ["evidence"] = "current code is fine", ["confidence"] = "medium" }),
-            ("RecordVerdict", new Dictionary<string, object?> { ["threadId"] = 2, ["verdict"] = "NonIssue", ["evidence"] = "src/A.cs:12 contradicts this", ["confidence"] = "high" }),
-            ("TaskDone", new Dictionary<string, object?> { ["summary"] = "done" })));
+            ("RecordVerdict", new Dictionary<string, object?> {["threadId"] = 1, ["verdict"] = "AlreadyFixed", ["evidence"] = "current code is fine", ["confidence"] = "medium"}),
+            ("RecordVerdict", new Dictionary<string, object?> {["threadId"] = 2, ["verdict"] = "NonIssue", ["evidence"] = "src/A.cs:12 contradicts this", ["confidence"] = "high"}),
+            ("TaskDone", new Dictionary<string, object?> {["summary"] = "done"})));
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1), Comment(2)];
 
@@ -74,13 +74,13 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Apply_fixes_reverts_edits_when_task_done_is_missing_and_declines_cluster()
     {
-        var path = Path.Combine(_root, "A.cs");
+        var path = Path.Combine(_Root, "A.cs");
         File.WriteAllText(path, "old\n");
         var hash = HashLine.Of("old");
         var chat = new ScriptedChatClient(ScriptedChatClient.FunctionCalls(
-            ("EditFile", new Dictionary<string, object?> { ["path"] = "A.cs", ["edits"] = new[] { new LineEdit(hash, null, null, null, "new") } })));
+            ("EditFile", new Dictionary<string, object?> {["path"] = "A.cs", ["edits"] = new[] {new LineEdit(hash, null, null, null, "new")}})));
         var ctx = Context();
-        ctx.Resolve!.ResolvePlan = new ResolvePlan([new PlannedFix(1, new ThreadAnchor("A.cs", 1, 1), "fix", "A.cs:1", ["A.cs"])], new HashSet<string> { "A.cs" }, []);
+        ctx.Resolve!.ResolvePlan = new ResolvePlan([new PlannedFix(1, new ThreadAnchor("A.cs", 1, 1), "fix", "A.cs:1", ["A.cs"])], new HashSet<string> {"A.cs"}, []);
 
         await new ApplyFixesStage(new NativeReviewAgent(new FakeChatClientFactory(chat)), 2).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -93,17 +93,18 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Verify_failure_reverts_files_and_single_commit_downgrades_survivors()
     {
-        var first = Path.Combine(_root, "A.cs");
-        var second = Path.Combine(_root, "B.cs");
-        File.WriteAllText(first, "a\n"); File.WriteAllText(second, "b\n");
-        var e1 = new HashLineEditor(new RepoPathGuard(_root), new HashSet<string> { "A.cs" });
-        var e2 = new HashLineEditor(new RepoPathGuard(_root), new HashSet<string> { "B.cs" });
+        var first = Path.Combine(_Root, "A.cs");
+        var second = Path.Combine(_Root, "B.cs");
+        File.WriteAllText(first, "a\n");
+        File.WriteAllText(second, "b\n");
+        var e1 = new HashLineEditor(new RepoPathGuard(_Root), new HashSet<string> {"A.cs"});
+        var e2 = new HashLineEditor(new RepoPathGuard(_Root), new HashSet<string> {"B.cs"});
         e1.EditFile("A.cs", [new LineEdit(HashLine.Of("a"), null, null, null, "A")]);
         e2.EditFile("B.cs", [new LineEdit(HashLine.Of("b"), null, null, null, "B")]);
         var ctx = Context();
-        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "a", ["A.cs"]), new AppliedResolution(2, "b", ["B.cs"] )];
-        ctx.Resolve!.ResolutionEditors = new Dictionary<int, HashLineEditor> { [1] = e1, [2] = e2 };
-        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed, [2] = ResolutionOutcome.Fixed };
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "a", ["A.cs"]), new AppliedResolution(2, "b", ["B.cs"])];
+        ctx.Resolve!.ResolutionEditors = new Dictionary<int, HashLineEditor> {[1] = e1, [2] = e2};
+        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> {[1] = ResolutionOutcome.Fixed, [2] = ResolutionOutcome.Fixed};
         ctx.Resolve!.ResolutionDetails = new Dictionary<int, string>();
 
         await new VerifyBuildStage(new ProcessRunner(false), ["build"], TimeSpan.FromSeconds(1), singleCommit: true).ExecuteAsync(ctx, CancellationToken.None);
@@ -118,14 +119,16 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Commit_push_downgrades_when_source_ref_is_missing_and_does_not_commit()
     {
-        var store = new FakeFindingStore(); var git = new FakeGitOps();
-        var ctx = Context(); ctx.Fetch = ctx.Fetch with {PullRequest = ctx.Fetch.PullRequest! with { SourceRefName = null }};
+        var store = new FakeFindingStore();
+        var git = new FakeGitOps();
+        var ctx = Context();
+        ctx.Fetch = ctx.Fetch with {PullRequest = ctx.Fetch.PullRequest! with {SourceRefName = null}};
         ctx.Resolve!.ResolvableComments = [Comment(1)];
         ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
-        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
-        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed };
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
+        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> {[1] = ResolutionOutcome.Fixed};
 
-        await new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example", null).ExecuteAsync(ctx, CancellationToken.None);
+        await new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(git.Commits);
         Assert.Empty(ctx.Resolve!.AppliedResolutions);
@@ -135,13 +138,18 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Commit_push_rejects_claim_loss_and_remote_pin_mismatch_before_push()
     {
-        var store = new FakeFindingStore(); var git = new FakeGitOps();
-        var ctx = Context(); ctx.Resolve!.ResolvableComments = [Comment(1)]; ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
-        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )]; ctx.PublishGuard = () => false;
+        var store = new FakeFindingStore();
+        var git = new FakeGitOps();
+        var ctx = Context();
+        ctx.Resolve!.ResolvableComments = [Comment(1)];
+        ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
+        ctx.PublishGuard = () => false;
         await Assert.ThrowsAsync<InvalidOperationException>(() => new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
         Assert.Empty(git.Commits);
 
-        ctx.PublishGuard = null; git.RemoteTip = "moved";
+        ctx.PublishGuard = null;
+        git.RemoteTip = "moved";
         await Assert.ThrowsAsync<PrHeadChangedException>(() => new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
         Assert.Empty(git.Pushes);
         var audit = Assert.Single(store.ResolveActions);
@@ -152,9 +160,12 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Commit_push_rejects_claim_loss_at_the_push_boundary()
     {
-        var store = new FakeFindingStore(); var git = new FakeGitOps();
-        var ctx = Context(); ctx.Resolve!.ResolvableComments = [Comment(1)]; ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
-        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"] )];
+        var store = new FakeFindingStore();
+        var git = new FakeGitOps();
+        var ctx = Context();
+        ctx.Resolve!.ResolvableComments = [Comment(1)];
+        ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
+        ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
         var calls = 0;
         ctx.PublishGuard = () => ++calls < 2; // holds "before resolve commit", lost "at resolve push"
 
@@ -170,12 +181,12 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     public async Task Commit_failure_persists_unpublished_outcome_before_failing()
     {
         var store = new FakeFindingStore();
-        var git = new FakeGitOps { ThrowOnCommit = new InvalidOperationException("commit failed") };
+        var git = new FakeGitOps {ThrowOnCommit = new InvalidOperationException("commit failed")};
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1)];
         ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
         ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
-        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> { [1] = ResolutionOutcome.Fixed };
+        ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> {[1] = ResolutionOutcome.Fixed};
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example")
@@ -190,14 +201,22 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Reply_deduplicates_existing_bot_reply_and_honors_status_opt_in()
     {
-        var source = new FakePullRequestSource(); var store = new FakeFindingStore(); var run = Guid.NewGuid();
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var run = Guid.NewGuid();
         var body = CommentFormatter.WithBotPreamble("Fixed in abcdef1 — fix: update. applied");
         var action = new ResolveAction(0, run, 1, TriageVerdict.Actionable, ResolutionOutcome.Fixed,
             "abcdef123", false, DateTimeOffset.UtcNow, body);
         await store.SaveResolveActionsAsync(Key, run, [action], CancellationToken.None);
         var ctx = Context(run);
-        ctx.Fetch = ctx.Fetch with {Threads = [new ReviewThread(1, "k1", ReviewThreadStatus.Active,
-            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])]};
+        ctx.Fetch = ctx.Fetch with
+        {
+            Threads =
+            [
+                new ReviewThread(1, "k1", ReviewThreadStatus.Active,
+                    [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])
+            ]
+        };
 
         await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
         Assert.Empty(source.Replies);
@@ -208,15 +227,23 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Reply_never_marks_a_human_authored_thread_fixed()
     {
-        var source = new FakePullRequestSource(); var store = new FakeFindingStore(); var run = Guid.NewGuid();
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var run = Guid.NewGuid();
         var body = CommentFormatter.WithBotPreamble("Fixed in abcdef1 — fix: update. applied");
         var action = new ResolveAction(0, run, 1, TriageVerdict.Actionable, ResolutionOutcome.Fixed,
             "abcdef123", false, DateTimeOffset.UtcNow, body);
         await store.SaveResolveActionsAsync(Key, run, [action], CancellationToken.None);
         var ctx = Context(run);
         // Human-authored thread (no bot dedupe key): a Fixed outcome must not close it.
-        ctx.Fetch = ctx.Fetch with {Threads = [new ReviewThread(1, null, ReviewThreadStatus.Active,
-            [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])]};
+        ctx.Fetch = ctx.Fetch with
+        {
+            Threads =
+            [
+                new ReviewThread(1, null, ReviewThreadStatus.Active,
+                    [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])
+            ]
+        };
 
         await new ReplyCommentsStage(source, store, setFixedStatus: true).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -231,11 +258,16 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var store = new FakeFindingStore();
         var run = Guid.NewGuid();
         await store.SaveResolveActionsAsync(Key, run,
-            [new ResolveAction(0, run, 4, TriageVerdict.Question, ResolutionOutcome.Question,
-                null, false, DateTimeOffset.UtcNow)], CancellationToken.None);
+        [
+            new ResolveAction(0, run, 4, TriageVerdict.Question, ResolutionOutcome.Question,
+                null, false, DateTimeOffset.UtcNow)
+        ], CancellationToken.None);
         var ctx = Context(run);
-        ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(4, TriageVerdict.Question, "please explain", "high",
-            Answer: "The API is async.")];
+        ctx.Resolve!.ThreadVerdicts =
+        [
+            new ThreadVerdict(4, TriageVerdict.Question, "please explain", "high",
+                Answer: "The API is async.")
+        ];
 
         await new ReplyCommentsStage(source, store, setFixedStatus: false).ExecuteAsync(ctx, CancellationToken.None);
 
@@ -253,11 +285,11 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             {
                 ["threadId"] = 1, ["verdict"] = "OutOfScope", ["evidence"] = "unclear", ["confidence"] = "low",
             })),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["summary"] = "done" })));
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["summary"] = "done"})));
 
         await new NativeReviewAgent(new FakeChatClientFactory(chat)).RunTriageAsync(
-            "triage", new ReviewCollector(), new ContextStore(), _root,
-            new HashSet<string>(), null, null, new HashSet<long> { 1 }, CancellationToken.None);
+            "triage", new ReviewCollector(), new ContextStore(), _Root,
+            new HashSet<string>(), null, null, new HashSet<long> {1}, CancellationToken.None);
 
         var tools = chat.ReceivedOptions.First()?.Tools?.Select(tool => tool.Name).ToArray() ?? [];
         Assert.Contains("RecordVerdict", tools);
@@ -271,7 +303,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
     [Fact]
     public async Task Triage_stage_fails_closed_when_the_agent_attempts_a_write_tool()
     {
-        var file = Path.Combine(_root, "A.cs");
+        var file = Path.Combine(_Root, "A.cs");
         File.WriteAllText(file, "original\n");
         // The model attempts an edit through the triage pass: no write tool is registered,
         // so the attempt must never reach the filesystem — fail closed, pass continues.
@@ -279,13 +311,13 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             ScriptedChatClient.FunctionCalls(("EditFile", new Dictionary<string, object?>
             {
                 ["path"] = "A.cs",
-                ["edits"] = new List<object> { new Dictionary<string, object?> { ["replacement"] = "pwned" } },
+                ["edits"] = new List<object> {new Dictionary<string, object?> {["replacement"] = "pwned"}},
             })),
             ScriptedChatClient.FunctionCalls(("RecordVerdict", new Dictionary<string, object?>
             {
                 ["threadId"] = 1, ["verdict"] = "OutOfScope", ["evidence"] = "unclear", ["confidence"] = "low",
             })),
-            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> { ["summary"] = "done" })));
+            ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["summary"] = "done"})));
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1)];
 
@@ -295,6 +327,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         Assert.Equal("original\n", File.ReadAllText(file));
         Assert.Single(ctx.Resolve!.ThreadVerdicts);
     }
+
     private sealed class ProcessRunner(bool success) : IProcessRunner
     {
         public Task<ProcessRunResult> RunAsync(IReadOnlyList<string> argv, string? workingDirectory, TimeSpan timeout, CancellationToken cancellationToken = default)

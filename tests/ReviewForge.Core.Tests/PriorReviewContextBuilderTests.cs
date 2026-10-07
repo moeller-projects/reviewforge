@@ -53,7 +53,7 @@ public sealed class PriorReviewContextBuilderTests
         Assert.NotNull(result);
         Assert.DoesNotContain("thread-command", result);
         Assert.Equal(PriorReviewContextBuilder.MaxEntries,
-            result!.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length - 1);
+            result.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length - 1);
     }
 
     [Fact]
@@ -72,11 +72,11 @@ public sealed class PriorReviewContextBuilderTests
         var result = PriorReviewContextBuilder.Build(prior, []);
 
         Assert.NotNull(result);
-        Assert.True(result!.Length <= PriorReviewContextBuilder.MaxPayloadChars);
+        Assert.True(result.Length <= PriorReviewContextBuilder.MaxPayloadChars);
         Assert.True(result.IndexOf("a at a.cs:2", StringComparison.Ordinal)
-            < result.IndexOf("z at a.cs:4", StringComparison.Ordinal));
+                    < result.IndexOf("z at a.cs:4", StringComparison.Ordinal));
         Assert.True(result.IndexOf("a at a.cs:2", StringComparison.Ordinal)
-            < result.IndexOf("b at z.cs:2", StringComparison.Ordinal));
+                    < result.IndexOf("b at z.cs:2", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -84,7 +84,10 @@ public sealed class PriorReviewContextBuilderTests
     {
         var findings = Enumerable.Range(0, PriorReviewContextBuilder.MaxEntries)
             .Select(i => Finding($"key-{i}", "rule", $"src/{i:D2}.cs", i + 1, null)
-                with { Title = new string('x', 1_000) })
+                with
+                {
+                    Title = new string('x', 1_000)
+                })
             .ToArray();
         var prior = new PriorRun(Key, "sha", DateTimeOffset.UtcNow, findings.Select(f => f.DedupeKey).ToArray(), findings);
 

@@ -114,7 +114,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
 
                     foreach (var symbol in symbols)
                     {
-                        if (!ReferenceScanner.ScanLines([line], symbol, StringComparison.OrdinalIgnoreCase).Any())
+                        if (!ReferenceScanner.ScanLines([line], symbol).Any())
                         {
                             continue;
                         }

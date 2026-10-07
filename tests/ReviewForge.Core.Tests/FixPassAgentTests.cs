@@ -98,7 +98,7 @@ public class FixPassAgentTests : IDisposable
 
         var options = Assert.Single(chat.ReceivedOptions);
         Assert.NotNull(options);
-        Assert.NotNull(options!.Instructions);
+        Assert.NotNull(options.Instructions);
         var instructions = options.Instructions!;
         Assert.Contains("constrained fix-pass agent", instructions);
         Assert.Contains("ReadFileWithHashes, EditFile and TaskDone", instructions);
@@ -137,7 +137,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
             [new ChatMessage(ChatRole.User, "review")], cancellationToken: CancellationToken.None);
 
         Assert.True(collector.Done);
-        Assert.Equal("created", collector.ToResult("unused", null).Narrative.ReviewSummary);
+        Assert.Equal("created", collector.ToResult("unused").Narrative.ReviewSummary);
     }
 
 

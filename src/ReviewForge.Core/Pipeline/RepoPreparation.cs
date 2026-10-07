@@ -7,7 +7,7 @@ namespace ReviewForge.Core.Pipeline;
 /// <summary>Repository outputs and overlapping stage work produced before classification.</summary>
 public sealed record RepoPreparation : IDisposable
 {
-    private CancellationTokenSource? _overlapCts;
+    private CancellationTokenSource? _OverlapCts;
 
     public string? RepoDir { get; init; }
     public string DiffText { get; init; } = string.Empty;
@@ -18,7 +18,7 @@ public sealed record RepoPreparation : IDisposable
     public DateTimeOffset? RepoPreparedAt { get; init; }
     public Task<string?>? PendingEnrichment { get; init; }
 
-    internal CancellationTokenSource OverlapCts => _overlapCts ??= new();
+    internal CancellationTokenSource OverlapCts => _OverlapCts ??= new();
 
     public void Dispose()
     {

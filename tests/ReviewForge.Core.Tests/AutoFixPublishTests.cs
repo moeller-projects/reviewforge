@@ -24,8 +24,7 @@ public class AutoFixPublishTests
                 new FixProposal(
                     "script.sh", 3, 3,
                     "echo \"$name\"",
-                    "Quoting prevents word-splitting on the value.",
-                    FixOrigin.Deterministic)),
+                    "Quoting prevents word-splitting on the value.")),
         };
 
     private static ReviewContext Ctx(FakePullRequestSource source)
@@ -432,7 +431,7 @@ public class AutoFixPublishTests
         var finding = Fixable();
         finding.AppliedFix = new AppliedFix(
             "k1",
-            new FixProposal("script.sh", 3, 3, replacement, "r", FixOrigin.Deterministic));
+            new FixProposal("script.sh", 3, 3, replacement, "r"));
 
         var deterministic = CommentFormatter.FormatFinding(finding);
         Assert.Contains("````suggestion\nline ``` inside\n````", deterministic);
@@ -445,11 +444,11 @@ public class AutoFixPublishTests
 
     private sealed class HeadChangingPullRequestSource : FakePullRequestSource
     {
-        private int _fetches;
+        private int _Fetches;
 
         public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
         {
-            var fetch = Interlocked.Increment(ref _fetches);
+            var fetch = Interlocked.Increment(ref _Fetches);
             return Task.FromResult(fetch == 1 ? Pr : Pr with {SourceCommitSha = "changed-head"});
         }
     }

@@ -34,7 +34,7 @@ public class AutoFixFixerTests
         var fixer = new HomoglyphIdentifierFixer("homoglyph/mixed-script-identifier");
         var proposal = fixer.TryPropose(Ctx(fixer.RuleId, ["var stаte = 1;"], 1));
         Assert.NotNull(proposal);
-        Assert.Equal("var state = 1;", proposal!.Replacement);
+        Assert.Equal("var state = 1;", proposal.Replacement);
         Assert.Equal(1, proposal.StartLine);
         Assert.Equal("homoglyph/mixed-script-identifier", fixer.RuleId);
     }
@@ -201,6 +201,7 @@ public class AutoFixFixerTests
     [InlineData("#!")]
     public void SetE_declines_non_bash_interpreters(string shebang)
         => Assert.Null(SetE().TryPropose(Ctx("bash.set-e-missing", [shebang, "echo hi"], 1)));
+
     [Fact]
     public void SetE_accepts_env_bash_shebang()
     {
@@ -214,6 +215,7 @@ public class AutoFixFixerTests
         var proposal = SetE().TryPropose(Ctx("bash.set-e-missing", ["#!/usr/bin/env -S bash", "echo hi"], 1));
         Assert.Equal("#!/usr/bin/env -S bash\nset -euo pipefail", proposal!.Replacement);
     }
+
     [Fact]
     public void SetE_declines_when_set_e_already_present()
         => Assert.Null(SetE().TryPropose(Ctx("bash.set-e-missing", ["#!/bin/sh", "set -e", "echo hi"], 1)));
@@ -236,7 +238,7 @@ public class AutoFixFixerTests
     [Fact]
     public void Py_replaces_dict_default_and_uses_body_indent()
     {
-        var lines = new[] { "def f(config={}):", "", "        return config" };
+        var lines = new[] {"def f(config={}):", "", "        return config"};
         var proposal = Py().TryPropose(Ctx("py.mutable-default-arg", lines, 1));
         Assert.Equal("def f(config=None):\n        if config is None: config = {}", proposal!.Replacement);
     }
@@ -244,7 +246,7 @@ public class AutoFixFixerTests
     [Fact]
     public void Py_declines_multi_line_signature()
     {
-        var lines = new[] { "def f(", "    items=[]):", "    return items" };
+        var lines = new[] {"def f(", "    items=[]):", "    return items"};
         Assert.Null(Py().TryPropose(Ctx("py.mutable-default-arg", lines, 1)));
     }
 
@@ -273,10 +275,10 @@ public class AutoFixFixerTests
     [Fact]
     public void Py_preserves_docstring_before_guard()
     {
-        var lines = new[] { "def f(items=[]):", "    \"\"\"Keep this docstring.\"\"\"", "    return items" };
+        var lines = new[] {"def f(items=[]):", "    \"\"\"Keep this docstring.\"\"\"", "    return items"};
         var proposal = Py().TryPropose(Ctx("py.mutable-default-arg", lines, 1));
         Assert.NotNull(proposal);
-        Assert.Equal(2, proposal!.EndLine);
+        Assert.Equal(2, proposal.EndLine);
         Assert.Equal(
             "def f(items=None):\n    \"\"\"Keep this docstring.\"\"\"\n    if items is None: items = []",
             proposal.Replacement);
@@ -285,14 +287,14 @@ public class AutoFixFixerTests
     [Fact]
     public void Py_declines_multiline_docstring_before_guard()
     {
-        var lines = new[] { "def f(items=[]):", "    \"\"\"Start docstring", "    end\"\"\"", "    return items" };
+        var lines = new[] {"def f(items=[]):", "    \"\"\"Start docstring", "    end\"\"\"", "    return items"};
         Assert.Null(Py().TryPropose(Ctx("py.mutable-default-arg", lines, 1)));
     }
 
     [Fact]
     public void Py_preserves_single_quoted_docstring_before_guard()
     {
-        var lines = new[] { "def f(items=[]):", "    '''Keep this docstring.'''", "    return items" };
+        var lines = new[] {"def f(items=[]):", "    '''Keep this docstring.'''", "    return items"};
         var proposal = Py().TryPropose(Ctx("py.mutable-default-arg", lines, 1));
         Assert.Equal(2, proposal!.EndLine);
         Assert.Contains("'''Keep this docstring.'''", proposal.Replacement);
@@ -301,7 +303,7 @@ public class AutoFixFixerTests
     [Fact]
     public void Py_skips_comment_lines_when_finding_body_indent()
     {
-        var lines = new[] { "def f(items=[]):", "# comment", "    return items" };
+        var lines = new[] {"def f(items=[]):", "# comment", "    return items"};
         var proposal = Py().TryPropose(Ctx("py.mutable-default-arg", lines, 1));
         Assert.Equal("def f(items=None):\n    if items is None: items = []", proposal!.Replacement);
     }
@@ -309,7 +311,7 @@ public class AutoFixFixerTests
     [Fact]
     public void Py_declines_body_at_definition_indent()
     {
-        var lines = new[] { "def f(items=[]):", "return items" };
+        var lines = new[] {"def f(items=[]):", "return items"};
         Assert.Null(Py().TryPropose(Ctx("py.mutable-default-arg", lines, 1)));
     }
 
@@ -353,6 +355,7 @@ public class AutoFixFixerTests
     [Fact]
     public void Docker_declines_non_add_line()
         => Assert.Null(Docker().TryPropose(Ctx("docker.add-vs-copy", ["RUN echo hi"], 1)));
+
     [Fact]
     public void Registry_resolves_by_rule_id_case_insensitively()
     {
@@ -367,14 +370,12 @@ public class AutoFixFixerTests
 
     [Fact]
     public void Registry_rejects_duplicate_rule_ids()
-        => Assert.Throws<InvalidOperationException>(
-            () => new FindingFixerRegistry([new BashSetEMissingFixer(), new BashSetEMissingFixer()]));
+        => Assert.Throws<InvalidOperationException>(() => new FindingFixerRegistry([new BashSetEMissingFixer(), new BashSetEMissingFixer()]));
 
     [Fact]
     public void Registry_rejects_duplicate_rule_ids_case_insensitively()
-        => Assert.Throws<InvalidOperationException>(
-            () => new FindingFixerRegistry(
-                [new RuleIdFixer("rule"), new RuleIdFixer("RULE")]));
+        => Assert.Throws<InvalidOperationException>(() => new FindingFixerRegistry(
+            [new RuleIdFixer("rule"), new RuleIdFixer("RULE")]));
 
     private sealed class RuleIdFixer(string ruleId) : IFindingFixer
     {

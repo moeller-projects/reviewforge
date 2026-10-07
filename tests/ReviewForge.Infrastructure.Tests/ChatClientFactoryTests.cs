@@ -230,9 +230,9 @@ public class ChatClientFactoryTests
             MaxConcurrentRequests = 1,
         };
 
-        var results = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
-        var valid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
-            options, new System.ComponentModel.DataAnnotations.ValidationContext(options), results, validateAllProperties: true);
+        var results = new List<ValidationResult>();
+        var valid = Validator.TryValidateObject(
+            options, new ValidationContext(options), results, validateAllProperties: true);
 
         Assert.False(valid);
         Assert.Contains(results, r => r.MemberNames.Contains(nameof(ChatProviderOptions.FollowUpModel)));
@@ -249,9 +249,9 @@ public class ChatClientFactoryTests
             MaxConcurrentRequests = 1,
         };
 
-        var results = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
-        var valid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
-            options, new System.ComponentModel.DataAnnotations.ValidationContext(options), results, validateAllProperties: true);
+        var results = new List<ValidationResult>();
+        var valid = Validator.TryValidateObject(
+            options, new ValidationContext(options), results, validateAllProperties: true);
 
         Assert.True(valid);
         Assert.Empty(results);
@@ -377,9 +377,9 @@ public class ChatClientFactoryTests
             var exception = await Assert.ThrowsAsync<ClientResultException>(() =>
                 factory.Create(ChatTier.Full).GetResponseAsync(
                     [new ChatMessage(ChatRole.User, "review")],
-                    new ChatOptions { ModelId = factory.ModelName(ChatTier.Full) }));
+                    new ChatOptions {ModelId = factory.ModelName(ChatTier.Full)}));
 
-            Assert.Equal((int)HttpStatusCode.BadRequest, exception.Status);
+            Assert.Equal((int) HttpStatusCode.BadRequest, exception.Status);
             using var body = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
             Assert.False(body.RootElement.GetProperty("store").GetBoolean());
             Assert.True(body.RootElement.GetProperty("stream").GetBoolean());

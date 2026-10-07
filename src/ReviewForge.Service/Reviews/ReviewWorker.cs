@@ -64,7 +64,7 @@ public sealed class ReviewWorker(
 
             tracker.Set(request.RunId, request.Pr, RunState.Running, kind: request.Kind);
             logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
-            var repoTag = new TagList { { ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId }, { "kind", request.Kind.ToString().ToLowerInvariant() } };
+            var repoTag = new TagList {{ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId}, {"kind", request.Kind.ToString().ToLowerInvariant()}};
             ReviewTelemetry.ReviewsStarted.Add(1, repoTag);
             var runStart = Stopwatch.GetTimestamp();
             ReviewContext? ctx = null;
@@ -97,7 +97,7 @@ public sealed class ReviewWorker(
                     .RunUntilCancelled(heartbeatCts.Token);
                 try
                 {
-                    await pipelineBuilder.Build(request.Kind, request, ctx!).RunAsync(ctx!, stoppingToken);
+                    await pipelineBuilder.Build(request.Kind, request, ctx).RunAsync(ctx, stoppingToken);
                 }
                 finally
                 {
@@ -105,12 +105,12 @@ public sealed class ReviewWorker(
                     await heartbeat.ConfigureAwait(false);
                 }
 
-                var state = ctx?.Terminated == true ? RunState.Skipped : RunState.Completed;
-                tracker.Set(request.RunId, request.Pr, state, ctx?.TerminationReason, request.Kind);
+                var state = ctx.Terminated == true ? RunState.Skipped : RunState.Completed;
+                tracker.Set(request.RunId, request.Pr, state, ctx.TerminationReason, request.Kind);
                 logger.LogInformation("run {RunId} {State}: {Reason}",
-                    request.RunId, state, ctx?.TerminationReason ?? "ok");
+                    request.RunId, state, ctx.TerminationReason ?? "ok");
                 var tags = repoTag;
-                tags.Add(ReviewForgeTelemetry.TagResult, ctx?.Terminated == true ? "skipped" : "completed");
+                tags.Add(ReviewForgeTelemetry.TagResult, ctx.Terminated == true ? "skipped" : "completed");
                 ReviewTelemetry.ReviewsCompleted.Add(1, tags);
                 ReviewTelemetry.ReviewDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);

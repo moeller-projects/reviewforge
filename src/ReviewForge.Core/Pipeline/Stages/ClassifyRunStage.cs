@@ -56,9 +56,9 @@ public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? cl
             // unproven (the stamping continuation may not have run yet), so it re-fetches.
             // A genuinely in-flight fetch awaited here completes "now", necessarily
             // at/after preparation.
-            var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : (DateTimeOffset?)null);
+            var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : null);
             if (overlapped is not null && completedAt is { } receivedAt
-                && ctx.Repository.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
+                                       && ctx.Repository.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
             {
                 return overlapped;
             }

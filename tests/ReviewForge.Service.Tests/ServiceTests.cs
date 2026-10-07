@@ -738,7 +738,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             }
 
             Assert.NotNull(status);
-            Assert.Equal(RunState.Completed, status!.State);
+            Assert.Equal(RunState.Completed, status.State);
 
             var posted = Assert.Single(factory.Source.PostedFindings);
             Assert.Equal(2, posted.Finding.Anchor!.StartLine); // anchored at the fix range
@@ -753,7 +753,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             var row = Assert.Single(run.Findings, f => f.AppliedFixJson is not null);
             var persisted = JsonSerializer.Deserialize<AppliedFix>(row.AppliedFixJson!);
             Assert.NotNull(persisted);
-            Assert.Equal("script.sh", persisted!.Proposal.FilePath);
+            Assert.Equal("script.sh", persisted.Proposal.FilePath);
             Assert.Equal(FixOrigin.Deterministic, persisted.Proposal.Origin);
         }
     }

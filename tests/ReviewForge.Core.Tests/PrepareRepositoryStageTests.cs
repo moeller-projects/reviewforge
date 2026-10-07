@@ -3,6 +3,7 @@ using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Testing;
 using Xunit;
@@ -60,10 +61,10 @@ public sealed class PrepareRepositoryStageTests : IDisposable
     [Fact]
     public async Task Pooled_mode_remains_shared_and_populates_head_info()
     {
-        var headInfo = new ReviewForge.Core.Ports.TipCommitInfo(
+        var headInfo = new TipCommitInfo(
             "reviewforge@example.com",
             "fix(src): repair\n\nReviewForge-Run: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n");
-        var pool = new RepoCheckoutPool(new FakeGitOps { HeadInfo = headInfo }, new FakeWorkspaceFs(), _Root);
+        var pool = new RepoCheckoutPool(new FakeGitOps {HeadInfo = headInfo}, new FakeWorkspaceFs(), _Root);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
             Fetch = new FetchOutcome {PullRequest = PullRequest()},
@@ -80,26 +81,26 @@ public sealed class PrepareRepositoryStageTests : IDisposable
     [Fact]
     public async Task Loop_guard_terminates_only_discovery_runs_on_matching_bot_head()
     {
-        var headInfo = new ReviewForge.Core.Ports.TipCommitInfo(
+        var headInfo = new TipCommitInfo(
             "reviewforge@example.com",
             "fix(src): repair\n\nReviewForge-Run: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n");
-        var git = new FakeGitOps { HeadInfo = headInfo };
+        var git = new FakeGitOps {HeadInfo = headInfo};
         var pool = new RepoCheckoutPool(git, new FakeWorkspaceFs(), _Root);
         var options = CommitMode();
         var discovery = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
             Fetch = new FetchOutcome {PullRequest = PullRequest()},
-            Trigger = ReviewForge.Core.Ports.EnqueueTrigger.Discovery,
+            Trigger = EnqueueTrigger.Discovery,
         };
         var manual = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
             Fetch = new FetchOutcome {PullRequest = PullRequest()},
-            Trigger = ReviewForge.Core.Ports.EnqueueTrigger.Manual,
+            Trigger = EnqueueTrigger.Manual,
         };
         var unknownHead = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
             Fetch = new FetchOutcome {PullRequest = PullRequest()},
-            Trigger = ReviewForge.Core.Ports.EnqueueTrigger.Discovery,
+            Trigger = EnqueueTrigger.Discovery,
         };
         await Stage(pool, options: options).ExecuteAsync(discovery, CancellationToken.None);
         Assert.True(discovery.Terminated);
@@ -118,5 +119,5 @@ public sealed class PrepareRepositoryStageTests : IDisposable
         Assert.Null(unknownHead.Repository.HeadCommitInfo);
         Assert.NotNull(unknownHead.Repository.Diff);
         unknownHead.Dispose();
-}
+    }
 }
