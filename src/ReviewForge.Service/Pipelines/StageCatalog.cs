@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
-using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;

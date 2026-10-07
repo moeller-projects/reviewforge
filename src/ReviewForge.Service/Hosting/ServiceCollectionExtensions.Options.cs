@@ -1,16 +1,10 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
-using ReviewForge.Infrastructure.Chat;
-using ReviewForge.Service.Queue;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Reasoning;
-using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
+using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Persistence;
-using ReviewForge.Service.Security;
+using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
 
@@ -94,10 +88,10 @@ public static partial class ServiceCollectionExtensions
             .Validate(o => o.CommitGranularity is "PerThread" or "Single",
                 "Resolve:CommitGranularity must be PerThread or Single")
             .Validate(o => o.VerifyCommand is null || (o.VerifyCommand.Length > 0 && !string.IsNullOrWhiteSpace(o.VerifyCommand[0])
-                && o.VerifyCommand.All(arg => arg is not null && !arg.Any(c => c is ';' or '|' or '&' or '>' or '<' or '$' or '`'))),
+                                                                                  && o.VerifyCommand.All(arg => arg is not null && !arg.Any(c => c is ';' or '|' or '&' or '>' or '<' or '$' or '`'))),
                 "Resolve:VerifyCommand must be an argv array without shell metacharacters")
             .Validate(o => !o.Enabled || (!string.IsNullOrWhiteSpace(configuration[$"{AutoFixOptions.SectionName}:CommitAuthorName"])
-                                           && !string.IsNullOrWhiteSpace(configuration[$"{AutoFixOptions.SectionName}:CommitAuthorEmail"])),
+                                          && !string.IsNullOrWhiteSpace(configuration[$"{AutoFixOptions.SectionName}:CommitAuthorEmail"])),
                 "Resolve requires AutoFix:CommitAuthorName and AutoFix:CommitAuthorEmail")
             .ValidateOnStart();
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<ResolveOptions>>().Value);

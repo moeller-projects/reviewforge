@@ -2,7 +2,6 @@ using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
-using ReviewForge.Core.Workspaces;
 
 namespace ReviewForge.Service;
 
@@ -88,7 +87,7 @@ public static class Pipelines
         if (!resolve.Enabled)
             throw new InvalidOperationException("resolve run requested but Resolve:Enabled is false");
 
-        var includeVerifyBuild = resolve.VerifyCommand is { Length: > 0 };
+        var includeVerifyBuild = resolve.VerifyCommand is {Length: > 0};
         var features = new PipelineFeatures(
             CheckoutMode: CheckoutMode.Private,
             IncludeVerifyFindings: false,

@@ -1,6 +1,3 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
@@ -43,7 +40,7 @@ public static partial class ServiceCollectionExtensions
             sp.GetRequiredService<IOptions<GitOptions>>().Value.TargetedFetchEnabled,
             sp.GetRequiredService<GitOperationScheduler>(),
             credentialHost: new Uri(sp.GetRequiredService<IOptions<AdoOptions>>().Value.OrgUrl).Host));
-        services.AddSingleton(sp => (IDisposable)sp.GetRequiredService<GitOperationScheduler>());
+        services.AddSingleton(sp => (IDisposable) sp.GetRequiredService<GitOperationScheduler>());
         services.AddSingleton<IWorkspaceFs, FileSystemWorkspaceFs>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton(sp =>

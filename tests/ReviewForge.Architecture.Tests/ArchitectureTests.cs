@@ -2,9 +2,8 @@ using System.Reflection;
 using System.Xml.Linq;
 using NetArchTest.Rules;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Persistence;
-using ReviewForge.Service;
+using ReviewForge.Testing;
 using Xunit;
 
 namespace ReviewForge.Architecture.Tests;
@@ -20,14 +19,15 @@ public sealed class ArchitectureTests
     public void Core_does_not_depend_on_adapters_or_hosts()
         => AssertRule(
             Types.InAssembly(Core).ShouldNot().HaveDependencyOnAny(
-                "ReviewForge.Infrastructure", "ReviewForge.Service", "ReviewForge.Cli", "ReviewForge.AppHost")
+                    "ReviewForge.Infrastructure", "ReviewForge.Service", "ReviewForge.Cli", "ReviewForge.AppHost")
                 .GetResult());
+
     [Fact]
     public void Core_does_not_depend_on_adapter_vendor_technology()
         => AssertRule(
             Types.InAssembly(Core).ShouldNot().HaveDependencyOnAny(
-                "LibGit2Sharp", "Microsoft.EntityFrameworkCore", "Microsoft.AspNetCore",
-                "Microsoft.TeamFoundationServer", "Microsoft.VisualStudio.Services", "System.Net.Http")
+                    "LibGit2Sharp", "Microsoft.EntityFrameworkCore", "Microsoft.AspNetCore",
+                    "Microsoft.TeamFoundationServer", "Microsoft.VisualStudio.Services", "System.Net.Http")
                 .GetResult());
 
     [Fact]
@@ -40,9 +40,9 @@ public sealed class ArchitectureTests
         var unexpected = Core.GetReferencedAssemblies()
             .Select(reference => reference.Name ?? string.Empty)
             .Where(name => !name.StartsWith("System", StringComparison.Ordinal)
-                && !name.Equals("netstandard", StringComparison.Ordinal)
-                && !name.StartsWith("Microsoft.Agents.AI", StringComparison.Ordinal)
-                && !name.StartsWith("Microsoft.Extensions", StringComparison.Ordinal))
+                           && !name.Equals("netstandard", StringComparison.Ordinal)
+                           && !name.StartsWith("Microsoft.Agents.AI", StringComparison.Ordinal)
+                           && !name.StartsWith("Microsoft.Extensions", StringComparison.Ordinal))
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
@@ -53,15 +53,16 @@ public sealed class ArchitectureTests
     public void Infrastructure_does_not_depend_on_hosts()
         => AssertRule(
             Types.InAssembly(Infrastructure).ShouldNot().HaveDependencyOnAny(
-                "ReviewForge.Service", "ReviewForge.Cli", "ReviewForge.AppHost")
+                    "ReviewForge.Service", "ReviewForge.Cli", "ReviewForge.AppHost")
                 .GetResult());
+
     [Fact]
     public void Ports_contain_contract_interfaces_and_approved_value_types_only()
     {
         var types = Core.GetTypes()
             .Where(type => type.Namespace is { } ns
-                && ns.StartsWith("ReviewForge.Core.Ports", StringComparison.Ordinal)
-                && !type.IsNested)
+                           && ns.StartsWith("ReviewForge.Core.Ports", StringComparison.Ordinal)
+                           && !type.IsNested)
             .ToArray();
         var approvedValueTypes = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -106,7 +107,7 @@ public sealed class ArchitectureTests
     [Fact]
     public void Shared_testing_doubles_depend_on_core_only()
     {
-        var testing = typeof(ReviewForge.Testing.FakeGitOps).Assembly;
+        var testing = typeof(FakeGitOps).Assembly;
         Assert.DoesNotContain(testing.GetReferencedAssemblies(), reference =>
             reference.Name is "ReviewForge.Infrastructure" or "ReviewForge.Service" or "ReviewForge.Cli" or "ReviewForge.AppHost");
     }
@@ -114,7 +115,7 @@ public sealed class ArchitectureTests
     [Fact]
     public void Hosts_are_the_only_assemblies_allowed_to_depend_on_service_or_cli()
     {
-        var nonHosts = new[] {Core, Infrastructure, Service, typeof(ReviewForge.Testing.FakeGitOps).Assembly};
+        var nonHosts = new[] {Core, Infrastructure, Service, typeof(FakeGitOps).Assembly};
         foreach (var assembly in nonHosts)
         {
             Assert.DoesNotContain(assembly.GetReferencedAssemblies(), reference =>
@@ -123,7 +124,7 @@ public sealed class ArchitectureTests
 
         var appHostProject = XDocument.Load(Path.Combine(RepoRoot, "src", "ReviewForge.AppHost", "ReviewForge.AppHost.csproj"));
         var references = appHostProject.Descendants("ProjectReference")
-            .Select(element => Path.GetFileNameWithoutExtension((string?)element.Attribute("Include") ?? string.Empty))
+            .Select(element => Path.GetFileNameWithoutExtension((string?) element.Attribute("Include") ?? string.Empty))
             .ToArray();
         Assert.Contains("ReviewForge.Service", references);
     }
@@ -136,7 +137,7 @@ public sealed class ArchitectureTests
         {
             var project = XDocument.Load(Directory.GetFiles(directory, "*.csproj").Single());
             var references = project.Descendants("ProjectReference")
-                .Select(element => Path.GetFileNameWithoutExtension((string?)element.Attribute("Include") ?? string.Empty))
+                .Select(element => Path.GetFileNameWithoutExtension((string?) element.Attribute("Include") ?? string.Empty))
                 .Where(name => name.EndsWith(".Tests", StringComparison.Ordinal))
                 .ToArray();
 

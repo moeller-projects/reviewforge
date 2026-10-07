@@ -1,6 +1,6 @@
 using System.Diagnostics.Metrics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.AutoFix;
@@ -230,7 +230,8 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var overridePath = Path.Combine(_Root, "review-override.md");
         const string overrideText = "review-only prompt override marker";
         File.WriteAllText(overridePath, overrideText);
-        var options = new AgentOptions { PromptOverridePath = overridePath };
+        var options = new AgentOptions {PromptOverridePath = overridePath};
+
         static string[] Names(ScriptedChatClient chat)
             => chat.ReceivedOptions.First()!.Tools!.Select(tool => tool.Name).ToArray();
 
@@ -243,8 +244,10 @@ public class NativeReviewAgentCoverageTests : IDisposable
             CancellationToken.None);
 
         Assert.Equal(
-            ["ReadFile", "List", "Grep", "repo_file_diff", "FindReferences", "ReadContext",
-                "GetRulebook", "RecordFinding", "RecordUncertainty", "TaskDone"],
+            [
+                "ReadFile", "List", "Grep", "repo_file_diff", "FindReferences", "ReadContext",
+                "GetRulebook", "RecordFinding", "RecordUncertainty", "TaskDone"
+            ],
             Names(reviewChat));
         Assert.Equal([ChatTier.Fast], reviewFactory.RequestedTiers);
         Assert.Contains(overrideText, reviewChat.ReceivedOptions.First()!.Instructions);
@@ -264,8 +267,10 @@ public class NativeReviewAgentCoverageTests : IDisposable
             CancellationToken.None);
 
         Assert.Equal(
-            ["ReadFile", "List", "Grep", "repo_file_diff", "FindReferences", "ReadContext",
-                "RecordVerdict", "TaskDone"],
+            [
+                "ReadFile", "List", "Grep", "repo_file_diff", "FindReferences", "ReadContext",
+                "RecordVerdict", "TaskDone"
+            ],
             Names(triageChat));
         Assert.Equal([ChatTier.Full], triageFactory.RequestedTiers);
         Assert.Contains("resolve-triage agent", triageChat.ReceivedOptions.First()!.Instructions);
@@ -293,11 +298,11 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var agent = new NativeReviewAgent(new FakeChatClientFactory(new StreamingChatClient(), model));
         var collector = new ReviewCollector();
         var tokenUsageType = typeof(NativeReviewAgent).GetNestedType(
-            "TokenUsage", System.Reflection.BindingFlags.NonPublic)!;
+            "TokenUsage", BindingFlags.NonPublic)!;
         var usage = Activator.CreateInstance(tokenUsageType, nonPublic: true)!;
         var createPipeline = typeof(NativeReviewAgent).GetMethod(
-            "CreatePipeline", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        var pipeline = (IChatClient)createPipeline.Invoke(agent, [collector, usage, ChatTier.Full, 30])!;
+            "CreatePipeline", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var pipeline = (IChatClient) createPipeline.Invoke(agent, [collector, usage, ChatTier.Full, 30])!;
         var updates = new List<ChatResponseUpdate>();
 
         long cached = 0;
@@ -313,7 +318,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
         {
             foreach (var tag in tags)
             {
-                if (tag.Key == "model" && (string?)tag.Value == model)
+                if (tag.Key == "model" && (string?) tag.Value == model)
                 {
                     Interlocked.Add(ref cached, measurement);
                     break;
@@ -331,9 +336,9 @@ public class NativeReviewAgentCoverageTests : IDisposable
 
         Assert.Single(updates);
         Assert.Equal("streamed", updates[0].Text);
-        Assert.Equal(1, (int)tokenUsageType.GetProperty("Turns")!.GetValue(usage)!);
-        Assert.Equal(4, (long)tokenUsageType.GetProperty("InputTokens")!.GetValue(usage)!);
-        Assert.Equal(3, (long)tokenUsageType.GetProperty("OutputTokens")!.GetValue(usage)!);
+        Assert.Equal(1, (int) tokenUsageType.GetProperty("Turns")!.GetValue(usage)!);
+        Assert.Equal(4, (long) tokenUsageType.GetProperty("InputTokens")!.GetValue(usage)!);
+        Assert.Equal(3, (long) tokenUsageType.GetProperty("OutputTokens")!.GetValue(usage)!);
         Assert.Equal(2, Interlocked.Read(ref cached)); // CachedInputTokenCount surfaced by the provider
     }
 
@@ -354,13 +359,15 @@ public class NativeReviewAgentCoverageTests : IDisposable
         {
             await Task.CompletedTask;
             yield return new ChatResponseUpdate(ChatRole.Assistant,
-                [new TextContent("streamed"), new UsageContent(new UsageDetails
+            [
+                new TextContent("streamed"), new UsageContent(new UsageDetails
                 {
                     InputTokenCount = 4,
                     OutputTokenCount = 3,
                     TotalTokenCount = 7,
                     CachedInputTokenCount = 2,
-                })]);
+                })
+            ]);
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;

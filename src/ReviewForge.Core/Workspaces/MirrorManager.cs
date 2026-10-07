@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Core.Workspaces;

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.AutoFix;
-using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Core.Pipeline.Stages;
@@ -54,7 +53,7 @@ public sealed class CommitFixesStage(
                 "commit-fixes: SourceRefName '{SourceRefName}' is not a {Prefix} ref — all {Count} fixes degrade to suggestion mode",
                 pr.SourceRefName ?? "(null)", headsPrefix, pending.Count);
             AutoFixTelemetry.AutoFixDegradedToSuggestion.Add(
-                pending.Count, new TagList { { ReviewForgeTelemetry.TagReason, "no_source_ref" } });
+                pending.Count, new TagList {{ReviewForgeTelemetry.TagReason, "no_source_ref"}});
             return;
         }
 
@@ -76,9 +75,11 @@ public sealed class CommitFixesStage(
             ct.ThrowIfCancellationRequested();
             var message = ConventionalCommitBuilder.Build(
                 ctx.RunId,
-                [.. group.Select(f => new ConventionalCommitBuilder.CommitFixInput(
-                    f,
-                    f.DedupeKey is not null && findingsByKey.TryGetValue(f.DedupeKey, out var finding) ? finding : null))]);
+                [
+                    .. group.Select(f => new ConventionalCommitBuilder.CommitFixInput(
+                        f,
+                        f.DedupeKey is not null && findingsByKey.TryGetValue(f.DedupeKey, out var finding) ? finding : null))
+                ]);
             string sha;
             try
             {
@@ -109,20 +110,20 @@ public sealed class CommitFixesStage(
 
             committed.Add((group, sha, subject));
             AutoFixTelemetry.AutoFixCommits.Add(
-                1, new TagList { { "granularity", options.CommitGranularity } });
+                1, new TagList {{"granularity", options.CommitGranularity}});
         }
 
         if (degraded > 0)
         {
             AutoFixTelemetry.AutoFixDegradedToSuggestion.Add(
-                degraded, new TagList { { ReviewForgeTelemetry.TagReason, "commit_failed" } });
+                degraded, new TagList {{ReviewForgeTelemetry.TagReason, "commit_failed"}});
         }
 
         if (committed.Count == 0)
         {
             // Everything degraded; publish handles a pure-suggestion run.
             AutoFixTelemetry.AutoFixDegradedToSuggestion.Add(
-                1, new TagList { { ReviewForgeTelemetry.TagReason, "all_degraded" } });
+                1, new TagList {{ReviewForgeTelemetry.TagReason, "all_degraded"}});
             return;
         }
 
@@ -135,7 +136,7 @@ public sealed class CommitFixesStage(
         if (!string.Equals(tip, pr.SourceCommitSha, StringComparison.OrdinalIgnoreCase))
         {
             AutoFixTelemetry.AutoFixPushFailures.Add(
-                1, new TagList { { ReviewForgeTelemetry.TagReason, "pin" } });
+                1, new TagList {{ReviewForgeTelemetry.TagReason, "pin"}});
             throw new PrHeadChangedException(pr.SourceCommitSha, tip ?? "(branch missing on remote)");
         }
 
@@ -168,7 +169,7 @@ public sealed class CommitFixesStage(
         catch (PrHeadChangedException)
         {
             AutoFixTelemetry.AutoFixPushFailures.Add(
-                1, new TagList { { ReviewForgeTelemetry.TagReason, "pin" } });
+                1, new TagList {{ReviewForgeTelemetry.TagReason, "pin"}});
             await AbandonPushIntentAsync(ctx, ct).ConfigureAwait(false);
             throw;
         }
@@ -177,7 +178,7 @@ public sealed class CommitFixesStage(
             // Policy/auth rejection: the run fails visibly; the committed work dies with the
             // private checkout and is never retried with force.
             AutoFixTelemetry.AutoFixPushFailures.Add(
-                1, new TagList { { ReviewForgeTelemetry.TagReason, "rejected" } });
+                1, new TagList {{ReviewForgeTelemetry.TagReason, "rejected"}});
             logger.LogError(ex, "commit-fixes: push of {Count} commit(s) to {Branch} was rejected", committed.Count, branch);
             await AbandonPushIntentAsync(ctx, ct).ConfigureAwait(false);
             throw;

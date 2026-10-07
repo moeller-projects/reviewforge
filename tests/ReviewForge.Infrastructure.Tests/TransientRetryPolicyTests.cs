@@ -1,4 +1,3 @@
-using System.Net.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Infrastructure.Ado;
@@ -67,18 +66,17 @@ public class TransientRetryPolicyTests
             clock: clock);
         var attempts = 0;
 
-        var ex = await Assert.ThrowsAsync<HttpRequestException>(
-            () => RunWithAdvanceAsync(
-                clock,
-                policy.ExecuteAsync(
-                    _ =>
-                    {
-                        attempts++;
-                        return Task.FromException<int>(new HttpRequestException("boom"));
-                    },
-                    "op",
-                    CancellationToken.None),
-                TimeSpan.FromMilliseconds(10)));
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => RunWithAdvanceAsync(
+            clock,
+            policy.ExecuteAsync(
+                _ =>
+                {
+                    attempts++;
+                    return Task.FromException<int>(new HttpRequestException("boom"));
+                },
+                "op",
+                CancellationToken.None),
+            TimeSpan.FromMilliseconds(10)));
 
         Assert.Equal("boom", ex.Message);
         Assert.Equal(3, attempts);
@@ -88,19 +86,18 @@ public class TransientRetryPolicyTests
     public async Task Does_not_retry_non_transient_exceptions()
     {
         var policy = new TransientRetryPolicy(
-            new AdoRetryOptions { MaxAttempts = 5, BaseDelay = TimeSpan.FromMilliseconds(10) },
+            new AdoRetryOptions {MaxAttempts = 5, BaseDelay = TimeSpan.FromMilliseconds(10)},
             _ => false);
         var attempts = 0;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => policy.ExecuteAsync(
-                _ =>
-                {
-                    attempts++;
-                    return Task.FromException<int>(new InvalidOperationException("hard failure"));
-                },
-                "op",
-                CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => policy.ExecuteAsync(
+            _ =>
+            {
+                attempts++;
+                return Task.FromException<int>(new InvalidOperationException("hard failure"));
+            },
+            "op",
+            CancellationToken.None));
 
         Assert.Equal(1, attempts);
     }
@@ -111,19 +108,18 @@ public class TransientRetryPolicyTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var policy = new TransientRetryPolicy(
-            new AdoRetryOptions { MaxAttempts = 5, BaseDelay = TimeSpan.FromMilliseconds(10) },
+            new AdoRetryOptions {MaxAttempts = 5, BaseDelay = TimeSpan.FromMilliseconds(10)},
             _ => true);
         var attempts = 0;
 
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => policy.ExecuteAsync(
-                _ =>
-                {
-                    attempts++;
-                    return Task.FromException<int>(new OperationCanceledException(cts.Token));
-                },
-                "op",
-                cts.Token));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => policy.ExecuteAsync(
+            _ =>
+            {
+                attempts++;
+                return Task.FromException<int>(new OperationCanceledException(cts.Token));
+            },
+            "op",
+            cts.Token));
 
         Assert.Equal(1, attempts);
     }
@@ -290,20 +286,19 @@ public class TransientRetryPolicyTests
         var observed = new List<TimeSpan>();
         var fence = start;
 
-        await Assert.ThrowsAsync<HttpRequestException>(
-            () => RunWithAdvanceAsync(
-                clock,
-                policy.ExecuteAsync(
-                    _ =>
-                    {
-                        var now = clock.GetUtcNow();
-                        observed.Add(now - fence);
-                        fence = now;
-                        return Task.FromException<int>(new HttpRequestException("t"));
-                    },
-                    "op",
-                    CancellationToken.None),
-                TimeSpan.FromMilliseconds(5)));
+        await Assert.ThrowsAsync<HttpRequestException>(() => RunWithAdvanceAsync(
+            clock,
+            policy.ExecuteAsync(
+                _ =>
+                {
+                    var now = clock.GetUtcNow();
+                    observed.Add(now - fence);
+                    fence = now;
+                    return Task.FromException<int>(new HttpRequestException("t"));
+                },
+                "op",
+                CancellationToken.None),
+            TimeSpan.FromMilliseconds(5)));
 
         // Every wait must stay in the ±25 % band around the 100 ms nominal. The low
         // edge uses 74 ms because FakeTimeProvider fires timers ~1 ms early; the high

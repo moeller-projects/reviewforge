@@ -1,11 +1,9 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
-using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
-using ReviewForge.Service;
 using ReviewForge.Testing;
 
 namespace ReviewForge.Service.Tests;
@@ -31,7 +29,7 @@ internal static class PipelineBuilderTestFactory
             CommitAuthorEmail = "bot@example.test",
         };
         var verifyOptions = Options.Create(new VerifyFindingsOptions());
-        var workspaceOptions = Options.Create(new WorkspaceOptions { WorkDir = workDir });
+        var workspaceOptions = Options.Create(new WorkspaceOptions {WorkDir = workDir});
         var checkoutPool = new RepoCheckoutPool(git, new FakeWorkspaceFs(), workDir);
         var loggerFactory = NullLoggerFactory.Instance;
         var credentials = new PushCredentials("test-pat", autoFixOptions.CommitAuthorName, autoFixOptions.CommitAuthorEmail);

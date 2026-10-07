@@ -1,5 +1,5 @@
+using System.ComponentModel;
 using System.Text;
-using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Process;
 using Xunit;
 
@@ -190,7 +190,7 @@ public sealed class ProcessRunnerTests
     public async Task Propagates_process_start_failure()
     {
         var runner = new ProcessRunner();
-        await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(() =>
+        await Assert.ThrowsAsync<Win32Exception>(() =>
             runner.RunAsync(["reviewforge-missing-process-74c4"], null, TimeSpan.FromSeconds(1)));
     }
 

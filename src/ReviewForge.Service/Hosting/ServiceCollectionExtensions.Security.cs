@@ -1,6 +1,4 @@
 using System.Threading.RateLimiting;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ReviewForge.Service.Security;
 
@@ -19,8 +17,7 @@ public static partial class ServiceCollectionExtensions
                 opts.StatusPermitLimit = configuration.GetValue($"{ApiKeyOptions.SectionName}:StatusPermitLimit", opts.StatusPermitLimit);
                 opts.StatusWindowSeconds = configuration.GetValue($"{ApiKeyOptions.SectionName}:StatusWindowSeconds", opts.StatusWindowSeconds);
                 var fromEnv = Environment.GetEnvironmentVariable(ApiKeyOptions.KeysEnvironmentVariable);
-                opts.SetEnvironmentKeys(string.IsNullOrWhiteSpace(fromEnv) ? [] :
-                    fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                opts.SetEnvironmentKeys(string.IsNullOrWhiteSpace(fromEnv) ? [] : fromEnv.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
             })
             .Validate(opts => opts.AllowUnauthenticatedForDevelopment || opts.Keys.Any(key => !string.IsNullOrWhiteSpace(key)),
                 $"No API keys configured. Set {ApiKeyOptions.KeysEnvironmentVariable}, or set Api:AllowUnauthenticatedForDevelopment=true in Development.")

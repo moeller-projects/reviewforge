@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using System.Text.Json;
 using Xunit;
 
@@ -27,7 +26,7 @@ public sealed class SubmitReviewContractTests
 
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var body = document.RootElement;
-        Assert.Equal(new[] { "runId", "statusUrl" }, body.EnumerateObject()
+        Assert.Equal(new[] {"runId", "statusUrl"}, body.EnumerateObject()
             .Select(property => property.Name)
             .Order(StringComparer.Ordinal)
             .ToArray());

@@ -1,12 +1,9 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.AutoFix.Fixers;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Reasoning;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Ado;
 

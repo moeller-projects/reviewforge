@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace ReviewForge.Core.Analysis;
 
 public enum DiffEntryKind
@@ -32,9 +30,9 @@ public sealed class DiffIndex
     public static DiffIndex Parse(string unifiedDiff)
     {
         var index = new DiffIndex();
-        string? currentFile = null;   // file registered via "+++ b/"
-        string? sectionFile = null;   // destination path of the current "diff --git" section
-        var sawContent = false;       // section produced a +++ b/ header
+        string? currentFile = null; // file registered via "+++ b/"
+        string? sectionFile = null; // destination path of the current "diff --git" section
+        var sawContent = false; // section produced a +++ b/ header
         var sectionBinary = false;
         var sectionRename = false;
         var newLine = 0;
@@ -122,6 +120,7 @@ public sealed class DiffIndex
                         continue;
                 }
             }
+
             if (line.Contains("file diff skipped", StringComparison.Ordinal))
             {
                 var skippedFile = sectionFile ?? currentFile;
@@ -344,5 +343,4 @@ public sealed class DiffIndex
 
         return false;
     }
-
-    }
+}

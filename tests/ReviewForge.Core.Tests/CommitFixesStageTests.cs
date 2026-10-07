@@ -3,7 +3,6 @@ using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
-using ReviewForge.Core.Ports;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -44,9 +43,12 @@ public sealed class CommitFixesStageTests
         PullRequest? pr = null, params AppliedFix[] fixes)
         => new(Key, DateTimeOffset.UtcNow)
         {
-            Fetch = new() {PullRequest = pr ?? new PullRequest(
-                1, "t", null, "head-sha", "base", "https://clone", false, "creator-1", "PR Author",
-                SourceRefName: "refs/heads/feature/x")},
+            Fetch = new()
+            {
+                PullRequest = pr ?? new PullRequest(
+                    1, "t", null, "head-sha", "base", "https://clone", false, "creator-1", "PR Author",
+                    SourceRefName: "refs/heads/feature/x")
+            },
             Repository = new() {RepoDir = Path.GetTempPath()},
             AutoFix = new() {AppliedFixes = fixes},
             Validation = new()
@@ -128,8 +130,7 @@ public sealed class CommitFixesStageTests
         var ctx = Ctx(fixes: Fix("k1", "src/a.sh"));
         ctx.PublishGuard = () => false;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Empty(git.Commits);
     }
@@ -153,7 +154,7 @@ public sealed class CommitFixesStageTests
         Assert.Single(git.Pushes);
         Assert.Equal(("feature/x", "head-sha"), git.Pushes[0]);
         Assert.NotNull(a1.CommitSha);
-        Assert.Equal(a1.CommitSha, a2.CommitSha);   // same file ⇒ same commit
+        Assert.Equal(a1.CommitSha, a2.CommitSha); // same file ⇒ same commit
         Assert.NotEqual(a1.CommitSha, b1.CommitSha);
         Assert.All(new[] {a1.CommitSubject, a2.CommitSubject, b1.CommitSubject}, s => Assert.NotNull(s));
         // Pushed-fix rows are durable immediately after push, confirmed for reconciliation.
@@ -213,8 +214,7 @@ public sealed class CommitFixesStageTests
         var calls = 0;
         ctx.PublishGuard = () => ++calls < 2; // holds "before commit", lost "before push"
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Single(git.Commits);
         Assert.Empty(git.Pushes);
@@ -226,8 +226,7 @@ public sealed class CommitFixesStageTests
         var git = new FakeGitOps {RemoteTip = "someone-elses-sha"};
         var ctx = Ctx(fixes: Fix("k1", "src/a.sh"));
 
-        await Assert.ThrowsAsync<PrHeadChangedException>(
-            () => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<PrHeadChangedException>(() => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Empty(git.Pushes);
     }
@@ -240,8 +239,7 @@ public sealed class CommitFixesStageTests
         var calls = 0;
         ctx.PublishGuard = () => ++calls < 3; // holds "before commit"/"before push", lost "at push"
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Single(git.Commits);
         Assert.Empty(git.Pushes);
@@ -253,8 +251,7 @@ public sealed class CommitFixesStageTests
         var git = new FakeGitOps {RemoteTip = null};
         var ctx = Ctx(fixes: Fix("k1", "src/a.sh"));
 
-        await Assert.ThrowsAsync<PrHeadChangedException>(
-            () => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<PrHeadChangedException>(() => Stage(git, new FakeFindingStore(), Options()).ExecuteAsync(ctx, CancellationToken.None));
     }
 
     [Fact]
@@ -264,8 +261,7 @@ public sealed class CommitFixesStageTests
         var store = new FakeFindingStore();
         var ctx = Ctx(fixes: Fix("k1", "src/a.sh"));
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Stage(git, store, Options()).ExecuteAsync(ctx, CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Stage(git, store, Options()).ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Contains("TF402455", ex.Message);
         Assert.Empty(store.PushedFixes);

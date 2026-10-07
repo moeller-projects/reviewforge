@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging.Console;
 using OpenTelemetry.Logs;
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Service;
-using HostOptions = ReviewForge.Service.HostOptions;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddTomlFile("config.toml", optional: true, reloadOnChange: true);
