@@ -1,9 +1,8 @@
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.FileProviders;
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ReviewForge.Service.Security;
@@ -270,7 +269,7 @@ public class ApiKeyAuthTests
     }
 
     private static async Task<(int StatusCode, bool CalledNext)> InvokeFilterAsync(
-        ApiKeyOptions options, string environmentName, string path, string? apiKey)
+        ApiKeyOptions options, string environmentName, string path, string? apiKey, string? queryKey = null)
     {
         var called = false;
         EndpointFilterDelegate next = _ =>
@@ -286,6 +285,11 @@ public class ApiKeyAuthTests
         if (apiKey is not null)
         {
             httpContext.Request.Headers[ApiKeyOptions.HeaderName] = apiKey;
+        }
+
+        if (queryKey is not null)
+        {
+            httpContext.Request.QueryString = new QueryString($"?{ApiKeyOptions.QueryKeyName}={queryKey}");
         }
 
         var result = await filter.InvokeAsync(new TestFilterContext(httpContext), next);
@@ -344,5 +348,120 @@ public class ApiKeyAuthTests
         Assert.False(missingCalled);
         Assert.Equal(StatusCodes.Status401Unauthorized, wrongStatus);
         Assert.False(wrongCalled);
+    }
+
+    // ---- /mcp branch middleware (endpoint filters cannot run on the MCP transport endpoint) ----
+
+    private static async Task<(int StatusCode, bool CalledNext)> InvokeMiddlewareAsync(
+        ApiKeyOptions options, string environmentName, string? apiKey, string? queryKey = null)
+    {
+        var called = false;
+        RequestDelegate next = _ =>
+        {
+            called = true;
+            return Task.CompletedTask;
+        };
+        var middleware = new ApiKeyMiddleware(
+            next,
+            Options.Create(options),
+            new TestHostEnvironment {EnvironmentName = environmentName},
+            NullLogger<ApiKeyMiddleware>.Instance);
+        var httpContext = new DefaultHttpContext {Request = {Path = "/mcp"}};
+        if (apiKey is not null)
+        {
+            httpContext.Request.Headers[ApiKeyOptions.HeaderName] = apiKey;
+        }
+
+        if (queryKey is not null)
+        {
+            httpContext.Request.QueryString = new QueryString($"?{ApiKeyOptions.QueryKeyName}={queryKey}");
+        }
+
+        await middleware.InvokeAsync(httpContext);
+        return (httpContext.Response.StatusCode, called);
+    }
+
+    [Fact]
+    public async Task Mcp_middleware_passes_valid_key_to_next()
+    {
+        var (_, called) = await InvokeMiddlewareAsync(
+            new ApiKeyOptions(["k"]), Environments.Production, "k");
+
+        Assert.True(called);
+    }
+
+    [Fact]
+    public async Task Mcp_middleware_passes_valid_query_key_to_next()
+    {
+        var (_, called) = await InvokeMiddlewareAsync(
+            new ApiKeyOptions(["k"]), Environments.Production, apiKey: null, queryKey: "k");
+
+        Assert.True(called);
+    }
+
+    [Fact]
+    public async Task Mcp_middleware_rejects_invalid_query_key()
+    {
+        var (statusCode, called) = await InvokeMiddlewareAsync(
+            new ApiKeyOptions(["k"]), Environments.Production, apiKey: null, queryKey: "nope");
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, statusCode);
+        Assert.False(called);
+    }
+
+
+    [Fact]
+    public async Task Filter_does_not_accept_query_key_on_reviews()
+    {
+        // Query-param auth is scoped to /mcp; the /reviews surface stays header-only.
+        var (statusCode, called) = await InvokeFilterAsync(
+            new ApiKeyOptions(["k"]), Environments.Production, "/reviews", apiKey: null, queryKey: "k");
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, statusCode);
+        Assert.False(called);
+    }
+
+    [Fact]
+    public async Task Mcp_middleware_rejects_missing_or_invalid_key_with_challenge()
+    {
+        var httpContext = new DefaultHttpContext {Request = {Path = "/mcp"}};
+        var middleware = new ApiKeyMiddleware(
+            _ => Task.CompletedTask,
+            Options.Create(new ApiKeyOptions(["k"])),
+            new TestHostEnvironment(),
+            NullLogger<ApiKeyMiddleware>.Instance);
+
+        await middleware.InvokeAsync(httpContext);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, httpContext.Response.StatusCode);
+        Assert.Equal("ApiKey", httpContext.Response.Headers.WWWAuthenticate);
+
+        var (wrongStatus, wrongCalled) = await InvokeMiddlewareAsync(
+            new ApiKeyOptions(["k"]), Environments.Production, "nope");
+        Assert.Equal(StatusCodes.Status401Unauthorized, wrongStatus);
+        Assert.False(wrongCalled);
+    }
+
+    [Fact]
+    public async Task Mcp_middleware_fails_closed_when_no_keys_and_no_optout()
+    {
+        var (statusCode, called) = await InvokeMiddlewareAsync(
+            new ApiKeyOptions(), Environments.Production, apiKey: null);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, statusCode);
+        Assert.False(called);
+    }
+
+    [Theory]
+    [InlineData("Development", true)]
+    [InlineData("Production", false)]
+    public async Task Mcp_middleware_unauthenticated_optout_requires_development(
+        string environmentName, bool shouldCallNext)
+    {
+        var (_, called) = await InvokeMiddlewareAsync(
+            new ApiKeyOptions {AllowUnauthenticatedForDevelopment = true},
+            environmentName, apiKey: null);
+
+        Assert.Equal(shouldCallNext, called);
     }
 }

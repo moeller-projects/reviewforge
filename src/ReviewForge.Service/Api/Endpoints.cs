@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
-using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 using ReviewForge.Service.Security;
 
@@ -60,111 +60,54 @@ public static class Endpoints
             .Produces<RunStatus>()
             .ProducesProblem(404);
 
+        // MCP surface for agent-chat clients: same submission/status logic as the endpoints
+        // above (RunSubmissionService). The MCP transport endpoint is a raw RequestDelegate —
+        // endpoint filters never run on it, so X-Api-Key enforcement is a route-branch
+        // middleware with identical semantics (ApiKeyGate). The status policy applies: every
+        // JSON-RPC message is a POST, so the submit budget would strangle an agent session;
+        // per-PR claims and queue capacity still bound enqueue abuse.
+        app.UseWhen(
+            ctx => ctx.Request.Path.StartsWithSegments("/mcp", StringComparison.OrdinalIgnoreCase),
+            branch => branch.UseMiddleware<ApiKeyMiddleware>());
+        app.MapMcp("/mcp")
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy);
+
         return app;
     }
 
-    private static IResult SubmitReview(
-        SubmitReviewRequest request,
-        IReviewQueue queue,
-        RunTracker tracker,
-        InFlightClaims claims,
-        TimeProvider clock,
-        ILoggerFactory loggerFactory)
-        => Submit(request, RunKind.Review, queue, tracker, claims, clock, loggerFactory);
+    private static IResult SubmitReview(SubmitReviewRequest request, RunSubmissionService runs)
+        => Submit(request, RunKind.Review, runs);
 
     private static IResult SubmitResolution(
         SubmitReviewRequest request,
-        IReviewQueue queue,
-        RunTracker tracker,
-        InFlightClaims claims,
-        TimeProvider clock,
-        ILoggerFactory loggerFactory,
+        RunSubmissionService runs,
         IOptions<ResolveOptions> resolveOptions)
         => resolveOptions.Value.Enabled
-            ? Submit(request, RunKind.Resolve, queue, tracker, claims, clock, loggerFactory)
+            ? Submit(request, RunKind.Resolve, runs)
             : TypedResults.Problem(title: "Resolve pipeline disabled", statusCode: StatusCodes.Status503ServiceUnavailable);
 
-    private static IResult Submit(
-        SubmitReviewRequest request,
-        RunKind kind,
-        IReviewQueue queue,
-        RunTracker tracker,
-        InFlightClaims claims,
-        TimeProvider clock,
-        ILoggerFactory loggerFactory)
-    {
-        var logger = loggerFactory.CreateLogger("ReviewForge.Service.Endpoints");
-        var errors = Validate(request);
-        if (errors.Count > 0)
+    private static IResult Submit(SubmitReviewRequest request, RunKind kind, RunSubmissionService runs)
+        => runs.Submit(request, kind) switch
         {
-            return TypedResults.BadRequest(new {errors});
-        }
-
-        var pr = new PrKey(request.Org, request.Project, request.RepositoryId, request.PrId);
-        var runId = Guid.NewGuid();
-        if (!claims.TryClaim(pr, runId, out var holder))
-        {
-            logger.LogWarning("{Kind} submit conflict for {Pr}: already in flight (run {RunId})", kind, pr, holder);
-            return TypedResults.Conflict(new ConflictResponse(
-                "a run for this pull request is already in flight", holder));
-        }
-
-        tracker.Set(runId, pr, RunState.Queued, kind: kind);
-        var result = queue.TryEnqueue(new ReviewRequest(
-            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual, Kind: kind));
-        if (!result.Accepted)
-        {
-            tracker.Remove(runId);
-            claims.Release(pr, runId);
-            logger.LogWarning("{Kind} submit rejected for {Pr}: queue full (depth {Depth})", kind, pr, result.QueueDepth);
-            return TypedResults.Problem(
+            SubmitOutcome.Invalid(var errors) => TypedResults.BadRequest(new {errors}),
+            SubmitOutcome.Conflict(var holder) => TypedResults.Conflict(new ConflictResponse(
+                "a run for this pull request is already in flight", holder)),
+            SubmitOutcome.QueueFull(var depth, var capacity) => TypedResults.Problem(
                 title: "Review queue full",
-                detail: $"Queue depth {result.QueueDepth} of {queue.Capacity}. Retry shortly.",
-                statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
-
-        logger.LogInformation("{Kind} submitted for {Pr}, run {RunId}", kind, pr, runId);
-        return TypedResults.Accepted($"/reviews/{runId}", new SubmitReviewResponse(runId, $"/reviews/{runId}"));
-    }
+                detail: $"Queue depth {depth} of {capacity}. Retry shortly.",
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            SubmitOutcome.Accepted(var runId, var statusUrl) => TypedResults.Accepted(
+                statusUrl, new SubmitReviewResponse(runId, statusUrl)),
+            _ => throw new UnreachableException(),
+        };
 
     private static async Task<IResult> DiscoverPullRequests(DiscoveryService discovery, CancellationToken ct)
         => TypedResults.Ok(await discovery.RunSweepAsync(ct));
 
-    /// <summary>Tracker first (authoritative while the process lives); then the durable queue
-    /// row (Queued read-through after restart); then the store's run row (Completed/Failed
-    /// read-through after restart or tracker retention expiry). Unknown → 404.</summary>
-    private static async Task<IResult> GetRunStatus(
-        Guid runId, RunTracker tracker, IReviewQueue queue, IFindingStore store, CancellationToken ct)
-    {
-        if (tracker.Get(runId) is { } status)
-        {
-            return TypedResults.Ok(status);
-        }
-
-        if (queue.TryGetQueued(runId) is { } queued)
-        {
-            return TypedResults.Ok(new RunStatus(runId, queued.Pr, RunState.Queued, null, queued.EnqueuedAt, queued.Kind));
-        }
-
-        var run = await store.GetRunAsync(runId, ct);
-        return run switch
-        {
-            null => TypedResults.NotFound(),
-            {CompletedAt: null} => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Running, null, run.StartedAt, ParseRunKind(run.Pipeline))),
-            {Success: true} => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Completed, null, run.CompletedAt.Value, ParseRunKind(run.Pipeline))),
-            _ => TypedResults.Ok(new RunStatus(runId, run.Pr, RunState.Failed, null, run.CompletedAt!.Value, ParseRunKind(run.Pipeline))),
-        };
-    }
-
-    private static RunKind ParseRunKind(string pipeline)
-        => Enum.TryParse<RunKind>(pipeline, ignoreCase: true, out var kind) && Enum.IsDefined(kind)
-            ? kind
-            : RunKind.Review;
-
-    private static List<string> Validate(object instance)
-    {
-        var results = new List<ValidationResult>();
-        Validator.TryValidateObject(instance, new ValidationContext(instance), results, validateAllProperties: true);
-        return [.. results.Select(r => r.ErrorMessage ?? "invalid")];
-    }
+    /// <summary>Read-through lives in <see cref="RunSubmissionService.GetStatusAsync"/>:
+    /// tracker → queue row → store row; unknown → 404.</summary>
+    private static async Task<IResult> GetRunStatus(Guid runId, RunSubmissionService runs, CancellationToken ct)
+        => await runs.GetStatusAsync(runId, ct) is { } status
+            ? TypedResults.Ok(status)
+            : TypedResults.NotFound();
 }

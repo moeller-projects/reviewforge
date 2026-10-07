@@ -22,6 +22,7 @@
         <PackageReference Include="OpenTelemetry.Instrumentation.Runtime"/>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi"/>
         <PackageReference Include="Scalar.AspNetCore"/>
+        <PackageReference Include="ModelContextProtocol.AspNetCore"/>
     </ItemGroup>
     <ItemGroup>
         <None Update="config*.toml"

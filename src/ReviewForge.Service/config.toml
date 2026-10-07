@@ -106,7 +106,6 @@ ContextLines = 15
 TimeoutSeconds = 60
 MaxPromptChars = 24000
 
-
 [Discovery]
 TargetBranches = ["main", "develop"]
 Creators = ["00000000-0000-0000-0000-000000000000"]

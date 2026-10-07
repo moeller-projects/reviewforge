@@ -14,6 +14,11 @@ public sealed class ApiKeyOptions
     public const string KeysEnvironmentVariable = "REVIEWFORGE_API_KEYS";
     public const string HeaderName = "X-Api-Key";
 
+    /// <summary>Query-parameter alternative to <see cref="HeaderName"/>, accepted only on the
+    /// /mcp surface (clients that cannot set headers). Query strings appear in request logs —
+    /// prefer the header.</summary>
+    public const string QueryKeyName = "api_key";
+
     /// <summary>Fixed-window rate-limit policy name for the submit/discover endpoints.</summary>
     internal const string SubmitPolicy = SectionName + ":submit";
 

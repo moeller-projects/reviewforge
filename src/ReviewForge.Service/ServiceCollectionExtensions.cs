@@ -1,6 +1,3 @@
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-
 namespace ReviewForge.Service;
 
 /// <summary>DI wiring for the whole host — options validation at startup, fail fast on bad config.</summary>
@@ -12,6 +9,7 @@ public static partial class ServiceCollectionExtensions
         services.AddReviewForgeAdapters();
         services.AddReviewForgePipeline(configuration);
         services.AddReviewForgeSecurity(configuration);
+        services.AddReviewForgeMcp();
         services.AddReviewForgeTelemetry(configuration);
         return services;
     }

@@ -98,6 +98,19 @@ which is unauthenticated input and would give each key guess a fresh permit budg
 behind a reverse proxy requires forwarded-headers support, otherwise every client shares
 the proxy's single partition.
 
+The same submission/status logic is exposed as an MCP server (Streamable HTTP) at `/mcp` for
+agent-chat clients, with the same `X-Api-Key` auth and the status rate-limit policy (every
+JSON-RPC message is a POST, so the submit budget would strangle a session). Tools:
+`enqueue_review(org, project, repositoryId, prId)` → `{accepted, runId, statusUrl, error}`
+(conflicts and a full queue are reported, never retried internally),
+`get_review_status(runId)` → the run status or null, and `list_open_prs(project?, repositoryId?,
+maxResults=100)` → open PRs in the org with title/author/draft/branch fields (bounded — when
+`truncated` is true, narrow the filters), so an agent
+then call `enqueue_review` per pick. Point an MCP client at `http://localhost:5080/mcp` with
+the `X-Api-Key` header set — or, for clients that cannot set headers, pass the key as the
+`api_key` query parameter (`/mcp` only; the header is preferred because query strings appear
+in request logs).
+
 ## Autonomous comment resolution
 
 The separate resolve pipeline is disabled by default. Enable it with `Resolve:Enabled=true`

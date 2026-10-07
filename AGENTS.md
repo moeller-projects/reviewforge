@@ -139,8 +139,15 @@ dotnet run --project src/ReviewForge.Service        # serves http://localhost:50
 
 Service endpoints: `POST /reviews` and opt-in `POST /resolutions` → 202 `{runId, statusUrl}`
 (400 validation, 401 bad key, 409 PR already in flight, 429 rate-limited, 503 queue full) ·
-`GET /reviews/{runId}` · `POST /reviews/discover` · `GET /health` (store-backed) · `GET /alive` (liveness). The
-ingest queue has a fixed capacity of 100; `Host:WorkerCount` sets the workers
+`GET /reviews/{runId}` · `POST /reviews/discover` · `GET /health` (store-backed) · `GET /alive` (liveness) ·
+`POST /mcp` (MCP server, Streamable HTTP via ModelContextProtocol.AspNetCore) exposing
+`enqueue_review` / `get_review_status` / `list_open_prs` for agent-chat clients; submission
+and status delegate to `Api/RunSubmissionService.cs`, the single path shared with the REST
+endpoints. Auth is `Security/ApiKeyMiddleware.cs` on a `/mcp` route branch (endpoint filters
+cannot run on the raw MCP transport endpoint; `ApiKeyGate` keeps the check identical to the
+`/reviews` filter, plus an `api_key` query-parameter alternative scoped to `/mcp`), status
+rate-limit policy. The ingest queue has a fixed capacity of 100;
+`Host:WorkerCount` sets the workers
 (default processorCount/2 clamped 2–8, validated 1–64). `RunTracker` is a bounded
 in-memory status cache (24 h retention, 10k entries, sticky terminal states); status
 read-through falls back to the durable queue row and then the store row, so with
