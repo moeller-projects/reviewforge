@@ -12,10 +12,8 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// vanishing. GetLastCompletedRunAsync filters on CompletedAt != null && Success, so the
 /// shell never seeds the next run's gate or dedupe.
 /// </summary>
-public sealed class BeginRunStage(IFindingStore store, TimeProvider? clock = null) : IReviewStage
+public sealed class BeginRunStage(IFindingStore store) : IReviewStage
 {
-    private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
-
     public string Name => "begin-run";
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)

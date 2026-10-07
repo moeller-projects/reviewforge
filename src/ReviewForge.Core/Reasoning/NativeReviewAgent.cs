@@ -145,11 +145,14 @@ public sealed class NativeReviewAgent(
             {
                 ModelId = chatClientFactory.ModelName(effectiveTier),
                 Instructions = instructions,
-                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions { Effort = effort } : null,
+                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
                 Tools = tools,
             },
-            AIContextProviders = [new CompactionProvider(new SlidingWindowCompactionStrategy(
-                CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))],
+            AIContextProviders =
+            [
+                new CompactionProvider(new SlidingWindowCompactionStrategy(
+                    CompactionTriggers.TokensExceed(_Options.MaxContextTokens)))
+            ],
         });
     }
 
@@ -233,7 +236,7 @@ public sealed class NativeReviewAgent(
         switch (request.Profile)
         {
             case ToolProfile.Review when request.AllowedThreadIds is not null
-                || request.WritablePaths is not null || request.MaxIterationsOverride is not null:
+                                         || request.WritablePaths is not null || request.MaxIterationsOverride is not null:
                 throw new ArgumentException("Review profile cannot specify triage or fix-only fields.", nameof(request));
             case ToolProfile.Triage when request.AllowedThreadIds is null:
                 throw new ArgumentException("Triage profile requires AllowedThreadIds.", nameof(request));
@@ -247,8 +250,11 @@ public sealed class NativeReviewAgent(
     }
 
     private sealed record AgentRunOutcome(
-        ReviewResult Result, HashLineEditor? Editor, IReadOnlyList<ThreadVerdict> Verdicts,
-        long UsageInputTokens, long UsageOutputTokens);
+        ReviewResult Result,
+        HashLineEditor? Editor,
+        IReadOnlyList<ThreadVerdict> Verdicts,
+        long UsageInputTokens,
+        long UsageOutputTokens);
 
     private sealed class TokenUsage
     {
@@ -332,7 +338,7 @@ public sealed class NativeReviewAgent(
                 foreach (var usageContent in update.Contents.OfType<UsageContent>())
                 {
                     usage.Add(usageContent.Details);
-                    var cachedTokens = usageContent.Details?.CachedInputTokenCount ?? 0;
+                    var cachedTokens = usageContent.Details.CachedInputTokenCount ?? 0;
                     if (cachedTokens > 0)
                     {
                         LlmTelemetry.LlmCachedTokens.Add(

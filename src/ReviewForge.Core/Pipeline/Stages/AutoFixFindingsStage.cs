@@ -107,7 +107,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
         if (eligible.Count > 0)
         {
             await RunDeterministicPassAsync(
-                    ctx, repoDir, guard, eligible, applied,
+                    ctx, guard, eligible, applied,
                     () => budget, remaining => budget = remaining, ct)
                 .ConfigureAwait(false);
         }
@@ -151,7 +151,6 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
     private async Task RunDeterministicPassAsync(
         ReviewContext ctx,
-        string repoDir,
         RepoPathGuard guard,
         IReadOnlyDictionary<string, IFindingFixer> eligible,
         List<AppliedFix> applied,
@@ -241,7 +240,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             return;
         }
 
-        foreach (var (path, proposals) in proposalsByFile)
+        foreach (var (_, proposals) in proposalsByFile)
         {
             ct.ThrowIfCancellationRequested();
             foreach (var (finding, proposal, _) in proposals)
@@ -429,8 +428,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 continue;
             }
 
-            var snapshotBytes = File.ReadAllBytes(abs);
-            var snapshotLines = _LineReader(abs);
+            var snapshotBytes = await File.ReadAllBytesAsync(abs, ct);
             var editor = _EditorFactory(guard, new HashSet<string>(RepoPath.PathComparer) {path});
             // CommitOnHead: an accepted pass KEEPS its edits (they are the commit payload);
             // declined/failed passes still revert so a later "nothing to commit" stays accurate.
@@ -497,7 +495,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
             {
                 if (!keepEdits)
                 {
-                    RevertFile(editor, guard, repoDir, path, snapshotBytes);
+                    RevertFile(editor, guard, path, snapshotBytes);
                 }
             }
         }
@@ -528,7 +526,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
     /// <summary>Reverts the file to its pre-pass state; a failed revert fails the run
     /// (a dirty pooled checkout would poison later runs).</summary>
     private static void RevertFile(
-        HashLineEditor editor, RepoPathGuard guard, string repoDir, string path, byte[] snapshotBytes)
+        HashLineEditor editor, RepoPathGuard guard, string path, byte[] snapshotBytes)
     {
         var resolved = guard.Resolve(path, out var resolveError)
                        ?? throw new IOException($"auto-fix revert path denied for {path}: {resolveError}");

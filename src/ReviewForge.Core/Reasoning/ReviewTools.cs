@@ -54,15 +54,15 @@ public sealed class ReviewTools(
 
     [Description("Record a single review finding. Call once per distinct issue. Duplicate findings are rejected.")]
     public string RecordFinding(
-        [Description("Stable rule id")] string ruleId,
+        [Description("Stable rule id")] string? ruleId,
         [Description("One-line title of the issue")]
-        string title,
+        string? title,
         [Description("Severity: critical, high, medium, low or info")]
-        string severity,
+        string? severity,
         [Description("Category: bug, security, performance, style or docs")]
-        string category,
+        string? category,
         [Description("What is wrong and why it matters")]
-        string description,
+        string? description,
         [Description("Exact offending code line(s)")]
         string? snippet = null,
         [Description("Concrete fix suggestion")]
@@ -129,6 +129,7 @@ public sealed class ReviewTools(
             logger?.LogDebug("finding deduped: key {DedupeKey} already known", key);
             return $"already recorded (dedupe key {key}) — skipped";
         }
+
         finding.DedupeKey = key;
         collector.AddFinding(finding);
         logger?.LogDebug("finding recorded: key {DedupeKey}, rule {RuleId}, severity {Severity}", key, finding.RuleId, finding.Severity);
@@ -180,5 +181,4 @@ public sealed class ReviewTools(
 
         return errors;
     }
-
-    }
+}

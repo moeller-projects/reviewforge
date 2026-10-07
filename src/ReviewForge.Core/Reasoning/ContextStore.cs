@@ -15,7 +15,7 @@ public sealed class ContextStore
     public void Put(string name, string content)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        _Entries[name] = content ?? string.Empty;
+        _Entries[name] = content;
     }
 
     /// <summary>Reads an entry, capped at <see cref="MaxReadChars"/>; null when unknown.</summary>

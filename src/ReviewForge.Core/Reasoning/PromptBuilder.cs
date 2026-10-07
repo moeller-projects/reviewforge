@@ -33,6 +33,7 @@ public static class PromptBuilder
 
     /// <summary>Delimiter pair marking every PR-author-controlled byte in the prompt.</summary>
     internal const string UntrustedBegin = "<pr-supplied-data>";
+
     internal const string UntrustedEnd = "</pr-supplied-data>";
 
     /// <summary>Strip our own delimiters from embedded content so the boundary cannot be forged from inside.</summary>
@@ -40,7 +41,7 @@ public static class PromptBuilder
         => string.IsNullOrEmpty(text)
             ? string.Empty
             : text.Replace(UntrustedBegin, string.Empty, StringComparison.Ordinal)
-                  .Replace(UntrustedEnd, string.Empty, StringComparison.Ordinal);
+                .Replace(UntrustedEnd, string.Empty, StringComparison.Ordinal);
 
     public static string Build(PromptInput input)
     {
@@ -58,6 +59,7 @@ public static class PromptBuilder
         {
             sb.AppendLine($"- Description: {PromptText.Clean(input.Pr.Description)}");
         }
+
         sb.AppendLine(UntrustedEnd);
 
         // commit SHAs are operator/tool-supplied — outside the delimiters:
@@ -83,6 +85,7 @@ public static class PromptBuilder
                     sb.AppendLine(PromptText.Clean(wi.AcceptanceCriteria.Trim()));
                 }
             }
+
             sb.AppendLine(UntrustedEnd);
 
             sb.AppendLine();
@@ -96,8 +99,9 @@ public static class PromptBuilder
             sb.AppendLine(UntrustedBegin);
             foreach (var reply in input.PendingReplies)
             {
-                sb.AppendLine($"- Thread {reply.ThreadId} (finding {PromptText.Clean(reply.DedupeKey) ?? "n/a"}), {PromptText.Clean(reply.Author)}: {PromptText.Clean(reply.Text)}");
+                sb.AppendLine($"- Thread {reply.ThreadId} (finding {(reply.DedupeKey is { } k ? PromptText.Clean(k) : "n/a")}), {PromptText.Clean(reply.Author)}: {PromptText.Clean(reply.Text)}");
             }
+
             sb.AppendLine(UntrustedEnd);
 
             sb.AppendLine();
@@ -111,6 +115,7 @@ public static class PromptBuilder
         {
             sb.AppendLine($"- {PromptText.Clean(file)}");
         }
+
         sb.AppendLine(UntrustedEnd);
 
         sb.AppendLine("You may read unchanged files for dependency context, but every file-specific finding MUST target a changed file and changed line in this pull request. Do not report pre-existing issues from unchanged files or use a general finding to bypass this scope.");
@@ -173,8 +178,8 @@ public static class PromptBuilder
         foreach (var lineSpan in diff.AsSpan().EnumerateLines())
         {
             var fileHeader = lineSpan.StartsWith("diff --git ", StringComparison.Ordinal)
-                || lineSpan.StartsWith("+++ b/", StringComparison.Ordinal)
-                || lineSpan.StartsWith("+++ /dev/null", StringComparison.Ordinal);
+                             || lineSpan.StartsWith("+++ b/", StringComparison.Ordinal)
+                             || lineSpan.StartsWith("+++ /dev/null", StringComparison.Ordinal);
             if (fileHeader)
             {
                 currentFileLength = 0;
@@ -200,7 +205,6 @@ public static class PromptBuilder
                 if (!markerWritten && written + markerLength <= maxTotal)
                 {
                     result.Append(DiffTruncationMarker).Append(nl);
-                    written += markerLength;
                 }
 
                 break;

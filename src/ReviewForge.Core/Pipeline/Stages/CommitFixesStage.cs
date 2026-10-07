@@ -78,7 +78,7 @@ public sealed class CommitFixesStage(
                 [
                     .. group.Select(f => new ConventionalCommitBuilder.CommitFixInput(
                         f,
-                        f.DedupeKey is not null && findingsByKey.TryGetValue(f.DedupeKey, out var finding) ? finding : null))
+                        findingsByKey.GetValueOrDefault(f.DedupeKey)))
                 ]);
             string sha;
             try

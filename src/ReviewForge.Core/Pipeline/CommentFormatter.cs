@@ -17,7 +17,7 @@ public static class CommentFormatter
 
     /// <summary>Comment bodies are platform-independent artifacts posted to the PR host:
     /// lines always terminate with "\n", never <see cref="Environment.NewLine"/>.</summary>
-    private static StringBuilder Line(StringBuilder sb, string text) => sb.Append(text).Append('\n');
+    private static void Line(StringBuilder sb, string text) => sb.Append(text).Append('\n');
 
     public static string FormatFinding(RichFinding finding)
     {

@@ -4,7 +4,7 @@ namespace ReviewForge.Core.Analysis;
 public static class ReferenceScanner
 {
     /// <summary>Returns whether an identifier is syntactically suitable for a reference scan.</summary>
-    public static bool IsValidIdentifier(string identifier)
+    public static bool IsValidIdentifier(string? identifier)
     {
         if (identifier is null || identifier.Length is < 2 or > 128)
         {
@@ -23,6 +23,7 @@ public static class ReferenceScanner
 
         return true;
     }
+
     /// <summary>Yields (1-based line number, line) where the identifier occurs on a word boundary.</summary>
     public static IEnumerable<(int LineNo, string Line)> ScanLines(
         IEnumerable<string> lines, string identifier, StringComparison comparison = StringComparison.OrdinalIgnoreCase)

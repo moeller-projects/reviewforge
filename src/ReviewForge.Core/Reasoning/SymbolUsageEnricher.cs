@@ -4,7 +4,6 @@ using System.Text.RegularExpressions;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Ports;
 
-
 namespace ReviewForge.Core.Reasoning;
 
 /// <summary>Enriches reviews with bounded references to symbols introduced by the PR.</summary>
@@ -31,6 +30,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
     private const int MaxScanMs = 10_000;
     private const int MaxScanLines = 200_000;
     private static readonly Regex Identifier = new(@"[A-Za-z_][A-Za-z0-9_]{3,}", RegexOptions.Compiled);
+
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "abstract", "and", "as", "async", "await", "base", "bool", "break", "byte", "case", "catch",
@@ -42,7 +42,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
         "set", "short", "sizeof", "static", "string", "struct", "switch", "this", "throw", "true", "try",
         "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "var", "virtual", "void",
         "volatile", "when", "while", "with", "yield", "elif", "fi", "from", "import", "lambda", "pass",
-        "raise", "self", "def", "None", "True", "False", "function", "package", "fun", "val", "type"
+        "raise", "self", "def", "None", "True", "False", "package", "fun", "val", "type"
     };
 
     /// <inheritdoc />
@@ -94,7 +94,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
 
             var relative = Path.GetRelativePath(root, file.FullName).Replace('\\', '/');
             if (changed.Contains(RepoPath.Normalize(relative)) || file.Length > MaxFileBytes
-                || (file.LinkTarget is not null && guard.IsResolvedDenied(file.FullName, rootReal, rootLinks)))
+                                                               || (file.LinkTarget is not null && guard.IsResolvedDenied(file.FullName, rootReal, rootLinks)))
             {
                 continue;
             }
@@ -184,6 +184,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
                 }
             }
         }
+
         return symbols;
     }
 
@@ -218,6 +219,7 @@ public sealed class SymbolUsageEnricher : IContextEnricher
             {
                 yield break;
             }
+
             var current = pending.Pop();
             string[] dirs;
             FileInfo[] files;

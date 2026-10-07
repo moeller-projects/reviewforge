@@ -26,12 +26,12 @@ public static class VerdictParser
             return null;
         }
 
-        Entry[]? entries;
+        Entry?[]? entries;
         try
         {
-            entries = JsonSerializer.Deserialize<Entry[]>(
+            entries = JsonSerializer.Deserialize<Entry?[]>(
                 text.AsSpan(start, end - start + 1),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                new JsonSerializerOptions {PropertyNameCaseInsensitive = true});
         }
         catch (JsonException)
         {
@@ -46,7 +46,7 @@ public static class VerdictParser
         var verdicts = new Dictionary<string, FindingsVerifierPrompt.Verdict>(StringComparer.Ordinal);
         foreach (var entry in entries)
         {
-            if (entry?.Key is not { Length: > 0 } key)
+            if (entry is not {Key: {Length: > 0} key})
             {
                 continue;
             }
@@ -58,10 +58,5 @@ public static class VerdictParser
         return verdicts;
     }
 
-    private sealed class Entry
-    {
-        public string? Key { get; set; }
-        public string? Verdict { get; set; }
-        public string? Reason { get; set; }
-    }
+    private sealed record Entry(string? Key, string? Verdict, string? Reason);
 }

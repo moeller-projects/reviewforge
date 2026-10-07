@@ -89,9 +89,9 @@ public sealed class SqliteReviewQueue : IReviewQueue
         insert.Parameters.AddWithValue("$repo", request.Pr.RepositoryId);
         insert.Parameters.AddWithValue("$prId", request.Pr.PrId);
         insert.Parameters.AddWithValue("$enqueuedAt", Stamp(request.EnqueuedAt));
-        insert.Parameters.AddWithValue("$headSha", (object?)request.HeadSha ?? DBNull.Value);
-        insert.Parameters.AddWithValue("$traceParent", (object?)TraceParentOf(request.EnqueueContext) ?? DBNull.Value);
-        insert.Parameters.AddWithValue("$traceState", (object?)request.EnqueueContext?.TraceState ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$headSha", (object?) request.HeadSha ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$traceParent", (object?) TraceParentOf(request.EnqueueContext) ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$traceState", (object?) request.EnqueueContext?.TraceState ?? DBNull.Value);
         insert.Parameters.AddWithValue("$trigger", request.Trigger.ToString());
         insert.Parameters.AddWithValue("$kind", request.Kind.ToString());
         insert.ExecuteNonQuery();
@@ -154,7 +154,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         using var connection = Open();
         using var transaction = connection.BeginTransaction(deferred: false);
         ReviewRequest? request;
-        var reclaimed = false;
+        bool reclaimed;
         using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
@@ -218,6 +218,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             cmd.CommandText = "ALTER TABLE QueuedRuns ADD COLUMN Trigger TEXT NULL";
             cmd.ExecuteNonQuery();
         }
+
         cmd.CommandText =
             "SELECT COUNT(*) FROM pragma_table_info('QueuedRuns') WHERE name = 'Kind'";
         if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
@@ -279,12 +280,12 @@ public sealed class SqliteReviewQueue : IReviewQueue
 
         var triggerText = reader.IsDBNull(9) ? null : reader.GetString(9);
         var trigger = triggerText is not null && Enum.TryParse<EnqueueTrigger>(triggerText, out var parsedTrigger)
-                      && Enum.IsDefined(parsedTrigger)
+                                              && Enum.IsDefined(parsedTrigger)
             ? parsedTrigger
             : EnqueueTrigger.Manual;
         var kindText = reader.IsDBNull(10) ? null : reader.GetString(10);
         var kind = kindText is not null && Enum.TryParse<RunKind>(kindText, out var parsedKind)
-                   && Enum.IsDefined(parsedKind)
+                                        && Enum.IsDefined(parsedKind)
             ? parsedKind
             : RunKind.Review;
 

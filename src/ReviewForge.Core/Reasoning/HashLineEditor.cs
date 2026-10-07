@@ -36,9 +36,12 @@ public class HashLineEditor
 
     [Description("Read a file with per-line content hashes for edit anchoring.")]
     public virtual string ReadFileWithHashes(
-        [Description("File path relative to repo root")] string path,
-        [Description("1-based first line to read")] int startLine = 1,
-        [Description("Maximum number of lines")] int? maxLines = null)
+        [Description("File path relative to repo root")]
+        string? path,
+        [Description("1-based first line to read")]
+        int startLine = 1,
+        [Description("Maximum number of lines")]
+        int? maxLines = null)
     {
         var rel = RepoPath.Normalize(path ?? string.Empty);
         var full = _Guard.Resolve(path, out _);
@@ -73,7 +76,7 @@ public class HashLineEditor
         {
             var marker = duplicated.Contains(lineHashes[i]) ? "*" : string.Empty;
             sb.Append(i + 1).Append(' ').Append(lineHashes[i]).Append(marker).Append(": ")
-                .AppendLine(HashLine.Normalize(lines[i] ?? string.Empty));
+                .AppendLine(HashLine.Normalize(lines[i]));
         }
 
         if (emitted == 0 && lines.Count < start)
@@ -91,8 +94,10 @@ public class HashLineEditor
 
     [Description("Apply one or more line edits to a file. All edits must succeed or none are applied.")]
     public virtual string EditFile(
-        [Description("File path relative to repo root")] string path,
-        [Description("Line edits to apply atomically")] LineEdit[] edits)
+        [Description("File path relative to repo root")]
+        string path,
+        [Description("Line edits to apply atomically")]
+        LineEdit[] edits)
     {
         if (!TryResolveWritable(path, out var rel, out var full, out var denyError))
         {
@@ -222,17 +227,16 @@ public class HashLineEditor
             return;
         }
 
-        FileSnapshot? cached = null;
-        _RawCache.TryGetValue(rel, out cached);
+        _RawCache.TryGetValue(rel, out var cached);
         var newLine = "\n";
-        if (cached is { Raw.Length: > 0 })
+        if (cached is {Raw.Length: > 0})
         {
             newLine = HashLine.DetectNewLine(cached.Raw);
         }
         else if (File.Exists(full))
         {
-            var (raw, _, _) = ReadRawLines(rel, full!);
-            if (raw is { Count: > 0 })
+            var (raw, _, _) = ReadRawLines(rel, full);
+            if (raw is {Count: > 0})
             {
                 newLine = HashLine.DetectNewLine(raw);
             }
@@ -287,7 +291,7 @@ public class HashLineEditor
         return (range.StartLine, range.EndLine, replacement);
     }
 
-    private bool TryResolveWritable(string path, out string rel, out string? full, out string? error)
+    private bool TryResolveWritable(string? path, out string rel, out string? full, out string? error)
     {
         rel = RepoPath.Normalize(path ?? string.Empty);
         full = _Guard.Resolve(rel, out error);
@@ -495,8 +499,12 @@ public class HashLineEditor
                 File.Delete(path);
             }
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
 
@@ -575,7 +583,7 @@ public class HashLineEditor
             var delta = replacement - (t - f + 1);
             if (f > current.EndLine)
             {
-                _Sessions[rel] = current with { EndLine = Math.Max(current.EndLine, f + replacement - 1) };
+                _Sessions[rel] = current with {EndLine = Math.Max(current.EndLine, f + replacement - 1)};
             }
             else if (current.StartLine > t)
             {

@@ -38,7 +38,6 @@ public sealed class AdoPullRequestSource : IPullRequestSource
 
     private readonly VssConnection _Connection;
     private readonly string _Org;
-    private readonly string _Project;
     private readonly TransientRetryPolicy _Retry;
 
     public AdoPullRequestSource(
@@ -53,7 +52,6 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                 $"ADO PAT missing — set the {AdoOptions.PatEnvironmentVariable} environment variable.");
         }
 
-        _Project = options.Project;
         _Org = OrgFromUrl(options.OrgUrl);
         _Connection = new VssConnection(
             new Uri(options.OrgUrl),
@@ -91,7 +89,7 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
             cloneUrl,
             gpr.IsDraft ?? false,
-            gpr.CreatedBy?.Id.ToString() ?? string.Empty,
+            gpr.CreatedBy?.Id ?? string.Empty,
             gpr.CreatedBy?.DisplayName ?? string.Empty,
             gpr.SourceRefName);
     }
@@ -148,7 +146,7 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                         gpr.LastMergeTargetCommit?.CommitId ?? string.Empty,
                         cloneUrl,
                         gpr.IsDraft ?? false,
-                        gpr.CreatedBy?.Id.ToString() ?? string.Empty,
+                        gpr.CreatedBy?.Id ?? string.Empty,
                         gpr.CreatedBy?.DisplayName ?? string.Empty,
                         gpr.SourceRefName);
 
@@ -156,7 +154,7 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                         key,
                         pr,
                         StripRefs(gpr.TargetRefName),
-                        gpr.CreatedBy?.Id.ToString() ?? string.Empty,
+                        gpr.CreatedBy?.Id ?? string.Empty,
                         gpr.CreatedBy?.DisplayName ?? string.Empty));
                 }
 

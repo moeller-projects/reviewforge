@@ -50,7 +50,7 @@ public static class ResolvePromptBuilder
     private static void AppendUntrusted(StringBuilder sb, string name, string value)
     {
         sb.Append("<pr-supplied-data name=\"").Append(name).AppendLine("\">");
-        sb.AppendLine(SecurityElement.Escape(value) ?? string.Empty);
+        sb.AppendLine(SecurityElement.Escape(value));
         sb.AppendLine("</pr-supplied-data>");
     }
 }
