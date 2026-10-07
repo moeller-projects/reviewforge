@@ -17,10 +17,7 @@ builder.Configuration.AddEnvironmentVariables();
 builder.Configuration.AddCommandLine(args);
 builder.Logging.AddConsole(options => options.FormatterName = CompactConsoleFormatter.FormatterName);
 builder.Logging.AddConsoleFormatter<CompactConsoleFormatter, ConsoleFormatterOptions>();
-var otlpStatus = ServiceCollectionExtensions.ComputeOtlpStatus(builder.Configuration);
-var otlpLogsEnabled = otlpStatus.LogsEnabled;
-var otlpTracesEnabled = otlpStatus.TracesEnabled;
-var otlpMetricsEnabled = otlpStatus.MetricsEnabled;
+var otlpLogsEnabled = ServiceCollectionExtensions.ComputeOtlpStatus(builder.Configuration).LogsEnabled;
 builder.Logging.AddOpenTelemetry(options =>
 {
     options.IncludeFormattedMessage = true;
