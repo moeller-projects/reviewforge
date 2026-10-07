@@ -56,8 +56,10 @@ jobs:
         if: runner.os == 'Windows'
         run: reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f
 
-      # CollectCoverage=true enforces each project's 95% line-coverage threshold.
-      # Per-project invocation keeps TRX files distinct and continues after failures.
+      # coverlet.msbuild driver: enforces each project's 95% line-coverage threshold
+      # (fails dotnet test on breach) and emits per-project cobertura reports for the
+      # union-of-lines summary below. Per-project invocation keeps TRX/report files
+      # distinct and continues after failures.
       - name: Test
         shell: bash
         run: |
@@ -66,22 +68,9 @@ jobs:
             name="$(basename "$proj")"
             dotnet test "$proj" --no-build --configuration Release \
               -p:CollectCoverage=true -p:CoverletOutputFormat=cobertura \
+              -p:CoverletOutput="$GITHUB_WORKSPACE/CoverageResults/$name/" \
               --logger "trx;LogFileName=$name.trx" \
               --results-directory TestResults || failed=1
-          done
-          exit "$failed"
-
-      # Collect XPlat reports for the union-of-lines check in build-and-test.ps1.
-      # This is separate from coverlet.msbuild, which enforces per-project thresholds.
-      - name: Collect line coverage
-        if: always()
-        shell: bash
-        run: |
-          failed=0
-          for proj in tests/*/; do
-            dotnet test "$proj" --no-build --configuration Release \
-              --collect:"XPlat Code Coverage" --settings coverage.runsettings \
-              --results-directory CoverageResults || failed=1
           done
           exit "$failed"
 
