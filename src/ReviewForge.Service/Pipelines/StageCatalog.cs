@@ -29,7 +29,6 @@ public sealed class StageCatalog
     private readonly ILoggerFactory _LoggerFactory;
     private readonly ReviewOptions _ReviewOptions;
     private readonly ResolveOptions _ResolveOptions;
-    private readonly WorkspaceOptions _WorkspaceOptions;
     private readonly AutoFixOptions _AutoFixOptions;
     private readonly VerifyFindingsOptions _VerifyFindingsOptions;
     private readonly FindingFixerRegistry _FixerRegistry;
@@ -66,7 +65,7 @@ public sealed class StageCatalog
         _LoggerFactory = loggerFactory;
         _ReviewOptions = reviewOptions.Value;
         _ResolveOptions = resolveOptions.Value;
-        _WorkspaceOptions = workspaceOptions.Value;
+        var workspaceOptionsValue = workspaceOptions.Value;
         _AutoFixOptions = autoFixOptions.Value;
         _VerifyFindingsOptions = verifyFindingsOptions.Value;
         _FixerRegistry = new FindingFixerRegistry(findingFixers);
@@ -77,7 +76,7 @@ public sealed class StageCatalog
             _ReviewOptions.MaxDiffBytes,
             _ReviewOptions.MaxDiffBytesPerFile,
             _ReviewOptions.DiffExcludeGlobs ?? DiffBudget.Default.ExcludeGlobs);
-        _FindingsDir = Path.Combine(_WorkspaceOptions.WorkDir, "findings");
+        _FindingsDir = Path.Combine(workspaceOptionsValue.WorkDir, "findings");
 
         var logger = loggerFactory.CreateLogger<StageCatalog>();
         foreach (var ruleId in _AutoFixOptions.AllowedRuleIds)
@@ -129,7 +128,7 @@ public sealed class StageCatalog
                 _AutoFixOptions,
                 _LoggerFactory.CreateLogger<AutoFixFindingsStage>(),
                 store: _Store),
-            StageId.BeginRun => new BeginRunStage(_Store, _Clock),
+            StageId.BeginRun => new BeginRunStage(_Store),
             StageId.CommitFixes => new CommitFixesStage(
                 _GitOps ?? throw new InvalidOperationException("IGitOps is required for the commit-fixes stage"),
                 _Store,
