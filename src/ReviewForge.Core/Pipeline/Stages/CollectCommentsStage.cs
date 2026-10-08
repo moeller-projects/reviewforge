@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -8,7 +9,8 @@ public sealed class CollectCommentsStage(
     IPullRequestSource source,
     IFindingStore store,
     IReadOnlySet<string> allowedCommenters,
-    TimeProvider? clock = null) : IReviewStage
+    TimeProvider? clock = null,
+    ILogger<CollectCommentsStage>? logger = null) : IReviewStage
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     public string Name => "collect-comments";
@@ -17,6 +19,8 @@ public sealed class CollectCommentsStage(
     {
         var resolve = ctx.RequireResolveState();
         ctx.Fetch = ctx.Fetch with {Threads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false)};
+        logger?.LogDebug("resolved comment threads: {ThreadCount}, allowed commenters: {AllowedCommenterCount}",
+            ctx.Fetch.Threads.Count, allowedCommenters.Count);
         var priorByThread = (await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false))
             .ToDictionary(action => action.ThreadId);
         var authorOnly = allowedCommenters.Count == 0;
@@ -54,6 +58,8 @@ public sealed class CollectCommentsStage(
         }
 
         resolve.ResolvableComments = comments;
+        logger?.LogDebug("collected resolvable comments: {Count}; deferred actions considered: {PriorActionCount}",
+            comments.Count, priorByThread.Count);
     }
 
     private async Task<IReadOnlyList<ReviewThread>> ResolveThreadsAsync(ReviewContext ctx, CancellationToken ct)

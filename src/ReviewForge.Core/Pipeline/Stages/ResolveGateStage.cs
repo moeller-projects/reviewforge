@@ -29,8 +29,11 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
         resolve.ResolveWatermark = apiManual || deferredThreadIds.Count > 0
             ? null
             : lastResolveRun?.LastObservedCommentAt ?? lastResolveRun?.CompletedAt;
+        logger?.LogDebug("resolve gate inputs: threads={ThreadCount}, active={ActiveThreadCount}, deferred={DeferredThreadCount}, manual={Manual}, watermarkPresent={WatermarkPresent}",
+            ctx.Fetch.Threads.Count, activeThreads.Count, deferredThreadIds.Count, apiManual, resolve.ResolveWatermark is not null);
         var decision = ResolveGate.Evaluate(
             pr, ctx.Fetch.Threads, resolve.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds);
+        logger?.LogDebug("resolve gate decision: {Decision}", decision);
         if (decision != ResolveGateDecision.Continue)
         {
             logger?.LogInformation("resolve gate terminated run: {Decision}", decision);

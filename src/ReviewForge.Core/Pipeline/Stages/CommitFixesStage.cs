@@ -31,12 +31,14 @@ public sealed class CommitFixesStage(
     {
         if (!options.IsCommitOnHead)
         {
+            logger.LogDebug("commit-fixes: commit-on-head disabled; skipping");
             return;
         }
 
         var pending = ctx.AutoFix.AppliedFixes.Where(f => f.AppliedToTree).ToList();
         if (pending.Count == 0)
         {
+            logger.LogDebug("commit-fixes: no materialized fixes; skipping commit and push");
             return;
         }
 
@@ -63,6 +65,9 @@ public sealed class CommitFixesStage(
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before commit");
 
         var groups = Group(pending).ToArray();
+        logger.LogDebug(
+            "commit-fixes: prepared {GroupCount} commit groups from {PendingCount} materialized fixes using {Granularity} granularity",
+            groups.Length, pending.Count, options.CommitGranularity);
         var findingsByKey = ctx.Validation.AcceptedFindings
             .Where(f => f.DedupeKey is not null)
             .GroupBy(f => f.DedupeKey!, StringComparer.Ordinal)
@@ -119,6 +124,9 @@ public sealed class CommitFixesStage(
                 degraded, new TagList {{ReviewForgeTelemetry.TagReason, "commit_failed"}});
         }
 
+        logger.LogDebug(
+            "commit-fixes: {CommittedCount} commits ready; {DegradedCount} fixes degraded before push",
+            committed.Count, degraded);
         if (committed.Count == 0)
         {
             // Everything degraded; publish handles a pure-suggestion run.
@@ -160,6 +168,9 @@ public sealed class CommitFixesStage(
                 ReplyPosted: false,
                 CreatedAt: default)))
             .ToArray();
+        logger.LogDebug(
+            "commit-fixes: persisting {PushIntentCount} push-intent rows before pushing {CommitCount} commits",
+            rows.Length, committed.Count);
         await store.SavePushedFixesAsync(ctx.Pr, ctx.RunId, rows, ct).ConfigureAwait(false);
 
         try

@@ -159,7 +159,7 @@ public sealed class NativeReviewAgent(
     private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier, int maxIterations)
     {
         IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(tier));
-        IChatClient retrying = new RetryingChatClient(guarded, _Logger);
+        IChatClient retrying = new RetryingChatClient(guarded, chatClientFactory.IsTransientFailure, _Logger);
         IChatClient invoking = new ChatClientBuilder(retrying)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)
             .Build();

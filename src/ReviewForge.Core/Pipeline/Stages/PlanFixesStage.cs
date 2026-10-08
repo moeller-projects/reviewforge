@@ -1,11 +1,12 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
-public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IReviewStage
+public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles, ILogger<PlanFixesStage>? logger = null) : IReviewStage
 {
     public string Name => "plan-fixes";
 
@@ -17,6 +18,8 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
         // The writable plan must respect the same deny policy as the editor: an anchored
         // comment on .env/.git/secrets must be rejected HERE, not fail the agent pass later.
         var guard = new RepoPathGuard(ctx.RequireRepoDir());
+        logger?.LogDebug("planning fixes: comments={CommentCount}, verdicts={VerdictCount}, changedFiles={ChangedFileCount}, maxThreads={MaxThreads}, maxWritableFiles={MaxWritableFiles}",
+            resolve.ResolvableComments.Count, resolve.ThreadVerdicts.Count, changed.Count, maxThreads, maxWritableFiles);
         var verdicts = new List<ThreadVerdict>(resolve.ThreadVerdicts.Count);
         var outcomes = new Dictionary<int, ResolutionOutcome>();
         var details = new Dictionary<int, string>();
@@ -35,6 +38,7 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
                 verdicts.Add(verdict);
                 continue;
             }
+
             var anchorPath = comment.Anchor is null ? null : RepoPath.Normalize(comment.Anchor.FilePath);
             var rejection =
                 !comment.CommenterAllowed ? "commenter is not authorized to request edits"
@@ -46,21 +50,26 @@ public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles) : IRevi
             {
                 details[verdict.ThreadId] = rejection;
                 outcomes[verdict.ThreadId] = ResolutionOutcome.OutOfScope;
-                verdicts.Add(verdict with { Verdict = TriageVerdict.OutOfScope });
+                verdicts.Add(verdict with {Verdict = TriageVerdict.OutOfScope});
                 continue;
             }
+
             verdicts.Add(verdict);
         }
+
         var plan = ResolvePlanner.Plan(resolve.ResolvableComments, verdicts, changed.ToArray(), maxThreads, maxWritableFiles);
         foreach (var (threadId, reason) in plan.Deferred)
         {
             outcomes[threadId] = ResolutionOutcome.Deferred;
             details[threadId] = reason;
-            ResolveTelemetry.ResolveDeferred.Add(1, new TagList { { "reason", reason } });
+            ResolveTelemetry.ResolveDeferred.Add(1, new TagList {{"reason", reason}});
         }
+
         resolve.ThreadVerdicts = verdicts;
         resolve.ResolvePlan = plan;
         resolve.ResolutionOutcomes = outcomes;
+        logger?.LogDebug("fix plan completed: fixes={FixCount}, deferred={DeferredCount}, verdicts={VerdictCount}, outcomes={OutcomeCount}",
+            plan.Fixes.Count, plan.Deferred.Count, verdicts.Count, outcomes.Count);
         resolve.ResolutionDetails = details;
         return Task.CompletedTask;
     }

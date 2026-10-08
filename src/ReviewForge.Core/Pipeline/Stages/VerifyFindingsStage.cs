@@ -24,7 +24,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 public sealed class VerifyFindingsStage(
     IChatClientFactory chatClientFactory,
     VerifyFindingsOptions options,
-    ILogger<VerifyFindingsStage> logger,
+    ILogger<VerifyFindingsStage>? logger = null,
     Func<string, string[]>? lineReader = null) : IReviewStage
 {
     private readonly Func<string, string[]> _LineReader = lineReader ?? File.ReadAllLines;
@@ -37,11 +37,14 @@ public sealed class VerifyFindingsStage(
     {
         if (!options.Enabled || ctx.Validation.AcceptedFindings.Count == 0)
         {
+            logger?.LogDebug("finding verification skipped for {Pr}: enabled={Enabled}, accepted={AcceptedCount}",
+                ctx.Pr, options.Enabled, ctx.Validation.AcceptedFindings.Count);
             return;
         }
 
         if (ctx.Reasoning.Result?.ReviewDepth == "trivial diff — no agent run")
         {
+            logger?.LogDebug("finding verification skipped for {Pr}: trivial diff", ctx.Pr);
             return;
         }
 
@@ -53,13 +56,16 @@ public sealed class VerifyFindingsStage(
             .ToList();
         if (candidates.Count == 0)
         {
+            logger?.LogDebug("finding verification skipped for {Pr}: no model candidates, accepted={AcceptedCount}",
+                ctx.Pr, ctx.Validation.AcceptedFindings.Count);
             return;
         }
 
         var repoDir = ctx.RequireRepoDir();
         var prompt = FindingsVerifierPrompt.Build(
             candidates, anchor => Slice(repoDir, anchor, options.ContextLines), options.MaxPromptChars);
-
+        logger?.LogDebug("starting finding verification for {Pr}: candidates={CandidateCount}, maxPromptChars={MaxPromptChars}",
+            ctx.Pr, candidates.Count, options.MaxPromptChars);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
 
@@ -67,7 +73,7 @@ public sealed class VerifyFindingsStage(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var client = new RetryingChatClient(chatClientFactory.Create(ChatTier.Fast), logger);
+            var client = new RetryingChatClient(chatClientFactory.Create(ChatTier.Fast), chatClientFactory.IsTransientFailure, logger);
             var response = await client.GetResponseAsync(
                 FindingsVerifierPrompt.Messages(prompt), cancellationToken: timeout.Token).ConfigureAwait(false);
             verdicts = VerdictParser.Parse(response.Text) ?? await Retry(client, prompt, timeout.Token).ConfigureAwait(false);
@@ -76,7 +82,7 @@ public sealed class VerifyFindingsStage(
         {
             FindingsTelemetry.FindingsVerifierFailures.Add(
                 1, new TagList {{ReviewForgeTelemetry.TagReason, ex.GetType().Name}});
-            logger.LogWarning(ex, "findings verifier failed — keeping all findings (fail-open)");
+            logger?.LogWarning(ex, "findings verifier failed — keeping all findings (fail-open)");
             return; // host shutdown cancellation still throws
         }
         finally
@@ -91,13 +97,14 @@ public sealed class VerifyFindingsStage(
             .ToList();
         foreach (var finding in rejected)
         {
-            var reason = verdicts[finding.DedupeKey!].Reason;
             FindingsTelemetry.FindingsVerifierRejected.Add(
                 1, new TagList {{"rule", finding.RuleId}});
-            logger.LogInformation("finding {Key} rejected by verifier: {Reason}", finding.DedupeKey, reason);
+            logger?.LogInformation("finding {Key} rejected by verifier", finding.DedupeKey);
         }
 
         ctx.Validation = ctx.Validation with {AcceptedFindings = ctx.Validation.AcceptedFindings.Except(rejected).ToList()};
+        logger?.LogDebug("finding verification completed for {Pr}: rejected={RejectedCount}, remaining={RemainingCount}",
+            ctx.Pr, rejected.Count, ctx.Validation.AcceptedFindings.Count);
     }
 
     /// <summary>One retry with a JSON-only nudge; a second malformed reply fails open (all kept).</summary>
@@ -113,7 +120,7 @@ public sealed class VerifyFindingsStage(
 
         FindingsTelemetry.FindingsVerifierFailures.Add(
             1, new TagList {{ReviewForgeTelemetry.TagReason, "unparseable"}});
-        logger.LogWarning("findings verifier returned malformed output twice — keeping all findings (fail-open)");
+        logger?.LogWarning("findings verifier returned malformed output twice — keeping all findings (fail-open)");
         return new Dictionary<string, FindingsVerifierPrompt.Verdict>(StringComparer.Ordinal);
     }
 
@@ -138,7 +145,7 @@ public sealed class VerifyFindingsStage(
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                logger.LogWarning(ex, "could not read {Path} for findings verification", path);
+                logger?.LogWarning(ex, "could not read {Path} for findings verification", path);
                 lines = null;
             }
 

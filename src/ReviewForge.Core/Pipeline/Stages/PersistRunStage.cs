@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -10,12 +11,14 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// posted thread ids. Carried-forward prior findings (P0-1) are included so the known-key
 /// set never decays to accepted-only. Skipped runs (gate-terminated) never reach here.
 /// </summary>
-public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = null) : IReviewStage
+public sealed class PersistRunStage(
+    IFindingStore store,
+    TimeProvider? clock = null,
+    ILogger<PersistRunStage>? logger = null) : IReviewStage
 {
+    private readonly ILogger<PersistRunStage>? _Logger = logger;
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
-
     public string Name => "persist-run";
-
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
@@ -31,7 +34,7 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
         // not in ctx.Fetch.Threads, so they cannot raise the watermark of their own run.
         var lastObservedComment = ctx.Fetch.Threads
             .SelectMany(t => t.Comments)
-            .Select(c => (DateTimeOffset?)c.PublishedAt)
+            .Select(c => (DateTimeOffset?) c.PublishedAt)
             .Max();
 
         var run = new ReviewRun(
@@ -46,6 +49,9 @@ public sealed class PersistRunStage(IFindingStore store, TimeProvider? clock = n
             LastObservedCommentAt: lastObservedComment,
             Pipeline: ctx.RunKind.ToString());
 
+        _Logger?.LogDebug(
+            "persist-run: saving completed run with {FindingCount} finding rows, {PostedThreadCount} posted thread ids, observed comment watermark {LastObservedCommentAt}",
+            findings.Count, ctx.Published.PostedThreadIds.Count, lastObservedComment);
         return store.SaveRunAsync(run, ct);
     }
 }

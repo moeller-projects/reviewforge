@@ -11,7 +11,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// are rejected rather than published as general comments.
 /// </summary>
 public sealed class ValidateFindingsStage(
-    ILogger<ValidateFindingsStage> logger,
+    ILogger<ValidateFindingsStage>? logger = null,
     Func<string, string[]>? lineReader = null) : IReviewStage
 {
     private readonly Dictionary<string, AnchorResolver.PreparedFile> _FileCache = new(StringComparer.Ordinal);
@@ -31,34 +31,34 @@ public sealed class ValidateFindingsStage(
         {
             if (finding.Anchor is null)
             {
-                logger.LogDebug("finding {Key} rejected because it has no changed-line anchor", finding.DedupeKey);
-                FindingsTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "no-anchor" } });
+                logger?.LogDebug("finding {Key} rejected because it has no changed-line anchor", finding.DedupeKey);
+                FindingsTelemetry.FindingsRejected.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, "no-anchor"}});
                 continue;
             }
 
             var path = RepoPath.Normalize(finding.Anchor.FilePath);
             if (ctx.Repository.Diff?.NonReviewableFiles.TryGetValue(path, out var nonReviewableKind) == true)
             {
-                logger.LogInformation(
+                logger?.LogInformation(
                     "finding {Key} rejected because file {Path} is non-reviewable ({Kind})",
                     finding.DedupeKey, path, nonReviewableKind);
                 FindingsTelemetry.FindingsRejected.Add(
-                    1, new TagList { { ReviewForgeTelemetry.TagReason, $"non-reviewable-{nonReviewableKind.ToString().ToLowerInvariant()}" } });
+                    1, new TagList {{ReviewForgeTelemetry.TagReason, $"non-reviewable-{nonReviewableKind.ToString().ToLowerInvariant()}"}});
                 continue;
             }
 
             if (!TryReanchor(finding, repoDir))
             {
-                logger.LogDebug("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
-                FindingsTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "anchor-unverified" } });
+                logger?.LogDebug("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
+                FindingsTelemetry.FindingsRejected.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, "anchor-unverified"}});
                 continue;
             }
 
             if (!changedFiles.Contains(path) ||
                 (ctx.Repository.Diff is not null && !ctx.Repository.Diff.Contains(path, finding.Anchor.StartLine)))
             {
-                logger.LogInformation("finding {Key} rejected because its anchor is outside the current PR diff", finding.DedupeKey);
-                FindingsTelemetry.FindingsRejected.Add(1, new TagList { { ReviewForgeTelemetry.TagReason, "not-in-diff" } });
+                logger?.LogInformation("finding {Key} rejected because its anchor is outside the current PR diff", finding.DedupeKey);
+                FindingsTelemetry.FindingsRejected.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, "not-in-diff"}});
                 continue;
             }
 
@@ -67,6 +67,8 @@ public sealed class ValidateFindingsStage(
         }
 
         ctx.Validation = ctx.Validation with {AcceptedFindings = accepted};
+        logger?.LogDebug("validated findings for {Pr}: accepted={AcceptedCount}, rejected={RejectedCount}, candidateCount={CandidateCount}",
+            ctx.Pr, accepted.Count, ctx.RequireResult().Findings.Count - accepted.Count, ctx.RequireResult().Findings.Count);
         return Task.CompletedTask;
     }
 
@@ -88,7 +90,7 @@ public sealed class ValidateFindingsStage(
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                logger.LogWarning(ex, "could not read {Path} for anchor validation", path);
+                logger?.LogWarning(ex, "could not read {Path} for anchor validation", path);
                 return false;
             }
         }
@@ -101,7 +103,7 @@ public sealed class ValidateFindingsStage(
             case AnchorResolver.Resolution.WeakSnippet:
                 // Keep the stated anchor for diff-membership validation, but never post inline.
                 finding.AnchorDowngraded = true;
-                logger.LogInformation("finding {Key} downgraded: snippet too unspecific to reanchor", finding.DedupeKey);
+                logger?.LogInformation("finding {Key} downgraded: snippet too unspecific to reanchor", finding.DedupeKey);
                 break;
             case AnchorResolver.Resolution.Reanchored when anchor is not null:
                 finding.Anchor = anchor;
@@ -110,5 +112,4 @@ public sealed class ValidateFindingsStage(
 
         return true;
     }
-
-    }
+}

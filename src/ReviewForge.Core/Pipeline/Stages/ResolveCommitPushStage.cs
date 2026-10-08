@@ -24,6 +24,8 @@ public sealed class ResolveCommitPushStage(
     {
         var resolve = ctx.RequireResolveState();
         var applied = resolve.AppliedResolutions.ToArray();
+        logger?.LogDebug("resolve publish starting: appliedResolutions={AppliedResolutionCount}, commitGranularity={CommitGranularity}",
+            applied.Length, commitGranularity);
         if (applied.Length > 0)
         {
             var pr = ctx.RequirePullRequest();
@@ -37,6 +39,7 @@ public sealed class ResolveCommitPushStage(
                     details[item.ThreadId] = "The fix could not be committed because this pull request has no source branch reference.";
                 resolve.ResolutionDetails = details;
                 resolve.AppliedResolutions = [];
+                logger?.LogDebug("resolve publish skipped: invalid source branch reference");
                 logger?.LogWarning("resolve push unavailable: source ref is missing or not a branch for {Pr}", ctx.Pr);
             }
             else
@@ -44,11 +47,11 @@ public sealed class ResolveCommitPushStage(
                 await CommitAndPushAsync(ctx, applied, pr, refName["refs/heads/".Length..], ct).ConfigureAwait(false);
             }
         }
+
         await PersistActionsAsync(ctx, ct).ConfigureAwait(false);
     }
 
-    private async Task CommitAndPushAsync(
-        ReviewContext ctx, AppliedResolution[] applied, PullRequest pr, string branch, CancellationToken ct)
+    private async Task CommitAndPushAsync(ReviewContext ctx, AppliedResolution[] applied, PullRequest pr, string branch, CancellationToken ct)
     {
         var resolve = ctx.RequireResolveState();
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before resolve commit");
@@ -57,6 +60,7 @@ public sealed class ResolveCommitPushStage(
             ? [applied]
             : applied.GroupBy(r => string.Join("\0", r.Files.Order(RepoPath.PathComparer)), StringComparer.Ordinal)
                 .OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => g.ToArray()).ToArray();
+        logger?.LogDebug("resolve commit groups: groupCount={GroupCount}, singleCommit={SingleCommit}", groups.Length, single);
         try
         {
             foreach (var group in groups)
@@ -70,10 +74,12 @@ public sealed class ResolveCommitPushStage(
                 var paths = single ? group.SelectMany(r => r.Files).Distinct(RepoPath.PathComparer).ToArray() : representative.Files;
                 var sha = await git.CommitAsync(ctx.RequireRepoDir(), message, authorName, authorEmail, paths, ct).ConfigureAwait(false);
                 var subject = ConventionalCommitBuilder.SubjectOf(message);
+                logger?.LogDebug("resolve commit created: threadCount={ThreadCount}, fileCount={FileCount}",
+                    threadIds.Length, paths.Count);
                 for (var i = 0; i < applied.Length; i++)
                 {
                     if (threadIds.Contains(applied[i].ThreadId))
-                        applied[i] = applied[i] with { CommitSha = sha, CommitSubject = subject };
+                        applied[i] = applied[i] with {CommitSha = sha, CommitSubject = subject};
                 }
             }
 
@@ -82,21 +88,24 @@ public sealed class ResolveCommitPushStage(
                 throw new PrHeadChangedException(pr.SourceCommitSha, tip ?? "<missing>");
             // The claim can be lost during the commit loop and the asynchronous tip read
             // above; re-check it at the irreversible boundary itself, directly before push.
+            logger?.LogDebug("resolve push boundary: groups={GroupCount}", groups.Length);
             PublishGuardChecks.ThrowIfClaimLost(ctx, "at resolve push");
             await git.PushAsync(ctx.RequireRepoDir(), pr.CloneUrl, branch, pr.SourceCommitSha, pat, ct).ConfigureAwait(false);
         }
         catch (PrHeadChangedException)
         {
-            ResolveTelemetry.ResolvePushFailures.Add(1, new TagList { { "reason", "pin" } });
+            ResolveTelemetry.ResolvePushFailures.Add(1, new TagList {{"reason", "pin"}});
             await PersistPushFailureAsync(ctx, applied, ct).ConfigureAwait(false);
             throw;
         }
         catch
         {
-            ResolveTelemetry.ResolvePushFailures.Add(1, new TagList { { "reason", "rejected" } });
+            ResolveTelemetry.ResolvePushFailures.Add(1, new TagList {{"reason", "rejected"}});
             await PersistPushFailureAsync(ctx, applied, ct).ConfigureAwait(false);
             throw;
         }
+
+        logger?.LogDebug("resolve publish completed: pushedGroups={GroupCount}", groups.Length);
         ResolveTelemetry.ResolveCommitsPushed.Add(groups.Length);
         resolve.AppliedResolutions = applied;
     }
@@ -111,6 +120,7 @@ public sealed class ResolveCommitPushStage(
             outcomes[item.ThreadId] = ResolutionOutcome.PushFailed;
             details[item.ThreadId] = "the resolution was not published because local commit creation or branch push failed";
         }
+
         resolve.ResolutionOutcomes = outcomes;
         resolve.ResolutionDetails = details;
         resolve.AppliedResolutions = applied;
@@ -131,6 +141,7 @@ public sealed class ResolveCommitPushStage(
             if (outcome == ResolutionOutcome.Fixed && commit is null) outcome = ResolutionOutcome.OutOfScope;
             return new ResolveAction(0, ctx.RunId, comment.ThreadId, verdict.Verdict, outcome, commit, false, _Clock.GetUtcNow());
         }).ToArray();
+        logger?.LogDebug("resolve actions persisted: actionCount={ActionCount}", actions.Length);
         await store.SaveResolveActionsAsync(ctx.Pr, ctx.RunId, actions, ct).ConfigureAwait(false);
         resolve.ResolveActions = await store.GetResolveActionsAsync(ctx.Pr, actions.Select(a => a.ThreadId).ToArray(), ct).ConfigureAwait(false);
     }

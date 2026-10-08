@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -8,14 +9,21 @@ public sealed class VerifyBuildStage(
     IProcessRunner runner,
     IReadOnlyList<string> command,
     TimeSpan timeout,
-    bool singleCommit) : IReviewStage
+    bool singleCommit,
+    ILogger<VerifyBuildStage>? logger = null) : IReviewStage
 {
     public string Name => "verify-build";
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
         var resolve = ctx.RequireResolveState();
-        if (command.Count == 0 || resolve.AppliedResolutions.Count == 0) return;
+        if (command.Count == 0 || resolve.AppliedResolutions.Count == 0)
+        {
+            logger?.LogDebug("verification skipped: commandConfigured={CommandConfigured}, appliedResolutions={AppliedResolutionCount}",
+                command.Count > 0, resolve.AppliedResolutions.Count);
+            return;
+        }
+
         resolve.ResolveVerificationStatus = "passed";
         var outcomes = new Dictionary<int, ResolutionOutcome>(resolve.ResolutionOutcomes);
         var details = new Dictionary<int, string>(resolve.ResolutionDetails);
@@ -26,12 +34,16 @@ public sealed class VerifyBuildStage(
                      .OrderBy(g => g.Key, StringComparer.Ordinal))
         {
             var items = group.ToArray();
+            if (logger?.IsEnabled(LogLevel.Debug) == true)
+                logger.LogDebug("verification group: resolutionCount={ResolutionCount}, fileCount={FileCount}",
+                    items.Length, items.SelectMany(item => item.Files).Distinct(RepoPath.PathComparer).Count());
             var result = await runner.RunAsync(command, ctx.RequireRepoDir(), timeout, ct).ConfigureAwait(false);
             if (result.Succeeded)
             {
                 surviving.AddRange(items);
                 continue;
             }
+
             var output = (result.StandardOutput + "\n" + result.StandardError).Trim();
             if (output.Length > 4000) output = output[^4000..];
             var detail = result.TimedOut
@@ -45,10 +57,12 @@ public sealed class VerifyBuildStage(
                         && editor.GetSessionChange(file) is not null)
                         editor.RevertFile(file);
                 }
+
                 failed.Add((items, detail));
                 break;
             }
         }
+
         if (failed.Count > 0) resolve.ResolveVerificationStatus = "failed";
 
         if (singleCommit && failed.Count > 0)
@@ -62,12 +76,15 @@ public sealed class VerifyBuildStage(
                         && editor.GetSessionChange(file) is not null)
                         editor.RevertFile(file);
                 }
+
                 outcomes[item.ThreadId] = ResolutionOutcome.VerifyFailed;
                 details[item.ThreadId] = detail;
             }
+
             ResolveTelemetry.ResolveVerifyFailed.Add(surviving.Count);
             surviving.Clear();
         }
+
         foreach (var (items, detail) in failed)
         {
             ResolveTelemetry.ResolveVerifyFailed.Add(items.Length);
@@ -77,6 +94,9 @@ public sealed class VerifyBuildStage(
                 details[item.ThreadId] = detail;
             }
         }
+
+        logger?.LogDebug("verification completed: inputResolutions={InputResolutionCount}, failedGroups={FailedGroupCount}, survivingResolutions={SurvivingCount}, singleCommit={SingleCommit}",
+            resolve.AppliedResolutions.Count, failed.Count, surviving.Count, singleCommit);
         resolve.AppliedResolutions = surviving;
         resolve.ResolutionOutcomes = outcomes;
         resolve.ResolutionDetails = details;

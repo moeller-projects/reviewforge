@@ -92,8 +92,10 @@ public sealed class StageCatalog
         var features = build.Definition.Features;
         return id switch
         {
-            StageId.FetchPrContext => new FetchPrContextStage(_Source, _Store),
-            StageId.ReviewGate => new ReviewGateStage(_Clock),
+            StageId.FetchPrContext => new FetchPrContextStage(
+                _Source, _Store, _LoggerFactory.CreateLogger<FetchPrContextStage>()),
+            StageId.ReviewGate => new ReviewGateStage(
+                _Clock, _LoggerFactory.CreateLogger<ReviewGateStage>()),
             StageId.ResolveGate => new ResolveGateStage(
                 _Store,
                 _ResolveOptions.AllowedAuthors.ToHashSet(StringComparer.OrdinalIgnoreCase),
@@ -107,7 +109,8 @@ public sealed class StageCatalog
                 _Clock,
                 checkoutMode: features.CheckoutMode,
                 autoFix: _AutoFixOptions),
-            StageId.ClassifyRun => new ClassifyRunStage(_Source),
+            StageId.ClassifyRun => new ClassifyRunStage(
+                _Source, _Clock, _LoggerFactory.CreateLogger<ClassifyRunStage>()),
             StageId.EnrichContext => new EnrichContextStage(
                 _Enricher, _LoggerFactory.CreateLogger<EnrichContextStage>()),
             StageId.ExecuteReasoning => new ExecuteReasoningStage(
@@ -115,7 +118,8 @@ public sealed class StageCatalog
                 _ReviewOptions.MaxDiffChars,
                 _ReviewOptions.MaxDiffCharsPerFile,
                 _FindingsDir,
-                trivialDiffSkipEnabled: _ReviewOptions.TrivialDiffSkipEnabled),
+                trivialDiffSkipEnabled: _ReviewOptions.TrivialDiffSkipEnabled,
+                logger: _LoggerFactory.CreateLogger<ExecuteReasoningStage>()),
             StageId.ValidateFindings => new ValidateFindingsStage(
                 _LoggerFactory.CreateLogger<ValidateFindingsStage>()),
             StageId.VerifyFindings => new VerifyFindingsStage(
@@ -128,7 +132,8 @@ public sealed class StageCatalog
                 _AutoFixOptions,
                 _LoggerFactory.CreateLogger<AutoFixFindingsStage>(),
                 store: _Store),
-            StageId.BeginRun => new BeginRunStage(_Store),
+            StageId.BeginRun => new BeginRunStage(
+                _Store, _LoggerFactory.CreateLogger<BeginRunStage>()),
             StageId.CommitFixes => new CommitFixesStage(
                 _GitOps ?? throw new InvalidOperationException("IGitOps is required for the commit-fixes stage"),
                 _Store,
@@ -147,18 +152,23 @@ public sealed class StageCatalog
                 _Source,
                 _Store,
                 _ResolveOptions.AllowedCommenters.ToHashSet(StringComparer.OrdinalIgnoreCase),
-                _Clock),
+                _Clock,
+                _LoggerFactory.CreateLogger<CollectCommentsStage>()),
             StageId.TriageComments => new TriageCommentsStage(
-                build.Agent, _ResolveOptions.TriageBatchSize),
+                build.Agent, _ResolveOptions.TriageBatchSize,
+                _LoggerFactory.CreateLogger<TriageCommentsStage>()),
             StageId.PlanFixes => new PlanFixesStage(
-                _ResolveOptions.MaxThreadsPerRun, _ResolveOptions.MaxWritableFiles),
+                _ResolveOptions.MaxThreadsPerRun, _ResolveOptions.MaxWritableFiles,
+                _LoggerFactory.CreateLogger<PlanFixesStage>()),
             StageId.ApplyFixes => new ApplyFixesStage(
-                build.Agent, _ResolveOptions.FixPassMaxIterations),
+                build.Agent, _ResolveOptions.FixPassMaxIterations,
+                _LoggerFactory.CreateLogger<ApplyFixesStage>()),
             StageId.VerifyBuild => new VerifyBuildStage(
                 _ProcessRunner,
                 _ResolveOptions.VerifyCommand ?? [],
                 TimeSpan.FromSeconds(_ResolveOptions.VerifyTimeoutSeconds),
-                _ResolveOptions.CommitGranularity.Equals("Single", StringComparison.OrdinalIgnoreCase)),
+                _ResolveOptions.CommitGranularity.Equals("Single", StringComparison.OrdinalIgnoreCase),
+                _LoggerFactory.CreateLogger<VerifyBuildStage>()),
             StageId.ResolveCommitPush => new ResolveCommitPushStage(
                 _GitOps ?? throw new InvalidOperationException("IGitOps is required for resolve runs"),
                 _Store,
@@ -173,7 +183,7 @@ public sealed class StageCatalog
                 _Store,
                 _ResolveOptions.SetFixedStatus,
                 _LoggerFactory.CreateLogger<ReplyCommentsStage>()),
-            StageId.PersistRun => new PersistRunStage(_Store, _Clock),
+            StageId.PersistRun => new PersistRunStage(_Store, _Clock, _LoggerFactory.CreateLogger<PersistRunStage>()),
             _ => throw new ArgumentOutOfRangeException(nameof(id), id, "Unknown review stage."),
         };
     }

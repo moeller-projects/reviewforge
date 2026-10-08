@@ -1,4 +1,3 @@
-using System.Net;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -6,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace ReviewForge.Core.Reasoning;
 
 /// <summary>Retries transient chat transport failures before a response is observed.</summary>
-internal sealed class RetryingChatClient(IChatClient inner, ILogger? logger = null) : DelegatingChatClient(inner)
+internal sealed class RetryingChatClient(IChatClient inner, Func<Exception, bool> isTransientFailure, ILogger? logger = null) : DelegatingChatClient(inner)
 {
     private const int MaxAttempts = 3;
     private static readonly TimeSpan BaseDelay = TimeSpan.FromMilliseconds(250);
@@ -69,19 +68,12 @@ internal sealed class RetryingChatClient(IChatClient inner, ILogger? logger = nu
         }
     }
 
-    private static bool ShouldRetry(Exception exception, int attempt, CancellationToken ct)
+    private bool ShouldRetry(Exception exception, int attempt, CancellationToken ct)
     {
         if (attempt >= MaxAttempts || ct.IsCancellationRequested || exception is OperationCanceledException)
             return false;
 
-        return exception switch
-        {
-            HttpRequestException {StatusCode: null} => true,
-            HttpRequestException {StatusCode: HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests} => true,
-            HttpRequestException {StatusCode: { } status} when (int) status >= 500 => true,
-            TimeoutException => true,
-            _ => false,
-        };
+        return isTransientFailure(exception);
     }
 
     private async Task DelayAsync(int attempt, Exception exception, CancellationToken ct)

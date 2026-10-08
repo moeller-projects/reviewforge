@@ -19,6 +19,8 @@ public sealed class ReplyCommentsStage(
         var resolve = ctx.RequireResolveState();
         var unresolved = await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false);
         var actions = unresolved.Where(a => !a.ReplyPosted).OrderBy(a => a.RunId == ctx.RunId ? 1 : 0).ThenBy(a => a.Id).ToArray();
+        logger?.LogDebug("reply processing: storedActions={StoredActionCount}, pendingReplies={PendingReplyCount}, currentApplied={AppliedResolutionCount}",
+            unresolved.Count, actions.Length, resolve.AppliedResolutions.Count);
         var threads = ctx.Fetch.Threads.ToDictionary(t => t.Id);
         var applied = resolve.AppliedResolutions.ToDictionary(r => r.ThreadId);
         var replies = 0;
@@ -41,6 +43,7 @@ public sealed class ReplyCommentsStage(
                     await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
                 ResolveTelemetry.ResolveRepliesDeduped.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
                 await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
+                logger?.LogDebug("reply deduplicated: outcome={Outcome}, markFixed={MarkFixed}", action.Outcome, MayMarkFixed(threads, action));
                 continue;
             }
 
@@ -48,6 +51,7 @@ public sealed class ReplyCommentsStage(
             if (MayMarkFixed(threads, action))
                 await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
             await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
+            logger?.LogDebug("reply posted: outcome={Outcome}, markFixed={MarkFixed}", action.Outcome, MayMarkFixed(threads, action));
             ResolveTelemetry.ResolveRepliesPosted.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
             replies++;
         }
@@ -72,6 +76,7 @@ public sealed class ReplyCommentsStage(
             if (deferred.Length > 0) summary.Append("- Deferred: ").AppendLine(string.Join(", ", deferred));
             summary.Append("- Verification: ").AppendLine(resolve.ResolveVerificationStatus);
             await source.PostGeneralCommentAsync(ctx.Pr, summary.ToString().TrimEnd(), summaryKey, ct).ConfigureAwait(false);
+            logger?.LogDebug("resolve summary posted: currentActions={CurrentActionCount}", current.Length);
         }
 
         logger?.LogInformation("resolve replies posted: {Count}", replies);

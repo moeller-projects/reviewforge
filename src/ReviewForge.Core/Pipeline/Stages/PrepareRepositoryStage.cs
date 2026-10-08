@@ -11,7 +11,11 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// <summary>How stage 3 materializes the workspace. Pooled (default) shares the per-head
 /// checkout with sibling runs; Private gives CommitOnHead runs a run-scoped writable checkout
 /// that is deleted on disposal (see RepoCheckoutPool.AcquirePrivateAsync).</summary>
-public enum CheckoutMode { Pooled, Private }
+public enum CheckoutMode
+{
+    Pooled,
+    Private
+}
 
 /// <summary>Stage 3: acquire a per-head checkout and compute the unified change diff.
 /// Also starts the stage-4 threads refresh and the stage-5 enrichment call so both round-trips
@@ -22,7 +26,7 @@ public enum CheckoutMode { Pooled, Private }
 /// gate (order 20) runs before the checkout exists, so the rule cannot live there.</summary>
 public sealed class PrepareRepositoryStage(
     RepoCheckoutPool pool,
-    ILogger<PrepareRepositoryStage> logger,
+    ILogger<PrepareRepositoryStage>? logger = null,
     DiffBudget? diffBudget = null,
     IPullRequestSource? source = null,
     IContextEnricher? enricher = null,
@@ -43,6 +47,7 @@ public sealed class PrepareRepositoryStage(
         // any fault for runs that never reach stage 4.
         if (source is not null)
         {
+            logger?.LogDebug("starting overlapped thread refresh for {Pr}", ctx.Pr);
             var overlap = new ThreadsRefreshOverlap(
                 source.GetThreadsAsync(ctx.Pr, LinkOverlapToken(ct, ctx.Repository.OverlapCts.Token)),
                 _Clock.GetUtcNow());
@@ -52,10 +57,12 @@ public sealed class PrepareRepositoryStage(
 
         var pr = ctx.Fetch.PullRequest ?? throw new InvalidOperationException(
             $"stage ordering violation: {nameof(FetchOutcome.PullRequest)} is null but required (fetch stage must run first)");
+        logger?.LogDebug("acquiring {CheckoutMode} checkout for {Pr}", checkoutMode, ctx.Pr);
         var checkout = checkoutMode == CheckoutMode.Private
             ? await pool.AcquirePrivateAsync(ctx.RunId, ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false)
             : await pool.AcquireAsync(ctx.Pr.RepositoryId, pr.CloneUrl, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
         ctx.RepoLease = checkout;
+        logger?.LogDebug("checkout acquired for {Pr}: mode={CheckoutMode}", ctx.Pr, checkoutMode);
 
         // Loop-guard input: cheap local lookup, filled for every run so the gate rule and
         // tests observe the same value. Null (commit not found) reads as "proceed".
@@ -67,13 +74,14 @@ public sealed class PrepareRepositoryStage(
             && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
         {
             ReviewTelemetry.LoopGuardSkips.Add(
-                1, new TagList { { "source", "gate" } });
-            logger.LogInformation(
+                1, new TagList {{"source", "gate"}});
+            logger?.LogInformation(
                 "loop guard: discovery-triggered run on bot-authored head {Sha} suppressed (run {RunId})",
                 pr.SourceCommitSha, ctx.RunId);
             ctx.Terminate("bot-authored head");
             return;
         }
+
         var diffText = await pool.GetDiffAsync(checkout.Path, pr.TargetCommitSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
         var diff = DiffIndex.Parse(diffText);
         var nonReviewable = diff.NonReviewableFiles.Keys.ToHashSet(RepoPath.PathComparer);
@@ -83,7 +91,7 @@ public sealed class PrepareRepositoryStage(
             var path = RepoPath.Normalize(file.Path);
             if (nonReviewable.Contains(path))
             {
-                logger.LogInformation("excluding non-reviewable file {Path} ({Kind}) from review scope",
+                logger?.LogInformation("excluding non-reviewable file {Path} ({Kind}) from review scope",
                     path, diff.NonReviewableFiles[path]);
                 continue;
             }
@@ -92,7 +100,7 @@ public sealed class PrepareRepositoryStage(
             {
                 // Machine-generated content — never reviewable, never in the diff. The only
                 // legitimate way a manifest file has no diff entry.
-                logger.LogDebug("excluding budget-excluded file {Path} from review scope", path);
+                logger?.LogDebug("excluding budget-excluded file {Path} from review scope", path);
                 continue;
             }
 
@@ -116,6 +124,9 @@ public sealed class PrepareRepositoryStage(
                 $"provider changed-file scope does not match Git diff (provider: {reviewable.Count}, diff: {diffFiles.Count})");
         }
 
+        logger?.LogDebug("computed repository diff for {Pr}: diffFiles={DiffFileCount}, reviewableFiles={ReviewableFileCount}",
+            ctx.Pr, diffFiles.Count, reviewable.Count);
+
         ctx.Repository = ctx.Repository with
         {
             DiffText = diffText,
@@ -123,6 +134,8 @@ public sealed class PrepareRepositoryStage(
             ReviewableFiles = reviewable,
             RepoPreparedAt = _Clock.GetUtcNow()
         };
+        logger?.LogDebug("repository prepared for {Pr}: reviewableFiles={ReviewableFileCount}, diffChars={DiffCharCount}",
+            ctx.Pr, reviewable.Count, diffText.Length);
 
         // Enrichment needs only RepoDir + DiffText, both final now; stage 5 awaits the task
         // with its usual fail-safe catch. A contract-violating synchronous throw is captured
@@ -131,6 +144,7 @@ public sealed class PrepareRepositoryStage(
         {
             try
             {
+                logger?.LogDebug("starting overlapped context enrichment for {Pr}: enricher={Enricher}", ctx.Pr, enricher.Name);
                 ctx.Repository = ctx.Repository with
                 {
                     PendingEnrichment = enricher.EnrichAsync(

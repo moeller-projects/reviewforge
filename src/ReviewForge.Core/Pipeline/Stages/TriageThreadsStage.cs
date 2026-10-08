@@ -34,6 +34,9 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
 
         var botThreads = ctx.Fetch.Threads.Where(t => t.DedupeKey is not null).ToList();
         var agentActions = ctx.RequireResult().Narrative.ThreadActions ?? [];
+        logger.LogDebug(
+            "triage-threads: evaluating {BotThreadCount} bot threads and {AgentActionCount} agent actions",
+            botThreads.Count, agentActions.Length);
 
         // Only findings validated in this run count as current. Prior keys remain in
         // persistence for deduplication, but must not keep stale bot threads alive.
@@ -60,6 +63,13 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
         };
         var opCount = ctx.Triage.Plan.Count(o => o.Op != TriageOp.None);
         logger.LogInformation("triage plan: {BotThreads} bot threads, {Actions} agent actions, {Ops} ops, {Unanswered} unanswered", botThreads.Count, agentActions.Length, opCount, ctx.Triage.UnansweredThreads.Count);
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug(
+                "triage-threads: plan has {ReplyCount} replies, {StatusCount} status changes, {NoOpCount} no-op operations and {CurrentKeyCount} current finding keys",
+                ctx.Triage.Plan.Count(o => !string.IsNullOrWhiteSpace(o.Comment)),
+                ctx.Triage.Plan.Count(o => o.NewStatus is not null),
+                ctx.Triage.Plan.Count(o => o.Op == TriageOp.None),
+                currentKeys.Count);
 
         // Threads are independent; only reply-then-status per thread must stay sequential.
         using var gate = new SemaphoreSlim(4, 4);
@@ -94,6 +104,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
                     ReviewTelemetry.ThreadsReplied.Add(1);
                 }
             }
+
             PublishGuardChecks.ThrowIfClaimLost(ctx, $"before status write on thread {op.ThreadId}");
 
             if (op.NewStatus is { } status)
@@ -120,7 +131,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
     private async Task<bool> AlreadyRepliedAsync(ReviewContext ctx, int threadId, string text, CancellationToken ct)
     {
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
-        return threads.FirstOrDefault(t => t.Id == threadId)?.LastComment is { IsBot: true } last
+        return threads.FirstOrDefault(t => t.Id == threadId)?.LastComment is {IsBot: true} last
                && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal);
     }
 }

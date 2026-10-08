@@ -64,10 +64,16 @@ public sealed class AutoFixFindingsStage : IReviewStage
     {
         if (!_Options.Enabled)
         {
+            _Logger.LogDebug("auto-fix: disabled by configuration; skipping");
             return;
         }
 
         var pr = ctx.RequirePullRequest();
+        _Logger.LogDebug(
+            "auto-fix: evaluating {FindingCount} accepted findings with budget {Budget}, commit-on-head={CommitOnHead}, commanded-commands={CommandsEnabled}",
+            ctx.Validation.AcceptedFindings.Count, _Options.MaxFixesPerRun, _Options.IsCommitOnHead,
+            _Options.EnableThreadFixCommands);
+
         if (_Options.AllowedAuthors.Length == 0)
         {
             _Logger.LogInformation("auto-fix: disabled — AutoFix:AllowedAuthors is empty");
@@ -119,6 +125,9 @@ public sealed class AutoFixFindingsStage : IReviewStage
         }
 
         ctx.AutoFix = ctx.AutoFix with {AppliedFixes = applied};
+        _Logger.LogDebug(
+            "auto-fix: completed with {AppliedCount} applied fixes and {RemainingBudget} remaining budget",
+            applied.Count, budget);
     }
 
     /// <summary>Gate failure must not silently drop author commands: every scanned /fixit
@@ -363,6 +372,9 @@ public sealed class AutoFixFindingsStage : IReviewStage
         var commands = FixCommandDetector.Scan(
             ctx.Fetch.Threads, ctx.RequirePullRequest().CreatorId, ctx.Fetch.PriorRun?.LastObservedCommentAt);
         ctx.AutoFix = ctx.AutoFix with {FixCommands = commands};
+        _Logger.LogDebug(
+            "auto-fix commanded: detected {CommandCount} eligible commands with budget {Budget}",
+            commands.Count, getBudget());
         if (commands.Count == 0)
         {
             return;

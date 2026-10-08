@@ -1,6 +1,7 @@
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Collections.Concurrent;
+using System.Net;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenAI.Responses;
@@ -52,6 +53,15 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
 
         return _Clients.GetOrAdd(tier, static (_, self) => new Lazy<IChatClient>(self.BuildClient, true), this).Value;
     }
+
+    public bool IsTransientFailure(Exception exception) => exception switch
+    {
+        HttpRequestException {StatusCode: null} => true,
+        HttpRequestException {StatusCode: HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests} => true,
+        HttpRequestException {StatusCode: { } status} when (int) status >= 500 => true,
+        TimeoutException => true,
+        _ => false,
+    };
 
     /// <summary>Releases every created client's transport (if any) on host shutdown.</summary>
     public void Dispose()

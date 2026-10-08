@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -10,7 +11,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// at/after preparation finished; otherwise — including a faulted overlap — re-fetches
 /// exactly as before (the overlap is an optimization, never a correctness path).
 /// </summary>
-public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? clock = null) : IReviewStage
+public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? clock = null, ILogger<ClassifyRunStage>? logger = null) : IReviewStage
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
@@ -19,15 +20,15 @@ public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? cl
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        ctx.Fetch = ctx.Fetch with
-        {
-            Threads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false)
-        };
+        var refreshedThreads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false);
+        ctx.Fetch = ctx.Fetch with {Threads = refreshedThreads};
         ctx.Classification = ctx.Classification with
         {
             Kind = RunClassifier.Classify(ctx.Fetch.PriorRun),
             PendingReplies = RunClassifier.PendingReplies(ctx.Fetch.Threads),
         };
+        logger?.LogDebug("classified run for {Pr}: kind={Kind}, threads={ThreadCount}, pendingReplies={PendingReplyCount}",
+            ctx.Pr, ctx.Classification.Kind, ctx.Fetch.Threads.Count, ctx.Classification.PendingReplies.Count);
     }
 
     private async Task<IReadOnlyList<ReviewThread>> ResolveThreadsAsync(ReviewContext ctx, CancellationToken ct)
@@ -60,10 +61,12 @@ public sealed class ClassifyRunStage(IPullRequestSource source, TimeProvider? cl
             if (overlapped is not null && completedAt is { } receivedAt
                                        && ctx.Repository.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
             {
+                logger?.LogDebug("using overlapped thread refresh for {Pr}: threadCount={ThreadCount}", ctx.Pr, overlapped.Count);
                 return overlapped;
             }
         }
 
+        logger?.LogDebug("re-fetching threads for {Pr}: overlap unavailable or stale", ctx.Pr);
         return await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
     }
 }

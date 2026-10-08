@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -12,7 +13,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// vanishing. GetLastCompletedRunAsync filters on CompletedAt != null && Success, so the
 /// shell never seeds the next run's gate or dedupe.
 /// </summary>
-public sealed class BeginRunStage(IFindingStore store) : IReviewStage
+public sealed class BeginRunStage(IFindingStore store, ILogger<BeginRunStage>? logger = null) : IReviewStage
 {
     public string Name => "begin-run";
 
@@ -22,6 +23,8 @@ public sealed class BeginRunStage(IFindingStore store) : IReviewStage
         // identities. Commanded-fix audit rows are added by the finalize stage, once the
         // suggestion thread ids exist.
         var findings = AppliedFixPersistence.BuildRows(ctx);
+        logger?.LogDebug("beginning persisted run shell for {Pr}: findingRows={FindingCount}, kind={Kind}",
+            ctx.Pr, findings.Count, ctx.Classification.Kind);
 
         var run = new ReviewRun(
             ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Classification.Kind,

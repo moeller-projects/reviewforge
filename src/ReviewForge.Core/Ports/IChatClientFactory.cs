@@ -22,4 +22,8 @@ public interface IChatClientFactory
     string ModelName(ChatTier tier);
 
     IChatClient Create(ChatTier tier);
+
+    /// <summary>Whether a provider transport failure is safe to retry before a response is observed.
+    /// Custom providers can override this to classify their own transport exceptions.</summary>
+    bool IsTransientFailure(Exception exception) => exception is TimeoutException;
 }

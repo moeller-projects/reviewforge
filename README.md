@@ -432,6 +432,14 @@ Signals and where they land:
   other signals (`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or the common endpoint).
   Per-run correlation: filter console/OTLP output by the `RunId` log scope.
 
+For stage-level diagnostics, set `Logging__LogLevel__ReviewForge.Core.Pipeline.Stages=Debug`
+for one deployment or run, then filter logs by `RunId` and `Stage`. Stage debug events
+record decisions, bounded counts, IDs, and verification/publish checkpoints rather than
+prompts, comment bodies, source text, clone URLs, or credentials. Keep the category at
+`Information` by default to avoid high-volume per-finding and per-thread logs; restrict
+access and retention even for debug logs because file paths and PR metadata can be
+sensitive.
+
 Backends:
 
 - **Dev** — the Aspire dashboard (see "Dev loop").

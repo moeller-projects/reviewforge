@@ -44,7 +44,7 @@ public sealed class PublishFindingsStage(
         // the push landed but its replies never did) get their "Fixed in {sha}" replies now,
         // constructed entirely from the durable record. Rows of THIS run flow through the
         // normal paths below and are marked replied as each reply lands.
-        if (autoFix is { IsCommitOnHead: true })
+        if (autoFix is {IsCommitOnHead: true})
         {
             // Reconciliation is a publish write path too: validate the run's reviewed head
             // (or its own pushed head) before any orphan reply is attempted.
@@ -91,9 +91,16 @@ public sealed class PublishFindingsStage(
                         && liveThreadKeys.Contains(f.DedupeKey)
                         && !regressedThreadIds.ContainsKey(f.DedupeKey))
             .Select(f => (Key: f.DedupeKey!,
-                          ThreadId: ctx.Fetch.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
-                          Body: CommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
+                ThreadId: ctx.Fetch.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
+                Body: CommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
             .ToList();
+        if (logger.IsEnabled(LogLevel.Debug))
+            logger.LogDebug(
+                "publish-findings: {ToPostCount} findings to post ({InlineCount} inline, {GeneralCount} general), {LiveFixedCount} live-thread fixes, {RegressedCount} regressed threads",
+                toPost.Count,
+                toPost.Count(f => f is {Anchor: not null, AnchorDowngraded: false}),
+                toPost.Count(f => f is not {Anchor: not null, AnchorDowngraded: false}),
+                liveFixedReplies.Count, regressedThreadIds.Count);
 
         foreach (var suppressed in ctx.Validation.AcceptedFindings.Where(f => f.DedupeKey is not null && liveThreadKeys.Contains(f.DedupeKey)))
         {
@@ -144,13 +151,14 @@ public sealed class PublishFindingsStage(
                         : finding;
                     var threadId = await source.PostFindingThreadAsync(ctx.Pr, toPublish, ct).ConfigureAwait(false);
                     posted[finding.DedupeKey!] = threadId;
-                    FindingsTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "inline" } });
+                    FindingsTelemetry.FindingsPosted.Add(1, new TagList {{"kind", "inline"}});
                     if (finding.AppliedFix is { } applied)
                     {
                         Interlocked.Increment(ref publishedFixCount);
                         AutoFixTelemetry.FixesApplied.Add(
                             1, FixTags(applied.Proposal.Origin, finding.RuleId));
                     }
+
                     if (finding.AppliedFix?.CommitSha is not null
                         && pushedFixRowIds.TryGetValue(finding.DedupeKey!, out var inlineRowId))
                     {
@@ -181,7 +189,7 @@ public sealed class PublishFindingsStage(
                                          && finding.DedupeKey is { } key
                                          && pushedFixRowIds.TryGetValue(key, out var rowId)
                         ? rowId
-                        : (int?)null;
+                        : (int?) null;
                     if (committedRowId is { } existingRowId
                         && await AlreadyPostedGeneralAsync(ctx, finding.DedupeKey!, body, ct).ConfigureAwait(false))
                     {
@@ -192,7 +200,7 @@ public sealed class PublishFindingsStage(
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "before general finding");
                     await source.PostGeneralCommentAsync(ctx.Pr, body, finding.DedupeKey, ct)
                         .ConfigureAwait(false);
-                    FindingsTelemetry.FindingsPosted.Add(1, new TagList { { "kind", "general" } });
+                    FindingsTelemetry.FindingsPosted.Add(1, new TagList {{"kind", "general"}});
                     if (committedRowId is { } postedRowId)
                     {
                         await store.MarkPushedFixRepliedAsync(postedRowId, ct).ConfigureAwait(false);
@@ -205,6 +213,9 @@ public sealed class PublishFindingsStage(
             });
 
         await Task.WhenAll(inlineTasks.Concat(generalTasks)).ConfigureAwait(false);
+        logger.LogDebug(
+            "publish-findings: finding posts completed with {PostedCount} posted thread ids and {PublishedFixCount} fixes",
+            posted.Count, publishedFixCount);
 
         // Re-check immediately before the sequential auto-fix writes. The initial check
         // protects the ordinary finding posts; this one closes the TOCTOU window before
@@ -283,7 +294,7 @@ public sealed class PublishFindingsStage(
             var body = CommentFormatter.WithBotPreamble(text);
             var markedRowId = pushedFixRowIds.TryGetValue($"{AppliedFix.CommandKeyPrefix}{threadId}", out var commandRowId)
                 ? commandRowId
-                : (int?)null;
+                : (int?) null;
             if (await AlreadyRepliedAsync(ctx, threadId, body, ct).ConfigureAwait(false))
             {
                 logger.LogInformation("thread {ThreadId}: fix reply already posted by a previous attempt — skipping", threadId);
@@ -302,7 +313,8 @@ public sealed class PublishFindingsStage(
                 await store.MarkPushedFixRepliedAsync(rowId, ct).ConfigureAwait(false);
             }
         }
-        ctx.Published = ctx.Published with { PostedThreadIds = posted };
+
+        ctx.Published = ctx.Published with {PostedThreadIds = posted};
 
         // Summary must post AFTER findings (readers of the PR see findings first).
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before summary");
@@ -395,8 +407,10 @@ public sealed class PublishFindingsStage(
             c.IsBot
             && (string.Equals(c.Text.Trim(), body.Trim(), StringComparison.Ordinal)
                 || c.Text.Contains(marker, StringComparison.Ordinal)));
+
     private static TagList FixTags(FixOrigin origin, string rule)
-        => new() { {"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule} };
+        => new() {{"origin", origin.ToString().ToLowerInvariant()}, {"rule", rule}};
+
     private Task PersistCommandAuditAsync(ReviewContext ctx, CancellationToken ct)
     {
         var findings = AppliedFixPersistence.BuildFinalRows(
@@ -433,13 +447,14 @@ public sealed class PublishFindingsStage(
             && thread.Comments.FirstOrDefault() is {IsBot: true} first
             && string.Equals(first.Text.Trim(), body.Trim(), StringComparison.Ordinal));
     }
+
     private async Task<bool> AlreadyPostedGeneralAsync(
         ReviewContext ctx, string dedupeKey, string text, CancellationToken ct)
     {
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
         return threads.Any(t =>
             t.DedupeKey == dedupeKey
-            && t.LastComment is { IsBot: true } last
+            && t.LastComment is {IsBot: true} last
             && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal));
     }
 

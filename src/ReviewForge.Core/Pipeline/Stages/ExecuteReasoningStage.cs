@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -15,13 +16,15 @@ public sealed class ExecuteReasoningStage(
     int maxDiffChars,
     int maxDiffCharsPerFile,
     string? findingsDir = null,
-    bool trivialDiffSkipEnabled = true) : IReviewStage
+    bool trivialDiffSkipEnabled = true,
+    ILogger<ExecuteReasoningStage>? logger = null) : IReviewStage
 {
-
     public string Name => "execute-reasoning";
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        logger?.LogDebug("starting reasoning for {Pr}: files={FileCount}, threads={ThreadCount}, kind={Kind}",
+            ctx.Pr, ctx.Fetch.ChangedFiles.Count, ctx.Fetch.Threads.Count, ctx.Classification.Kind);
         var repoDir = ctx.RequireRepoDir();
         // Direct System.IO by design — see IWorkspaceFs scope note. Findings JSONL is a
         // single-writer per-run artifact; root-file enumeration feeds rule activation only.
@@ -45,6 +48,7 @@ public sealed class ExecuteReasoningStage(
                 .Select(t => t.DedupeKey!)
                 .ToHashSet(StringComparer.Ordinal),
         };
+        logger?.LogDebug("computed resolved finding keys for {Pr}: count={ResolvedKeyCount}", ctx.Pr, ctx.Fetch.ResolvedKeys.Count);
 
         foreach (var finding in HomoglyphDiffAnalyzer.Analyze(ctx.Repository.DiffText))
         {
@@ -76,12 +80,14 @@ public sealed class ExecuteReasoningStage(
             ctx.Reasoning.Collector.AddFinding(finding);
         }
 
+        logger?.LogDebug("deterministic analysis completed for {Pr}: findingCount={FindingCount}", ctx.Pr, ctx.Reasoning.Collector.Findings.Count);
+
         // Trivial-diff fast path: zero added reviewable lines and nothing awaiting an
         // answer → clean vote without an LLM call. The deterministic homoglyph analyzer
         // above has already run, so its findings are still recorded. Unknown reviewability
         // (stage-3 fields unset, e.g. stage unit tests) never skips.
         if (trivialDiffSkipEnabled && ctx.Repository.ReviewableFiles is { } reviewable
-            && TrivialDiff.IsTrivial(ctx.Repository.Diff ?? DiffIndex.Parse(ctx.Repository.DiffText), ctx.Classification.PendingReplies, reviewable))
+                                   && TrivialDiff.IsTrivial(ctx.Repository.Diff ?? DiffIndex.Parse(ctx.Repository.DiffText), ctx.Classification.PendingReplies, reviewable))
         {
             ReviewTelemetry.TrivialReviews.Add(1);
             // The synthetic result must carry the collector's findings: the homoglyph
@@ -97,6 +103,7 @@ public sealed class ExecuteReasoningStage(
                     ReviewDepth = "trivial diff — no agent run",
                 },
             };
+            logger?.LogDebug("trivial diff fast path for {Pr}: findings={FindingCount}", ctx.Pr, ctx.Reasoning.Collector.Findings.Count);
             return;
         }
 
@@ -107,6 +114,9 @@ public sealed class ExecuteReasoningStage(
             Pr: ctx.RequirePullRequest(), Kind: ctx.Classification.Kind, WorkItems: ctx.Fetch.WorkItems, ChangedFiles: ctx.Fetch.ChangedFiles,
             PendingReplies: ctx.Classification.PendingReplies, DiffText: ctx.Repository.DiffText, Enrichment: null, ContextNames: ctx.Reasoning.ContextStore.Names,
             MaxDiffChars: maxDiffChars, MaxDiffCharsPerFile: maxDiffCharsPerFile));
+        logger?.LogDebug("calling reasoning agent for {Pr}: tier={Tier}, rootFileCount={RootFileCount}, contextCount={ContextCount}",
+            ctx.Pr, ctx.Classification.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full, rootFiles.Length,
+            ctx.Reasoning.ContextStore.Names.Count);
         ctx.Reasoning = ctx.Reasoning with
         {
             Result = await agent.RunAsync(new AgentRunRequest(
@@ -114,6 +124,6 @@ public sealed class ExecuteReasoningStage(
                 ruleBook, ctx.Fetch.ChangedFiles.ToHashSet(RepoPath.PathComparer), ctx.Repository.Diff, ctx.Repository.DiffText,
                 ctx.Fetch.ResolvedKeys, Tier: ctx.Classification.Kind == ReviewKind.FollowUp ? ChatTier.Fast : ChatTier.Full), ct),
         };
+        logger?.LogDebug("reasoning agent completed for {Pr}: findings={FindingCount}", ctx.Pr, ctx.Reasoning.Result?.Findings.Count ?? 0);
     }
-
 }

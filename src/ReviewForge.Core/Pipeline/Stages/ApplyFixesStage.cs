@@ -1,10 +1,11 @@
+using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
-public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) : IReviewStage
+public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations, ILogger<ApplyFixesStage>? logger = null) : IReviewStage
 {
     public string Name => "apply-fixes";
 
@@ -15,6 +16,8 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
         var outcomes = new Dictionary<int, ResolutionOutcome>(resolve.ResolutionOutcomes);
         var details = new Dictionary<int, string>(resolve.ResolutionDetails);
         var editors = new Dictionary<int, HashLineEditor>();
+        logger?.LogDebug("applying fixes: plannedFixes={FixCount}, maxIterations={MaxIterations}",
+            resolve.ResolvePlan?.Fixes.Count ?? 0, maxIterations);
         foreach (var fix in resolve.ResolvePlan?.Fixes ?? [])
         {
             ct.ThrowIfCancellationRequested();
@@ -29,6 +32,8 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
                 maxIterations,
                 ct).ConfigureAwait(false);
             var files = fix.CandidateFiles.Where(path => pass.Editor.GetSessionChange(path) is not null).ToArray();
+            logger?.LogDebug("fix agent result: threadCount={ThreadCount}, completed={Completed}, changedFileCount={ChangedFileCount}",
+                fix.ThreadIds.Count, collector.Done, files.Length);
             var rationale = pass.Result.Narrative.ReviewSummary?.Trim() ?? string.Empty;
             var detail = rationale.Length == 0 ? "apply the requested correction" : rationale;
             if (!collector.Done && files.Length > 0)
@@ -37,6 +42,7 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
                 files = [];
                 detail = "the fix pass did not complete task_done";
             }
+
             if (files.Length == 0)
             {
                 ResolveTelemetry.ResolveFixesDeclined.Add(fix.ThreadIds.Count);
@@ -45,8 +51,11 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
                     outcomes[threadId] = ResolutionOutcome.AgentDeclined;
                     details[threadId] = detail;
                 }
+
+                logger?.LogDebug("fix declined: threadCount={ThreadCount}", fix.ThreadIds.Count);
                 continue;
             }
+
             foreach (var threadId in fix.ThreadIds)
             {
                 applied.Add(new AppliedResolution(threadId, detail, files));
@@ -54,8 +63,12 @@ public sealed class ApplyFixesStage(NativeReviewAgent agent, int maxIterations) 
                 details[threadId] = detail;
                 editors[threadId] = pass.Editor;
             }
+
+            logger?.LogDebug("fix applied: threadCount={ThreadCount}, changedFileCount={ChangedFileCount}",
+                fix.ThreadIds.Count, files.Length);
             ResolveTelemetry.ResolveFixesApplied.Add(fix.ThreadIds.Count);
         }
+
         resolve.AppliedResolutions = applied;
         resolve.ResolutionOutcomes = outcomes;
         resolve.ResolutionDetails = details;
