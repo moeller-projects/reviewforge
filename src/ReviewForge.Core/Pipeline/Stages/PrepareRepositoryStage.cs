@@ -82,7 +82,12 @@ public sealed class PrepareRepositoryStage(
             return;
         }
 
-        var diffText = await pool.GetDiffAsync(checkout.Path, pr.TargetCommitSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
+        var mergeBaseSha = await pool.GetMergeBaseShaAsync(
+            checkout.Path, pr.TargetCommitSha, pr.SourceCommitSha, ct).ConfigureAwait(false);
+        logger?.LogDebug(
+            "using PR merge base for {Pr}: targetSha={TargetSha}, sourceSha={SourceSha}, mergeBaseSha={MergeBaseSha}",
+            ctx.Pr, pr.TargetCommitSha, pr.SourceCommitSha, mergeBaseSha);
+        var diffText = await pool.GetDiffAsync(checkout.Path, mergeBaseSha, pr.SourceCommitSha, ct, diffBudget).ConfigureAwait(false);
         var diff = DiffIndex.Parse(diffText);
         var nonReviewable = diff.NonReviewableFiles.Keys.ToHashSet(RepoPath.PathComparer);
         var reviewable = new HashSet<string>(RepoPath.PathComparer);
@@ -108,6 +113,9 @@ public sealed class PrepareRepositoryStage(
         }
 
         var diffFiles = diff.Files.Select(RepoPath.Normalize).ToHashSet(RepoPath.PathComparer);
+        logger?.LogDebug(
+            "comparing provider changed-file scope with Git diff for {Pr}: mergeBaseSha={MergeBaseSha}, sourceSha={SourceSha}",
+            ctx.Pr, mergeBaseSha, pr.SourceCommitSha);
         var missingFromDiff = reviewable.Where(f => !diffFiles.Contains(f)).Order(RepoPath.PathComparer).ToArray();
         if (missingFromDiff.Length > 0)
         {
@@ -120,8 +128,17 @@ public sealed class PrepareRepositoryStage(
 
         if (!reviewable.SetEquals(diffFiles))
         {
+            var providerOnly = reviewable.Except(diffFiles, RepoPath.PathComparer)
+                .Order(RepoPath.PathComparer)
+                .ToArray();
+            var diffOnly = diffFiles.Except(reviewable, RepoPath.PathComparer)
+                .Order(RepoPath.PathComparer)
+                .ToArray();
             throw new InvalidOperationException(
-                $"provider changed-file scope does not match Git diff (provider: {reviewable.Count}, diff: {diffFiles.Count})");
+                $"provider changed-file scope does not match Git diff " +
+                $"(provider: {reviewable.Count}, diff: {diffFiles.Count}; " +
+                $"provider-only: [{string.Join(", ", providerOnly)}]; " +
+                $"diff-only: [{string.Join(", ", diffOnly)}])");
         }
 
         logger?.LogDebug("computed repository diff for {Pr}: diffFiles={DiffFileCount}, reviewableFiles={ReviewableFileCount}",

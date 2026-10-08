@@ -471,9 +471,12 @@ public class FakeGitOps : IGitOps
     private int _ActiveClones;
     private int _MaxConcurrentClones;
     public string Diff { get; set; } = string.Empty;
+    public string MergeBaseSha { get; set; } = "fake-merge-base";
     public string RepoDir { get; set; } = Path.Combine(Path.GetTempPath(), "reviewforge-fake-repo");
     public List<string> Checkouts { get; } = [];
     public List<(string Base, string Head)> EnsuredCommits { get; } = [];
+    public List<(string Base, string Head)> DiffRequests { get; } = [];
+    public List<(string First, string Second)> MergeBaseRequests { get; } = [];
 
     /// <summary>Optional exception for diff retrieval tests.</summary>
     public Exception? ThrowOnGetDiff { get; set; }
@@ -606,7 +609,16 @@ public class FakeGitOps : IGitOps
     }
 
     public virtual Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
-        => ThrowOnGetDiff is { } error ? Task.FromException<string>(error) : Task.FromResult(Diff);
+    {
+        DiffRequests.Add((baseSha, headSha));
+        return ThrowOnGetDiff is { } error ? Task.FromException<string>(error) : Task.FromResult(Diff);
+    }
+
+    public virtual Task<string> GetMergeBaseShaAsync(string repoPath, string firstSha, string secondSha, CancellationToken ct)
+    {
+        MergeBaseRequests.Add((firstSha, secondSha));
+        return Task.FromResult(MergeBaseSha);
+    }
 }
 
 /// <summary>Fake enricher: fixed payload, null, or throwing.</summary>

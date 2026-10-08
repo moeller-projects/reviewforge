@@ -1,6 +1,6 @@
 using LibGit2Sharp;
+using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Pipeline;
-
 using ReviewForge.Infrastructure.Git;
 using Xunit;
 
@@ -76,14 +76,11 @@ public class LibGit2SharpGitOpsTests
             File.WriteAllText(Path.Combine(stalePath, "file.txt"), "divergent\n");
             await git.CommitAsync(
                 stalePath, "fix: divergent update", "ReviewForge", "bot@example.com", ["file.txt"], CancellationToken.None);
-            await Assert.ThrowsAnyAsync<LibGit2SharpException>(
-                () => git.PushAsync(stalePath, remotePath, branch, committedSha, null, CancellationToken.None));
+            await Assert.ThrowsAnyAsync<LibGit2SharpException>(() => git.PushAsync(stalePath, remotePath, branch, committedSha, null, CancellationToken.None));
 
-            var changedTip = await Assert.ThrowsAsync<PrHeadChangedException>(
-                () => git.PushAsync(stalePath, remotePath, branch, initialSha, null, CancellationToken.None));
+            var changedTip = await Assert.ThrowsAsync<PrHeadChangedException>(() => git.PushAsync(stalePath, remotePath, branch, initialSha, null, CancellationToken.None));
             Assert.Equal(initialSha, changedTip.Expected);
             Assert.Equal(committedSha, changedTip.Actual);
-
         }
         finally
         {
@@ -94,6 +91,89 @@ public class LibGit2SharpGitOpsTests
                     File.SetAttributes(file, FileAttributes.Normal);
                 }
 
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Pull_request_diff_uses_merge_base_and_excludes_target_only_changes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "reviewforge-git-merge-base-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repoPath = Path.Combine(root, "repo");
+            Repository.Init(repoPath);
+            string mergeBaseSha, targetSha, sourceSha;
+            var targetOnlyPaths = new[]
+            {
+                "modules/laekkerai.branches/src/Laekkerai.Branches.Application/DistributedEvents/BranchUpdatedEventHandler.cs",
+                "modules/laekkerai.branches/src/Laekkerai.Branches.Domain/Branches/Branch.cs",
+                "modules/laekkerai.branches/test/Laekkerai.Branches.Application.Tests/Branches/BranchesAppServiceTests.cs",
+            };
+            var prPaths = new[]
+            {
+                "apps/shop/src/app/delivery-details/shared/window-picker/fixed-window-picker/fixed-window-picker.component.spec.ts",
+                "apps/shop/src/app/delivery-details/shared/window-picker/fixed-window-picker/fixed-window-picker.component.ts",
+                "apps/shop/src/app/delivery-details/shared/window-picker/window-picker.component.html",
+                "openspec/changes/fix-auto-select-fixed-delivery-window-12359/proposal.md",
+                "openspec/changes/fix-auto-select-fixed-delivery-window-12359/specs/ordering-lieferinformationen-im-checkout/spec.md",
+                "openspec/changes/fix-auto-select-fixed-delivery-window-12359/tasks.md",
+            };
+
+            using (var repo = new Repository(repoPath))
+            {
+                var identity = new Signature("author", "author@example.com", DateTimeOffset.UtcNow);
+                foreach (var path in targetOnlyPaths)
+                    WriteFile(path, "common version\n");
+                Commands.Stage(repo, "*");
+                mergeBaseSha = repo.Commit("common base", identity, identity).Sha;
+
+                var target = repo.CreateBranch("target", repo.Lookup<Commit>(mergeBaseSha));
+                Commands.Checkout(repo, target);
+                foreach (var path in targetOnlyPaths)
+                    WriteFile(path, "target branch version\n");
+                Commands.Stage(repo, "*");
+                targetSha = repo.Commit("target-only changes", identity, identity).Sha;
+
+                var source = repo.CreateBranch("source", repo.Lookup<Commit>(mergeBaseSha));
+                Commands.Checkout(repo, source);
+                foreach (var path in prPaths)
+                    WriteFile(path, "PR change\n");
+                Commands.Stage(repo, "*");
+                sourceSha = repo.Commit("PR changes", identity, identity).Sha;
+            }
+
+            using var scheduler = new GitOperationScheduler(1);
+            var git = new LibGit2SharpGitOps(scheduler: scheduler);
+            var actualMergeBase = await git.GetMergeBaseShaAsync(
+                repoPath, targetSha, sourceSha, CancellationToken.None);
+            Assert.Equal(mergeBaseSha, actualMergeBase);
+
+            var correctDiff = await git.GetDiffAsync(repoPath, actualMergeBase, sourceSha, CancellationToken.None);
+            var oldDiff = await git.GetDiffAsync(repoPath, targetSha, sourceSha, CancellationToken.None);
+            var correctFiles = DiffIndex.Parse(correctDiff).Files.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var oldFiles = DiffIndex.Parse(oldDiff).Files.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            Assert.Equal(prPaths.Length, correctFiles.Count);
+            Assert.Equal(prPaths.ToHashSet(StringComparer.OrdinalIgnoreCase), correctFiles);
+            Assert.Equal(prPaths.Length + targetOnlyPaths.Length, oldFiles.Count);
+            Assert.True(targetOnlyPaths.All(oldFiles.Contains));
+
+            void WriteFile(string relativePath, string contents)
+            {
+                var path = Path.Combine(repoPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, contents);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(file, FileAttributes.Normal);
                 Directory.Delete(root, recursive: true);
             }
         }
@@ -145,8 +225,7 @@ public class LibGit2SharpGitOpsTests
                 seed.Network.Push(remote, $"+refs/heads/reset-target:refs/heads/{branch}");
             }
 
-            var ex = await Assert.ThrowsAsync<PrHeadChangedException>(
-                () => git.PushAsync(checkoutPath, remotePath, branch, pinnedSha, null, CancellationToken.None));
+            var ex = await Assert.ThrowsAsync<PrHeadChangedException>(() => git.PushAsync(checkoutPath, remotePath, branch, pinnedSha, null, CancellationToken.None));
             Assert.Equal(pinnedSha, ex.Expected);
             Assert.Equal(rootSha, ex.Actual);
             Assert.Equal(rootSha,

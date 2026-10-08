@@ -34,6 +34,9 @@ public interface IGitOps
     /// <summary>Unified diff between base and head commits, optionally bounded and pre-filtered.</summary>
     Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null);
 
+    /// <summary>Returns the common ancestor of two commits, used as the comparison base for PR diffs.</summary>
+    Task<string> GetMergeBaseShaAsync(string repoPath, string firstSha, string secondSha, CancellationToken ct);
+
     /// <summary>Returns the checked-out HEAD SHA, or null when no commit is available.</summary>
     Task<string?> GetHeadShaAsync(string repoPath, CancellationToken ct);
 

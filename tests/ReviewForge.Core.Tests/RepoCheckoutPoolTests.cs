@@ -797,6 +797,9 @@ public sealed class RepoCheckoutPoolTests : IDisposable
 
         public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null) => Task.FromResult(string.Empty);
 
+        public Task<string> GetMergeBaseShaAsync(string repoPath, string firstSha, string secondSha, CancellationToken ct)
+            => Task.FromResult("fake-merge-base");
+
         public Task WarmupMirrorAsync(string mirrorPath, string cloneUrl, string baseSha, string headSha, string? pat, CancellationToken ct)
         {
             lock (_Gate)

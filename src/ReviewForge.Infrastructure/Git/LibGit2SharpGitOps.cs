@@ -6,6 +6,7 @@ using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
+
 namespace ReviewForge.Infrastructure.Git;
 
 /// <summary>
@@ -187,6 +188,9 @@ public sealed class LibGit2SharpGitOps : IGitOps
     public Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
         => _Scheduler.RunAsync(() => GetDiffCore(repoPath, baseSha, headSha, budget), ct);
 
+    public Task<string> GetMergeBaseShaAsync(string repoPath, string firstSha, string secondSha, CancellationToken ct)
+        => _Scheduler.RunAsync(() => GetMergeBaseShaCore(repoPath, firstSha, secondSha), ct);
+
     /// <summary>Existing CloneOrOpen body; mirror path supplied by the async wrapper.</summary>
     private string CloneOrOpenCore(string cloneUrl, string workDir, string? pat, string mirror)
     {
@@ -266,6 +270,18 @@ public sealed class LibGit2SharpGitOps : IGitOps
             RemoveRef(repo, "refs/reviewforge/base");
             RemoveRef(repo, "refs/reviewforge/head");
         }
+    }
+
+    private static string GetMergeBaseShaCore(string repoPath, string firstSha, string secondSha)
+    {
+        using var repo = new Repository(repoPath);
+        var first = repo.Lookup<Commit>(firstSha)
+                    ?? throw new InvalidOperationException($"first commit {firstSha} not found");
+        var second = repo.Lookup<Commit>(secondSha)
+                     ?? throw new InvalidOperationException($"second commit {secondSha} not found");
+        var mergeBase = repo.ObjectDatabase.FindMergeBase(first, second)
+                        ?? throw new InvalidOperationException($"commits {firstSha} and {secondSha} have no merge base");
+        return mergeBase.Sha;
     }
 
     private string GetDiffCore(string repoPath, string baseSha, string headSha, DiffBudget? budget)

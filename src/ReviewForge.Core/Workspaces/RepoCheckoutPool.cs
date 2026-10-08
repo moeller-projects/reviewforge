@@ -118,6 +118,9 @@ public sealed class RepoCheckoutPool
     internal Task<string> GetDiffAsync(string repoPath, string baseSha, string headSha, CancellationToken ct, DiffBudget? budget = null)
         => _Git.GetDiffAsync(repoPath, baseSha, headSha, ct, budget);
 
+    internal Task<string> GetMergeBaseShaAsync(string repoPath, string firstSha, string secondSha, CancellationToken ct)
+        => _Git.GetMergeBaseShaAsync(repoPath, firstSha, secondSha, ct);
+
     /// <summary>Run-scoped writable checkout for CommitOnHead runs: a mirror-local clone into
     /// {root}/private/{runId}, protected by process-local and OS-backed locks for its whole
     /// lifetime and deleted on lease disposal. The pooled per-head checkouts never see writes —
@@ -264,7 +267,6 @@ public sealed class RepoCheckoutPool
             // A transient native Git handle or AV lock: eviction will reclaim it later.
         }
     }
-
 
 
     /// <summary>Private-checkout lease: disposal deletes {root}/private/{runId} while the

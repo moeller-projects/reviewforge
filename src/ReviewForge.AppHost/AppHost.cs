@@ -11,18 +11,18 @@ var openAiKey = builder.AddParameter("openai-api-key", secret: true);
 var apiKey = builder.AddParameter("api-key", secret: true);
 
 // Dev-loop scratch state under temp (matches the prior env pass-through behavior).
-var reviewforgeWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge");
-Directory.CreateDirectory(reviewforgeWorkDir);
+// var reviewforgeWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge");
+// Directory.CreateDirectory(reviewforgeWorkDir);
 
 builder.AddProject<ReviewForge_Service>("reviewforge")
     .WithHttpEndpoint(name: "http", targetPort: 5080)
     // The dashboard health tile reflects readiness; liveness remains available to orchestrators.
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints()
-    .WithEnvironment("Workspace__WorkDir", reviewforgeWorkDir)
-    .WithEnvironment(
-        "Persistence__StoreConnectionString",
-        $"Data Source={Path.Combine(reviewforgeWorkDir, "reviewforge.db")}")
+    // .WithEnvironment("Workspace__WorkDir", reviewforgeWorkDir)
+    // .WithEnvironment(
+    //     "Persistence__StoreConnectionString",
+    //     $"Data Source={Path.Combine(reviewforgeWorkDir, "reviewforge.db")}")
     .WithEnvironment("REVIEWFORGE_ADO_PAT", adoPat)
     .WithEnvironment("OPENAI_API_KEY", openAiKey)
     .WithEnvironment("REVIEWFORGE_API_KEYS", apiKey)

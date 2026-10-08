@@ -79,6 +79,29 @@ public sealed class PrepareRepositoryStageTests : IDisposable
     }
 
     [Fact]
+    public async Task Uses_merge_base_to_build_diff_and_match_provider_scope()
+    {
+        const string diff = "diff --git a/src/file.cs b/src/file.cs\n--- a/src/file.cs\n+++ b/src/file.cs\n@@ -1 +1 @@\n-old\n+new\n";
+        var git = new FakeGitOps {Diff = diff, MergeBaseSha = "pr-merge-base"};
+        var pool = new RepoCheckoutPool(git, new FakeWorkspaceFs(), _Root);
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            Fetch = new FetchOutcome
+            {
+                PullRequest = PullRequest(),
+                ChangedFileManifest = [new ChangedFile("src/file.cs", ChangedFileType.Edit)],
+            },
+        };
+
+        await Stage(pool).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal([("base-sha", "head-sha")], git.MergeBaseRequests);
+        Assert.Equal([("pr-merge-base", "head-sha")], git.DiffRequests);
+        Assert.Equal(new[] {"src/file.cs"}, ctx.Repository.Diff!.Files);
+        ctx.Dispose();
+    }
+
+    [Fact]
     public async Task Loop_guard_terminates_only_discovery_runs_on_matching_bot_head()
     {
         var headInfo = new TipCommitInfo(
