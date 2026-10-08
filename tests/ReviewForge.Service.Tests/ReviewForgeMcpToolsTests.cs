@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
@@ -18,7 +19,7 @@ public sealed class ReviewForgeMcpToolsTests
     private ReviewForgeMcpTools CreateTools(IReviewQueue? queue = null)
         => new(new RunSubmissionService(
             queue ?? _Queue, _Tracker, _Claims, _Store, TimeProvider.System,
-            NullLogger<RunSubmissionService>.Instance), _Source);
+            NullLogger<RunSubmissionService>.Instance), _Source, Options.Create(new ResolveOptions()));
 
     [Fact]
     public void Enqueue_accepts_and_returns_run_id_and_status_url()

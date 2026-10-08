@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
@@ -36,7 +37,10 @@ public sealed record OpenPrListResult(int TotalCount, bool Truncated, IReadOnlyL
 /// shared with the REST endpoints.
 /// </summary>
 [McpServerToolType]
-public sealed class ReviewForgeMcpTools(RunSubmissionService runs, IPullRequestSource source)
+public sealed class ReviewForgeMcpTools(
+    RunSubmissionService runs,
+    IPullRequestSource source,
+    IOptions<ResolveOptions> resolveOptions)
 {
     [McpServerTool(Name = "enqueue_review"),
      Description("Enqueue an automated review run for a pull request. Returns the run id and a "
@@ -50,7 +54,27 @@ public sealed class ReviewForgeMcpTools(RunSubmissionService runs, IPullRequestS
         [Description("Repository id (name or GUID)")]
         string repositoryId,
         [Description("Pull request number")] int prId)
-        => runs.Submit(new SubmitReviewRequest(org, project, repositoryId, prId), RunKind.Review) switch
+        => Submit(org, project, repositoryId, prId, RunKind.Review);
+
+    [McpServerTool(Name = "enqueue_resolution"),
+     Description("Enqueue an automated resolution run for a pull request. The resolve pipeline "
+                 + "must be enabled. Returns the run id and a status URL on success, or an error "
+                 + "explaining the rejection (pipeline disabled, already in flight, queue full, "
+                 + "invalid request). Poll progress with get_review_status.")]
+    public EnqueueReviewResult EnqueueResolution(
+        [Description("Azure DevOps organization name")]
+        string org,
+        [Description("Azure DevOps project name")]
+        string project,
+        [Description("Repository id (name or GUID)")]
+        string repositoryId,
+        [Description("Pull request number")] int prId)
+        => resolveOptions.Value.Enabled
+            ? Submit(org, project, repositoryId, prId, RunKind.Resolve)
+            : new EnqueueReviewResult(false, null, null, "resolve pipeline disabled");
+
+    private EnqueueReviewResult Submit(string org, string project, string repositoryId, int prId, RunKind kind)
+        => runs.Submit(new SubmitReviewRequest(org, project, repositoryId, prId), kind) switch
         {
             SubmitOutcome.Accepted(var runId, var statusUrl) => new EnqueueReviewResult(true, runId, statusUrl, null),
             SubmitOutcome.Conflict(var holder) => new EnqueueReviewResult(
