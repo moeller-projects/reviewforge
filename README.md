@@ -61,8 +61,9 @@ failed stage fails the run.
 `ReviewContext` stores stage outputs in typed groups: `Fetch`, `Repository`, `Classification`, `Reasoning`, `Validation`, `AutoFix`, `Triage`, and `Published`. Resolve runs additionally initialize `Resolve`; review runs leave it null. Repository preparation owns its overlapping thread-refresh and enrichment work, canceling and observing those tasks when the context is disposed.
 
 `enqueue_review_draft` runs the review stages through validation and required finding verification, then persists only findings from that draft. It omits autofix, commit, triage, and publication. Draft findings remain separate from ordinary review
-dedupe history. Verification must be enabled with `VerifyFindings:Enabled=true`. Use `get_review_findings(runId)` to inspect results and `publish_review_findings(runId, findingIds?)` to explicitly post all or selected findings. Publication is
-rejected if the PR head differs from the reviewed head; retries reconcile findings already posted.
+dedupe history. Verification must be enabled with `VerifyFindings:Enabled=true`; draft runs fail if the configured finding cap, prompt budget, verifier failure, or missing verdict prevents complete verification. Ordinary review retains the verifier's
+fail-open behavior. Use `get_review_findings(runId)` to inspect results and `publish_review_findings(runId, findingIds?)` to explicitly post all or selected findings. Publication is rejected if the PR head differs from the reviewed head; retries
+reconcile findings already posted.
 
 ## Run it
 

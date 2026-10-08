@@ -96,6 +96,8 @@ public sealed class StageCatalog
                 _Source, _Store, _LoggerFactory.CreateLogger<FetchPrContextStage>()),
             StageId.ReviewGate => new ReviewGateStage(
                 _Clock, _LoggerFactory.CreateLogger<ReviewGateStage>()),
+            StageId.BeginDraftRun => new BeginDraftRunStage(
+                _Store, _LoggerFactory.CreateLogger<BeginDraftRunStage>()),
             StageId.ResolveGate => new ResolveGateStage(
                 _Store,
                 _ResolveOptions.AllowedAuthors.ToHashSet(StringComparer.OrdinalIgnoreCase),

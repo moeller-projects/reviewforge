@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
@@ -12,9 +14,16 @@ public sealed class DraftReviewServiceTests
     private readonly FakeFindingStore _Store = new();
     private readonly FakePullRequestSource _Source = new();
     private readonly InFlightClaims _Claims = new();
+    private readonly ReviewQueue _Queue = new();
+    private readonly RunTracker _Tracker = new();
     private readonly DraftReviewService _Service;
 
-    public DraftReviewServiceTests() => _Service = new DraftReviewService(_Store, _Source, _Claims);
+    public DraftReviewServiceTests()
+    {
+        var runs = new RunSubmissionService(_Queue, _Tracker, _Claims, _Store,
+            TimeProvider.System, NullLogger<RunSubmissionService>.Instance);
+        _Service = new DraftReviewService(_Store, _Source, _Claims, runs);
+    }
 
     [Fact]
     public async Task Query_returns_full_findings_only_for_successful_completed_drafts()
@@ -39,11 +48,29 @@ public sealed class DraftReviewServiceTests
         var ordinary = Draft([]) with {Pipeline = nameof(RunKind.Review)};
         var running = Draft([]) with {CompletedAt = null};
         var failed = Draft([]) with {Success = false};
-        _Store.Runs.AddRange([ordinary, running, failed]);
+        var failedShell = Draft([]) with {CompletedAt = null, Success = false};
+        _Store.Runs.AddRange([ordinary, running, failed, failedShell]);
+        _Tracker.Set(failedShell.Id, Key, RunState.Failed, kind: RunKind.ReviewDraft);
 
         Assert.Contains("not a review draft", (await _Service.GetFindingsAsync(ordinary.Id, CancellationToken.None)).Error);
         Assert.Contains("still running", (await _Service.GetFindingsAsync(running.Id, CancellationToken.None)).Error);
         Assert.Contains("failed", (await _Service.GetFindingsAsync(failed.Id, CancellationToken.None)).Error);
+        Assert.Contains("failed", (await _Service.GetFindingsAsync(failedShell.Id, CancellationToken.None)).Error);
+    }
+
+    [Fact]
+    public async Task Query_uses_run_tracker_for_drafts_not_yet_persisted()
+    {
+        var runId = Guid.NewGuid();
+        var queued = _Queue.TryEnqueue(new ReviewRequest(runId, Key, DateTimeOffset.UtcNow,
+            Trigger: EnqueueTrigger.Manual, Kind: RunKind.ReviewDraft));
+        Assert.True(queued.Accepted);
+        _Tracker.Set(runId, Key, RunState.Queued, kind: RunKind.ReviewDraft);
+
+        var result = await _Service.GetFindingsAsync(runId, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("still running", result.Error);
     }
 
     [Fact]

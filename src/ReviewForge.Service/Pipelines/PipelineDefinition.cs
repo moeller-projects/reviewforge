@@ -9,6 +9,7 @@ public enum StageId
 {
     FetchPrContext,
     ReviewGate,
+    BeginDraftRun,
     ResolveGate,
     PrepareRepository,
     ClassifyRun,
@@ -98,6 +99,7 @@ public static class Pipelines
         {
             StageId.FetchPrContext,
             StageId.ReviewGate,
+            StageId.BeginDraftRun,
             StageId.PrepareRepository,
             StageId.ClassifyRun,
             StageId.EnrichContext,

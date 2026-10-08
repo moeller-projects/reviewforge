@@ -18,11 +18,14 @@ public sealed class ReviewForgeMcpToolsTests
     private readonly FakePullRequestSource _Source = new();
 
     private ReviewForgeMcpTools CreateTools(IReviewQueue? queue = null, bool verifyEnabled = true)
-        => new(new RunSubmissionService(
-                queue ?? _Queue, _Tracker, _Claims, _Store, TimeProvider.System,
-                NullLogger<RunSubmissionService>.Instance), _Source, Options.Create(new ResolveOptions()),
+    {
+        var runs = new RunSubmissionService(
+            queue ?? _Queue, _Tracker, _Claims, _Store, TimeProvider.System,
+            NullLogger<RunSubmissionService>.Instance);
+        return new ReviewForgeMcpTools(runs, _Source, Options.Create(new ResolveOptions()),
             Options.Create(new VerifyFindingsOptions {Enabled = verifyEnabled}),
-            new DraftReviewService(_Store, _Source, _Claims));
+            new DraftReviewService(_Store, _Source, _Claims, runs));
+    }
 
     [Fact]
     public void Enqueue_review_draft_requires_verification_and_uses_draft_run_kind()

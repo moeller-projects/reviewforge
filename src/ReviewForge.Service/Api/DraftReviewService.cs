@@ -32,7 +32,8 @@ public sealed record PublishDraftResult(bool Accepted, int PublishedCount, int A
 public sealed class DraftReviewService(
     IFindingStore store,
     IPullRequestSource source,
-    InFlightClaims claims)
+    InFlightClaims claims,
+    RunSubmissionService runs)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -40,23 +41,25 @@ public sealed class DraftReviewService(
     {
         var run = await store.GetRunAsync(runId, ct).ConfigureAwait(false);
         if (run is null)
-            return new DraftFindingsResult(false, "unknown run id", null, []);
+            return new DraftFindingsResult(false, await MissingRunErrorAsync(runId, ct).ConfigureAwait(false), null, []);
         if (!string.Equals(run.Pipeline, RunKind.ReviewDraft.ToString(), StringComparison.Ordinal))
             return new DraftFindingsResult(false, "run is not a review draft", null, []);
         if (run.CompletedAt is null)
-            return new DraftFindingsResult(false, "review draft is still running", run.HeadSha, []);
+            return new DraftFindingsResult(false, await IncompleteRunErrorAsync(runId, ct).ConfigureAwait(false), run.HeadSha, []);
         if (!run.Success)
             return new DraftFindingsResult(false, "review draft failed", run.HeadSha, []);
 
-        var findings = run.Findings
-            .Where(f => f.FindingJson is not null)
-            .Select(f => JsonSerializer.Deserialize<RichFinding>(f.FindingJson!, JsonOptions)
-                         ?? throw new InvalidOperationException($"stored finding {f.DedupeKey} is invalid"))
-            .Zip(run.Findings.Where(f => f.FindingJson is not null), (finding, row) => new DraftFindingResult(
+        var findings = new List<DraftFindingResult>();
+        foreach (var row in run.Findings.Where(f => f.FindingJson is not null))
+        {
+            var finding = JsonSerializer.Deserialize<RichFinding>(row.FindingJson!, JsonOptions)
+                          ?? throw new InvalidOperationException($"stored finding {row.DedupeKey} is invalid");
+            findings.Add(new DraftFindingResult(
                 row.DedupeKey, finding.RuleId, finding.Title, finding.Severity, finding.Category,
                 finding.Description, finding.Snippet, finding.Suggestion, finding.Anchor,
-                finding.AnchorDowngraded, row.Published, row.ThreadId))
-            .ToArray();
+                finding.AnchorDowngraded, row.Published, row.ThreadId));
+        }
+
         return new DraftFindingsResult(true, null, run.HeadSha, findings);
     }
 
@@ -67,11 +70,11 @@ public sealed class DraftReviewService(
     {
         var run = await store.GetRunAsync(runId, ct).ConfigureAwait(false);
         if (run is null)
-            return Rejected("unknown run id");
+            return Rejected(await MissingRunErrorAsync(runId, ct).ConfigureAwait(false));
         if (!string.Equals(run.Pipeline, RunKind.ReviewDraft.ToString(), StringComparison.Ordinal))
             return Rejected("run is not a review draft");
         if (run.CompletedAt is null)
-            return Rejected("review draft is still running");
+            return Rejected(await IncompleteRunErrorAsync(runId, ct).ConfigureAwait(false));
         if (!run.Success)
             return Rejected("review draft failed");
 
@@ -138,4 +141,31 @@ public sealed class DraftReviewService(
     }
 
     private static PublishDraftResult Rejected(string error) => new(false, 0, 0, error);
+
+    private async Task<string> MissingRunErrorAsync(Guid runId, CancellationToken ct)
+    {
+        var status = await runs.GetStatusAsync(runId, ct).ConfigureAwait(false);
+        if (status is null)
+            return "unknown run id";
+        if (status.Kind != RunKind.ReviewDraft)
+            return "run is not a review draft";
+        return status.State switch
+        {
+            RunState.Queued or RunState.Running => "review draft is still running",
+            RunState.Failed => "review draft failed",
+            RunState.Skipped => "review draft was skipped by the gate",
+            _ => "review draft findings are not available",
+        };
+    }
+
+    private async Task<string> IncompleteRunErrorAsync(Guid runId, CancellationToken ct)
+    {
+        var status = await runs.GetStatusAsync(runId, ct).ConfigureAwait(false);
+        return status?.State switch
+        {
+            RunState.Failed => "review draft failed",
+            RunState.Skipped => "review draft was skipped by the gate",
+            _ => "review draft is still running",
+        };
+    }
 }

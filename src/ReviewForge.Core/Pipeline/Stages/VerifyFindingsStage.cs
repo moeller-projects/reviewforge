@@ -49,11 +49,15 @@ public sealed class VerifyFindingsStage(
         }
 
         // Deterministic findings (homoglyph/*) need no model challenge.
-        var candidates = ctx.Validation.AcceptedFindings
+        var allCandidates = ctx.Validation.AcceptedFindings
             .Where(f => !f.RuleId.StartsWith("homoglyph/", StringComparison.Ordinal))
             .OrderByDescending(SeverityRank) // critical/high verified first
-            .Take(options.MaxFindings)
             .ToList();
+        var strictDraft = ctx.RunKind == RunKind.ReviewDraft;
+        if (strictDraft && allCandidates.Count > options.MaxFindings)
+            throw new InvalidOperationException(
+                $"review draft has {allCandidates.Count} findings to verify, exceeding VerifyFindings:MaxFindings ({options.MaxFindings})");
+        var candidates = allCandidates.Take(options.MaxFindings).ToList();
         if (candidates.Count == 0)
         {
             logger?.LogDebug("finding verification skipped for {Pr}: no model candidates, accepted={AcceptedCount}",
@@ -64,6 +68,9 @@ public sealed class VerifyFindingsStage(
         var repoDir = ctx.RequireRepoDir();
         var prompt = FindingsVerifierPrompt.Build(
             candidates, anchor => Slice(repoDir, anchor, options.ContextLines), options.MaxPromptChars);
+        if (strictDraft && candidates.Any(f => !prompt.Contains(
+                $"### {f.DedupeKey}{Environment.NewLine}", StringComparison.Ordinal)))
+            throw new InvalidOperationException("review draft findings exceed the verifier prompt budget");
         logger?.LogDebug("starting finding verification for {Pr}: candidates={CandidateCount}, maxPromptChars={MaxPromptChars}",
             ctx.Pr, candidates.Count, options.MaxPromptChars);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -82,6 +89,12 @@ public sealed class VerifyFindingsStage(
         {
             FindingsTelemetry.FindingsVerifierFailures.Add(
                 1, new TagList {{ReviewForgeTelemetry.TagReason, ex.GetType().Name}});
+            if (strictDraft)
+            {
+                logger?.LogWarning(ex, "review draft finding verification failed");
+                throw new InvalidOperationException("review draft finding verification failed", ex);
+            }
+
             logger?.LogWarning(ex, "findings verifier failed — keeping all findings (fail-open)");
             return; // host shutdown cancellation still throws
         }
@@ -89,6 +102,9 @@ public sealed class VerifyFindingsStage(
         {
             FindingsTelemetry.FindingsVerifierDurationMilliseconds.Record(stopwatch.ElapsedMilliseconds);
         }
+
+        if (strictDraft && candidates.Any(f => f.DedupeKey is null || !verdicts.ContainsKey(f.DedupeKey)))
+            throw new InvalidOperationException("review draft verifier omitted one or more finding verdicts");
 
         var rejected = ctx.Validation.AcceptedFindings
             .Where(f => f.DedupeKey is { } k

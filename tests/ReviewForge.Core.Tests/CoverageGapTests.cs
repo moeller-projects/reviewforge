@@ -80,10 +80,15 @@ public class CoverageGapTests : IDisposable
                 ],
             },
             Classification = new Classification {Kind = ReviewKind.Full},
-            Validation = new ValidationOutcome {AcceptedFindings = [finding]},
+            Validation = new ValidationOutcome
+            {
+                AcceptedFindings = [finding, finding with {DedupeKey = null, Anchor = null}],
+            },
         };
 
-        await new PersistDraftRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+        var stage = new PersistDraftRunStage(store);
+        Assert.Equal("persist-draft-run", stage.Name);
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
 
         var saved = Assert.Single(store.Runs);
         Assert.Equal(nameof(RunKind.ReviewDraft), saved.Pipeline);
@@ -92,6 +97,30 @@ public class CoverageGapTests : IDisposable
         Assert.NotNull(row.FindingJson);
         Assert.Null(row.ThreadId);
         Assert.Equal(DateTimeOffset.UtcNow.Date, saved.LastObservedCommentAt!.Value.Date);
+    }
+
+    [Fact]
+    public async Task Begin_draft_persists_running_shell_after_gate()
+    {
+        var store = new FakeFindingStore();
+        var source = new FakePullRequestSource();
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
+        {
+            RunKind = RunKind.ReviewDraft,
+            Fetch = new FetchOutcome {PullRequest = source.Pr},
+        };
+        var stage = new BeginDraftRunStage(store);
+        Assert.Equal("begin-draft-run", stage.Name);
+
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
+
+        var shell = Assert.Single(store.Runs);
+        Assert.Equal(ctx.RunId, shell.Id);
+        Assert.Equal("head-sha", shell.HeadSha);
+        Assert.Equal(nameof(RunKind.ReviewDraft), shell.Pipeline);
+        Assert.Null(shell.CompletedAt);
+        Assert.False(shell.Success);
+        Assert.Empty(shell.Findings);
     }
 
     [Fact]

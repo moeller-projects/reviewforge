@@ -78,7 +78,7 @@ public sealed class PipelineDefinitionTests
 
         Assert.Equal(
             [
-                StageId.FetchPrContext, StageId.ReviewGate, StageId.PrepareRepository, StageId.ClassifyRun,
+                StageId.FetchPrContext, StageId.ReviewGate, StageId.BeginDraftRun, StageId.PrepareRepository, StageId.ClassifyRun,
                 StageId.EnrichContext, StageId.ExecuteReasoning, StageId.ValidateFindings,
                 StageId.VerifyFindings, StageId.PersistDraftRun
             ],

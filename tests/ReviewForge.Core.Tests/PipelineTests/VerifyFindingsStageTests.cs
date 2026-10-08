@@ -50,6 +50,13 @@ public sealed class VerifyFindingsStageTests : IDisposable
         };
     }
 
+    private ReviewContext DraftCtx(params RichFinding[] findings)
+    {
+        var ctx = Ctx(findings);
+        ctx.RunKind = RunKind.ReviewDraft;
+        return ctx;
+    }
+
     private static VerifyFindingsStage Stage(ScriptedChatClient chat, VerifyFindingsOptions? options = null)
         => new(
             new FakeChatClientFactory(chat),
@@ -90,6 +97,54 @@ public sealed class VerifyFindingsStageTests : IDisposable
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(["k1"], ctx.Validation.AcceptedFindings.Select(f => f.DedupeKey));
+    }
+
+    [Fact]
+    public async Task Draft_requires_a_verdict_for_each_model_finding()
+    {
+        var chat = new ScriptedChatClient(ScriptedChatClient.Text("[]"));
+        var ctx = DraftCtx(Finding("k1"));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Stage(chat).ExecuteAsync(ctx, CancellationToken.None));
+        Assert.Contains("omitted", error.Message);
+        Assert.Single(ctx.Validation.AcceptedFindings);
+    }
+
+    [Fact]
+    public async Task Draft_accepts_a_finding_when_the_verifier_returns_its_verdict()
+    {
+        var chat = new ScriptedChatClient(ScriptedChatClient.Text(
+            """[{"key":"k1","verdict":"confirmed","reason":"supported by code"}]"""));
+        var ctx = DraftCtx(Finding("k1"));
+
+        await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Single(ctx.Validation.AcceptedFindings);
+    }
+
+    [Fact]
+    public async Task Draft_rejects_findings_over_the_verification_cap()
+    {
+        var chat = new ScriptedChatClient();
+        var ctx = DraftCtx(Finding("k1"), Finding("k2"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Stage(chat, new VerifyFindingsOptions {Enabled = true, MaxFindings = 1})
+                .ExecuteAsync(ctx, CancellationToken.None));
+        Assert.Equal(0, chat.Calls);
+    }
+
+    [Fact]
+    public async Task Draft_verifier_failure_fails_the_run()
+    {
+        var stage = new VerifyFindingsStage(
+            new FakeChatClientFactory(new ThrowingChatClient()),
+            new VerifyFindingsOptions {Enabled = true},
+            NullLogger<VerifyFindingsStage>.Instance);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            stage.ExecuteAsync(DraftCtx(Finding("k1")), CancellationToken.None));
     }
 
     [Fact]
