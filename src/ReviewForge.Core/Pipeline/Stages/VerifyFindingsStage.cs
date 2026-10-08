@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
@@ -66,7 +67,7 @@ public sealed class VerifyFindingsStage(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var client = chatClientFactory.Create(ChatTier.Fast); // governor already applied by the factory
+            var client = new RetryingChatClient(chatClientFactory.Create(ChatTier.Fast), logger);
             var response = await client.GetResponseAsync(
                 FindingsVerifierPrompt.Messages(prompt), cancellationToken: timeout.Token).ConfigureAwait(false);
             verdicts = VerdictParser.Parse(response.Text) ?? await Retry(client, prompt, timeout.Token).ConfigureAwait(false);
@@ -74,7 +75,7 @@ public sealed class VerifyFindingsStage(
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             FindingsTelemetry.FindingsVerifierFailures.Add(
-                1, new TagList { { ReviewForgeTelemetry.TagReason, ex.GetType().Name } });
+                1, new TagList {{ReviewForgeTelemetry.TagReason, ex.GetType().Name}});
             logger.LogWarning(ex, "findings verifier failed — keeping all findings (fail-open)");
             return; // host shutdown cancellation still throws
         }
@@ -92,7 +93,7 @@ public sealed class VerifyFindingsStage(
         {
             var reason = verdicts[finding.DedupeKey!].Reason;
             FindingsTelemetry.FindingsVerifierRejected.Add(
-                1, new TagList { { "rule", finding.RuleId } });
+                1, new TagList {{"rule", finding.RuleId}});
             logger.LogInformation("finding {Key} rejected by verifier: {Reason}", finding.DedupeKey, reason);
         }
 
@@ -101,7 +102,7 @@ public sealed class VerifyFindingsStage(
 
     /// <summary>One retry with a JSON-only nudge; a second malformed reply fails open (all kept).</summary>
     private async Task<IReadOnlyDictionary<string, FindingsVerifierPrompt.Verdict>> Retry(
-        Microsoft.Extensions.AI.IChatClient client, string prompt, CancellationToken ct)
+        IChatClient client, string prompt, CancellationToken ct)
     {
         var retry = await client.GetResponseAsync(
             FindingsVerifierPrompt.RetryMessages(prompt), cancellationToken: ct).ConfigureAwait(false);
@@ -111,7 +112,7 @@ public sealed class VerifyFindingsStage(
         }
 
         FindingsTelemetry.FindingsVerifierFailures.Add(
-            1, new TagList { { ReviewForgeTelemetry.TagReason, "unparseable" } });
+            1, new TagList {{ReviewForgeTelemetry.TagReason, "unparseable"}});
         logger.LogWarning("findings verifier returned malformed output twice — keeping all findings (fail-open)");
         return new Dictionary<string, FindingsVerifierPrompt.Verdict>(StringComparer.Ordinal);
     }

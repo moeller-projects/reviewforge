@@ -1,7 +1,9 @@
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
+using ReviewForge.Core.Ports;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -134,6 +136,24 @@ public sealed class VerifyFindingsStageTests : IDisposable
     }
 
     [Fact]
+    public async Task Transient_provider_failure_is_retried_and_verdict_applied()
+    {
+        var chat = new TransientThenSuccessChatClient(
+            """[{"key":"k1","verdict":"rejected","reason":"not a defect"}]""");
+        var stage = new VerifyFindingsStage(
+            new FakeChatClientFactory(chat),
+            new VerifyFindingsOptions {Enabled = true},
+            NullLogger<VerifyFindingsStage>.Instance);
+        var ctx = Ctx(Finding("k1"));
+
+        await stage.ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(2, chat.Calls);
+        Assert.Empty(ctx.Validation.AcceptedFindings);
+    }
+
+
+    [Fact]
     public async Task Host_shutdown_cancellation_propagates()
     {
         var chat = new ThrowingChatClient(new OperationCanceledException());
@@ -143,8 +163,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
             NullLogger<VerifyFindingsStage>.Instance);
         var ctx = Ctx(Finding("k1"));
 
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => stage.ExecuteAsync(ctx, new CancellationToken(canceled: true)));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => stage.ExecuteAsync(ctx, new CancellationToken(canceled: true)));
     }
 
     [Fact]
@@ -245,7 +264,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
 
         await stage.ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal([Ports.ChatTier.Fast], factory.RequestedTiers);
+        Assert.Equal([ChatTier.Fast], factory.RequestedTiers);
     }
 
     [Fact]
@@ -289,17 +308,46 @@ public sealed class VerifyFindingsStageTests : IDisposable
         }
     }
 
-    private sealed class ThrowingChatClient(Exception? ex = null) : Microsoft.Extensions.AI.IChatClient
+    private sealed class TransientThenSuccessChatClient(string responseText) : IChatClient
     {
-        public Task<Microsoft.Extensions.AI.ChatResponse> GetResponseAsync(
-            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
-            Microsoft.Extensions.AI.ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => Task.FromException<Microsoft.Extensions.AI.ChatResponse>(ex ?? new HttpRequestException("provider down"));
+        public int Calls { get; private set; }
 
-        public IAsyncEnumerable<Microsoft.Extensions.AI.ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
-            Microsoft.Extensions.AI.ChatOptions? options = null,
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Calls == 1
+                ? Task.FromException<ChatResponse>(new HttpRequestException("temporary provider failure"))
+                : Task.FromResult(new ChatResponse(
+                    new ChatMessage(ChatRole.Assistant, responseText)));
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ThrowingChatClient(Exception? ex = null) : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromException<ChatResponse>(ex ?? new HttpRequestException("provider down"));
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
