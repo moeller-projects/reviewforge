@@ -1,8 +1,20 @@
 namespace ReviewForge.Core.Domain;
 
-public enum RunKind { Review, Resolve }
+public enum RunKind
+{
+    Review,
+    Resolve,
+    ReviewDraft
+}
 
-public enum TriageVerdict { Actionable, NonIssue, Question, AlreadyFixed, OutOfScope }
+public enum TriageVerdict
+{
+    Actionable,
+    NonIssue,
+    Question,
+    AlreadyFixed,
+    OutOfScope
+}
 
 public sealed record ResolvableComment(
     int ThreadId,
@@ -31,6 +43,7 @@ public sealed record PlannedFix(
 {
     public IReadOnlyList<int> ThreadIds => ClusterThreadIds ?? [ThreadId];
 }
+
 public sealed record ResolvePlan(
     IReadOnlyList<PlannedFix> Fixes,
     IReadOnlySet<string> WritableFiles,
@@ -45,8 +58,15 @@ public sealed record AppliedResolution(
 
 public enum ResolutionOutcome
 {
-    Fixed, AgentDeclined, NonIssue, Question, AlreadyFixed, OutOfScope,
-    VerifyFailed, PushFailed, Deferred
+    Fixed,
+    AgentDeclined,
+    NonIssue,
+    Question,
+    AlreadyFixed,
+    OutOfScope,
+    VerifyFailed,
+    PushFailed,
+    Deferred
 }
 
 public sealed record ResolveAction(

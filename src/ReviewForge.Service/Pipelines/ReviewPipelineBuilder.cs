@@ -34,6 +34,7 @@ public sealed class ReviewPipelineBuilder(
                 autoFixOptions,
                 verifyFindingsOptions.Value,
                 gitOps is not null),
+            RunKind.ReviewDraft => Pipelines.ReviewDraft(verifyFindingsOptions.Value),
             RunKind.Resolve => Pipelines.Resolve(resolveOptions.Value),
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown run kind."),
         };

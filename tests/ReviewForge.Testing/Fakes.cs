@@ -342,6 +342,20 @@ public class FakeFindingStore : IFindingStore
         return Task.CompletedTask;
     }
 
+    public virtual Task MarkFindingPublishedAsync(Guid runId, string dedupeKey, int? threadId, CancellationToken ct)
+    {
+        var run = Runs.FirstOrDefault(r => r.Id == runId);
+        if (run is not null)
+        {
+            var findings = run.Findings.Select(f => f.DedupeKey == dedupeKey
+                ? f with {Published = true, ThreadId = threadId ?? f.ThreadId}
+                : f).ToArray();
+            Runs[Runs.IndexOf(run)] = run with {Findings = findings};
+        }
+
+        return Task.CompletedTask;
+    }
+
     public virtual Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
         => Task.FromResult<IReadOnlyList<ReviewRun>>(
             [.. RecentRuns.Where(r => r.Pr == pr).OrderByDescending(r => r.StartedAt).Take(count)]);

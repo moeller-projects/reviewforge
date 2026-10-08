@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 
@@ -31,6 +32,12 @@ public sealed record OpenPrSummary(
 /// project/repositoryId filters) to reach the remaining pull requests.</summary>
 public sealed record OpenPrListResult(int TotalCount, bool Truncated, IReadOnlyList<OpenPrSummary> PullRequests);
 
+public sealed record PublishReviewFindingsResult(
+    bool Accepted,
+    int PublishedCount,
+    int AlreadyPublishedCount,
+    string? Error);
+
 /// <summary>
 /// MCP tools for agent-chat clients (served at <c>/mcp</c>, Streamable HTTP). Thin wrappers
 /// over <see cref="RunSubmissionService"/> — enqueue/status semantics live there exactly once,
@@ -40,7 +47,9 @@ public sealed record OpenPrListResult(int TotalCount, bool Truncated, IReadOnlyL
 public sealed class ReviewForgeMcpTools(
     RunSubmissionService runs,
     IPullRequestSource source,
-    IOptions<ResolveOptions> resolveOptions)
+    IOptions<ResolveOptions> resolveOptions,
+    IOptions<VerifyFindingsOptions> verifyFindingsOptions,
+    DraftReviewService drafts)
 {
     [McpServerTool(Name = "enqueue_review"),
      Description("Enqueue an automated review run for a pull request. Returns the run id and a "
@@ -55,6 +64,48 @@ public sealed class ReviewForgeMcpTools(
         string repositoryId,
         [Description("Pull request number")] int prId)
         => Submit(org, project, repositoryId, prId, RunKind.Review);
+
+    [McpServerTool(Name = "enqueue_review_draft"),
+     Description("Enqueue a read-only review draft. It validates and verifies findings but does "
+                 + "not post comments, apply fixes, or resolve threads. VerifyFindings must be "
+                 + "enabled. Query findings with get_review_findings, then publish explicitly "
+                 + "with publish_review_findings.")]
+    public EnqueueReviewResult EnqueueReviewDraft(
+        [Description("Azure DevOps organization name")]
+        string org,
+        [Description("Azure DevOps project name")]
+        string project,
+        [Description("Repository id (name or GUID)")]
+        string repositoryId,
+        [Description("Pull request number")] int prId)
+        => verifyFindingsOptions.Value.Enabled
+            ? Submit(org, project, repositoryId, prId, RunKind.ReviewDraft)
+            : new EnqueueReviewResult(false, null, null, "review draft requires VerifyFindings:Enabled=true");
+
+    [McpServerTool(Name = "get_review_findings"),
+     Description("Get validated, verified findings from a completed review draft. Use each "
+                 + "findingId to select findings for explicit publication.")]
+    public Task<DraftFindingsResult> GetReviewFindings(
+        [Description("Run id returned by enqueue_review_draft")]
+        Guid runId,
+        CancellationToken cancellationToken)
+        => drafts.GetFindingsAsync(runId, cancellationToken);
+
+    [McpServerTool(Name = "publish_review_findings"),
+     Description("Post all findings from a completed review draft, or only the selected "
+                 + "findingIds. Publication is rejected if the PR head changed. Repeating the "
+                 + "call safely reconciles already-posted findings.")]
+    public async Task<PublishReviewFindingsResult> PublishReviewFindings(
+        [Description("Run id returned by enqueue_review_draft")]
+        Guid runId,
+        [Description("Optional findingIds from get_review_findings; omit to publish all")]
+        IReadOnlyList<string>? findingIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await drafts.PublishAsync(runId, findingIds, cancellationToken).ConfigureAwait(false);
+        return new PublishReviewFindingsResult(
+            result.Accepted, result.PublishedCount, result.AlreadyPublishedCount, result.Error);
+    }
 
     [McpServerTool(Name = "enqueue_resolution"),
      Description("Enqueue an automated resolution run for a pull request. The resolve pipeline "

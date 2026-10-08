@@ -208,6 +208,30 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Draft_finding_payload_and_publish_state_survive_store_round_trip()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var run = new ReviewRun(Guid.NewGuid(), Key, "draft-head", ReviewKind.Full,
+            now.AddMinutes(-1), now, true,
+            [
+                new StoredFinding("draft-key", "rule", "high", "title", "f.cs", 2, null,
+                    FindingJson: "{\"description\":\"full finding\"}")
+            ],
+            Pipeline: nameof(RunKind.ReviewDraft));
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+
+        await _Store.MarkFindingPublishedAsync(run.Id, "draft-key", 123, CancellationToken.None);
+        var loaded = await _Store.GetRunAsync(run.Id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(nameof(RunKind.ReviewDraft), loaded.Pipeline);
+        var finding = Assert.Single(loaded.Findings);
+        Assert.Equal("{\"description\":\"full finding\"}", finding.FindingJson);
+        Assert.True(finding.Published);
+        Assert.Equal(123, finding.ThreadId);
+    }
+
+    [Fact]
     public async Task Commanded_fix_thread_ids_include_valid_keys_for_the_requested_pr_only()
     {
         var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full,

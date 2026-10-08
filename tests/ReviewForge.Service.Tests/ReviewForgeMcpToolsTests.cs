@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
@@ -16,10 +17,24 @@ public sealed class ReviewForgeMcpToolsTests
     private readonly FakeFindingStore _Store = new();
     private readonly FakePullRequestSource _Source = new();
 
-    private ReviewForgeMcpTools CreateTools(IReviewQueue? queue = null)
+    private ReviewForgeMcpTools CreateTools(IReviewQueue? queue = null, bool verifyEnabled = true)
         => new(new RunSubmissionService(
-            queue ?? _Queue, _Tracker, _Claims, _Store, TimeProvider.System,
-            NullLogger<RunSubmissionService>.Instance), _Source, Options.Create(new ResolveOptions()));
+                queue ?? _Queue, _Tracker, _Claims, _Store, TimeProvider.System,
+                NullLogger<RunSubmissionService>.Instance), _Source, Options.Create(new ResolveOptions()),
+            Options.Create(new VerifyFindingsOptions {Enabled = verifyEnabled}),
+            new DraftReviewService(_Store, _Source, _Claims));
+
+    [Fact]
+    public void Enqueue_review_draft_requires_verification_and_uses_draft_run_kind()
+    {
+        var rejected = CreateTools(verifyEnabled: false).EnqueueReviewDraft("org", "proj", "repo", 42);
+        Assert.False(rejected.Accepted);
+        Assert.Contains("VerifyFindings:Enabled=true", rejected.Error);
+
+        var accepted = CreateTools().EnqueueReviewDraft("org", "proj", "repo", 42);
+        Assert.True(accepted.Accepted);
+        Assert.Equal(RunKind.ReviewDraft, _Queue.TryGetQueued(accepted.RunId!.Value)!.Kind);
+    }
 
     [Fact]
     public void Enqueue_accepts_and_returns_run_id_and_status_url()

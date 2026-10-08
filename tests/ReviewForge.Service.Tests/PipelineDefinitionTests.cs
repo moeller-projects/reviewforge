@@ -72,6 +72,24 @@ public sealed class PipelineDefinitionTests
     }
 
     [Fact]
+    public void Review_draft_is_read_only_and_requires_finding_verification()
+    {
+        var draft = Pipelines.ReviewDraft(new VerifyFindingsOptions {Enabled = true});
+
+        Assert.Equal(
+            [
+                StageId.FetchPrContext, StageId.ReviewGate, StageId.PrepareRepository, StageId.ClassifyRun,
+                StageId.EnrichContext, StageId.ExecuteReasoning, StageId.ValidateFindings,
+                StageId.VerifyFindings, StageId.PersistDraftRun
+            ],
+            draft.Stages);
+        Assert.DoesNotContain(StageId.AutoFixFindings, draft.Stages);
+        Assert.DoesNotContain(StageId.TriageThreads, draft.Stages);
+        Assert.DoesNotContain(StageId.PublishFindings, draft.Stages);
+        Assert.Throws<InvalidOperationException>(() => Pipelines.ReviewDraft(new VerifyFindingsOptions()));
+    }
+
+    [Fact]
     public void Resolve_definition_rejects_disabled_pipeline()
     {
         Assert.Throws<InvalidOperationException>(() => Pipelines.Resolve(new ResolveOptions()));
@@ -102,10 +120,7 @@ public sealed class PipelineDefinitionTests
         var request = new ReviewRequest(Guid.NewGuid(), Key, DateTimeOffset.UtcNow);
         using var context = new ReviewContext(Key, request.EnqueuedAt, request.RunId);
 
-        Assert.Throws<ArgumentException>(() =>
-        {
-            new ResolveContextInitializer().Initialize(request, context);
-        });
+        Assert.Throws<ArgumentException>(() => { new ResolveContextInitializer().Initialize(request, context); });
         Assert.Null(context.Resolve);
     }
 

@@ -126,6 +126,8 @@ public sealed class StageCatalog
                 _ChatClientFactory,
                 _VerifyFindingsOptions,
                 _LoggerFactory.CreateLogger<VerifyFindingsStage>()),
+            StageId.PersistDraftRun => new PersistDraftRunStage(
+                _Store, _Clock, _LoggerFactory.CreateLogger<PersistDraftRunStage>()),
             StageId.AutoFixFindings => new AutoFixFindingsStage(
                 _FixerRegistry,
                 build.Agent,

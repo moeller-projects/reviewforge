@@ -42,23 +42,27 @@ tests/
 (fractional numbers retired). Every stage is a class in `Core/Pipeline/Stages/` and a
 failed stage fails the run.
 
-| #  | Stage              | What it does                                                                                                                                               |
-|----|--------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1  | fetch-pr-context   | PR metadata, linked work items (with acceptance criteria), changed files, threads, PAT identity, prior run                                                 |
-| 2  | review-gate        | skips drafts and "same head, no new human comments" — graceful early exit                                                                                  |
-| 3  | prepare-repository | clone/reuse checkout, checkout head, unified diff → DiffIndex                                                                                              |
-| 4  | classify-run       | re-fetches threads (new comments?), full vs follow-up, pending human replies                                                                               |
-| 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                      |
-| 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files |
-| 7  | validate-findings  | re-anchors via snippet (AnchorResolver), downgrades unverifiable/out-of-diff anchors to general comments                                                   |
-| 8  | auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; published as suggestions (default) or committed by stage 10 (`AutoFix:PublishMode=CommitOnHead`) |
-| 9  | begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService |
+| #  | Stage              | What it does                                                                                                                                                                                                                                |
+|----|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 1  | fetch-pr-context   | PR metadata, linked work items (with acceptance criteria), changed files, threads, PAT identity, prior run                                                                                                                                  |
+| 2  | review-gate        | skips drafts and "same head, no new human comments" — graceful early exit                                                                                                                                                                   |
+| 3  | prepare-repository | clone/reuse checkout, checkout head, unified diff → DiffIndex                                                                                                                                                                               |
+| 4  | classify-run       | re-fetches threads (new comments?), full vs follow-up, pending human replies                                                                                                                                                                |
+| 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                                                                                                       |
+| 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files                                                            |
+| 7  | validate-findings  | re-anchors via snippet (AnchorResolver); rejects missing anchors and findings outside changed lines; weak snippets are downgraded to general comments                                                                                       |
+| 8  | auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; published as suggestions (default) or committed by stage 10 (`AutoFix:PublishMode=CommitOnHead`)                                                     |
+| 9  | begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService                       |
 | 10 | commit-fixes       | CommitOnHead only (no-op otherwise): commits the materialized fixes in the run's private checkout, pushes fast-forward-only to the PR source branch (claim check + head pin + server-side CAS), persists pushed_fixes rows before any reply |
-| 11 | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                             |
-| 12 | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `Review:CleanRunVote` (default NoResponse) |
-| 13 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                            |
+| 11 | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                                                                                                              |
+| 12 | publish-findings   | inline or general comments, summary comment with AC verdicts, reviewer vote **-5 (waiting for author)** when findings/AC-unmet/unanswered exist; clean runs get `Review:CleanRunVote` (default NoResponse)                                  |
+| 13 | persist-run        | finalizes the run row (Success, CompletedAt); skipped runs are never persisted                                                                                                                                                              |
 
 `ReviewContext` stores stage outputs in typed groups: `Fetch`, `Repository`, `Classification`, `Reasoning`, `Validation`, `AutoFix`, `Triage`, and `Published`. Resolve runs additionally initialize `Resolve`; review runs leave it null. Repository preparation owns its overlapping thread-refresh and enrichment work, canceling and observing those tasks when the context is disposed.
+
+`enqueue_review_draft` runs the review stages through validation and required finding verification, then persists only findings from that draft. It omits autofix, commit, triage, and publication. Draft findings remain separate from ordinary review
+dedupe history. Verification must be enabled with `VerifyFindings:Enabled=true`. Use `get_review_findings(runId)` to inspect results and `publish_review_findings(runId, findingIds?)` to explicitly post all or selected findings. Publication is
+rejected if the PR head differs from the reviewed head; retries reconcile findings already posted.
 
 ## Run it
 
@@ -103,10 +107,13 @@ agent-chat clients, with the same `X-Api-Key` auth and the status rate-limit pol
 JSON-RPC message is a POST, so the submit budget would strangle a session). Tools:
 `enqueue_review(org, project, repositoryId, prId)` → `{accepted, runId, statusUrl, error}`
 (conflicts and a full queue are reported, never retried internally),
+`enqueue_review_draft(org, project, repositoryId, prId)` → the same submission result for a read-only, verified draft (requires `VerifyFindings:Enabled=true`),
+`get_review_findings(runId)` → verified findings and their stable `findingId` values,
+`publish_review_findings(runId, findingIds?)` → explicit publication result; omit `findingIds` to publish all,
 `get_review_status(runId)` → the run status or null, and `list_open_prs(project?, repositoryId?,
 maxResults=100)` → open PRs in the org with title/author/draft/branch fields (bounded — when
-`truncated` is true, narrow the filters), so an agent
-then call `enqueue_review` per pick. Point an MCP client at `http://localhost:5080/mcp` with
+`truncated` is true, narrow the filters), so an agent can call `enqueue_review` or
+`enqueue_review_draft` per pick. Point an MCP client at `http://localhost:5080/mcp` with
 the `X-Api-Key` header set — or, for clients that cannot set headers, pass the key as the
 `api_key` query parameter (`/mcp` only; the header is preferred because query strings appear
 in request logs).

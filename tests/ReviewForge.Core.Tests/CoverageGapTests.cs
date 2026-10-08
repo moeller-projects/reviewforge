@@ -54,6 +54,47 @@ public class CoverageGapTests : IDisposable
     }
 
     [Fact]
+    public async Task Persist_draft_saves_only_current_verified_findings_with_full_payload()
+    {
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(
+                new PrKey("o", "p", "r", 1), "old-head", DateTimeOffset.UtcNow.AddDays(-1), ["prior-key"],
+                [new StoredFinding("prior-key", "r", "low", "prior", null, null, null)]),
+        };
+        var finding = new RichFinding
+        {
+            RuleId = "r", Title = "finding", Severity = "high", Category = "bug", Description = "description",
+            Anchor = new FindingAnchor("src/file.cs", 5, 5), DedupeKey = "current-key",
+        };
+        var ctx = new ReviewContext(new PrKey("o", "p", "r", 1), DateTimeOffset.UtcNow)
+        {
+            RunKind = RunKind.ReviewDraft,
+            Fetch = new FetchOutcome
+            {
+                PullRequest = new FakePullRequestSource().Pr,
+                Threads =
+                [
+                    new ReviewThread(1, null, ReviewThreadStatus.Active,
+                        [new ThreadComment("u", "user", false, "comment", DateTimeOffset.UtcNow)])
+                ],
+            },
+            Classification = new Classification {Kind = ReviewKind.Full},
+            Validation = new ValidationOutcome {AcceptedFindings = [finding]},
+        };
+
+        await new PersistDraftRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
+
+        var saved = Assert.Single(store.Runs);
+        Assert.Equal(nameof(RunKind.ReviewDraft), saved.Pipeline);
+        var row = Assert.Single(saved.Findings);
+        Assert.Equal("current-key", row.DedupeKey);
+        Assert.NotNull(row.FindingJson);
+        Assert.Null(row.ThreadId);
+        Assert.Equal(DateTimeOffset.UtcNow.Date, saved.LastObservedCommentAt!.Value.Date);
+    }
+
+    [Fact]
     public async Task Triage_flags_unanswered_threads_without_writing()
     {
         var source = new FakePullRequestSource();

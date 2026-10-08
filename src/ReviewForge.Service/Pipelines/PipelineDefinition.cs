@@ -26,6 +26,7 @@ public enum StageId
     PlanFixes,
     ApplyFixes,
     VerifyBuild,
+    PersistDraftRun,
     ResolveCommitPush,
     ReplyComments,
     PersistRun,
@@ -80,6 +81,32 @@ public static class Pipelines
         stages.AddRange([StageId.TriageThreads, StageId.PublishFindings, StageId.PersistRun]);
 
         return new PipelineDefinition(RunKind.Review, stages, features);
+    }
+
+    public static PipelineDefinition ReviewDraft(VerifyFindingsOptions verifyFindings)
+    {
+        if (!verifyFindings.Enabled)
+            throw new InvalidOperationException("ReviewDraft requires VerifyFindings:Enabled=true");
+
+        var features = new PipelineFeatures(
+            CheckoutMode: CheckoutMode.Pooled,
+            IncludeVerifyFindings: true,
+            IncludeCommitFixes: false,
+            IncludeVerifyBuild: false,
+            CleanRunVote: null);
+        var stages = new List<StageId>
+        {
+            StageId.FetchPrContext,
+            StageId.ReviewGate,
+            StageId.PrepareRepository,
+            StageId.ClassifyRun,
+            StageId.EnrichContext,
+            StageId.ExecuteReasoning,
+            StageId.ValidateFindings,
+            StageId.VerifyFindings,
+            StageId.PersistDraftRun,
+        };
+        return new PipelineDefinition(RunKind.ReviewDraft, stages, features);
     }
 
     public static PipelineDefinition Resolve(ResolveOptions resolve)

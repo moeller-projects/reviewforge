@@ -11,13 +11,17 @@ public sealed class RunEntity
     public int PrId { get; set; }
     public required string HeadSha { get; set; }
     public required string Kind { get; set; }
+
     /// <summary>Pipeline which produced the run (for example Review or Resolve).</summary>
     public required string Pipeline { get; set; }
+
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+
     /// <summary>Newest observed comment timestamp (ADO server time) at fetch; the follow-up
     /// gate compares against this instead of the local-clock CompletedAt (P2-24).</summary>
     public DateTimeOffset? LastObservedCommentAt { get; set; }
+
     public bool Success { get; set; }
     public List<FindingEntity> Findings { get; set; } = [];
 }
@@ -36,6 +40,9 @@ public sealed class FindingEntity
 
     /// <summary>Serialized AppliedFix for fixes applied on that run; null for plain findings.</summary>
     public string? AppliedFixJson { get; set; }
+
+    public string? FindingJson { get; set; }
+    public bool Published { get; set; }
 }
 
 /// <summary>Durable resolve action and its reply state.</summary>
@@ -56,7 +63,6 @@ public sealed class ResolveActionEntity
     public string? ReplyText { get; set; }
 }
 
-
 /// <summary>Durable pushed-fix record (CommitOnHead): written by the commit stage as a push
 /// INTENT before the external push and confirmed atomically after it succeeds — the
 /// crash-before/after-push recovery source. Only confirmed rows are reconciled for replies.
@@ -69,14 +75,17 @@ public sealed class PushedFixEntity
     public required string Project { get; set; }
     public required string RepositoryId { get; set; }
     public int PrId { get; set; }
-    public required string DedupeKey { get; set; }   // finding key or "thread-{id}"
+    public required string DedupeKey { get; set; } // finding key or "thread-{id}"
     public required string CommitSha { get; set; }
     public required string CommitSubject { get; set; }
-    public int? ThreadId { get; set; }               // resolved live thread when known
+    public int? ThreadId { get; set; } // resolved live thread when known
+
     /// <summary>False while the row is a pre-push intent; true once the push succeeded.</summary>
     public bool Pushed { get; set; }
+
     /// <summary>AI-authored change — reconciliation replies must carry the AI-generated label.</summary>
     public bool AiDrafted { get; set; }
+
     public bool ReplyPosted { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }

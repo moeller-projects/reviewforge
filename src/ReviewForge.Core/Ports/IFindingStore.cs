@@ -14,15 +14,14 @@ namespace ReviewForge.Core.Ports;
 public sealed record PushedFix(
     int Id,
     Guid RunId,
-    string DedupeKey,          // finding key, or "thread-{ThreadId}" for commanded fixes
+    string DedupeKey, // finding key, or "thread-{ThreadId}" for commanded fixes
     string CommitSha,
     string CommitSubject,
-    int? ThreadId,             // resolved live thread when known (commanded fixes)
-    bool Pushed,               // false = push intent only; true = push confirmed on the remote
-    bool AiDrafted,            // AI-authored change — replies must carry the AI-generated label
+    int? ThreadId, // resolved live thread when known (commanded fixes)
+    bool Pushed, // false = push intent only; true = push confirmed on the remote
+    bool AiDrafted, // AI-authored change — replies must carry the AI-generated label
     bool ReplyPosted,
     DateTimeOffset CreatedAt);
- 
 
 /// <summary>FP-keyed finding store: run history and posted findings per PR.</summary>
 public interface IFindingStore
@@ -30,6 +29,7 @@ public interface IFindingStore
     Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct);
 
     Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct);
+
     /// <summary>Returns commanded-fix thread ids already recorded as audit rows for this PR.</summary>
     Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct);
 
@@ -42,6 +42,8 @@ public interface IFindingStore
 
     /// <summary>Backfill the posted thread id for a finding of the run.</summary>
     Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct);
+
+    Task MarkFindingPublishedAsync(Guid runId, string dedupeKey, int? threadId, CancellationToken ct);
 
     /// <summary>Newest runs for the PR regardless of outcome (failure backoff, diagnostics).</summary>
     Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct);
@@ -87,10 +89,13 @@ public interface IFindingStore
 
     /// <summary>Connectivity probe for health checks; must not depend on any PR-scoped data.</summary>
     Task<ReviewRun?> GetLastCompletedResolveRunAsync(PrKey pr, CancellationToken ct);
+
     Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(
         PrKey pr, IReadOnlyCollection<int> threadIds, CancellationToken ct);
+
     Task SaveResolveActionsAsync(
         PrKey pr, Guid runId, IReadOnlyList<ResolveAction> actions, CancellationToken ct);
+
     Task MarkResolveActionRepliedAsync(int id, CancellationToken ct);
     Task PingAsync(CancellationToken ct);
 }

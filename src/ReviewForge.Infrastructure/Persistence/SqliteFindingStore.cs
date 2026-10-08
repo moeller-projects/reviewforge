@@ -29,7 +29,7 @@ public sealed class SqliteFindingStore : IFindingStore
         // The shared database file may already exist with only the queue schema (durable
         // queue mode) or be brand new. EnsureCreated() is a no-op once ANY table exists,
         // so create the store schema explicitly whenever the Runs table is missing.
-        var connection = (SqliteConnection)db.Database.GetDbConnection();
+        var connection = (SqliteConnection) db.Database.GetDbConnection();
         db.Database.OpenConnection();
         try
         {
@@ -66,6 +66,20 @@ public sealed class SqliteFindingStore : IFindingStore
             if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
             {
                 cmd.CommandText = "ALTER TABLE Findings ADD COLUMN AppliedFixJson TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'FindingJson'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE Findings ADD COLUMN FindingJson TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'Published'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE Findings ADD COLUMN Published INTEGER NOT NULL DEFAULT 0";
                 cmd.ExecuteNonQuery();
             }
 
@@ -155,11 +169,16 @@ public sealed class SqliteFindingStore : IFindingStore
             pr,
             run.HeadSha,
             run.CompletedAt!.Value,
-            [.. run.Findings
-                .Where(f => !f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
-                .Select(f => f.DedupeKey)],
-            [.. run.Findings.Select(f => new StoredFinding(
-                f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
+            [
+                .. run.Findings
+                    .Where(f => !f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
+                    .Select(f => f.DedupeKey)
+            ],
+            [
+                .. run.Findings.Select(f => new StoredFinding(
+                    f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson,
+                    f.FindingJson, f.Published))
+            ],
             run.LastObservedCommentAt);
     }
 
@@ -218,8 +237,11 @@ public sealed class SqliteFindingStore : IFindingStore
             .OrderBy(p => p.Id)
             .ToListAsync(ct)
             .ConfigureAwait(false);
-        return [.. rows.Select(p => new PushedFix(
-            p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.Pushed, p.AiDrafted, p.ReplyPosted, p.CreatedAt))];
+        return
+        [
+            .. rows.Select(p => new PushedFix(
+                p.Id, p.RunId, p.DedupeKey, p.CommitSha, p.CommitSubject, p.ThreadId, p.Pushed, p.AiDrafted, p.ReplyPosted, p.CreatedAt))
+        ];
     }
 
     public async Task MarkPushedFixRepliedAsync(int pushedFixId, CancellationToken ct)
@@ -251,8 +273,11 @@ public sealed class SqliteFindingStore : IFindingStore
             run.StartedAt,
             run.CompletedAt,
             run.Success,
-            [.. run.Findings.Select(f => new StoredFinding(
-                f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
+            [
+                .. run.Findings.Select(f => new StoredFinding(
+                    f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson,
+                    f.FindingJson, f.Published))
+            ],
             run.LastObservedCommentAt,
             run.Pipeline);
     }
@@ -320,16 +345,19 @@ public sealed class SqliteFindingStore : IFindingStore
     {
         await using var db = CreateContext();
         var query = db.ResolveActions.Where(a => a.Org == pr.Org && a.Project == pr.Project
-            && a.RepositoryId == pr.RepositoryId && a.PrId == pr.PrId);
+                                                                 && a.RepositoryId == pr.RepositoryId && a.PrId == pr.PrId);
         if (threadIds.Count > 0)
         {
             query = query.Where(a => threadIds.Contains(a.ThreadId));
         }
 
         var rows = await query.OrderBy(a => a.Id).ToListAsync(ct).ConfigureAwait(false);
-        return [.. rows.Select(a => new ResolveAction(a.Id, a.RunId, a.ThreadId,
-            Enum.Parse<TriageVerdict>(a.Verdict), Enum.Parse<ResolutionOutcome>(a.Outcome),
-            a.CommitSha, a.ReplyPosted, a.CreatedAt, a.ReplyText))];
+        return
+        [
+            .. rows.Select(a => new ResolveAction(a.Id, a.RunId, a.ThreadId,
+                Enum.Parse<TriageVerdict>(a.Verdict), Enum.Parse<ResolutionOutcome>(a.Outcome),
+                a.CommitSha, a.ReplyPosted, a.CreatedAt, a.ReplyText))
+        ];
     }
 
     public async Task SaveResolveActionsAsync(
@@ -399,6 +427,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 .ToListAsync(ct)
         ];
     }
+
     public async Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
     {
         await using var db = CreateContext();
@@ -413,7 +442,7 @@ public sealed class SqliteFindingStore : IFindingStore
 
         return keys
             .Select(key => key[AppliedFix.CommandKeyPrefix.Length..])
-            .Select(suffix => long.TryParse(suffix, out var id) ? (long?)id : null)
+            .Select(suffix => long.TryParse(suffix, out var id) ? (long?) id : null)
             .Where(id => id is not null)
             .Select(id => id!.Value)
             .ToHashSet();
@@ -476,6 +505,8 @@ public sealed class SqliteFindingStore : IFindingStore
         Line = f.Line,
         ThreadId = f.ThreadId,
         AppliedFixJson = f.AppliedFixJson,
+        FindingJson = f.FindingJson,
+        Published = f.Published,
     };
 
     public async Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct)
@@ -484,6 +515,14 @@ public sealed class SqliteFindingStore : IFindingStore
         await db.Findings
             .Where(f => f.RunId == runId && f.DedupeKey == dedupeKey)
             .ExecuteUpdateAsync(s => s.SetProperty(f => f.ThreadId, threadId), ct);
+    }
+
+    public async Task MarkFindingPublishedAsync(Guid runId, string dedupeKey, int? threadId, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await db.Findings.Where(f => f.RunId == runId && f.DedupeKey == dedupeKey)
+            .ExecuteUpdateAsync(s => s.SetProperty(f => f.Published, true)
+                .SetProperty(f => f.ThreadId, f => threadId ?? f.ThreadId), ct).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
@@ -515,8 +554,11 @@ public sealed class SqliteFindingStore : IFindingStore
                 .Select(r => new ReviewRun(
                     r.Id, pr, r.HeadSha, Enum.Parse<ReviewKind>(r.Kind),
                     r.StartedAt, r.CompletedAt, r.Success,
-                    [.. r.Findings.Select(f => new StoredFinding(
-                        f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson))],
+                    [
+                        .. r.Findings.Select(f => new StoredFinding(
+                            f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId,
+                            f.AppliedFixJson, f.FindingJson, f.Published))
+                    ],
                     r.LastObservedCommentAt, r.Pipeline))
         ];
     }
@@ -561,7 +603,7 @@ public sealed class SqliteFindingStore : IFindingStore
     public async Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct)
     {
         await using var db = CreateContext();
-        var connection = (SqliteConnection)db.Database.GetDbConnection();
+        var connection = (SqliteConnection) db.Database.GetDbConnection();
         await connection.OpenAsync(ct).ConfigureAwait(false);
         try
         {
@@ -583,6 +625,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 AddPruneParameters(deletePushedFixes, olderThan, minRunsPerPr);
                 await deletePushedFixes.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
+
             await using (var deleteResolveActions = connection.CreateCommand())
             {
                 deleteResolveActions.Transaction = tx;
