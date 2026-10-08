@@ -630,6 +630,9 @@ public class FakeChatClientFactory(IChatClient client, string model = "test-mode
         RequestedTiers.Add(tier);
         return client;
     }
+
+    public bool IsTransientFailure(Exception exception)
+        => exception is HttpRequestException {StatusCode: null} or TimeoutException;
 }
 
 /// <summary>In-memory <see cref="IWorkspaceFs"/> backed by the real filesystem (temp dirs).</summary>

@@ -21,6 +21,20 @@ public class ChatClientFactoryTests
         => Assert.Equal(expected, ChatClientFactory.ResolveModelName(configured));
 
     [Fact]
+    public void Transport_retry_classification_preserves_transient_boundaries()
+    {
+        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "m"});
+
+        Assert.True(factory.IsTransientFailure(new HttpRequestException("connection lost")));
+        Assert.True(factory.IsTransientFailure(new HttpRequestException("timeout", null, HttpStatusCode.RequestTimeout)));
+        Assert.True(factory.IsTransientFailure(new HttpRequestException("throttled", null, HttpStatusCode.TooManyRequests)));
+        Assert.True(factory.IsTransientFailure(new HttpRequestException("server", null, HttpStatusCode.InternalServerError)));
+        Assert.True(factory.IsTransientFailure(new TimeoutException()));
+        Assert.False(factory.IsTransientFailure(new HttpRequestException("bad request", null, HttpStatusCode.BadRequest)));
+        Assert.False(factory.IsTransientFailure(new InvalidOperationException()));
+    }
+
+    [Fact]
     public void ModelName_uses_resolved_model()
     {
         var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "openai:gpt-5"});
