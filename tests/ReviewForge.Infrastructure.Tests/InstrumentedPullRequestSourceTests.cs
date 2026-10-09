@@ -117,7 +117,7 @@ public sealed class InstrumentedPullRequestSourceTests
         public override Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
             => throw new InvalidOperationException("boom");
 
-        public override Task PostGeneralCommentAsync(
+        public override Task<int> PostGeneralCommentAsync(
             PrKey pr,
             string text,
             string? dedupeKey,

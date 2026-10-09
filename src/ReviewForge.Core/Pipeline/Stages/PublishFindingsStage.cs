@@ -318,7 +318,7 @@ public sealed class PublishFindingsStage(
 
         // Summary must post AFTER findings (readers of the PR see findings first).
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before summary");
-        await source.PostGeneralCommentAsync(
+        var summaryThreadId = await source.PostGeneralCommentAsync(
                 ctx.Pr,
                 CommentFormatter.FormatSummary(
                     ctx.RequireResult(), ctx.Fetch.WorkItems, ctx.Triage.UnansweredThreads, ctx.Classification.Kind,
@@ -327,8 +327,26 @@ public sealed class PublishFindingsStage(
                 ct: ct)
             .ConfigureAwait(false);
 
-        var acUnmet = (ctx.RequireResult().Narrative.AcceptanceCriteria ?? []).Any(v => v.Status == AcStatus.Unmet);
-        var needsAttention = ctx.Validation.AcceptedFindings.Count > 0 || acUnmet || ctx.Triage.UnansweredThreads.Count > 0;
+        var acceptanceCriteria = ctx.RequireResult().Narrative.AcceptanceCriteria ?? [];
+        var workItemsWithCriteria = ctx.Fetch.WorkItems
+            .Where(item => !string.IsNullOrWhiteSpace(item.AcceptanceCriteria))
+            .Select(item => item.Id)
+            .ToHashSet();
+        var criteriaReportedForEveryWorkItem = workItemsWithCriteria.All(id => acceptanceCriteria.Any(v => v.WorkItemId == id));
+        var allAcceptanceCriteriaMet = criteriaReportedForEveryWorkItem
+                                       && acceptanceCriteria.All(v => v.Status == AcStatus.Met);
+        var hasActiveQuestions = ctx.Triage.UnansweredThreads.Count > 0
+                                || ctx.RequireResult().Uncertainties.Count > 0;
+        var needsAttention = ctx.Validation.AcceptedFindings.Count > 0
+                            || !allAcceptanceCriteriaMet
+                            || hasActiveQuestions;
+        if (!needsAttention)
+        {
+            PublishGuardChecks.ThrowIfClaimLost(ctx, "before closing clean review summary");
+            await source.SetThreadStatusAsync(ctx.Pr, summaryThreadId, ReviewThreadStatus.Closed, ct)
+                .ConfigureAwait(false);
+        }
+
         if (needsAttention)
         {
             PublishGuardChecks.ThrowIfClaimLost(ctx, "before vote");

@@ -33,7 +33,8 @@ public interface IPullRequestSource
     /// publish suppression. Returns the new thread id.</summary>
     Task<int> PostSuggestionThreadAsync(PrKey pr, ThreadAnchor anchor, string body, CancellationToken ct);
 
-    Task PostGeneralCommentAsync(PrKey pr, string text, string? dedupeKey, CancellationToken ct);
+    /// <summary>Posts a general comment thread and returns its thread id.</summary>
+    Task<int> PostGeneralCommentAsync(PrKey pr, string text, string? dedupeKey, CancellationToken ct);
 
     Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct);
 

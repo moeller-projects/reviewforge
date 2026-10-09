@@ -140,7 +140,7 @@ public class FakePullRequestSource : IPullRequestSource
         }
     }
 
-    public virtual Task PostGeneralCommentAsync(
+    public virtual Task<int> PostGeneralCommentAsync(
         PrKey pr,
         string text,
         string? dedupeKey,
@@ -150,9 +150,8 @@ public class FakePullRequestSource : IPullRequestSource
         {
             GeneralComments.Add(text);
             GeneralCommentDedupeKeys.Add(dedupeKey);
+            return Task.FromResult(_NextThreadId++);
         }
-
-        return Task.CompletedTask;
     }
 
     public virtual Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct)
@@ -240,18 +239,20 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
         }
     }
 
-    public override async Task PostGeneralCommentAsync(
+    public override async Task<int> PostGeneralCommentAsync(
         PrKey pr,
         string text,
         string? dedupeKey,
         CancellationToken ct)
     {
         await DelayAsync(ct);
-        await base.PostGeneralCommentAsync(pr, text, dedupeKey, ct);
+        var threadId = await base.PostGeneralCommentAsync(pr, text, dedupeKey, ct);
         lock (_LogGate)
         {
             WriteLog.Add($"comment {_CommentCount++}");
         }
+
+        return threadId;
     }
 
     public override async Task ReplyToThreadAsync(PrKey pr, int threadId, string text, CancellationToken ct)

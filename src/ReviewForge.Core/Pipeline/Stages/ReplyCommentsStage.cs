@@ -58,25 +58,38 @@ public sealed class ReplyCommentsStage(
 
         var current = unresolved.Where(a => a.RunId == ctx.RunId).ToArray();
         var summaryKey = $"resolve-{ctx.RunId:D}";
-        if (current.Length > 0 && !threads.Values.Any(t => t.DedupeKey == summaryKey))
+        if (current.Length > 0)
         {
-            PublishGuardChecks.ThrowIfClaimLost(ctx, "before resolve summary");
-            var summary = new StringBuilder(CommentFormatter.BotPreamble).AppendLine().AppendLine()
-                .AppendLine("## Review · resolve summary");
-            foreach (var group in current.Where(a => a.CommitSha is not null)
-                         .GroupBy(a => a.CommitSha!, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+            var existingSummary = threads.Values.FirstOrDefault(t => t.DedupeKey == summaryKey);
+            var summaryThreadId = existingSummary?.Id;
+            if (summaryThreadId is null)
             {
-                var subject = resolve.AppliedResolutions.FirstOrDefault(item => item.CommitSha == group.Key)?.CommitSubject;
-                summary.Append("- Commit: ").Append(group.Key[..Math.Min(7, group.Key.Length)]);
-                if (!string.IsNullOrWhiteSpace(subject)) summary.Append(" — ").Append(subject);
-                summary.AppendLine();
+                PublishGuardChecks.ThrowIfClaimLost(ctx, "before resolve summary");
+                var summary = new StringBuilder(CommentFormatter.BotPreamble).AppendLine().AppendLine()
+                    .AppendLine("## Review · resolve summary");
+                foreach (var group in current.Where(a => a.CommitSha is not null)
+                             .GroupBy(a => a.CommitSha!, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+                {
+                    var subject = resolve.AppliedResolutions.FirstOrDefault(item => item.CommitSha == group.Key)?.CommitSubject;
+                    summary.Append("- Commit: ").Append(group.Key[..Math.Min(7, group.Key.Length)]);
+                    if (!string.IsNullOrWhiteSpace(subject)) summary.Append(" — ").Append(subject);
+                    summary.AppendLine();
+                }
+
+                var deferred = current.Where(a => a.Outcome == ResolutionOutcome.Deferred).Select(a => $"#{a.ThreadId}").ToArray();
+                if (deferred.Length > 0) summary.Append("- Deferred: ").AppendLine(string.Join(", ", deferred));
+                summary.Append("- Verification: ").AppendLine(resolve.ResolveVerificationStatus);
+                summaryThreadId = await source.PostGeneralCommentAsync(
+                    ctx.Pr, summary.ToString().TrimEnd(), summaryKey, ct).ConfigureAwait(false);
+                logger?.LogDebug("resolve summary posted: currentActions={CurrentActionCount}", current.Length);
             }
 
-            var deferred = current.Where(a => a.Outcome == ResolutionOutcome.Deferred).Select(a => $"#{a.ThreadId}").ToArray();
-            if (deferred.Length > 0) summary.Append("- Deferred: ").AppendLine(string.Join(", ", deferred));
-            summary.Append("- Verification: ").AppendLine(resolve.ResolveVerificationStatus);
-            await source.PostGeneralCommentAsync(ctx.Pr, summary.ToString().TrimEnd(), summaryKey, ct).ConfigureAwait(false);
-            logger?.LogDebug("resolve summary posted: currentActions={CurrentActionCount}", current.Length);
+            if (current.All(a => a.Outcome != ResolutionOutcome.Deferred) && existingSummary?.Status != ReviewThreadStatus.Closed)
+            {
+                PublishGuardChecks.ThrowIfClaimLost(ctx, "before closing resolve summary");
+                await source.SetThreadStatusAsync(ctx.Pr, summaryThreadId.Value, ReviewThreadStatus.Closed, ct)
+                    .ConfigureAwait(false);
+            }
         }
 
         logger?.LogInformation("resolve replies posted: {Count}", replies);
