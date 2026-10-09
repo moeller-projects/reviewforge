@@ -132,6 +132,9 @@ public sealed class NativeReviewAgent(
         }
 
         var tracked = CreatePipeline(request.Collector, usage, effectiveTier, maxIterations);
+        var chatOptions = chatClientFactory.CreateChatOptions(effectiveTier, _Options.Effort);
+        chatOptions.Instructions = instructions;
+        chatOptions.Tools = tools;
         return tracked.AsAIAgent(new ChatClientAgentOptions
         {
             Name = request.Profile switch
@@ -141,13 +144,7 @@ public sealed class NativeReviewAgent(
                 ToolProfile.Fix => "reviewforge-fix",
                 _ => "reviewforge-native",
             },
-            ChatOptions = new ChatOptions
-            {
-                ModelId = chatClientFactory.ModelName(effectiveTier),
-                Instructions = instructions,
-                Reasoning = _Options.Effort is { } effort ? new ReasoningOptions {Effort = effort} : null,
-                Tools = tools,
-            },
+            ChatOptions = chatOptions,
             AIContextProviders =
             [
                 new CompactionProvider(new SlidingWindowCompactionStrategy(
