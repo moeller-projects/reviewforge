@@ -53,6 +53,26 @@ public sealed class SymbolUsageEnricherTests : IDisposable
     }
 
     [Fact]
+    public async Task Reports_multiple_symbols_caps_call_sites_and_counts_additional_references()
+    {
+        await File.WriteAllLinesAsync(Path.Combine(_Root, "Consumer.cs"),
+        [
+            "ParseConfig();",
+            "ParseConfig();",
+            "ParseConfig();",
+            "ParseConfig();",
+            "BuildResult();",
+        ]);
+        var diff = "+public ParseConfig BuildResult() => new();\n";
+
+        var result = await new SymbolUsageEnricher().EnrichAsync(_Root, diff, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Contains("ParseConfig — 4 references: Consumer.cs:1, Consumer.cs:2, Consumer.cs:3 (+1 more)", result);
+        Assert.Contains("BuildResult — 1 references: Consumer.cs:5", result);
+    }
+
+    [Fact]
     public async Task Converts_cancellation_or_unexpected_errors_to_null()
     {
         var diff = "+public NewSymbol = 1;\n";

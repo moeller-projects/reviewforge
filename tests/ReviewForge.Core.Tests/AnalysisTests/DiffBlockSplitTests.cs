@@ -87,4 +87,17 @@ public sealed class DiffBlockSplitTests
 
         Assert.Single(blocks);
     }
+
+    [Fact]
+    public void Split_recovers_file_path_from_plus_header_when_git_header_is_malformed()
+    {
+        var diff = "diff --git \n+++ b/first.cs\n+one\n"
+                   + "diff --git a/old.cs\n+++ b/second.cs\n+two\n"
+                   + "diff --git a/old.cs c/third.cs\n+++ b/third.cs\n+three\n"
+                   + "diff --git a/old.cs b/\n+++ b/fourth.cs\n+four\n";
+
+        var blocks = DiffBlockSplit.Split(diff);
+
+        Assert.Equal(["first.cs", "second.cs", "third.cs", "fourth.cs"], blocks.Select(block => block.File));
+    }
 }

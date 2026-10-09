@@ -1298,6 +1298,7 @@ public class StageTests : IDisposable
         Assert.Single(source.Votes);
         Assert.Equal(ReviewerVote.WaitingForAuthor, source.Votes[0].Vote);
         Assert.Equal("user-1", source.Votes[0].ReviewerId);
+        Assert.DoesNotContain(source.StatusChanges, status => status.Status == ReviewThreadStatus.Closed);
     }
 
     [Fact]
@@ -1348,7 +1349,20 @@ public class StageTests : IDisposable
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
-        ctx.Reasoning = ctx.Reasoning with {Result = new ReviewResult {Narrative = new ReviewNarrative {ReviewSummary = "clean"}, Findings = [], Uncertainties = []}};
+        ctx.Fetch = ctx.Fetch with {WorkItems = [new WorkItem(1, "wi", "Bug", null, "AC", "Active")]};
+        ctx.Reasoning = ctx.Reasoning with
+        {
+            Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative
+                {
+                    ReviewSummary = "clean",
+                    AcceptanceCriteria = [new AcVerdict(1, "AC", AcStatus.Met, "verified")],
+                },
+                Findings = [],
+                Uncertainties = [],
+            }
+        };
         ctx.Validation = ctx.Validation with {AcceptedFindings = []};
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance).ExecuteAsync(ctx, CancellationToken.None);
@@ -1357,6 +1371,58 @@ public class StageTests : IDisposable
         Assert.Equal(ReviewerVote.NoResponse, vote.Vote);
         Assert.Equal("user-1", vote.ReviewerId);
         Assert.Single(source.GeneralComments); // summary only
+        Assert.Contains(source.StatusChanges, status => status.ThreadId == 1000 && status.Status == ReviewThreadStatus.Closed);
+    }
+
+    [Fact]
+    public async Task Publish_keeps_summary_active_when_acceptance_criteria_are_unresolved()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Fetch = ctx.Fetch with {WorkItems = [new WorkItem(1, "wi", "Bug", null, "AC", "Active")]};
+        ctx.Reasoning = ctx.Reasoning with
+        {
+            Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative
+                {
+                    ReviewSummary = "review",
+                    AcceptanceCriteria = [new AcVerdict(1, "AC", AcStatus.Unclear, "could not verify")],
+                },
+                Findings = [],
+                Uncertainties = [],
+            }
+        };
+        ctx.Validation = ctx.Validation with {AcceptedFindings = []};
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.DoesNotContain(source.StatusChanges, status => status.Status == ReviewThreadStatus.Closed);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, Assert.Single(source.Votes).Vote);
+    }
+
+    [Fact]
+    public async Task Publish_keeps_summary_active_when_review_has_an_unanswered_question()
+    {
+        var source = new FakePullRequestSource();
+        var ctx = Ctx(source);
+        ctx.Reasoning = ctx.Reasoning with
+        {
+            Result = new ReviewResult
+            {
+                Narrative = new ReviewNarrative {ReviewSummary = "review"},
+                Findings = [],
+                Uncertainties = [new ReviewUncertainty("configuration", "Which environment is authoritative?", null)],
+            }
+        };
+        ctx.Validation = ctx.Validation with {AcceptedFindings = []};
+
+        await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.DoesNotContain(source.StatusChanges, status => status.Status == ReviewThreadStatus.Closed);
+        Assert.Equal(ReviewerVote.WaitingForAuthor, Assert.Single(source.Votes).Vote);
     }
 
     [Fact]

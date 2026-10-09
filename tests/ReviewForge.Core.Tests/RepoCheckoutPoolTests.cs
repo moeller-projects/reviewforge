@@ -61,6 +61,27 @@ public sealed class RepoCheckoutPoolTests : IDisposable
     }
 
     [Fact]
+    public async Task Mirror_helpers_warm_and_consult_the_repository_mirror()
+    {
+        var git = new TestGitOps();
+        var pool = Pool(git, "pat");
+
+        Assert.False(pool.HasCheckout("repo", "head"));
+        Assert.Null(await pool.GetMirrorCommitInfoAsync("repo", "head", CancellationToken.None));
+        await pool.WarmupAsync("repo", "url", "base", "head", CancellationToken.None);
+        pool.MarkWarmed("repo", "head");
+
+        using var checkout = await pool.AcquireAsync("repo", "url", "base", "head", CancellationToken.None);
+
+        Assert.True(pool.HasCheckout("repo", "head"));
+        Assert.Contains("warmup", git.Calls);
+        Assert.Equal("pat", git.WarmupPat);
+        Directory.CreateDirectory(Path.Combine(_Root, "mirror", RepoCheckoutPool.KeyComponent("repo")));
+        Assert.Null(await pool.GetMirrorCommitInfoAsync("repo", "head", CancellationToken.None));
+        Assert.Equal(1, git.CommitInfoCalls);
+    }
+
+    [Fact]
     public async Task Acquire_ensures_commits_before_checkout()
     {
         var git = new TestGitOps();
@@ -708,6 +729,8 @@ public sealed class RepoCheckoutPoolTests : IDisposable
         public bool ThrowOnEnsure { get; set; }
         public int CheckoutCount { get; private set; }
         public int CloneCount { get; private set; }
+        public int CommitInfoCalls { get; private set; }
+        public string? WarmupPat { get; private set; }
         public int MaxConcurrentClones => Volatile.Read(ref _MaxConcurrentClones);
         public string? HeadSha { get; init; }
         public List<(string Base, string Head)> EnsuredCommits { get; } = [];
@@ -806,6 +829,7 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             {
                 Calls.Add("warmup");
                 EnsuredCommits.Add((baseSha, headSha));
+                WarmupPat = pat;
             }
 
             return ThrowOnEnsure
@@ -827,6 +851,9 @@ public sealed class RepoCheckoutPoolTests : IDisposable
             => Task.FromResult<string?>(null);
 
         public Task<TipCommitInfo?> GetCommitInfoAsync(string repoPath, string commitSha, CancellationToken ct)
-            => Task.FromResult<TipCommitInfo?>(null);
+        {
+            CommitInfoCalls++;
+            return Task.FromResult<TipCommitInfo?>(null);
+        }
     }
 }

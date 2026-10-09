@@ -274,6 +274,44 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var posted = Assert.Single(source.Replies);
         Assert.Equal(posted.Text, Assert.Single(store.ResolveActions).ReplyText);
         Assert.True(posted.Text.Contains("The API is async.", StringComparison.Ordinal));
+        Assert.Contains(source.StatusChanges, status => status.ThreadId == 1000 && status.Status == ReviewThreadStatus.Closed);
+    }
+
+    [Fact]
+    public async Task Reply_formats_resolution_outcomes_and_leaves_deferred_summary_active()
+    {
+        var source = new FakePullRequestSource();
+        var store = new FakeFindingStore();
+        var run = Guid.NewGuid();
+        var outcomes = new[]
+        {
+            ResolutionOutcome.AgentDeclined,
+            ResolutionOutcome.NonIssue,
+            ResolutionOutcome.Question,
+            ResolutionOutcome.AlreadyFixed,
+            ResolutionOutcome.PushFailed,
+            ResolutionOutcome.OutOfScope,
+            ResolutionOutcome.Deferred,
+        };
+        await store.SaveResolveActionsAsync(Key, run, outcomes.Select((outcome, index) => new ResolveAction(
+            0, run, index + 1, TriageVerdict.Actionable, outcome, null, false, DateTimeOffset.UtcNow)).ToArray(),
+            CancellationToken.None);
+        var ctx = Context(run);
+        ctx.Resolve!.ThreadVerdicts = outcomes.Select((outcome, index) => new ThreadVerdict(
+            index + 1, TriageVerdict.Question, "Not a defect", "high", Answer: "Use the async API.")).ToArray();
+
+        await new ReplyCommentsStage(source, store, setFixedStatus: false).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(outcomes.Length, source.Replies.Count);
+        Assert.Contains(source.Replies, reply => reply.Text.Contains("No change made.", StringComparison.Ordinal));
+        Assert.Contains(source.Replies, reply => reply.Text.Contains("Not a defect", StringComparison.Ordinal));
+        Assert.Contains(source.Replies, reply => reply.Text.Contains("Use the async API.", StringComparison.Ordinal));
+        Assert.Contains(source.Replies, reply => reply.Text.Contains("already holds on head-sh", StringComparison.Ordinal));
+        Assert.Contains(source.Replies, reply => reply.Text.Contains("could not be published", StringComparison.Ordinal));
+        Assert.Contains(source.Replies, reply => reply.Text.Contains("needs a human decision", StringComparison.Ordinal));
+        Assert.Contains(source.Replies, reply => reply.Text.Contains("re-queued for the next resolve run", StringComparison.Ordinal));
+        Assert.Contains("- Deferred: #7", Assert.Single(source.GeneralComments));
+        Assert.Empty(source.StatusChanges);
     }
 
 
