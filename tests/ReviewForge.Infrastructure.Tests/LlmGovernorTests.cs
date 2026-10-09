@@ -7,6 +7,7 @@ using Xunit;
 
 namespace ReviewForge.Infrastructure.Tests;
 
+[Collection(EnvironmentVariableCollection.Name)]
 public class LlmGovernorTests
 {
     /// <summary>Records the governor's observed inflight count at call start; optionally

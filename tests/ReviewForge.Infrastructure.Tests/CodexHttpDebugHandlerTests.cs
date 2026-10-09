@@ -7,6 +7,7 @@ using Xunit;
 
 namespace ReviewForge.Infrastructure.Tests;
 
+[Collection(EnvironmentVariableCollection.Name)]
 public class CodexHttpDebugHandlerTests
 {
     [Fact]

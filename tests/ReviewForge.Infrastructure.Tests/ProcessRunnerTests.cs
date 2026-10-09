@@ -5,6 +5,7 @@ using Xunit;
 
 namespace ReviewForge.Infrastructure.Tests;
 
+[Collection(EnvironmentVariableCollection.Name)]
 public sealed class ProcessRunnerTests
 {
     [Fact]
