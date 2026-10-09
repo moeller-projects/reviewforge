@@ -90,22 +90,21 @@ public static class FindingsVerifierPrompt
         return sb.ToString();
     }
 
-    /// <summary>System + user messages for the single verification request.</summary>
+    /// <summary>Single user message with verifier identity and instructions at its top.</summary>
     public static ChatMessage[] Messages(string prompt)
         =>
         [
-            new ChatMessage(ChatRole.System, System),
-            new ChatMessage(ChatRole.User, prompt),
+            new ChatMessage(ChatRole.User, WithIdentity(prompt)),
         ];
 
-    /// <summary>Retry messages after an unparseable first response: same prompt plus a
-    /// JSON-only nudge. Sent once; a second malformed reply fails open.</summary>
+    /// <summary>Retry the same user prompt with a JSON-only nudge.</summary>
     public static ChatMessage[] RetryMessages(string prompt)
         =>
         [
-            new ChatMessage(ChatRole.System, System),
-            new ChatMessage(ChatRole.User, prompt),
+            new ChatMessage(ChatRole.User, WithIdentity(prompt)),
             new ChatMessage(ChatRole.User,
                 "Your previous answer was not parseable. Reply with ONLY the JSON array — no prose, no code fence."),
         ];
+
+    private static string WithIdentity(string prompt) => $"{System}{Environment.NewLine}{Environment.NewLine}{prompt}";
 }

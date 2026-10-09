@@ -84,23 +84,24 @@ public sealed class FindingsVerifierPromptTests
     }
 
     [Fact]
-    public void Messages_contain_system_and_user_roles()
+    public void Messages_puts_verifier_identity_at_top_of_user_prompt()
     {
         var messages = FindingsVerifierPrompt.Messages("verify these");
 
-        Assert.Equal(2, messages.Length);
-        Assert.Equal(ChatRole.System, messages[0].Role);
-        Assert.Equal(ChatRole.User, messages[1].Role);
-        Assert.Equal("verify these", messages[1].Text);
+        var message = Assert.Single(messages);
+        Assert.Equal(ChatRole.User, message.Role);
+        Assert.StartsWith(FindingsVerifierPrompt.System, message.Text);
+        Assert.EndsWith("verify these", message.Text);
     }
 
     [Fact]
-    public void RetryMessages_adds_json_only_nudge()
+    public void RetryMessages_keeps_identity_and_adds_json_only_nudge()
     {
         var messages = FindingsVerifierPrompt.RetryMessages("verify these");
 
-        Assert.Equal(3, messages.Length);
-        Assert.Contains("ONLY the JSON array", messages[2].Text);
+        Assert.All(messages, message => Assert.Equal(ChatRole.User, message.Role));
+        Assert.StartsWith(FindingsVerifierPrompt.System, messages[0].Text);
+        Assert.Contains("ONLY the JSON array", messages[1].Text);
     }
 }
 
