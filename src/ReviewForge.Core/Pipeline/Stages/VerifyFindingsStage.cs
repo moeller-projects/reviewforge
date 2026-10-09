@@ -81,9 +81,12 @@ public sealed class VerifyFindingsStage(
         try
         {
             var client = new RetryingChatClient(chatClientFactory.Create(ChatTier.Fast), chatClientFactory.IsTransientFailure, logger);
+            var chatOptions = chatClientFactory.CreateChatOptions(ChatTier.Fast);
             var response = await client.GetResponseAsync(
-                FindingsVerifierPrompt.Messages(prompt), cancellationToken: timeout.Token).ConfigureAwait(false);
-            verdicts = VerdictParser.Parse(response.Text) ?? await Retry(client, prompt, timeout.Token).ConfigureAwait(false);
+                FindingsVerifierPrompt.Messages(prompt),
+                chatOptions,
+                timeout.Token).ConfigureAwait(false);
+            verdicts = VerdictParser.Parse(response.Text) ?? await Retry(client, chatOptions, prompt, timeout.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -125,10 +128,12 @@ public sealed class VerifyFindingsStage(
 
     /// <summary>One retry with a JSON-only nudge; a second malformed reply fails open (all kept).</summary>
     private async Task<IReadOnlyDictionary<string, FindingsVerifierPrompt.Verdict>> Retry(
-        IChatClient client, string prompt, CancellationToken ct)
+        IChatClient client, ChatOptions chatOptions, string prompt, CancellationToken ct)
     {
         var retry = await client.GetResponseAsync(
-            FindingsVerifierPrompt.RetryMessages(prompt), cancellationToken: ct).ConfigureAwait(false);
+            FindingsVerifierPrompt.RetryMessages(prompt),
+            chatOptions,
+            ct).ConfigureAwait(false);
         if (VerdictParser.Parse(retry.Text) is { } verdicts)
         {
             return verdicts;
