@@ -25,6 +25,22 @@ public sealed class ResolveCommandTests
     }
 
     [Fact]
+    public void Scan_ignores_system_vote_event_even_when_content_looks_like_a_creator_command()
+    {
+        var system = new ReviewThread(9, null, ReviewThreadStatus.Active,
+            [new ThreadComment(CreatorId, CreatorId, ThreadCommentOrigin.System, "/resolve fix", PublishedAt)]);
+        var systemAfterCommand = new ReviewThread(10, null, ReviewThreadStatus.Active,
+        [
+            Comment(CreatorId, false, "/resolve preserve human request"),
+            new ThreadComment(CreatorId, CreatorId, ThreadCommentOrigin.System, "voted -5", PublishedAt.AddMinutes(1)),
+        ]);
+
+        Assert.Empty(ResolveCommandDetector.Scan([system], CreatorId, watermark: null));
+        Assert.Equal("preserve human request",
+            Assert.Single(ResolveCommandDetector.Scan([systemAfterCommand], CreatorId, watermark: null)).RequestText);
+    }
+
+    [Fact]
     public void Scan_ignores_ineligible_threads_and_non_commands()
     {
         var threads = new[]

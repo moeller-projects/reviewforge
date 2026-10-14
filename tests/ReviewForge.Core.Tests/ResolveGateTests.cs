@@ -34,6 +34,18 @@ public sealed class ResolveGateTests
     }
 
     [Fact]
+    public void Evaluate_ignores_system_events_when_deciding_whether_human_feedback_exists()
+    {
+        var system = new ThreadComment("creator", "creator", ThreadCommentOrigin.System, "voted -5", Watermark.AddDays(1));
+        Assert.Equal(ResolveGateDecision.NoComments,
+            ResolveGate.Evaluate(Pr(), [Thread(1, system)], Watermark, authorAllowed: true));
+        var humanThenSystem = new ReviewThread(2, null, ReviewThreadStatus.Active,
+            [Human("creator", Watermark.AddTicks(1)), system]);
+        Assert.Equal(ResolveGateDecision.Continue,
+            ResolveGate.Evaluate(Pr(), [humanThenSystem], Watermark, authorAllowed: true));
+    }
+
+    [Fact]
     public void Evaluate_requires_a_human_comment_newer_than_watermark()
     {
         var thread = Thread(1, Human("creator", Watermark));

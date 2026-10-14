@@ -171,7 +171,7 @@ public sealed class DiscoveryService(
                 resolveCommand = ResolveCommandDetector.Scan(threads, candidate.Pr.CreatorId, resolveWatermark)
                     .OrderBy(c => c.PublishedAt).LastOrDefault();
                 var newHumanComment = threads.SelectMany(t => t.Comments)
-                    .Any(c => !c.IsBot && (resolveWatermark is null || c.PublishedAt > resolveWatermark));
+                    .Any(c => c.IsHuman && (resolveWatermark is null || c.PublishedAt > resolveWatermark));
                 var deferredThreadIds = (await store.GetResolveActionsAsync(candidate.Key, [], token)
                         .ConfigureAwait(false))
                     .Where(action => action.Outcome == ResolutionOutcome.Deferred)
@@ -179,7 +179,7 @@ public sealed class DiscoveryService(
                 var hasDeferredActions = threads.Any(thread =>
                     deferredThreadIds.Contains(thread.Id)
                     && thread.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
-                    && thread.Comments.Any(comment => !comment.IsBot));
+                    && thread.Comments.Any(comment => comment.IsHuman));
                 resolveRun = resolveCommand is not null || (_Resolve.DiscoveryEnabled && (newHumanComment || hasDeferredActions));
             }
 
@@ -200,7 +200,7 @@ public sealed class DiscoveryService(
                 var watermark = prior.LastObservedCommentAt ?? prior.CompletedAt;
                 hasNewHumanComments = threads
                     .SelectMany(t => t.Comments)
-                    .Any(c => !c.IsBot && c.PublishedAt > watermark);
+                    .Any(c => c.IsHuman && c.PublishedAt > watermark);
             }
 
             if (!resolveRun)

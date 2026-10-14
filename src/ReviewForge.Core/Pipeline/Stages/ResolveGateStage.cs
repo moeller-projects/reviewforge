@@ -20,7 +20,7 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
         var priorActions = await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false);
         var activeThreads = ctx.Fetch.Threads
             .Where(thread => thread.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
-                             && thread.Comments.Any(comment => !comment.IsBot))
+                             && thread.Comments.Any(comment => comment.IsHuman))
             .Select(thread => thread.Id).ToHashSet();
         var deferredThreadIds = priorActions
             .Where(action => action.Outcome == ResolutionOutcome.Deferred && activeThreads.Contains(action.ThreadId))

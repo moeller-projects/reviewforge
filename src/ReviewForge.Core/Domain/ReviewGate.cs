@@ -35,7 +35,7 @@ public static class ReviewGate
         var watermark = priorRun.LastObservedCommentAt ?? priorRun.CompletedAt;
         var newHumanComments = threads
             .SelectMany(t => t.Comments)
-            .Any(c => !c.IsBot && c.PublishedAt > watermark);
+            .Any(c => c.IsHuman && c.PublishedAt > watermark);
 
         return newHumanComments
             ? GateDecision.Review()
@@ -54,6 +54,10 @@ public static class RunClassifier
         [
             .. threads
                 .Where(t => t.DedupeKey is not null && t.HasPendingHumanReply)
-                .Select(t => new PendingReply(t.Id, t.DedupeKey, t.LastComment!.AuthorName, t.LastComment.Text))
+                .Select(t =>
+                {
+                    var lastHuman = t.LastNonSystemComment!;
+                    return new PendingReply(t.Id, t.DedupeKey, lastHuman.AuthorName, lastHuman.Text);
+                })
         ];
 }

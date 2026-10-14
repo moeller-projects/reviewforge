@@ -16,8 +16,8 @@ public static class ResolveCommandDetector
         {
             if (thread.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed || thread.Comments.Count == 0)
                 continue;
-            var last = thread.Comments[^1];
-            if (last.IsBot || !string.Equals(last.AuthorId, creatorId, StringComparison.OrdinalIgnoreCase)
+            var last = thread.LastNonSystemComment;
+            if (last is null || !last.IsHuman || !string.Equals(last.AuthorId, creatorId, StringComparison.OrdinalIgnoreCase)
                            || (watermark is { } at && last.PublishedAt <= at))
                 continue;
             var text = last.Text.TrimStart();

@@ -10,9 +10,10 @@ namespace ReviewForge.Core.Domain;
 /// <param name="Findings">Full finding rows of that run; lets the next run carry them forward so the
 /// known-key set does not decay to accepted-findings-only. Null when loaded from a
 /// source that only has keys.</param>
-/// <param name="LastObservedCommentAt">Newest comment timestamp (ADO server time) the run observed
-/// at fetch; the gate compares future comment timestamps against this instead of the local-clock
-/// CompletedAt. Null for runs persisted before the watermark existed (gate falls back).</param>
+/// <param name="LastObservedCommentAt">Newest human-comment timestamp (ADO server time) the run observed
+/// at fetch; system events and bot comments do not advance this watermark. The gate compares future
+/// human-comment timestamps against this instead of the local-clock CompletedAt. Legacy rows may
+/// contain the newest timestamp of any comment; null rows fall back to CompletedAt.</param>
 [ExcludeFromCodeCoverage]
 public sealed record PriorRun(
     PrKey Pr,

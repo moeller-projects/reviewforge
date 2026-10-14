@@ -40,8 +40,8 @@ public static class FixCommandDetector
                 continue;
             }
 
-            var last = thread.LastComment;
-            if (last is null || last.IsBot)
+            var last = thread.LastNonSystemComment;
+            if (last is null || !last.IsHuman)
             {
                 continue; // our own reply makes the bot last → cannot retrigger (self-idempotent)
             }
@@ -94,7 +94,7 @@ public static class FixCommandDetector
         {
             var c = thread.Comments[i];
             var text = c.Text.Trim();
-            if (c.IsBot || text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+            if (!c.IsHuman || text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

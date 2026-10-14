@@ -61,6 +61,21 @@ public class DomainTests
     }
 
     [Fact]
+    public void Gate_ignores_new_system_events_but_reviews_plain_text_from_shared_identity()
+    {
+        var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), []);
+        var systemThread = new ReviewThread(2, null, ReviewThreadStatus.Active,
+            [new ThreadComment("lukas", "Lukas", ThreadCommentOrigin.System, "voted -5", Now)]);
+        var humanThread = new ReviewThread(3, null, ReviewThreadStatus.Active,
+            [new ThreadComment("lukas", "Lukas", ThreadCommentOrigin.Human, "non issue", Now)]);
+
+        Assert.False(ReviewGate.Evaluate(Pr(), prior, [systemThread], Now).ShouldReview);
+        Assert.True(ReviewGate.Evaluate(Pr(), prior, [humanThread], Now).ShouldReview);
+        Assert.False(systemThread.HasPendingHumanReply);
+        Assert.True(humanThread.HasPendingHumanReply);
+    }
+
+    [Fact]
     public void Gate_reviews_new_comment_after_watermark()
     {
         var prior = new PriorRun(new PrKey("o", "p", "r", 7), "sha-1", Now.AddHours(-1), [],
@@ -136,6 +151,7 @@ public class DomainTests
         [
             new ThreadComment("b", "bot", true, "finding", Now.AddHours(-2)),
             new ThreadComment("u", "human", false, "why?", Now.AddHours(-1)),
+            new ThreadComment("u", "human", ThreadCommentOrigin.System, "voted -5", Now),
         ]);
         var answered = new ReviewThread(2, "key2", ReviewThreadStatus.Active,
         [
@@ -165,6 +181,14 @@ public class DomainTests
             [new ThreadComment("b", "bot", true, "x", Now)]);
         Assert.False(botLast.HasPendingHumanReply);
         Assert.Equal("x", botLast.LastComment!.Text);
+
+        var systemAfterHuman = new ReviewThread(3, null, ReviewThreadStatus.Active,
+        [
+            new ThreadComment("u", "human", false, "please fix", Now.AddMinutes(-1)),
+            new ThreadComment("u", "human", ThreadCommentOrigin.System, "voted -5", Now),
+        ]);
+        Assert.True(systemAfterHuman.HasPendingHumanReply);
+        Assert.Equal("please fix", systemAfterHuman.LastNonSystemComment!.Text);
     }
 
     [Fact]

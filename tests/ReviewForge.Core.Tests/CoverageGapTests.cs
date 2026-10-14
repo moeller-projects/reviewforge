@@ -56,6 +56,7 @@ public class CoverageGapTests : IDisposable
     [Fact]
     public async Task Persist_draft_saves_only_current_verified_findings_with_full_payload()
     {
+        var humanCommentAt = DateTimeOffset.UtcNow;
         var store = new FakeFindingStore
         {
             LastRun = new PriorRun(
@@ -76,7 +77,9 @@ public class CoverageGapTests : IDisposable
                 Threads =
                 [
                     new ReviewThread(1, null, ReviewThreadStatus.Active,
-                        [new ThreadComment("u", "user", false, "comment", DateTimeOffset.UtcNow)])
+                        [new ThreadComment("u", "user", false, "comment", humanCommentAt)]),
+                    new ReviewThread(2, null, ReviewThreadStatus.Active,
+                        [new ThreadComment("u", "user", ThreadCommentOrigin.System, "voted -5", humanCommentAt.AddMinutes(1))])
                 ],
             },
             Classification = new Classification {Kind = ReviewKind.Full},
@@ -96,7 +99,7 @@ public class CoverageGapTests : IDisposable
         Assert.Equal("current-key", row.DedupeKey);
         Assert.NotNull(row.FindingJson);
         Assert.Null(row.ThreadId);
-        Assert.Equal(DateTimeOffset.UtcNow.Date, saved.LastObservedCommentAt!.Value.Date);
+        Assert.Equal(humanCommentAt, saved.LastObservedCommentAt);
     }
 
     [Fact]

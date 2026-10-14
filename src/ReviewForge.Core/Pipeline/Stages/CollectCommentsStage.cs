@@ -31,9 +31,10 @@ public sealed class CollectCommentsStage(
             var deferred = previousAction?.Outcome == ResolutionOutcome.Deferred;
             if (thread.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed || thread.Comments.Count == 0)
                 continue;
-            if (!deferred && (thread.Comments[^1].IsBot || (thread.DedupeKey is not null && !thread.HasPendingHumanReply)))
+            if (!deferred && (thread.LastNonSystemComment is not {IsHuman: true}
+                              || (thread.DedupeKey is not null && !thread.HasPendingHumanReply)))
                 continue;
-            var latestHuman = thread.Comments.LastOrDefault(c => !c.IsBot);
+            var latestHuman = thread.Comments.LastOrDefault(c => c.IsHuman);
             if (latestHuman is null
                 || (!deferred && resolve.ResolveWatermark is { } watermark && latestHuman.PublishedAt <= watermark)
                 || (!deferred && previousAction is not null && latestHuman.PublishedAt <= previousAction.CreatedAt))
@@ -52,7 +53,7 @@ public sealed class CollectCommentsStage(
                 thread.Anchor is null ? null : thread.Anchor with {FilePath = RepoPath.Normalize(thread.Anchor.FilePath)},
                 latestHuman.AuthorId,
                 latestHuman.AuthorName,
-                thread.Comments,
+                thread.Comments.Where(comment => comment.Origin != ThreadCommentOrigin.System).ToArray(),
                 latestHuman.Text.Length <= 1000 ? latestHuman.Text : latestHuman.Text[..1000],
                 allowed));
         }

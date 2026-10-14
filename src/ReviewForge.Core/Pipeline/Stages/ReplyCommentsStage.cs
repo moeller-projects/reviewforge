@@ -36,7 +36,7 @@ public sealed class ReplyCommentsStage(
             }
 
             if (threads.TryGetValue(action.ThreadId, out var thread)
-                && thread.Comments.LastOrDefault() is {IsBot: true} last
+                && thread.LastNonSystemComment is {IsBot: true} last
                 && string.Equals(last.Text, body, StringComparison.Ordinal))
             {
                 if (MayMarkFixed(threads, action))

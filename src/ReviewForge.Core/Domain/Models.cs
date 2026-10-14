@@ -56,8 +56,39 @@ public enum ReviewThreadStatus
     Pending
 }
 
+public enum ThreadCommentOrigin
+{
+    Human,
+    Bot,
+    System
+}
+
 [ExcludeFromCodeCoverage]
-public sealed record ThreadComment(string AuthorId, string AuthorName, bool IsBot, string Text, DateTimeOffset PublishedAt);
+public sealed record ThreadComment
+{
+    public ThreadComment(string AuthorId, string AuthorName, ThreadCommentOrigin Origin, string Text, DateTimeOffset PublishedAt)
+    {
+        this.AuthorId = AuthorId;
+        this.AuthorName = AuthorName;
+        this.Origin = Origin;
+        this.Text = Text;
+        this.PublishedAt = PublishedAt;
+    }
+
+    // Compatibility constructor for callers that predate system-comment classification.
+    public ThreadComment(string AuthorId, string AuthorName, bool IsBot, string Text, DateTimeOffset PublishedAt)
+        : this(AuthorId, AuthorName, IsBot ? ThreadCommentOrigin.Bot : ThreadCommentOrigin.Human, Text, PublishedAt)
+    {
+    }
+
+    public string AuthorId { get; init; }
+    public string AuthorName { get; init; }
+    public ThreadCommentOrigin Origin { get; init; }
+    public string Text { get; init; }
+    public DateTimeOffset PublishedAt { get; init; }
+    public bool IsBot => Origin == ThreadCommentOrigin.Bot;
+    public bool IsHuman => Origin == ThreadCommentOrigin.Human;
+}
 
 public sealed record ReviewThread(
     int Id,
@@ -67,7 +98,8 @@ public sealed record ReviewThread(
     ThreadAnchor? Anchor = null)
 {
     public ThreadComment? LastComment => Comments.Count == 0 ? null : Comments[^1];
-    public bool HasPendingHumanReply => LastComment is {IsBot: false};
+    public ThreadComment? LastNonSystemComment => Comments.LastOrDefault(comment => comment.Origin != ThreadCommentOrigin.System);
+    public bool HasPendingHumanReply => LastNonSystemComment is {IsHuman: true};
 }
 
 /// <summary>File location of a PR thread (from the provider's thread context). Null for

@@ -254,8 +254,9 @@ public sealed class AdoPullRequestSource : IPullRequestSource
                             .Select(c => new ThreadComment(
                                 c.Author?.Id.ToString() ?? string.Empty,
                                 c.Author?.DisplayName ?? "unknown",
-                                AdoCommentBotClassifier.IsBot(
-                                    c.Author?.Id.ToString(), botId, c.Content),
+                                AdoCommentBotClassifier.Classify(
+                                    c.Author?.Id.ToString(), botId, c.Content,
+                                    c.CommentType == AdoCommentType.System),
                                 c.Content ?? string.Empty,
                                 AdoTime.ToUtc(c.PublishedDate)))
                     ],
@@ -379,9 +380,25 @@ public sealed class AdoPullRequestSource : IPullRequestSource
     public async Task SetReviewerVoteAsync(PrKey pr, string reviewerId, ReviewerVote vote, CancellationToken ct)
     {
         var git = await GitClientAsync(ct);
+        var pullRequest = await _Retry.ExecuteAsync(
+            attemptCt => git.GetPullRequestAsync(
+                pr.Project, pr.RepositoryId, pr.PrId, cancellationToken: attemptCt),
+            $"GetPullRequestForVote({pr.PrId})",
+            ct).ConfigureAwait(false);
+        if (pullRequest.Reviewers is { } reviewers)
+        {
+            var currentVote = reviewers
+                .FirstOrDefault(reviewer => string.Equals(reviewer.Id, reviewerId, StringComparison.OrdinalIgnoreCase))?
+                .Vote;
+            if (!AdoReviewerVote.IsChangeRequired(currentVote, vote))
+            {
+                return;
+            }
+        }
+
         await git.CreatePullRequestReviewerAsync(
             new IdentityRefWithVote {Id = reviewerId, Vote = AdoReviewerVote.ToAdoVote(vote)},
-            pr.Project, pr.RepositoryId, pr.PrId, reviewerId, cancellationToken: ct);
+            pr.Project, pr.RepositoryId, pr.PrId, reviewerId, cancellationToken: ct).ConfigureAwait(false);
     }
 
     private static string OrgFromUrl(string orgUrl)
