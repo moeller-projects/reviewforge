@@ -51,4 +51,16 @@ public class AdoTimeTests
         Assert.False(AdoCommentBotClassifier.IsBot("other-user", identity, botComment));
         Assert.False(AdoCommentBotClassifier.IsBot(identity, identity, null));
     }
+
+    [Fact]
+    public void Comment_origin_distinguishes_system_bot_and_plain_text_from_shared_identity()
+    {
+        const string identity = "pat-user";
+        var botComment = $"{CommentFormatter.BotPreamble}\n\nreview result";
+
+        Assert.Equal(ThreadCommentOrigin.System, AdoCommentBotClassifier.Classify(identity, identity, "voted -5", isSystem: true));
+        Assert.Equal(ThreadCommentOrigin.Bot, AdoCommentBotClassifier.Classify(identity, identity, botComment, isSystem: false));
+        Assert.Equal(ThreadCommentOrigin.Human, AdoCommentBotClassifier.Classify(identity, identity, "non issue", isSystem: false));
+        Assert.Equal(ThreadCommentOrigin.Human, AdoCommentBotClassifier.Classify("other-user", identity, botComment, isSystem: false));
+    }
 }

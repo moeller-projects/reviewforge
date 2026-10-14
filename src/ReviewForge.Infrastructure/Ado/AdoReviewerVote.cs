@@ -18,4 +18,9 @@ public static class AdoReviewerVote
         ReviewerVote.Rejected => -10,
         _ => throw new ArgumentOutOfRangeException(nameof(vote), vote, "unknown reviewer vote"),
     };
+
+    /// <summary>Whether an ADO write is needed. An absent reviewer vote is equivalent to
+    /// NoResponse, so do not add a reviewer solely to persist the neutral vote.</summary>
+    public static bool IsChangeRequired(short? currentAdoVote, ReviewerVote desiredVote)
+        => (currentAdoVote ?? 0) != ToAdoVote(desiredVote);
 }

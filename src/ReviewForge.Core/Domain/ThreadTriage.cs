@@ -120,7 +120,7 @@ public static class ThreadTriage
                 break;
         }
 
-        var alreadyPosted = thread.LastComment is {IsBot: true} last
+        var alreadyPosted = thread.LastNonSystemComment is {IsBot: true} last
                             && string.Equals(last.Text.Trim(), replyTextForMatch(action.Comment).Trim(), StringComparison.Ordinal);
         return new TriageOperation(thread.Id, op, alreadyPosted ? null : action.Comment, status);
     }

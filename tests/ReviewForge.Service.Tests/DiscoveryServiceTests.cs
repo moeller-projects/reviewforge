@@ -68,6 +68,66 @@ public class DiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Sweep_skips_same_head_when_only_new_system_event_exists()
+    {
+        var candidate = Candidate(77, creatorId: "lukas", creatorName: "Lukas");
+        var watermark = DateTimeOffset.UtcNow;
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "Active")],
+            Threads =
+            [
+                new ReviewThread(10, null, ReviewThreadStatus.Active,
+                    [new ThreadComment("lukas", "Lukas", ThreadCommentOrigin.System, "voted -5", watermark.AddMinutes(1))]),
+            ],
+        };
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, candidate.Pr.SourceCommitSha,
+                watermark, [], LastObservedCommentAt: watermark),
+        };
+        var queue = new ReviewQueue();
+        var tracker = new RunTracker();
+
+        var report = await Service(source, store, queue, tracker).RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Empty(tracker.Snapshot());
+    }
+
+    [Fact]
+    public async Task Sweep_enqueues_same_head_when_shared_identity_posts_plain_text()
+    {
+        var candidate = Candidate(78, creatorId: "lukas", creatorName: "Lukas");
+        var watermark = DateTimeOffset.UtcNow;
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [new WorkItem(1, "t", "bug", null, null, "Active")],
+            Threads =
+            [
+                new ReviewThread(11, null, ReviewThreadStatus.Active,
+                [
+                    new ThreadComment("lukas", "Lukas", ThreadCommentOrigin.Human, "non issue", watermark.AddMinutes(1)),
+                    new ThreadComment("lukas", "Lukas", ThreadCommentOrigin.System, "voted -5", watermark.AddMinutes(2)),
+                ]),
+            ],
+        };
+        var store = new FakeFindingStore
+        {
+            LastRun = new PriorRun(candidate.Key, candidate.Pr.SourceCommitSha,
+                watermark, [], LastObservedCommentAt: watermark),
+        };
+        var queue = new ReviewQueue();
+        var tracker = new RunTracker();
+
+        var report = await Service(source, store, queue, tracker).RunSweepAsync(CancellationToken.None);
+
+        Assert.Equal([candidate.Key], report.Enqueued);
+    }
+
+    [Fact]
     public async Task Sweep_requeues_deferred_action_without_new_human_comment()
     {
         var candidate = Candidate(8, creatorId: "alice");

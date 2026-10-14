@@ -17,6 +17,7 @@ public sealed class BeginDraftRunStage(
         ct.ThrowIfCancellationRequested();
         var headSha = ctx.RequirePullRequest().SourceCommitSha;
         var observedComment = ctx.Fetch.Threads.SelectMany(t => t.Comments)
+            .Where(c => c.IsHuman)
             .Select(c => (DateTimeOffset?) c.PublishedAt).Max();
         var shell = new ReviewRun(
             ctx.RunId, ctx.Pr, headSha, ReviewKind.Full,

@@ -131,7 +131,7 @@ public sealed class TriageThreadsStage(IPullRequestSource source, ILogger<Triage
     private async Task<bool> AlreadyRepliedAsync(ReviewContext ctx, int threadId, string text, CancellationToken ct)
     {
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
-        return threads.FirstOrDefault(t => t.Id == threadId)?.LastComment is {IsBot: true} last
+        return threads.FirstOrDefault(t => t.Id == threadId)?.LastNonSystemComment is {IsBot: true} last
                && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal);
     }
 }

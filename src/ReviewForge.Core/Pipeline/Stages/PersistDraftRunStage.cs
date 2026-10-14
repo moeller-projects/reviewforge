@@ -29,6 +29,7 @@ public sealed class PersistDraftRunStage(
                 FindingJson: JsonSerializer.Serialize(f, JsonOptions)))
             .ToArray();
         var lastObservedComment = ctx.Fetch.Threads.SelectMany(t => t.Comments)
+            .Where(c => c.IsHuman)
             .Select(c => (DateTimeOffset?) c.PublishedAt).Max();
         var run = new ReviewRun(
             ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Classification.Kind,

@@ -214,7 +214,10 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             Threads =
             [
                 new ReviewThread(1, "k1", ReviewThreadStatus.Active,
-                    [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)])
+                [
+                    new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow),
+                    new ThreadComment("bot", "bot", ThreadCommentOrigin.System, "thread status updated", DateTimeOffset.UtcNow.AddMinutes(1)),
+                ])
             ]
         };
 

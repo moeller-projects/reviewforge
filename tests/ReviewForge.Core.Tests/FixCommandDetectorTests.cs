@@ -80,6 +80,22 @@ public class FixCommandDetectorTests
     }
 
     [Fact]
+    public void System_event_does_not_trigger_fix_command()
+    {
+        var system = new ThreadComment(CreatorId, CreatorName, ThreadCommentOrigin.System,
+            "/fixit please", T0.AddMinutes(1));
+        Assert.Empty(FixCommandDetector.Scan([Thread(8, [system])], CreatorId, watermark: null));
+
+        var systemAfterCommand = Thread(9,
+        [
+            Author("/fixit preserve human request", 1),
+            new ThreadComment(CreatorId, CreatorName, ThreadCommentOrigin.System, "voted -5", T0.AddMinutes(2)),
+        ]);
+        Assert.Equal("preserve human request",
+            Assert.Single(FixCommandDetector.Scan([systemAfterCommand], CreatorId, watermark: null)).Instruction);
+    }
+
+    [Fact]
     public void Non_author_command_is_ignored()
     {
         var commands = FixCommandDetector.Scan(

@@ -1684,7 +1684,7 @@ public class StageTests : IDisposable
     }
 
     [Fact]
-    public async Task Persist_run_persists_max_observed_comment_timestamp()
+    public async Task Persist_run_persists_max_observed_human_comment_timestamp()
     {
         var store = new FakeFindingStore();
         var t1 = DateTimeOffset.UtcNow.AddMinutes(-5);
@@ -1699,6 +1699,8 @@ public class StageTests : IDisposable
                     [new ThreadComment("b", "bot", true, "note", t1)]),
                 new ReviewThread(2, null, ReviewThreadStatus.Active,
                     [new ThreadComment("u", "human", false, "reply", t2)]),
+                new ReviewThread(3, null, ReviewThreadStatus.Active,
+                    [new ThreadComment("u", "human", ThreadCommentOrigin.System, "voted -5", t2.AddMinutes(1))]),
             ]
         };
         ctx.Validation = ctx.Validation with {AcceptedFindings = []};
@@ -1845,6 +1847,7 @@ public class StageTests : IDisposable
             new ThreadComment("b", "bot", true, "finding", t0),
             new ThreadComment("u", "human", false, "why?", t0.AddMinutes(1)),
             new ThreadComment("b", "bot", true, CommentFormatter.WithBotPreamble("answer"), t0.AddMinutes(2)),
+            new ThreadComment("b", "bot", ThreadCommentOrigin.System, "thread status updated", t0.AddMinutes(3)),
         ]));
 
         var ctx = Ctx(source);

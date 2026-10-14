@@ -59,6 +59,31 @@ public sealed class CollectCommentsStageTests
     }
 
     [Fact]
+    public async Task Execute_ignores_system_only_threads_but_keeps_human_comments_from_shared_identity()
+    {
+        var source = new FakePullRequestSource();
+        source.Threads =
+        [
+            Thread(10, [new ThreadComment("creator", "creator", ThreadCommentOrigin.System, "voted -5", Now.AddMinutes(1))]),
+            Thread(11,
+            [
+                new ThreadComment("creator", "creator", ThreadCommentOrigin.Human, "non issue", Now.AddMinutes(1)),
+                new ThreadComment("creator", "creator", ThreadCommentOrigin.System, "voted -5", Now.AddMinutes(2)),
+            ]),
+        ];
+        var ctx = Context(source);
+        ctx.Resolve!.ResolveWatermark = Now;
+
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), TimeProvider.System)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var comment = Assert.Single(ctx.Resolve.ResolvableComments);
+        Assert.Equal(11, comment.ThreadId);
+        Assert.Equal("non issue", comment.RequestText);
+        Assert.DoesNotContain(comment.History, item => item.Origin == ThreadCommentOrigin.System);
+    }
+
+    [Fact]
     public async Task Execute_propagates_a_failed_threads_refresh_instead_of_refetching()
     {
         var source = new FakePullRequestSource();

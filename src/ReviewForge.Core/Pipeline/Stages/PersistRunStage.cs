@@ -34,6 +34,7 @@ public sealed class PersistRunStage(
         // not in ctx.Fetch.Threads, so they cannot raise the watermark of their own run.
         var lastObservedComment = ctx.Fetch.Threads
             .SelectMany(t => t.Comments)
+            .Where(c => c.IsHuman)
             .Select(c => (DateTimeOffset?) c.PublishedAt)
             .Max();
 
@@ -50,7 +51,7 @@ public sealed class PersistRunStage(
             Pipeline: ctx.RunKind.ToString());
 
         _Logger?.LogDebug(
-            "persist-run: saving completed run with {FindingCount} finding rows, {PostedThreadCount} posted thread ids, observed comment watermark {LastObservedCommentAt}",
+            "persist-run: saving completed run with {FindingCount} finding rows, {PostedThreadCount} posted thread ids, observed human-comment watermark {LastObservedCommentAt}",
             findings.Count, ctx.Published.PostedThreadIds.Count, lastObservedComment);
         return store.SaveRunAsync(run, ct);
     }

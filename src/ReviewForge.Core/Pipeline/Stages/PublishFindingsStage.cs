@@ -462,7 +462,7 @@ public sealed class PublishFindingsStage(
         return threads.Any(thread =>
             thread.Anchor is { } existingAnchor
             && existingAnchor == anchor
-            && thread.Comments.FirstOrDefault() is {IsBot: true} first
+            && thread.Comments.FirstOrDefault(comment => comment.Origin != ThreadCommentOrigin.System) is {IsBot: true} first
             && string.Equals(first.Text.Trim(), body.Trim(), StringComparison.Ordinal));
     }
 
@@ -472,7 +472,7 @@ public sealed class PublishFindingsStage(
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
         return threads.Any(t =>
             t.DedupeKey == dedupeKey
-            && t.LastComment is {IsBot: true} last
+            && t.LastNonSystemComment is {IsBot: true} last
             && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal));
     }
 
@@ -484,7 +484,7 @@ public sealed class PublishFindingsStage(
     private async Task<bool> AlreadyRepliedAsync(ReviewContext ctx, int threadId, string text, CancellationToken ct)
     {
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
-        return threads.FirstOrDefault(t => t.Id == threadId)?.LastComment is {IsBot: true} last
+        return threads.FirstOrDefault(t => t.Id == threadId)?.LastNonSystemComment is {IsBot: true} last
                && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal);
     }
 }
