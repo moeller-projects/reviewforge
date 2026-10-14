@@ -2,6 +2,18 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ReviewForge.Core.AutoFix;
 
+public enum AutoFixCommitGranularity
+{
+    PerFix,
+    Single,
+}
+
+public enum AutoFixPublishMode
+{
+    Suggestion,
+    CommitOnHead,
+}
+
 /// <summary>Configuration for the auto-fix feature (section "AutoFix"). Suggestion mode
 /// is the default; with <see cref="Enabled"/> false the pipeline is byte-identical to a run
 /// without the feature.</summary>
@@ -23,13 +35,13 @@ public sealed class AutoFixOptions
     /// <summary>"Suggestion" (default) | "CommitOnHead". "StackedBranch" remains reserved.
     /// With <see cref="Enabled"/> false the pipeline is byte-identical regardless of this
     /// value — the mode is inert until the feature itself is on.</summary>
-    public string PublishMode { get; init; } = "Suggestion";
+    public AutoFixPublishMode PublishMode { get; init; } = AutoFixPublishMode.Suggestion;
 
     /// <summary>Commit granularity in CommitOnHead mode. "PerFix" (default) = one commit per
     /// file-group: fixes touching the same file ALWAYS coalesce into that file's commit
     /// (staging is path-scoped; intra-file separation is impossible). "Single" = one commit
     /// per run. This is the contract — there is no intra-file granularity.</summary>
-    public string CommitGranularity { get; init; } = "PerFix";
+    public AutoFixCommitGranularity CommitGranularity { get; init; } = AutoFixCommitGranularity.PerFix;
 
     /// <summary>Commit identity. Required when Enabled && PublishMode=CommitOnHead; the email is
     /// also the loop-guard author reference (a discovery-triggered run on a head whose exact
@@ -40,12 +52,12 @@ public sealed class AutoFixOptions
 
     /// <summary>True when CommitOnHead publication is active for this run's pipeline.</summary>
     public bool IsCommitOnHead
-        => Enabled && string.Equals(PublishMode, ModeCommitOnHead, StringComparison.Ordinal);
+        => Enabled && PublishMode == AutoFixPublishMode.CommitOnHead;
 
-    public const string ModeSuggestion = "Suggestion";
-    public const string ModeCommitOnHead = "CommitOnHead";
-    public const string GranularityPerFix = "PerFix";
-    public const string GranularitySingle = "Single";
+    public const AutoFixPublishMode ModeSuggestion = AutoFixPublishMode.Suggestion;
+    public const AutoFixPublishMode ModeCommitOnHead = AutoFixPublishMode.CommitOnHead;
+    public const string GranularityPerFix = nameof(AutoFixCommitGranularity.PerFix);
+    public const string GranularitySingle = nameof(AutoFixCommitGranularity.Single);
 
     /// <summary>Hard cap of applied fixes per run, shared by both fix sources.</summary>
     [Range(1, 50)]

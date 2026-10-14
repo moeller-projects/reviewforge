@@ -12,7 +12,7 @@ public sealed class CommitFixesStageTests
 {
     private static readonly PrKey Key = new("o", "p", "r", 1);
 
-    private static AutoFixOptions Options(string granularity = AutoFixOptions.GranularityPerFix)
+    private static AutoFixOptions Options(AutoFixCommitGranularity granularity = AutoFixCommitGranularity.PerFix)
         => new()
         {
             Enabled = true,
@@ -169,7 +169,7 @@ public sealed class CommitFixesStageTests
         var git = new FakeGitOps();
         var ctx = Ctx(null, Fix("k1", "src/a.sh"), Fix("k2", "src/b.sh"));
 
-        await Stage(git, new FakeFindingStore(), Options(AutoFixOptions.GranularitySingle))
+        await Stage(git, new FakeFindingStore(), Options(AutoFixCommitGranularity.Single))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         var commit = Assert.Single(git.Commits);

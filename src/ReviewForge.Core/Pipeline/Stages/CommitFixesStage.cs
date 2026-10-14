@@ -67,7 +67,7 @@ public sealed class CommitFixesStage(
         var groups = Group(pending).ToArray();
         logger.LogDebug(
             "commit-fixes: prepared {GroupCount} commit groups from {PendingCount} materialized fixes using {Granularity} granularity",
-            groups.Length, pending.Count, options.CommitGranularity);
+            groups.Length, pending.Count, options.CommitGranularity.ToString());
         var findingsByKey = ctx.Validation.AcceptedFindings
             .Where(f => f.DedupeKey is not null)
             .GroupBy(f => f.DedupeKey!, StringComparer.Ordinal)
@@ -115,7 +115,7 @@ public sealed class CommitFixesStage(
 
             committed.Add((group, sha, subject));
             AutoFixTelemetry.AutoFixCommits.Add(
-                1, new TagList {{"granularity", options.CommitGranularity}});
+                1, new TagList {{"granularity", options.CommitGranularity.ToString()}});
         }
 
         if (degraded > 0)
@@ -246,7 +246,7 @@ public sealed class CommitFixesStage(
     /// the contract). "Single" = one group per run. Deterministic order (file path, ordinal).</summary>
     private IEnumerable<List<AppliedFix>> Group(List<AppliedFix> pending)
     {
-        if (string.Equals(options.CommitGranularity, AutoFixOptions.GranularitySingle, StringComparison.Ordinal))
+        if (options.CommitGranularity == AutoFixCommitGranularity.Single)
         {
             yield return [.. pending.OrderBy(f => f.Proposal.FilePath, RepoPath.PathComparer)];
             yield break;

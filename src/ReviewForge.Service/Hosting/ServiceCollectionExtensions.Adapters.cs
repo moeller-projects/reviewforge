@@ -19,7 +19,7 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<IReviewQueue>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<PersistenceOptions>>().Value;
-            return ParseDefinedEnum<QueueMode>(opts.QueueMode, "Persistence:QueueMode") switch
+            return opts.QueueMode switch
             {
                 QueueMode.Sqlite => new SqliteReviewQueue(opts.StoreConnectionString,
                     journalMode: ParseDefinedEnum<StoreJournalMode>(opts.JournalMode, "Persistence:JournalMode")),

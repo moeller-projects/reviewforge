@@ -128,7 +128,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
         ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> {[1] = ResolutionOutcome.Fixed};
 
-        await new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None);
+        await new ResolveCommitPushStage(git, store, ResolveCommitGranularity.PerThread, "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Empty(git.Commits);
         Assert.Empty(ctx.Resolve!.AppliedResolutions);
@@ -145,12 +145,12 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         ctx.Resolve!.ThreadVerdicts = [new ThreadVerdict(1, TriageVerdict.Actionable, "A.cs:1", "high")];
         ctx.Resolve!.AppliedResolutions = [new AppliedResolution(1, "fixed", ["A.cs"])];
         ctx.PublishGuard = () => false;
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new ResolveCommitPushStage(git, store, ResolveCommitGranularity.PerThread, "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
         Assert.Empty(git.Commits);
 
         ctx.PublishGuard = null;
         git.RemoteTip = "moved";
-        await Assert.ThrowsAsync<PrHeadChangedException>(() => new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<PrHeadChangedException>(() => new ResolveCommitPushStage(git, store, ResolveCommitGranularity.PerThread, "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
         Assert.Empty(git.Pushes);
         var audit = Assert.Single(store.ResolveActions);
         Assert.Equal(ResolutionOutcome.PushFailed, audit.Outcome);
@@ -169,7 +169,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var calls = 0;
         ctx.PublishGuard = () => ++calls < 2; // holds "before resolve commit", lost "at resolve push"
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new ResolveCommitPushStage(git, store, ResolveCommitGranularity.PerThread, "bot", "bot@example").ExecuteAsync(ctx, CancellationToken.None));
 
         Assert.Single(git.Commits);
         Assert.Empty(git.Pushes);
@@ -189,7 +189,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         ctx.Resolve!.ResolutionOutcomes = new Dictionary<int, ResolutionOutcome> {[1] = ResolutionOutcome.Fixed};
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new ResolveCommitPushStage(git, store, "PerThread", "bot", "bot@example")
+            new ResolveCommitPushStage(git, store, ResolveCommitGranularity.PerThread, "bot", "bot@example")
                 .ExecuteAsync(ctx, CancellationToken.None));
 
         var audit = Assert.Single(store.ResolveActions);

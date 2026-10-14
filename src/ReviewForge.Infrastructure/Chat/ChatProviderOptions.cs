@@ -2,6 +2,27 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ReviewForge.Infrastructure.Chat;
 
+public enum ChatProviderKind
+{
+    Unspecified,
+    OpenAiCodex,
+    OpenAi,
+}
+
+public static class ChatProviderKindExtensions
+{
+    public static bool TryParseConfigurationValue(string? value, out ChatProviderKind provider)
+    {
+        provider = value?.ToLowerInvariant() switch
+        {
+            "openai-codex" => ChatProviderKind.OpenAiCodex,
+            "openai" => ChatProviderKind.OpenAi,
+            _ => ChatProviderKind.Unspecified,
+        };
+        return provider != ChatProviderKind.Unspecified;
+    }
+}
+
 /// <summary>
 /// Typed reasoning-provider configuration. Provider format: "openai-codex" (OAuth file
 /// credential) or "openai" (API key from OPENAI_API_KEY). Model may carry a routing
@@ -11,8 +32,8 @@ public sealed class ChatProviderOptions : IValidatableObject
 {
     public const string SectionName = "Reasoning";
 
-    [Required, AllowedValues("openai-codex", "openai")]
-    public required string Provider { get; init; }
+    [Required]
+    public required ChatProviderKind Provider { get; init; }
 
     [Required] public required string Model { get; init; }
 
@@ -44,6 +65,13 @@ public sealed class ChatProviderOptions : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
+        if (Provider is not ChatProviderKind.OpenAiCodex and not ChatProviderKind.OpenAi)
+        {
+            yield return new ValidationResult(
+                "Reasoning:Provider must be openai-codex or openai",
+                [nameof(Provider)]);
+        }
+
         if (string.IsNullOrWhiteSpace(Model))
         {
             yield break; // [Required] reports a missing Model cleanly; nothing to cross-check

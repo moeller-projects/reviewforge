@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
@@ -171,7 +172,7 @@ public sealed class StageCatalog
                 _ProcessRunner,
                 _ResolveOptions.VerifyCommand ?? [],
                 TimeSpan.FromSeconds(_ResolveOptions.VerifyTimeoutSeconds),
-                _ResolveOptions.CommitGranularity.Equals("Single", StringComparison.OrdinalIgnoreCase),
+                _ResolveOptions.CommitGranularity == ResolveCommitGranularity.Single,
                 _LoggerFactory.CreateLogger<VerifyBuildStage>()),
             StageId.ResolveCommitPush => new ResolveCommitPushStage(
                 _GitOps ?? throw new InvalidOperationException("IGitOps is required for resolve runs"),

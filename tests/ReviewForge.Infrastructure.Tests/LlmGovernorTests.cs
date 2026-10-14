@@ -228,7 +228,7 @@ public class LlmGovernorTests
         {
             var governor = new LlmGovernor(4);
             var factory = new ChatClientFactory(
-                new ChatProviderOptions {Provider = "openai", Model = "gpt-5"},
+                new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "gpt-5"},
                 governor: governor);
 
             Assert.IsType<GovernedChatClient>(factory.Create(ChatTier.Full));
@@ -246,7 +246,7 @@ public class LlmGovernorTests
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
         try
         {
-            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
+            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "gpt-5"});
 
             Assert.IsNotType<GovernedChatClient>(factory.Create(ChatTier.Full));
         }
