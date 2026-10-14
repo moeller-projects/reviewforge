@@ -24,7 +24,7 @@ public class ChatClientFactoryTests
     [Fact]
     public void Transport_retry_classification_preserves_transient_boundaries()
     {
-        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "m"});
+        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "m"});
 
         Assert.True(factory.IsTransientFailure(new HttpRequestException("connection lost")));
         Assert.True(factory.IsTransientFailure(new HttpRequestException("timeout", null, HttpStatusCode.RequestTimeout)));
@@ -38,14 +38,14 @@ public class ChatClientFactoryTests
     [Fact]
     public void ModelName_uses_resolved_model()
     {
-        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "openai:gpt-5"});
+        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "openai:gpt-5"});
         Assert.Equal("gpt-5", factory.ModelName(ChatTier.Full));
     }
 
     [Fact]
     public void Unknown_provider_throws()
     {
-        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "bogus", Model = "m"});
+        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = (ChatProviderKind)99, Model = "m"});
         Assert.Throws<InvalidOperationException>(() => factory.Create(ChatTier.Full));
     }
 
@@ -56,7 +56,7 @@ public class ChatClientFactoryTests
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", null);
         try
         {
-            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
+            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "gpt-5"});
             Assert.Throws<InvalidOperationException>(() => factory.Create(ChatTier.Full));
         }
         finally
@@ -72,7 +72,7 @@ public class ChatClientFactoryTests
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
         try
         {
-            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
+            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "gpt-5"});
             Assert.NotNull(factory.Create(ChatTier.Full));
         }
         finally
@@ -86,7 +86,7 @@ public class ChatClientFactoryTests
     {
         var factory = new ChatClientFactory(new ChatProviderOptions
         {
-            Provider = "openai-codex",
+            Provider = ChatProviderKind.OpenAiCodex,
             Model = "openai-codex:gpt-5.6-luna",
             CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
         });
@@ -101,7 +101,7 @@ public class ChatClientFactoryTests
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
         try
         {
-            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
+            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "gpt-5"});
             var a = factory.Create(ChatTier.Full);
             var b = factory.Create(ChatTier.Full);
             Assert.Same(a, b);
@@ -117,7 +117,7 @@ public class ChatClientFactoryTests
     {
         var factory = new ChatClientFactory(new ChatProviderOptions
         {
-            Provider = "openai-codex",
+            Provider = ChatProviderKind.OpenAiCodex,
             Model = "openai-codex:gpt-5.6-luna",
             CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
         });
@@ -129,7 +129,7 @@ public class ChatClientFactoryTests
     [Fact]
     public void Dispose_before_create_does_not_throw()
     {
-        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "bogus", Model = "m"});
+        var factory = new ChatClientFactory(new ChatProviderOptions {Provider = (ChatProviderKind)99, Model = "m"});
         factory.Dispose();
     }
 
@@ -138,7 +138,7 @@ public class ChatClientFactoryTests
     {
         var factory = new ChatClientFactory(new ChatProviderOptions
         {
-            Provider = "openai-codex",
+            Provider = ChatProviderKind.OpenAiCodex,
             Model = "openai-codex:gpt-5.6-luna",
             CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
         });
@@ -155,7 +155,7 @@ public class ChatClientFactoryTests
         {
             var factory = new ChatClientFactory(new ChatProviderOptions
             {
-                Provider = "openai", Model = "gpt-5", FollowUpModel = "gpt-5-mini",
+                Provider = ChatProviderKind.OpenAi, Model = "gpt-5", FollowUpModel = "gpt-5-mini",
             });
             factory.Create(ChatTier.Full);
             factory.Create(ChatTier.Fast);
@@ -174,7 +174,7 @@ public class ChatClientFactoryTests
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
         try
         {
-            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = "openai", Model = "gpt-5"});
+            var factory = new ChatClientFactory(new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = "gpt-5"});
 
             Assert.Equal("gpt-5", factory.ModelName(ChatTier.Fast));
             Assert.Same(factory.Create(ChatTier.Full), factory.Create(ChatTier.Fast));
@@ -199,7 +199,7 @@ public class ChatClientFactoryTests
         {
             var factory = new ChatClientFactory(new ChatProviderOptions
             {
-                Provider = "openai", Model = "gpt-5", FollowUpModel = followUpModel,
+                Provider = ChatProviderKind.OpenAi, Model = "gpt-5", FollowUpModel = followUpModel,
             });
 
             Assert.Equal("gpt-5", factory.ModelName(ChatTier.Fast));
@@ -220,7 +220,7 @@ public class ChatClientFactoryTests
         {
             var factory = new ChatClientFactory(new ChatProviderOptions
             {
-                Provider = "openai", Model = "gpt-5", FollowUpModel = "gpt-5-mini",
+                Provider = ChatProviderKind.OpenAi, Model = "gpt-5", FollowUpModel = "gpt-5-mini",
             });
 
             Assert.Equal("gpt-5", factory.ModelName(ChatTier.Full));
@@ -239,7 +239,7 @@ public class ChatClientFactoryTests
     {
         var options = new ChatProviderOptions
         {
-            Provider = "openai-codex",
+            Provider = ChatProviderKind.OpenAiCodex,
             Model = "openai-codex:gpt-5.6-luna",
             FollowUpModel = "openai:gpt-5-mini",
             MaxConcurrentRequests = 1,
@@ -258,7 +258,7 @@ public class ChatClientFactoryTests
     {
         var options = new ChatProviderOptions
         {
-            Provider = "openai-codex",
+            Provider = ChatProviderKind.OpenAiCodex,
             Model = "openai-codex:gpt-5.6-luna",
             FollowUpModel = "openai-codex:gpt-5.6-luna-mini",
             MaxConcurrentRequests = 1,
@@ -289,7 +289,7 @@ public class ChatClientFactoryTests
             Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
             var factory = new ChatClientFactory(new ChatProviderOptions
             {
-                Provider = "openai-codex",
+                Provider = ChatProviderKind.OpenAiCodex,
                 Model = "openai-codex:gpt-5.6-luna",
                 CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
             });
@@ -319,7 +319,7 @@ public class ChatClientFactoryTests
             Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", "Production");
             var factory = new ChatClientFactory(new ChatProviderOptions
             {
-                Provider = "openai-codex",
+                Provider = ChatProviderKind.OpenAiCodex,
                 Model = "openai-codex:gpt-5.6-luna",
                 CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
             });
@@ -349,7 +349,7 @@ public class ChatClientFactoryTests
             Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
             var factory = new ChatClientFactory(new ChatProviderOptions
             {
-                Provider = "openai-codex",
+                Provider = ChatProviderKind.OpenAiCodex,
                 Model = "openai-codex:gpt-5.6-luna",
                 CredentialPath = Path.Combine(Path.GetTempPath(), "unused-auth.json"),
             });
@@ -384,7 +384,7 @@ public class ChatClientFactoryTests
             var handler = new CaptureRequestHandler();
             using var factory = new ChatClientFactory(new ChatProviderOptions
             {
-                Provider = "openai-codex",
+                Provider = ChatProviderKind.OpenAiCodex,
                 Model = "openai-codex:gpt-5.6-luna",
                 CredentialPath = credentialPath,
             }, handler);
@@ -409,7 +409,7 @@ public class ChatClientFactoryTests
     public void Validate_with_blank_model_yields_nothing_for_required_to_report()
     {
         // [Required] reports a missing Model; the cross-check has nothing to add.
-        var options = new ChatProviderOptions {Provider = "openai", Model = " "};
+        var options = new ChatProviderOptions {Provider = ChatProviderKind.OpenAi, Model = " "};
 
         Assert.Empty(options.Validate(new ValidationContext(options)));
     }

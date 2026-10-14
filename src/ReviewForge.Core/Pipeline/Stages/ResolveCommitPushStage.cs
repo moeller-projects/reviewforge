@@ -10,7 +10,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 public sealed class ResolveCommitPushStage(
     IGitOps git,
     IFindingStore store,
-    string commitGranularity,
+    ResolveCommitGranularity commitGranularity,
     string authorName,
     string authorEmail,
     string? pat = null,
@@ -55,7 +55,7 @@ public sealed class ResolveCommitPushStage(
     {
         var resolve = ctx.RequireResolveState();
         PublishGuardChecks.ThrowIfClaimLost(ctx, "before resolve commit");
-        var single = string.Equals(commitGranularity, "Single", StringComparison.OrdinalIgnoreCase);
+        var single = commitGranularity == ResolveCommitGranularity.Single;
         var groups = single
             ? [applied]
             : applied.GroupBy(r => string.Join("\0", r.Files.Order(RepoPath.PathComparer)), StringComparer.Ordinal)

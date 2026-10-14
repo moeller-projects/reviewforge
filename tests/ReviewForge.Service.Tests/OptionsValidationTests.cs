@@ -409,7 +409,7 @@ public class OptionsValidationTests
         var options = provider.GetRequiredService<IOptions<AutoFixOptions>>().Value;
         Assert.False(options.Enabled);
         Assert.Empty(options.AllowedAuthors);
-        Assert.Equal("Suggestion", options.PublishMode);
+        Assert.Equal(AutoFixPublishMode.Suggestion, options.PublishMode);
     }
 
     [Fact]

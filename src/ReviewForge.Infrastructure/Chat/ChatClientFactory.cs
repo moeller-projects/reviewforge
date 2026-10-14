@@ -79,8 +79,8 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
     {
         IChatClient raw = _Options.Provider switch
         {
-            "openai-codex" => CreateCodexClient(),
-            "openai" => CreateOpenAiClient(),
+            ChatProviderKind.OpenAiCodex => CreateCodexClient(),
+            ChatProviderKind.OpenAi => CreateOpenAiClient(),
             _ => throw new InvalidOperationException($"unknown reasoning provider '{_Options.Provider}'"),
         };
 

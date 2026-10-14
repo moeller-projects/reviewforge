@@ -69,7 +69,7 @@ public sealed class ResolvePipelineTests : IDisposable
             new PlanFixesStage(10, 10),
             new ApplyFixesStage(agent, 4),
             new VerifyBuildStage(process, ["build"], TimeSpan.FromSeconds(1), singleCommit: false),
-            new ResolveCommitPushStage(git, store, "Single", "ReviewForge", "bot@example.test"),
+            new ResolveCommitPushStage(git, store, ResolveCommitGranularity.Single, "ReviewForge", "bot@example.test"),
             new ReplyCommentsStage(source, store, setFixedStatus: true),
         ], NullLogger<ReviewPipeline>.Instance).RunAsync(ctx, CancellationToken.None);
 
