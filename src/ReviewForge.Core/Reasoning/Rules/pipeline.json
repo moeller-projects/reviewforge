@@ -1,0 +1,89 @@
+{
+  "id": "pipeline",
+  "title": "CI/CD pipeline and compose rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [],
+    "pathPatterns": [
+      "azure-pipelines*.yml",
+      "azure-pipelines*.yaml",
+      ".azure-pipelines/**",
+      ".azuredevops/**",
+      ".github/workflows/**",
+      "docker-compose*.yml",
+      "docker-compose*.yaml",
+      "compose.yml",
+      "compose.yaml",
+      "compose.*.yml",
+      "compose.*.yaml"
+    ],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "pipe.secret-in-plain-variable",
+      "title": "Secret in plain pipeline or compose variable",
+      "description": "Passwords, tokens, keys or connection strings with credentials set as plain variables, inline in script steps, in env blocks, or in compose environment entries instead of secret variables, a variable group with secret flag, Key Vault or the platform's secret store. Use this rule instead of sec.hardcoded-secret for pipeline and compose files. Never quote the value in the finding.",
+      "category": "security",
+      "defaultSeverity": "critical",
+      "enabled": true
+    },
+    {
+      "id": "pipe.unpinned-dependency",
+      "title": "Unpinned task, action or image",
+      "description": "A pipeline task, third-party action or container image referenced by a floating reference (latest, a branch such as @main, an untrusted tag) instead of a fixed version or commit SHA, so the pipeline can change under you. Do not record first-party actions or tasks from the same organization when the team deliberately tracks a major version.",
+      "category": "security",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "pipe.remote-script-exec",
+      "title": "Downloaded script executed unverified",
+      "description": "curl or wget piped into a shell, Invoke-Expression or dot-sourcing of downloaded content, or running an installer fetched at build time without checksum or signature verification.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "pipe.script-injection",
+      "title": "Untrusted input interpolated into a script step",
+      "description": "Attacker-controllable values (PR title or body, branch name, commit message, issue text, github.event.* fields, $(Build.SourceBranchName)) expanded directly into a script or run block, or a privileged trigger (pull_request_target, pipelines that expose secrets to fork builds) that checks out and runs code from the PR. Pass values through environment variables and quote them. Do not record values that are constants or controlled by maintainers only.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "pipe.excessive-permissions",
+      "title": "Pipeline permissions broader than needed",
+      "description": "Workflow or job token with write-all or unnecessary write scopes, service connections or deployment credentials available to every branch or fork build, or jobs that run with elevated rights they do not use. State the permission and the narrowest sufficient one.",
+      "category": "security",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "pipe.failure-masked",
+      "title": "Pipeline failure hidden",
+      "description": "continueOnError, allow_failure, '|| true', condition: always() or ignored exit codes on build, test, lint or security steps, so a failing check still produces a green pipeline. Do not record cleanup or best-effort notification steps that are meant to be non-blocking.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "pipe.compose-privileged",
+      "title": "Privileged or host-exposing compose service",
+      "description": "A compose service with privileged: true, network_mode: host, cap_add of broad capabilities, a mounted Docker socket, or sensitive host paths mounted read-write.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "pipe.compose-exposed-port",
+      "title": "Data or admin port published to all interfaces",
+      "description": "Databases, queues, admin consoles or debug ports published on all host interfaces (ports: \"5432:5432\") or with default credentials, instead of binding to 127.0.0.1 or an internal network only.",
+      "category": "security",
+      "defaultSeverity": "medium",
+      "enabled": true
+    }
+  ]
+}

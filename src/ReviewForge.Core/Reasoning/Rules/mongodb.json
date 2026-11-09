@@ -1,7 +1,7 @@
 {
   "id": "mongodb",
   "title": "MongoDB script rules",
-  "version": 1,
+  "version": 2,
   "activation": {
     "always": false,
     "extensions": [],
@@ -44,6 +44,22 @@
       "description": "Queries returning whole documents when a few fields are needed — network and memory waste in scripts.",
       "category": "performance",
       "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "mongo.missing-index",
+      "title": "Query without a supporting index",
+      "description": "A new or changed query, sort or aggregation $match filters or sorts on fields that no existing index (visible in the repository's index definitions or scripts) supports, forcing a collection scan on a large collection. Name the fields and the missing or needed index. Do not record when the collection is clearly tiny or an index in the repository covers the access pattern.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "mongo.unbounded-lookup",
+      "title": "Expensive or unbounded $lookup",
+      "description": "$lookup without an indexed foreign field, placed before $match/$limit so it runs over the full input, or used in a hot path to join large collections. Recommend filtering first, indexing the foreign field, or denormalizing. Do not record joins over small reference collections.",
+      "category": "performance",
+      "defaultSeverity": "medium",
       "enabled": true
     }
   ]

@@ -1,7 +1,7 @@
 {
   "id": "security",
   "title": "Cross-language security rules",
-  "version": 1,
+  "version": 2,
   "activation": {
     "always": true,
     "extensions": [],
@@ -12,7 +12,7 @@
     {
       "id": "sec.hardcoded-secret",
       "title": "Hardcoded secret",
-      "description": "Passwords, API keys, tokens, private keys, or connection strings with credentials committed in source. Move to a secret store; rotate if already committed.",
+      "description": "Passwords, API keys, tokens, private keys, or connection strings with credentials committed in source. Move to a secret store; rotate if already committed. In Dockerfiles use docker.secret-in-layer, in PowerShell ps.plaintext-credential, in CI/CD pipeline or compose files pipe.secret-in-plain-variable, when those packs are active.",
       "category": "security",
       "defaultSeverity": "critical",
       "enabled": true
@@ -93,6 +93,38 @@
       "id": "homoglyph/whole-token-lookalike",
       "title": "Whole-token lookalike identifier",
       "description": "Identifier is written entirely in one non-Latin script whose characters look like an ASCII identifier (e.g. Cyrillic lookalikes spelling an English identifier). Replace it with unambiguous ASCII.",
+      "category": "security",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "sec.xss",
+      "title": "Cross-site scripting sink",
+      "description": "Untrusted data written to the DOM or HTML without encoding: innerHTML/outerHTML, document.write, dangerouslySetInnerHTML, v-html, Angular bypassSecurityTrust*, Razor Html.Raw or unencoded output of request data. Name the source of the data and the sink. Do not record content that is a compile-time constant or has demonstrably been sanitized by a maintained sanitizer.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sec.insecure-config",
+      "title": "Insecure security configuration",
+      "description": "Security controls disabled or weakened: CORS allowing any origin with credentials, TLS or certificate validation turned off, cookies without Secure/HttpOnly/SameSite, CSRF protection disabled on state-changing endpoints, debug or developer exception pages enabled outside development, overly permissive default policies. Quote the setting and say which environment it applies to. Do not record settings clearly scoped to local development or tests.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sec.mass-assignment",
+      "title": "Mass assignment / over-posting",
+      "description": "Request bodies bound directly to persistence entities or to models containing fields the caller must not control (role, isAdmin, tenant or owner id, price, status), or object spread or AutoMapper from request into entity without an allowlist. Name the sensitive field and the binding. Use dedicated input DTOs or an explicit allowlist. Do not record binding into DTOs that contain only caller-controlled fields.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "sec.open-redirect",
+      "title": "Open redirect",
+      "description": "A redirect target taken from user input (query string, form field, header) without validating that it is a local path or an allowlisted host. Name the source and the redirect call. Do not record redirects to fixed or allowlisted destinations.",
       "category": "security",
       "defaultSeverity": "medium",
       "enabled": true

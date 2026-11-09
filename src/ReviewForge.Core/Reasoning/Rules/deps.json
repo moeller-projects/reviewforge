@@ -1,0 +1,73 @@
+{
+  "id": "deps",
+  "title": "Dependency change rules",
+  "version": 1,
+  "activation": {
+    "always": false,
+    "extensions": [
+      ".csproj",
+      ".fsproj",
+      ".vbproj",
+      ".props",
+      ".targets"
+    ],
+    "pathPatterns": [
+      "packages.lock.json",
+      "package.json",
+      "package-lock.json",
+      "bun.lock",
+      "bun.lockb",
+      "yarn.lock",
+      "pnpm-lock.yaml",
+      "requirements*.txt",
+      "pyproject.toml",
+      "uv.lock",
+      "Pipfile",
+      "Pipfile.lock",
+      "Directory.Packages.props"
+    ],
+    "rootFiles": []
+  },
+  "rules": [
+    {
+      "id": "deps.new-or-major-bump",
+      "title": "New dependency or major version bump",
+      "description": "A package is added or bumped across a major version. Check how the package is used in the changed code (repo_grep) and whether breaking changes or removed APIs affect existing call sites. Record on the manifest line, cite the affected usage, and name what breaks or what the new dependency duplicates. Do not record patch or minor bumps, or dependencies that are clearly required by the code in this diff.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "deps.unpinned-version",
+      "title": "Floating or unconstrained version",
+      "description": "A version of *, latest, an open-ended range (>=) or a wildcard in an application manifest, or a package version declared in a project file where central package management (Directory.Packages.props) is in use. Builds stop being reproducible. Do not record library projects that intentionally publish ranges.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "deps.lockfile-mismatch",
+      "title": "Manifest and lockfile out of sync",
+      "description": "A manifest (csproj, Directory.Packages.props, package.json, pyproject.toml) changed without the matching lockfile (packages.lock.json, bun.lock, package-lock.json, uv.lock) in the same diff, or a lockfile changed with no manifest change that explains it. Use the list of changed files as evidence. Do not record when the repository keeps no lockfile for that ecosystem.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "deps.suspicious-package",
+      "title": "Suspicious or non-registry dependency",
+      "description": "Evidence in the diff that a dependency is risky: a package installed from a git URL, tarball or local path instead of the registry, a name that looks like a typo of a well-known package, a postinstall or install script, or a package that nothing in the code uses. Only record what the diff itself shows; do not speculate about registry reputation.",
+      "category": "security",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "deps.unused-or-duplicate",
+      "title": "Unused or duplicate dependency",
+      "description": "An added package that no changed or existing code references, a package that duplicates functionality already provided by a dependency in the repository, or the same package declared at different versions in different manifests. Verify with repo_grep before recording.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    }
+  ]
+}

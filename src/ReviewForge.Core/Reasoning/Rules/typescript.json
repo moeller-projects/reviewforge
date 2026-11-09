@@ -1,7 +1,7 @@
 {
   "id": "typescript",
   "title": "TypeScript rules",
-  "version": 1,
+  "version": 2,
   "activation": {
     "always": false,
     "extensions": [
@@ -60,6 +60,30 @@
       "description": "Mutating props, store state, or shared objects in place where immutability is expected (React/Redux/NgRx patterns).",
       "category": "bug",
       "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ts.type-assertion",
+      "title": "Type assertion hides a mismatch",
+      "description": "An as-cast (including as unknown as T) or satisfies-bypass that silences the compiler on data whose shape is not actually guaranteed: parsed JSON, request bodies, third-party values, narrowing from a wider type. Show what is being asserted and why it can be wrong. Prefer a type guard or schema validation. Do not record assertions on values just validated, DOM element lookups that are checked, or const assertions.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ts.unvalidated-external-data",
+      "title": "External data used without validation",
+      "description": "Data from outside the process (JSON.parse results, HTTP request bodies or query strings, environment variables, files, message queues, API responses) used as typed values without runtime validation (schema library, type guard, explicit checks). Name the source and the first place the unvalidated value is relied on. Do not record when a validator runs earlier on the same path.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "ts.await-in-loop",
+      "title": "Sequential await in a loop over independent work",
+      "description": "await inside a for/while loop where the iterations are independent, so latency adds up. Use Promise.all (bounded concurrency for large sets) or batch the calls. Do not record when order or rate limits require sequential execution, or when each iteration depends on the previous result.",
+      "category": "performance",
+      "defaultSeverity": "low",
       "enabled": true
     }
   ]
