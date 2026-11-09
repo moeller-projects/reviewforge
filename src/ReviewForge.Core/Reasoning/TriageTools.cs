@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Resolve.Domain;
 
 namespace ReviewForge.Core.Reasoning;
 

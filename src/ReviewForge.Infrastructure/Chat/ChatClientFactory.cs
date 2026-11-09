@@ -129,13 +129,12 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
 
         var authHttp = new HttpClient(transportHandler);
 
-        var client = new OpenAIClient(new ApiKeyCredential("unused"), new OpenAIClientOptions
+        var client = new ResponsesChatClientAdapter(
+            new OpenAIClient(new ApiKeyCredential("unused"), new OpenAIClientOptions
             {
                 Endpoint = new Uri(CodexEndpoint),
                 Transport = new HttpClientPipelineTransport(authHttp),
-            })
-            .GetResponsesClient()
-            .AsIChatClient();
+            }).GetResponsesClient());
 
         var configured = new ChatClientBuilder(client)
             .ConfigureOptions(options =>
@@ -158,8 +157,7 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
             ? new OpenAIClientOptions()
             : new OpenAIClientOptions {Transport = new HttpClientPipelineTransport(new HttpClient(_HttpHandler, disposeHandler: false))};
 
-        return new OpenAIClient(new ApiKeyCredential(apiKey), clientOptions)
-            .GetResponsesClient()
-            .AsIChatClient();
+        return new ResponsesChatClientAdapter(
+            new OpenAIClient(new ApiKeyCredential(apiKey), clientOptions).GetResponsesClient());
     }
 }

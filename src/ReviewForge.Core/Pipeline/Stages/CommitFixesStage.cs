@@ -2,7 +2,10 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Commits;
+using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
@@ -213,7 +216,7 @@ public sealed class CommitFixesStage(
             .SelectMany(c => c.Fixes)
             .Where(f => f.Proposal.SourceThreadId is not null)
             .Select(f => (f.Proposal.SourceThreadId!.Value,
-                CommentFormatter.CommittedFixLine(
+                FixCommentFormatter.CommittedFixLine(
                     f.CommitSha!, f.CommitSubject ?? string.Empty, f.Proposal.Origin == FixOrigin.LlmCommanded)))
             .ToArray();
         if (commandReplies.Length > 0)

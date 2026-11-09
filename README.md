@@ -51,7 +51,7 @@ failed stage fails the run.
 | 5  | enrich-context     | optional code-review-graph payload into the context store (fail-safe)                                                                                                                                                                       |
 | 6  | execute-reasoning  | agent loop: repo read tools + record_finding/record_uncertainty/task_done, sliding-window compaction, iteration cap, findings streamed to per-run `findings/{runId}.jsonl` files                                                            |
 | 7  | validate-findings  | re-anchors via snippet (AnchorResolver); rejects missing anchors and findings outside changed lines; weak snippets are downgraded to general comments                                                                                       |
-| 8  | auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/rf fix` passes; published as suggestions (default) or committed by stage 10 (`AutoFix:PublishMode=CommitOnHead`)                                                     |
+| 8  | auto-fix-findings  | fixes (off by default): deterministic rule fixers + author-commanded `/fixit` passes; published as suggestions (default) or committed by stage 10 (`AutoFix:PublishMode=CommitOnHead`)                                                     |
 | 9  | begin-run          | persists the in-flight run shell (run row + finding keys, `Success=false`) so an interrupted run stays visible and later stages backfill durable rows; finalized by PersistRunStage or the startup ShellReaperService                       |
 | 10 | commit-fixes       | CommitOnHead only (no-op otherwise): commits the materialized fixes in the run's private checkout, pushes fast-forward-only to the PR source branch (claim check + head pin + server-side CAS), persists pushed_fixes rows before any reply |
 | 11 | triage-threads     | answers/resolves/reopens threads per agent decision, auto-resolves vanished findings, flags unanswered threads                                                                                                                              |
@@ -123,9 +123,13 @@ in request logs).
 
 The separate resolve pipeline is disabled by default. Enable it with `Resolve:Enabled=true`
 and configure `Resolve:AllowedAuthors` with immutable ADO creator IDs for discovery and
-`/rf resolve` command runs; startup rejects an enabled pipeline with an empty author allowlist.
-An authenticated manual `POST /resolutions` can explicitly bypass that allowlist and the
-watermark, but still rejects drafts and competes for the same PR claim.
+`/resolve` command runs; startup rejects an enabled pipeline with an empty author allowlist.
+With `Resolve:RequireCommand=true`, only active threads whose latest human comment is a
+creator-authored `/resolve` command are collected and triaged; the text after `/resolve`
+becomes the request. Plain comments do not trigger or enter those runs.
+An authenticated manual `POST /resolutions` bypasses the creator allowlist and comment
+watermark, but still rejects drafts, competes for the same PR claim, and respects
+`RequireCommand` filtering when enabled.
 
 Resolve runs collect human comments and triage them with a read-only agent pass. Only
 anchored, authorized, changed-file requests pass to a bounded edit pass in a private
@@ -164,17 +168,18 @@ set. Enable writes only after reviewing triage and evidence-downgrade metrics.
   "VerifyCommand": null,
   "VerifyTimeoutSeconds": 600,
   "DiscoveryEnabled": false,
+  "RequireCommand": false,
   "TriageBatchSize": 20
 }
 ```
 
-`AllowedCommenters` limits who may drive edits; empty means PR creator only. Other human
-comments can still be triaged and answered. `/rf resolve` on an active PR thread queues an
-author-commanded resolve run. Discovery-triggered resolve runs require
-`Resolve:DiscoveryEnabled=true` and comments newer than the last completed resolve watermark —
-with one exception: a thread whose previous resolution was deferred (budget exhausted) is
-re-queued even when no comment is newer than the watermark, and the run's watermark is cleared
-so the deferred retry is actually collected.
+`AllowedCommenters` limits who may drive edits; empty means PR creator only. With
+`Resolve:RequireCommand=false`, other eligible human comments can still be triaged and
+answered. `/resolve` on an active PR thread queues an author-commanded resolve run.
+Discovery-triggered runs require `Resolve:DiscoveryEnabled=true` and comments newer than
+the last completed resolve watermark. With `Resolve:RequireCommand=true`, discovery enqueues
+only `/resolve` commands or deferred retries; deferred retries still require discovery to be
+enabled and clear the run watermark so the thread is collected again.
 Both resolution and review runs share the per-PR claim, so they cannot write concurrently.
 
 ## Dev loop: Aspire vs Docker Compose
@@ -239,7 +244,7 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
   restarted run is re-acquired idempotently at dequeue.
 - `Review:Sharding` was removed (unused); large diffs use the `MaxDiffChars` truncation path.
 - `Reasoning:FollowUpModel` — optional cheaper/faster model for the Fast tier: follow-up
-  reviews and `/rf fix` passes route to it; full reviews keep `Reasoning:Model`. Must carry
+  reviews and `/fixit` passes route to it; full reviews keep `Reasoning:Model`. Must carry
   the same provider routing prefix (`openai-codex:…` with `openai-codex:…`); mismatches fail
   startup validation. Unset (default) aliases the Fast tier to the full model — identical
   behavior, zero config. Token metrics carry a `model` tag, so per-tier cost splits out
@@ -306,7 +311,7 @@ Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__�
   `bash.unquoted-vars`, `bash.set-e-missing`, `py.mutable-default-arg`,
   `docker.add-vs-copy`) gets a pure-C# proposal. Suggestion mode performs **zero checkout
   writes**; CommitOnHead materializes accepted fixes in a run-scoped private checkout.
-- **Commanded** — the PR author replies `/rf fix` on any thread (human, bot, or a
+- **Commanded** — the PR author replies `/fixit` on any thread (human, bot, or a
   ReviewForge finding). Only commands from the PR author, newer than the last completed
   run's comment watermark, on active file-anchored threads trigger a constrained agent
   fix pass: hash-anchored line edits, a one-file writable set, no shell, no findings
@@ -326,7 +331,7 @@ Two fix sources, gated by `AutoFix` configuration (env overrides use `AutoFix__�
   "CommitAuthorName": null,         // required when enabled in CommitOnHead mode
   "CommitAuthorEmail": null,        // required when enabled; also the loop-guard author reference
   "MaxFixesPerRun": 3,              // shared budget, deterministic fixes first
-  "EnableThreadFixCommands": false, // the '/rf fix' thread command
+  "EnableThreadFixCommands": false, // the '/fixit' thread command
   "FixPassMaxIterations": 8         // iteration cap for one commanded fix pass
 }
 ```
@@ -441,7 +446,8 @@ Signals and where they land:
   Per-run correlation: filter console/OTLP output by the `RunId` log scope.
 
 For stage-level diagnostics, set `Logging__LogLevel__ReviewForge.Core.Pipeline.Stages=Debug`
-for one deployment or run, then filter logs by `RunId` and `Stage`. Stage debug events
+for review stages and `Logging__LogLevel__ReviewForge.Core.Resolve.Stages=Debug` for
+resolve stages, then filter logs by `RunId` and `Stage`. Stage debug events
 record decisions, bounded counts, IDs, and verification/publish checkpoints rather than
 prompts, comment bodies, source text, clone URLs, or credentials. Keep the category at
 `Information` by default to avoid high-volume per-finding and per-thread logs; restrict

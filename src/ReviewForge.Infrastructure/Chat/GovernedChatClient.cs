@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Infrastructure.Chat;
 

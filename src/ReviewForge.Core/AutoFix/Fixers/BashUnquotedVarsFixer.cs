@@ -1,3 +1,4 @@
+using ReviewForge.Core.Domain;
 namespace ReviewForge.Core.AutoFix.Fixers;
 
 /// <summary>

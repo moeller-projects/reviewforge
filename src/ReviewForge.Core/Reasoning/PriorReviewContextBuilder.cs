@@ -1,5 +1,4 @@
 using System.Text;
-using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Reasoning;

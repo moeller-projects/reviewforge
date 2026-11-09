@@ -1,3 +1,5 @@
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
 using Xunit;

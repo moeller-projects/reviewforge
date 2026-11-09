@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace ReviewForge.Service.Security;
+namespace ReviewForge.Service;
 
 /// <summary>Constant-time API-key comparison over SHA-256 digests (fixed-length, no prefix oracle).</summary>
 public static class ApiKeyValidator

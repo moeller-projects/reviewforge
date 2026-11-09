@@ -1,3 +1,4 @@
+using ReviewForge.Core.Editing;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -6,10 +7,12 @@ using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
+using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning.Rules;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Reasoning;
 

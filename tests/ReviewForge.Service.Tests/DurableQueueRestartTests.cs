@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Persistence;
-using ReviewForge.Service.Queue;
 using Xunit;
 
 namespace ReviewForge.Service.Tests;

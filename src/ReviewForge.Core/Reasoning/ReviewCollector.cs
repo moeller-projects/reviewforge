@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Resolve.Domain;
 
 namespace ReviewForge.Core.Reasoning;
 

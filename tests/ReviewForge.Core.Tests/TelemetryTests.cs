@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using Xunit;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Tests;
 

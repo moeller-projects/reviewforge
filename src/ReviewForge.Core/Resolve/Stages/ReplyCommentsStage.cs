@@ -1,0 +1,127 @@
+using System.Diagnostics;
+using System.Text;
+using Microsoft.Extensions.Logging;
+using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
+
+namespace ReviewForge.Core.Resolve.Stages;
+
+public sealed class ReplyCommentsStage(
+    IPullRequestSource source,
+    IFindingStore store,
+    bool setFixedStatus,
+    ILogger<ReplyCommentsStage>? logger = null) : IReviewStage
+{
+    public string Name => "reply-comments";
+
+    public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        var resolve = ctx.RequireResolveState();
+        var unresolved = await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false);
+        var actions = unresolved.Where(a => !a.ReplyPosted).OrderBy(a => a.RunId == ctx.RunId ? 1 : 0).ThenBy(a => a.Id).ToArray();
+        logger?.LogDebug("reply processing: storedActions={StoredActionCount}, pendingReplies={PendingReplyCount}, currentApplied={AppliedResolutionCount}",
+            unresolved.Count, actions.Length, resolve.AppliedResolutions.Count);
+        var threads = ctx.Fetch.Threads.ToDictionary(t => t.Id);
+        var applied = resolve.AppliedResolutions.ToDictionary(r => r.ThreadId);
+        var replies = 0;
+        foreach (var pendingAction in actions)
+        {
+            var action = pendingAction;
+            PublishGuardChecks.ThrowIfClaimLost(ctx, $"before resolve reply on thread {action.ThreadId}");
+            var body = action.ReplyText ?? CommentFormatter.WithBotPreamble(FormatOutcome(ctx, action, applied));
+            if (action.ReplyText is null)
+            {
+                action = action with {ReplyText = body};
+                await store.SaveResolveActionsAsync(ctx.Pr, action.RunId, [action], ct).ConfigureAwait(false);
+            }
+
+            if (threads.TryGetValue(action.ThreadId, out var thread)
+                && thread.LastNonSystemComment is {IsBot: true} last
+                && string.Equals(last.Text, body, StringComparison.Ordinal))
+            {
+                if (MayMarkFixed(threads, action))
+                    await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
+                ResolveTelemetry.ResolveRepliesDeduped.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
+                await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
+                logger?.LogDebug("reply deduplicated: outcome={Outcome}, markFixed={MarkFixed}", action.Outcome, MayMarkFixed(threads, action));
+                continue;
+            }
+
+            await source.ReplyToThreadAsync(ctx.Pr, action.ThreadId, body, ct).ConfigureAwait(false);
+            if (MayMarkFixed(threads, action))
+                await source.SetThreadStatusAsync(ctx.Pr, action.ThreadId, ReviewThreadStatus.Fixed, ct).ConfigureAwait(false);
+            await store.MarkResolveActionRepliedAsync(action.Id, ct).ConfigureAwait(false);
+            logger?.LogDebug("reply posted: outcome={Outcome}, markFixed={MarkFixed}", action.Outcome, MayMarkFixed(threads, action));
+            ResolveTelemetry.ResolveRepliesPosted.Add(1, new TagList {{"outcome", action.Outcome.ToString().ToLowerInvariant()}});
+            replies++;
+        }
+
+        var current = unresolved.Where(a => a.RunId == ctx.RunId).ToArray();
+        var summaryKey = $"resolve-{ctx.RunId:D}";
+        if (current.Length > 0)
+        {
+            var existingSummary = threads.Values.FirstOrDefault(t => t.DedupeKey == summaryKey);
+            var summaryThreadId = existingSummary?.Id;
+            if (summaryThreadId is null)
+            {
+                PublishGuardChecks.ThrowIfClaimLost(ctx, "before resolve summary");
+                var summary = new StringBuilder(CommentFormatter.BotPreamble).AppendLine().AppendLine()
+                    .AppendLine("## Review · resolve summary");
+                foreach (var group in current.Where(a => a.CommitSha is not null)
+                             .GroupBy(a => a.CommitSha!, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+                {
+                    var subject = resolve.AppliedResolutions.FirstOrDefault(item => item.CommitSha == group.Key)?.CommitSubject;
+                    summary.Append("- Commit: ").Append(group.Key[..Math.Min(7, group.Key.Length)]);
+                    if (!string.IsNullOrWhiteSpace(subject)) summary.Append(" — ").Append(subject);
+                    summary.AppendLine();
+                }
+
+                var deferred = current.Where(a => a.Outcome == ResolutionOutcome.Deferred).Select(a => $"#{a.ThreadId}").ToArray();
+                if (deferred.Length > 0) summary.Append("- Deferred: ").AppendLine(string.Join(", ", deferred));
+                summary.Append("- Verification: ").AppendLine(resolve.ResolveVerificationStatus);
+                summaryThreadId = await source.PostGeneralCommentAsync(
+                    ctx.Pr, summary.ToString().TrimEnd(), summaryKey, ct).ConfigureAwait(false);
+                logger?.LogDebug("resolve summary posted: currentActions={CurrentActionCount}", current.Length);
+            }
+
+            if (current.All(a => a.Outcome != ResolutionOutcome.Deferred) && existingSummary?.Status != ReviewThreadStatus.Closed)
+            {
+                PublishGuardChecks.ThrowIfClaimLost(ctx, "before closing resolve summary");
+                await source.SetThreadStatusAsync(ctx.Pr, summaryThreadId.Value, ReviewThreadStatus.Closed, ct)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        logger?.LogInformation("resolve replies posted: {Count}", replies);
+    }
+
+    /// <summary>Fixed-status writes close the thread for every participant — allowed only on
+    /// the bot's own finding threads (dedupe-key stamped), only for Fixed outcomes, and only
+    /// when the operator opted in. A human-authored thread is never resolved by the bot.</summary>
+    private bool MayMarkFixed(IReadOnlyDictionary<int, ReviewThread> threads, ResolveAction action)
+        => setFixedStatus
+           && action.Outcome == ResolutionOutcome.Fixed
+           && threads.TryGetValue(action.ThreadId, out var thread)
+           && thread.DedupeKey is not null;
+
+    private static string FormatOutcome(ReviewContext ctx, ResolveAction action, IReadOnlyDictionary<int, AppliedResolution> applied)
+    {
+        var resolve = ctx.RequireResolveState();
+        var evidence = resolve.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == action.ThreadId)?.Evidence;
+        var detail = resolve.ResolutionDetails.GetValueOrDefault(action.ThreadId);
+        return action.Outcome switch
+        {
+            ResolutionOutcome.Fixed when action.CommitSha is { } sha => $"Fixed in {sha[..Math.Min(7, sha.Length)]} — {applied.GetValueOrDefault(action.ThreadId)?.CommitSubject ?? "applied the requested correction"}. {detail}",
+            ResolutionOutcome.AgentDeclined => $"I looked into this — {detail ?? "I could not identify a safe change"}. No change made.",
+            ResolutionOutcome.NonIssue => $"I don't think this is an issue: {evidence ?? "the current code does not reproduce the concern"}. Happy to revisit if I'm missing context.",
+            ResolutionOutcome.Question => resolve.ThreadVerdicts.FirstOrDefault(v => v.ThreadId == action.ThreadId)?.Answer ?? evidence ?? "I need more context to answer this question.",
+            ResolutionOutcome.AlreadyFixed => $"This already holds on {ctx.RequirePullRequest().SourceCommitSha[..Math.Min(7, ctx.RequirePullRequest().SourceCommitSha.Length)]}: {evidence ?? "the current head contains the requested behavior"}.",
+            ResolutionOutcome.PushFailed => "The resolution could not be published; no change from this fix was published.",
+            ResolutionOutcome.Deferred => $"This run's budget is exhausted; re-queued for the next resolve run.",
+            _ => $"I can't safely act on this one: {detail ?? evidence ?? "needs a human decision"} — needs a human decision."
+        };
+    }
+}

@@ -674,6 +674,38 @@ public class SqliteFindingStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Constructor_migrates_legacy_pushed_fixes_and_marks_commanded_fixes_as_ai_drafted()
+    {
+        await using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                                  ALTER TABLE PushedFixes DROP COLUMN AiDrafted;
+                                  ALTER TABLE PushedFixes DROP COLUMN Pushed;
+                                  INSERT INTO PushedFixes
+                                      (RunId, Org, Project, RepositoryId, PrId, DedupeKey, CommitSha, CommitSubject, ThreadId, ReplyPosted, CreatedAt)
+                                  VALUES
+                                      ($runId, $org, $project, $repo, $prId, 'thread-42', 'abc123', 'fix: commanded', 42, 0, $createdAt);
+                                  """;
+            command.Parameters.AddWithValue("$runId", Guid.NewGuid().ToString());
+            command.Parameters.AddWithValue("$org", Key.Org);
+            command.Parameters.AddWithValue("$project", Key.Project);
+            command.Parameters.AddWithValue("$repo", Key.RepositoryId);
+            command.Parameters.AddWithValue("$prId", Key.PrId);
+            command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var migrated = new SqliteFindingStore(_ConnectionString);
+        var fix = Assert.Single(await migrated.GetUnrepliedPushedFixesAsync(Key, CancellationToken.None));
+
+        Assert.True(fix.Pushed);
+        Assert.True(fix.AiDrafted);
+        Assert.Equal("thread-42", fix.DedupeKey);
+    }
+
+    [Fact]
     public async Task Legacy_row_without_watermark_returns_null_watermark()
     {
         var t0 = new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero);

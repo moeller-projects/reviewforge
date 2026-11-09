@@ -84,6 +84,7 @@ CommitGranularity = "PerThread"
 SetFixedStatus = false
 VerifyTimeoutSeconds = 600
 DiscoveryEnabled = false
+RequireCommand = false
 TriageBatchSize = 20
 
 [AutoFix]

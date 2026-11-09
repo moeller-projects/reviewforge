@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
@@ -92,7 +93,7 @@ public sealed class PublishFindingsStage(
                         && !regressedThreadIds.ContainsKey(f.DedupeKey))
             .Select(f => (Key: f.DedupeKey!,
                 ThreadId: ctx.Fetch.Threads.First(t => t.DedupeKey == f.DedupeKey).Id,
-                Body: CommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
+                Body: FixCommentFormatter.FormatFixedFinding(f, f.AppliedFix!)))
             .ToList();
         if (logger.IsEnabled(LogLevel.Debug))
             logger.LogDebug(
@@ -261,7 +262,7 @@ public sealed class PublishFindingsStage(
                 fix.Proposal.FilePath, fix.Proposal.StartLine, fix.Proposal.EndLine);
             var excerpt = ctx.AutoFix.FixCommands.FirstOrDefault(c => c.ThreadId == commandThreadId)?.QuotedComment
                           ?? string.Empty;
-            var body = CommentFormatter.FormatFixedFinding(fix.Proposal, excerpt);
+            var body = FixCommentFormatter.FormatFixedFinding(fix.Proposal, excerpt);
             if (await SuggestionAlreadyPostedAsync(ctx, anchor, body, ct).ConfigureAwait(false))
             {
                 logger.LogInformation(
@@ -372,8 +373,8 @@ public sealed class PublishFindingsStage(
     /// </summary>
     private async Task ReconcilePushedFixAsync(ReviewContext ctx, PushedFix fix, CancellationToken ct)
     {
-        var body = CommentFormatter.FormatCommittedFixReply(fix.CommitSha, fix.CommitSubject, fix.AiDrafted);
-        var marker = CommentFormatter.CommittedFixLine(fix.CommitSha, fix.CommitSubject, fix.AiDrafted);
+        var body = FixCommentFormatter.FormatCommittedFixReply(fix.CommitSha, fix.CommitSubject, fix.AiDrafted);
+        var marker = FixCommentFormatter.CommittedFixLine(fix.CommitSha, fix.CommitSubject, fix.AiDrafted);
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
         var liveThreadId = threads
             .FirstOrDefault(t =>

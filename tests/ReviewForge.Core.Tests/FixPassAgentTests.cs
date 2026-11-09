@@ -1,9 +1,9 @@
+using ReviewForge.Core.Editing;
 using System.Diagnostics.Metrics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using ReviewForge.Core.Analysis;
-using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;

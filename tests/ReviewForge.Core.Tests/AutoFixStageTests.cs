@@ -1,3 +1,4 @@
+using ReviewForge.Core.Editing;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Analysis;

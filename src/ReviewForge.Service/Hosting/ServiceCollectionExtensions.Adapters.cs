@@ -7,7 +7,6 @@ using ReviewForge.Infrastructure.Filesystem;
 using ReviewForge.Infrastructure.Git;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Infrastructure.Process;
-using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
 

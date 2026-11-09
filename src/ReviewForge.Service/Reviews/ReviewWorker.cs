@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
-using ReviewForge.Service.Queue;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Service;
 

@@ -2,8 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
-using ReviewForge.Service.Queue;
-using ReviewForge.Service.Security;
 
 namespace ReviewForge.Service;
 

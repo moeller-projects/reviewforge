@@ -149,7 +149,7 @@ public class AutoFixPublishTests
             "script.sh", 3, 3, "echo \"$name\"", "Quoted as requested.",
             FixOrigin.LlmCommanded, SourceThreadId: 42);
         var anchor = new ThreadAnchor("script.sh", 3, 3);
-        var body = CommentFormatter.FormatFixedFinding(proposal, "please quote this");
+        var body = FixCommentFormatter.FormatFixedFinding(proposal, "please quote this");
         source.Threads.Add(new ReviewThread(
             900, null, ReviewThreadStatus.Active,
             [new ThreadComment("bot", "bot", true, body, DateTimeOffset.UtcNow)], anchor));
@@ -262,7 +262,7 @@ public class AutoFixPublishTests
     public async Task CommitOnHead_reconciliation_recognizes_reply_posted_before_crash()
     {
         var source = new FakePullRequestSource();
-        var body = CommentFormatter.FormatCommittedFixReply("abcdef123456", "fix(src): quote variable", aiDrafted: true);
+        var body = FixCommentFormatter.FormatCommittedFixReply("abcdef123456", "fix(src): quote variable", aiDrafted: true);
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
         [
             new ThreadComment("b", "bot", true, "old finding", DateTimeOffset.UtcNow),
@@ -291,7 +291,7 @@ public class AutoFixPublishTests
         // recognize that announcement instead of posting a second "Fixed in …" comment.
         var source = new FakePullRequestSource();
         var announcement =
-            $"### 🔧 title\n**{CommentFormatter.CommittedFixLine("abcdef123456", "fix(src): quote variable")}** — rationale";
+            $"### 🔧 title\n**{FixCommentFormatter.CommittedFixLine("abcdef123456", "fix(src): quote variable")}** — rationale";
         source.Threads.Add(new ReviewThread(7, "k1", ReviewThreadStatus.Active,
         [
             new ThreadComment("b", "bot", true, announcement, DateTimeOffset.UtcNow),
@@ -414,7 +414,7 @@ public class AutoFixPublishTests
         var proposal = new FixProposal(
             "a.sh", 1, 1, "x", "rationale here", FixOrigin.LlmCommanded, 7);
         var excerpt = "line one\nline two " + new string('y', 300);
-        var text = CommentFormatter.FormatFixedFinding(proposal, excerpt);
+        var text = FixCommentFormatter.FormatFixedFinding(proposal, excerpt);
 
         Assert.Contains("### 🔧 Requested fix", text);
         Assert.Contains("#7", text);
@@ -436,7 +436,7 @@ public class AutoFixPublishTests
         var deterministic = CommentFormatter.FormatFinding(finding);
         Assert.Contains("````suggestion\nline ``` inside\n````", deterministic);
 
-        var commanded = CommentFormatter.FormatFixedFinding(
+        var commanded = FixCommentFormatter.FormatFixedFinding(
             new FixProposal("script.sh", 3, 3, replacement, "r", FixOrigin.LlmCommanded, 42),
             "please quote this");
         Assert.Contains("````suggestion\nline ``` inside\n````", commanded);

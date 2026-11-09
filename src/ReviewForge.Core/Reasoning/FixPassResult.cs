@@ -1,3 +1,4 @@
+using ReviewForge.Core.Editing;
 using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Reasoning;

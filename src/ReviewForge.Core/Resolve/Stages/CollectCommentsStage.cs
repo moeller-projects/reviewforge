@@ -1,0 +1,99 @@
+using Microsoft.Extensions.Logging;
+using ReviewForge.Core.Analysis;
+using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
+using ReviewForge.Core.Ports;
+
+namespace ReviewForge.Core.Resolve.Stages;
+
+public sealed class CollectCommentsStage(
+    IPullRequestSource source,
+    IFindingStore store,
+    IReadOnlySet<string> allowedCommenters,
+    TimeProvider? clock = null,
+    ILogger<CollectCommentsStage>? logger = null,
+    bool requireCommand = false) : IReviewStage
+{
+    private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
+    public string Name => "collect-comments";
+
+    public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        var resolve = ctx.RequireResolveState();
+        ctx.Fetch = ctx.Fetch with {Threads = await ResolveThreadsAsync(ctx, ct).ConfigureAwait(false)};
+        logger?.LogDebug("resolved comment threads: {ThreadCount}, allowed commenters: {AllowedCommenterCount}",
+            ctx.Fetch.Threads.Count, allowedCommenters.Count);
+        var priorByThread = (await store.GetResolveActionsAsync(ctx.Pr, [], ct).ConfigureAwait(false))
+            .ToDictionary(action => action.ThreadId);
+        var authorOnly = allowedCommenters.Count == 0;
+        var comments = new List<ResolvableComment>();
+        foreach (var thread in ctx.Fetch.Threads)
+        {
+            priorByThread.TryGetValue(thread.Id, out var previousAction);
+            var deferred = previousAction?.Outcome == ResolutionOutcome.Deferred;
+            if (thread.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed || thread.Comments.Count == 0)
+                continue;
+            var latestHuman = thread.Comments.LastOrDefault(c => c.IsHuman);
+            if (latestHuman is null
+                || (!deferred && resolve.ResolveWatermark is { } watermark && latestHuman.PublishedAt <= watermark)
+                || (!deferred && previousAction is not null && latestHuman.PublishedAt <= previousAction.CreatedAt))
+                continue;
+            // "/fixit" belongs to the auto-fix pipeline. "/resolve" stays: the command
+            // comment IS a resolution request (its text may carry the actual instructions);
+            // dropping it would leave a command-only PR with nothing to resolve even though
+            // the command was acknowledged.
+            if (Command(latestHuman.Text, "/fixit"))
+                continue;
+            var resolveCommand = ResolveCommandDetector.Find(
+                thread, ctx.RequirePullRequest().CreatorId, resolve.ResolveWatermark);
+            if (requireCommand && resolveCommand is null && !deferred)
+                continue;
+            if (!deferred && resolveCommand is null
+                && (thread.LastNonSystemComment is not {IsHuman: true}
+                    || (thread.DedupeKey is not null && !thread.HasPendingHumanReply)))
+                continue;
+            var allowed = authorOnly
+                ? string.Equals(latestHuman.AuthorId, ctx.RequirePullRequest().CreatorId, StringComparison.OrdinalIgnoreCase)
+                : allowedCommenters.Contains(latestHuman.AuthorId);
+            var requestText = requireCommand && resolveCommand is not null
+                ? resolveCommand.RequestText
+                : latestHuman.Text;
+            comments.Add(new ResolvableComment(
+                thread.Id,
+                thread.Anchor is null ? null : thread.Anchor with {FilePath = RepoPath.Normalize(thread.Anchor.FilePath)},
+                latestHuman.AuthorId,
+                latestHuman.AuthorName,
+                thread.Comments.Where(comment => comment.Origin != ThreadCommentOrigin.System).ToArray(),
+                requestText.Length <= 1000 ? requestText : requestText[..1000],
+                allowed));
+        }
+
+        resolve.ResolvableComments = comments;
+        logger?.LogDebug("collected resolvable comments: {Count}; deferred actions considered: {PriorActionCount}",
+            comments.Count, priorByThread.Count);
+    }
+
+    private async Task<IReadOnlyList<ReviewThread>> ResolveThreadsAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        if (ctx.Repository.PendingThreadsRefresh is { } refresh)
+        {
+            var wasInFlight = !refresh.Task.IsCompleted;
+            // No silent fallback: a failed overlap refresh fails the run. Refetching after a
+            // discarded provider failure would hide the original error and let a failed
+            // stage report success.
+            var overlapped = await refresh.Task.ConfigureAwait(false);
+            var completedAt = refresh.CompletedAt ?? (wasInFlight ? _Clock.GetUtcNow() : null);
+            if (completedAt is { } receivedAt
+                && ctx.Repository.RepoPreparedAt is { } preparedAt && receivedAt >= preparedAt)
+                return overlapped;
+        }
+
+        return await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
+    }
+
+    private static bool Command(string text, string command)
+        => text.TrimStart().StartsWith(command, StringComparison.OrdinalIgnoreCase)
+           && (text.TrimStart().Length == command.Length || char.IsWhiteSpace(text.TrimStart()[command.Length]));
+}

@@ -17,8 +17,6 @@ using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Ado;
-using ReviewForge.Service.Queue;
-using ReviewForge.Service.Security;
 using ReviewForge.Testing;
 using Xunit;
 

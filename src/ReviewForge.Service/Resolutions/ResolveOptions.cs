@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Resolve.Domain;
 
 namespace ReviewForge.Service;
 
@@ -19,6 +20,8 @@ public sealed class ResolveOptions
     public bool SetFixedStatus { get; set; }
     public string[]? VerifyCommand { get; set; }
     [Range(1, 3600)] public int VerifyTimeoutSeconds { get; set; } = 600;
+    /// <summary>Require a fresh /resolve command before collecting or discovering resolution work.</summary>
+    public bool RequireCommand { get; set; }
     public bool DiscoveryEnabled { get; set; }
     [Range(1, 50)] public int TriageBatchSize { get; set; } = 20;
 }

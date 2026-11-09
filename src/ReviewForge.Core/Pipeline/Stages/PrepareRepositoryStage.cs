@@ -5,6 +5,7 @@ using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
@@ -70,8 +71,8 @@ public sealed class PrepareRepositoryStage(
         ctx.Repository = ctx.Repository with {RepoDir = checkout.Path, HeadCommitInfo = headCommitInfo};
         if (ctx.Trigger == EnqueueTrigger.Discovery
             && headCommitInfo is { } headInfo
-            && autoFix is not null
-            && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
+            && autoFix is { IsCommitOnHead: true }
+            && LoopGuard.IsBotAuthoredHead(headInfo, autoFix.CommitAuthorEmail))
         {
             ReviewTelemetry.LoopGuardSkips.Add(
                 1, new TagList {{"source", "gate"}});

@@ -46,7 +46,7 @@ public sealed record StoredFinding(
     string? FilePath,
     int? Line,
     int? ThreadId,
-    // Serialized AutoFix.AppliedFix for fixes applied this run; null for plain findings.
+    // Serialized AppliedFix for fixes applied this run; null for plain findings.
     // Commanded fixes ("thread-{id}" keys) are audit-only rows.
     string? AppliedFixJson = null,
     string? FindingJson = null,

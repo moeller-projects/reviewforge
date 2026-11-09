@@ -1,6 +1,5 @@
 using ReviewForge.Core.Workspaces;
 using ReviewForge.Infrastructure.Chat;
-using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
 

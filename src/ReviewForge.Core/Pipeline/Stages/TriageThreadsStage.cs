@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 

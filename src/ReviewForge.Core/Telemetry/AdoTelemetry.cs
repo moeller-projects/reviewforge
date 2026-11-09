@@ -1,6 +1,6 @@
 using System.Diagnostics.Metrics;
 
-namespace ReviewForge.Core.Pipeline;
+namespace ReviewForge.Core.Telemetry;
 
 public static class AdoTelemetry
 {

@@ -93,7 +93,7 @@ intentionally not overridable.
    or path you introduce must preserve that (directory mount, read-write).
 8. **Auto-fix discipline.** A fix is only published when (a) the author is allowlisted and
    (b) the rule has a registered fixer or the fix was explicitly commanded by the PR
-   author via `/rf fix`. Any gate failing means the finding
+   author via `/fixit`. Any gate failing means the finding
    is published as a plain comment instead. In Suggestion mode every fix is published as an
    ADO suggestion block. In CommitOnHead mode (`AutoFix:PublishMode`) fixes are committed in
    the run's private checkout and pushed fast-forward-only to the PR source branch, and then
@@ -103,10 +103,13 @@ intentionally not overridable.
    (pushed_fixes), and a later run reconciles missing replies. ReviewForge never force-pushes,
    never rebases, never opens pull requests. AI-drafted fixes are always labeled as such.
    Resolve fixes are committed only after triage and bounded writable-set planning, then only
-   under the same claim/head-pin/fast-forward guards. Discovery and `/rf resolve` command
-   runs require the immutable creator allowlist and comment watermark; an authenticated
-   manual `POST /resolutions` bypasses those two checks but still rejects drafts and shares
-   the PR claim. Resolve outcomes are persisted before replies so a retry can reconcile them.
+   under the same claim/head-pin/fast-forward guards. Discovery and `/resolve` command
+   runs require the immutable creator allowlist and comment watermark. When
+   `Resolve:RequireCommand=true`, only active threads whose latest human comment is a
+   creator-authored `/resolve` command are collected; discovery also requires
+   `Resolve:DiscoveryEnabled=true` for deferred retries. An authenticated manual
+   `POST /resolutions` bypasses the allowlist and watermark but still respects command
+   filtering, rejects drafts, and shares the PR claim. Resolve outcomes are persisted before replies so a retry can reconcile them.
    Bot replies never close human threads by default. Never resolve another person's thread.
    Never leave a pooled checkout dirty.
 

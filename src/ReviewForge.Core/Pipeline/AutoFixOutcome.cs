@@ -1,4 +1,4 @@
-using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Domain;
 
 namespace ReviewForge.Core.Pipeline;
 

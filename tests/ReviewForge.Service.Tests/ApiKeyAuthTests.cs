@@ -5,7 +5,6 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using ReviewForge.Service.Security;
 using Xunit;
 
 namespace ReviewForge.Service.Tests;

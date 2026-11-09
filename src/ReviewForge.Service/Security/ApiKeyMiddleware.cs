@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Options;
 
-namespace ReviewForge.Service.Security;
+namespace ReviewForge.Service;
 
 /// <summary>
 /// X-Api-Key enforcement as route-branch middleware for the <c>/mcp</c> surface. The MCP

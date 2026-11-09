@@ -1,6 +1,9 @@
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
+using ReviewForge.Core.Resolve.Stages;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
@@ -102,7 +105,8 @@ public sealed class StageCatalog
             StageId.ResolveGate => new ResolveGateStage(
                 _Store,
                 _ResolveOptions.AllowedAuthors.ToHashSet(StringComparer.OrdinalIgnoreCase),
-                _LoggerFactory.CreateLogger<ResolveGateStage>()),
+                _LoggerFactory.CreateLogger<ResolveGateStage>(),
+                _ResolveOptions.RequireCommand),
             StageId.PrepareRepository => new PrepareRepositoryStage(
                 _CheckoutPool,
                 _LoggerFactory.CreateLogger<PrepareRepositoryStage>(),
@@ -158,7 +162,8 @@ public sealed class StageCatalog
                 _Store,
                 _ResolveOptions.AllowedCommenters.ToHashSet(StringComparer.OrdinalIgnoreCase),
                 _Clock,
-                _LoggerFactory.CreateLogger<CollectCommentsStage>()),
+                _LoggerFactory.CreateLogger<CollectCommentsStage>(),
+                _ResolveOptions.RequireCommand),
             StageId.TriageComments => new TriageCommentsStage(
                 build.Agent, _ResolveOptions.TriageBatchSize,
                 _LoggerFactory.CreateLogger<TriageCommentsStage>()),

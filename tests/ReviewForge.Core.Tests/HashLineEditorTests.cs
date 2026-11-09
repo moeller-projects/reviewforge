@@ -1,3 +1,4 @@
+using ReviewForge.Core.Editing;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Reasoning;
 using Xunit;

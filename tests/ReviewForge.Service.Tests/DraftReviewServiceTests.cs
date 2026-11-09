@@ -2,7 +2,6 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
-using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
 
