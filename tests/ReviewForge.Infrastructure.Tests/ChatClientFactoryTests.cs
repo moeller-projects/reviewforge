@@ -406,6 +406,103 @@ public class ChatClientFactoryTests
     }
 
     [Fact]
+    public async Task Responses_request_preserves_multimodal_user_content()
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var handler = new JsonResponseHandler("""
+                {"id":"resp_1","object":"response","created_at":1760000000,"status":"completed","model":"gpt-5","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}
+                """);
+            using var factory = new ChatClientFactory(new ChatProviderOptions
+            {
+                Provider = ChatProviderKind.OpenAi,
+                Model = "gpt-5",
+            }, handler);
+            var message = new ChatMessage(ChatRole.User, (string?)null);
+            message.Contents.Add(new TextContent("describe this image"));
+            message.Contents.Add(new UriContent(new Uri("https://example.test/image.png"), "image/png"));
+
+            await factory.Create(ChatTier.Full).GetResponseAsync(
+                [message],
+                new ChatOptions { ModelId = "gpt-5" });
+
+            using var body = JsonDocument.Parse(handler.RequestBody!);
+            var content = body.RootElement.GetProperty("input")[0].GetProperty("content");
+            Assert.Equal("input_text", content[0].GetProperty("type").GetString());
+            Assert.Equal("input_image", content[1].GetProperty("type").GetString());
+            Assert.Equal("https://example.test/image.png", content[1].GetProperty("image_url").GetString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
+    [Fact]
+    public async Task Responses_background_response_can_resume_streaming()
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var handler = new SequencedResponseHandler(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"id":"resp_1","object":"response","created_at":1760000000,"status":"in_progress","background":true,"model":"gpt-5","output":[]}""",
+                        null,
+                        "application/json"),
+                },
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                        event: response.output_text.delta
+                        data: {"type":"response.output_text.delta","sequence_number":8,"item_id":"msg_1","output_index":0,"content_index":0,"delta":"resumed"}
+
+                        event: response.completed
+                        data: {"type":"response.completed","sequence_number":9,"response":{"id":"resp_1","object":"response","created_at":1760000000,"status":"completed","model":"gpt-5","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}
+
+                        """, null, "text/event-stream"),
+                });
+            using var factory = new ChatClientFactory(new ChatProviderOptions
+            {
+                Provider = ChatProviderKind.OpenAi,
+                Model = "gpt-5",
+            }, handler);
+            var client = factory.Create(ChatTier.Full);
+
+            var initial = await client.GetResponseAsync(
+                [],
+                new ChatOptions { ModelId = "gpt-5", AllowBackgroundResponses = true });
+            Assert.NotNull(initial.ContinuationToken);
+
+            var updates = new List<ChatResponseUpdate>();
+            await foreach (var update in client.GetStreamingResponseAsync(
+                               [],
+                               new ChatOptions
+                               {
+                                   ModelId = "gpt-5",
+                                   AllowBackgroundResponses = true,
+                                   ContinuationToken = initial.ContinuationToken,
+                               }))
+            {
+                updates.Add(update);
+            }
+
+            Assert.EndsWith("/responses/resp_1", handler.RequestUris[1].AbsolutePath);
+            Assert.Contains(updates.SelectMany(update => update.Contents), content =>
+                content is TextContent { Text: "resumed" });
+            Assert.Contains(updates, update => update.ResponseId == "resp_1");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
+    [Fact]
     public async Task Responses_streaming_maps_text_and_completed_function_calls()
     {
         var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
@@ -436,6 +533,7 @@ public class ChatClientFactoryTests
 
                 event: response.completed
                 data: {"type":"response.completed","sequence_number":7,"response":{"id":"resp_1","object":"response","created_at":1760000000,"status":"completed","model":"gpt-5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"echo","arguments":"{\"value\":\"ok\"}"}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}
+
                 """);
             using var factory = new ChatClientFactory(new ChatProviderOptions
             {
@@ -483,6 +581,42 @@ public class ChatClientFactoryTests
             {
                 Content = new StringContent(responseBody, null, "text/event-stream"),
             };
+        }
+    }
+
+    private sealed class JsonResponseHandler(string responseBody) : HttpMessageHandler
+    {
+        public string? RequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseBody, null, "application/json"),
+            };
+        }
+    }
+
+    private sealed class SequencedResponseHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private int _Index;
+
+        public List<Uri> RequestUris { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestUris.Add(request.RequestUri!);
+            if (request.Content is not null)
+            {
+                _ = await request.Content.ReadAsStringAsync(cancellationToken);
+            }
+
+            return responses[_Index++];
         }
     }
 
