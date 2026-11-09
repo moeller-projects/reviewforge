@@ -1,8 +1,10 @@
+using ReviewForge.Core.Domain;
 using System.ComponentModel;
 using System.Text;
 using ReviewForge.Core.Analysis;
+using ReviewForge.Core.Reasoning;
 
-namespace ReviewForge.Core.Reasoning;
+namespace ReviewForge.Core.Editing;
 
 /// <summary>
 /// Hash-anchored line editor for checkout files. Direct System.IO by design — same

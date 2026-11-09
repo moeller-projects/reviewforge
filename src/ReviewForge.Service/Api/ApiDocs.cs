@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.OpenApi;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using Scalar.AspNetCore;
-using ApiKeyOptions = ReviewForge.Service.Security.ApiKeyOptions;
 
 namespace ReviewForge.Service;
 

@@ -3,8 +3,11 @@ using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
 
-namespace ReviewForge.Core.Pipeline.Stages;
+namespace ReviewForge.Core.Resolve.Stages;
 
 public sealed class PlanFixesStage(int maxThreads, int maxWritableFiles, ILogger<PlanFixesStage>? logger = null) : IReviewStage
 {

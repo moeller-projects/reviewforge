@@ -7,7 +7,6 @@ using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
-using ReviewForge.Service.Queue;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -56,7 +55,7 @@ public class DiscoveryServiceTests
         var tracker = new RunTracker();
         var service = Service(
             source, store, queue, tracker,
-            resolveOptions: new ResolveOptions {Enabled = true, AllowedAuthors = ["alice"]});
+            resolveOptions: new ResolveOptions {Enabled = true, AllowedAuthors = ["alice"], RequireCommand = true});
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 
@@ -65,6 +64,38 @@ public class DiscoveryServiceTests
         Assert.Equal(RunKind.Resolve, run.Kind);
         Assert.Equal(EnqueueTrigger.ResolveCommand, queue.TryGetQueued(run.RunId)?.Trigger);
         Assert.Equal(RunKind.Resolve, queue.TryGetQueued(run.RunId)?.Kind);
+    }
+
+    [Fact]
+    public async Task Sweep_require_command_skips_plain_new_human_comments()
+    {
+        var candidate = Candidate(79, creatorId: "alice");
+        var published = DateTimeOffset.UtcNow;
+        var source = new FakePullRequestSource
+        {
+            OpenPullRequests = [candidate],
+            WorkItems = [],
+            Threads =
+            [
+                new ReviewThread(44, null, ReviewThreadStatus.Active,
+                    [new ThreadComment("alice", "Alice", false, "please fix this", published)]),
+            ],
+        };
+        var queue = new ReviewQueue();
+        var tracker = new RunTracker();
+
+        var report = await Service(
+            source, new FakeFindingStore(), queue, tracker,
+            resolveOptions: new ResolveOptions
+            {
+                Enabled = true,
+                AllowedAuthors = ["alice"],
+                DiscoveryEnabled = true,
+                RequireCommand = true,
+            }).RunSweepAsync(CancellationToken.None);
+
+        Assert.Empty(report.Enqueued);
+        Assert.Empty(tracker.Snapshot());
     }
 
     [Fact]
@@ -160,7 +191,7 @@ public class DiscoveryServiceTests
         var queue = new ReviewQueue();
         var tracker = new RunTracker();
         var service = Service(source, store, queue, tracker,
-            resolveOptions: new ResolveOptions {Enabled = true, AllowedAuthors = ["alice"], DiscoveryEnabled = true});
+            resolveOptions: new ResolveOptions {Enabled = true, AllowedAuthors = ["alice"], DiscoveryEnabled = true, RequireCommand = true});
 
         var report = await service.RunSweepAsync(CancellationToken.None);
 

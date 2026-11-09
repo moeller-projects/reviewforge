@@ -4,8 +4,9 @@ using System.Threading.Channels;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Telemetry;
 
-namespace ReviewForge.Service.Queue;
+namespace ReviewForge.Service;
 
 public enum RunState
 {

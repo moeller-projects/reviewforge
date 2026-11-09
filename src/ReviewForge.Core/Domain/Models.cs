@@ -142,7 +142,7 @@ public sealed record RichFinding
 
     /// <summary>Set by the auto-fix stage; when present the published body is the fix
     /// suggestion instead of the standard finding body. Not persisted on the entity.</summary>
-    public AutoFix.AppliedFix? AppliedFix { get; set; }
+    public AppliedFix? AppliedFix { get; set; }
 }
 
 [ExcludeFromCodeCoverage]

@@ -1,4 +1,5 @@
 using ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Domain;
 using Xunit;
 
 namespace ReviewForge.Core.Tests;

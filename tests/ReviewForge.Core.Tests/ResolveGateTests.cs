@@ -1,3 +1,6 @@
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
+using ReviewForge.Core.Resolve.Stages;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Pipeline;
@@ -84,6 +87,73 @@ public sealed class ResolveGateTests
         Assert.Equal(
             ResolveGateDecision.Continue,
             ResolveGate.Evaluate(Pr(), [thread], Watermark, true, deferredThreadIds: new HashSet<int> { 1 }));
+    }
+
+    [Fact]
+    public void Evaluate_require_command_skips_threads_without_resolve_command()
+    {
+        var thread = Thread(1, Human("creator", Watermark.AddTicks(1)));
+
+        Assert.Equal(ResolveGateDecision.NoNewComments,
+            ResolveGate.Evaluate(Pr(), [thread], Watermark, authorAllowed: true,
+                requireCommand: true, creatorId: "creator"));
+    }
+
+    [Fact]
+    public void Evaluate_require_command_passes_thread_with_resolve_command()
+    {
+        var thread = Thread(1, Human("creator", "/resolve fix this", Watermark.AddTicks(1)));
+
+        Assert.Equal(ResolveGateDecision.Continue,
+            ResolveGate.Evaluate(Pr(), [thread], Watermark, authorAllowed: true,
+                requireCommand: true, creatorId: "creator"));
+    }
+
+    [Fact]
+    public void Evaluate_require_command_accepts_command_followed_by_bot_acknowledgement()
+    {
+        var thread = new ReviewThread(1, null, ReviewThreadStatus.Active,
+        [
+            new ThreadComment("creator", "Creator", false, "/resolve fix this", Watermark.AddTicks(1)),
+            new ThreadComment("bot", "ReviewForge", true, "Resolve run queued", Watermark.AddTicks(2)),
+        ]);
+
+        Assert.Equal(ResolveGateDecision.Continue,
+            ResolveGate.Evaluate(Pr(), [thread], Watermark, authorAllowed: true,
+                requireCommand: true, creatorId: "creator"));
+    }
+
+    [Fact]
+    public void Evaluate_accepts_acknowledged_command_when_command_filter_is_disabled()
+    {
+        var thread = new ReviewThread(1, null, ReviewThreadStatus.Active,
+        [
+            new ThreadComment("creator", "Creator", false, "/resolve fix this", Watermark.AddTicks(1)),
+            new ThreadComment("bot", "ReviewForge", true, "Resolve run queued", Watermark.AddTicks(2)),
+        ]);
+
+        Assert.Equal(ResolveGateDecision.Continue,
+            ResolveGate.Evaluate(Pr(), [thread], Watermark, authorAllowed: true, creatorId: "creator"));
+    }
+
+    [Fact]
+    public void Evaluate_require_command_still_honors_deferred_retry()
+    {
+        var thread = Thread(1, Human("creator", Watermark.AddTicks(-1)));
+
+        Assert.Equal(ResolveGateDecision.Continue,
+            ResolveGate.Evaluate(Pr(), [thread], Watermark, authorAllowed: true,
+                deferredThreadIds: new HashSet<int> {1}, requireCommand: true, creatorId: "creator"));
+    }
+
+    [Fact]
+    public void Evaluate_require_command_ignores_non_author_commands()
+    {
+        var thread = Thread(1, Human("reviewer", "/resolve fix this", Watermark.AddTicks(1)));
+
+        Assert.Equal(ResolveGateDecision.NoNewComments,
+            ResolveGate.Evaluate(Pr(), [thread], Watermark, authorAllowed: true,
+                requireCommand: true, creatorId: "creator"));
     }
 
     [Fact]
@@ -186,5 +256,6 @@ public sealed class ResolveGateTests
 
     private static PullRequest Pr() => new(1, "title", null, "head", "base", "clone", false, "creator", "Creator");
     private static ThreadComment Human(string id, DateTimeOffset at) => new(id, id, false, "please fix", at);
+    private static ThreadComment Human(string id, string text, DateTimeOffset at) => new(id, id, false, text, at);
     private static ReviewThread Thread(int id, ThreadComment comment) => new(id, null, ReviewThreadStatus.Active, [comment]);
 }

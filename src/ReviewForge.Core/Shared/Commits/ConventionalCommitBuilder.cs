@@ -1,7 +1,7 @@
 using System.Text;
 using ReviewForge.Core.Domain;
 
-namespace ReviewForge.Core.AutoFix;
+namespace ReviewForge.Core.Commits;
 
 /// <summary>
 /// Pure builder for the conventional-commit messages stage 10 pushes in CommitOnHead mode.

@@ -1,9 +1,11 @@
+using ReviewForge.Core.Domain;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Workspaces;
 

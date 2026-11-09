@@ -1,6 +1,10 @@
 using System.Reflection;
 using System.Xml.Linq;
 using NetArchTest.Rules;
+using ReviewForge.Core.Domain;
+using ReviewForge.Core.Commits;
+using ReviewForge.Core.Editing;
+using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Infrastructure.Persistence;
 using ReviewForge.Testing;
@@ -21,6 +25,44 @@ public sealed class ArchitectureTests
             Types.InAssembly(Core).ShouldNot().HaveDependencyOnAny(
                     "ReviewForge.Infrastructure", "ReviewForge.Service", "ReviewForge.Cli", "ReviewForge.AppHost")
                 .GetResult());
+
+    [Fact]
+    public void Domain_does_not_depend_on_features()
+        => AssertRule(Types.InAssembly(Core)
+            .That().ResideInNamespace("ReviewForge.Core.Domain")
+            .ShouldNot().HaveDependencyOnAny("ReviewForge.Core.AutoFix", "ReviewForge.Core.Pipeline", "ReviewForge.Core.Resolve")
+            .GetResult());
+
+
+    [Fact]
+    public void LoopGuard_lives_in_domain()
+        => Assert.Equal("ReviewForge.Core.Domain", typeof(LoopGuard).Namespace);
+
+    [Fact]
+    public void ConventionalCommitBuilder_is_not_owned_by_auto_fix()
+        => Assert.Equal("ReviewForge.Core.Commits", typeof(ConventionalCommitBuilder).Namespace);
+
+    [Fact]
+    public void LineEdit_couple_lives_together()
+    {
+        Assert.Equal("ReviewForge.Core.Editing", typeof(HashLineEditor).Namespace);
+        Assert.Equal("ReviewForge.Core.Editing", typeof(LineEditEngine).Namespace);
+    }
+
+
+    [Fact]
+    public void Resolve_is_a_self_contained_feature()
+        => AssertRule(Types.InAssembly(typeof(ResolveGate).Assembly)
+            .That().ResideInNamespaceStartingWith("ReviewForge.Core.Resolve")
+            .ShouldNot().HaveDependencyOnAny("ReviewForge.Core.AutoFix", "ReviewForge.Core.Pipeline.Stages")
+            .GetResult());
+
+    [Fact]
+    public void AutoFix_does_not_depend_on_Resolve()
+        => AssertRule(Types.InAssembly(Core)
+            .That().ResideInNamespaceStartingWith("ReviewForge.Core.AutoFix")
+            .ShouldNot().HaveDependencyOn("ReviewForge.Core.Resolve")
+            .GetResult());
 
     [Fact]
     public void Core_does_not_depend_on_adapter_vendor_technology()

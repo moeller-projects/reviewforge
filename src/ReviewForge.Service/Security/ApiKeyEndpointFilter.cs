@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Options;
 
-namespace ReviewForge.Service.Security;
+namespace ReviewForge.Service;
 
 /// <summary>
 /// Authoritative API-key enforcement for the /reviews route group. Lives on endpoint

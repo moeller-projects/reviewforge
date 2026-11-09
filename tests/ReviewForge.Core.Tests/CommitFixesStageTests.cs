@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Commits;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Testing;

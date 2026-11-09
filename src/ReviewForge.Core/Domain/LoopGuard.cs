@@ -1,6 +1,7 @@
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Commits;
 
-namespace ReviewForge.Core.AutoFix;
+namespace ReviewForge.Core.Domain;
 
 /// <summary>
 /// Suppresses ReviewForge's own automation loop: a CommitOnHead push creates a new PR head,
@@ -15,13 +16,11 @@ namespace ReviewForge.Core.AutoFix;
 public static class LoopGuard
 {
     /// <summary>True when the head commit is verifiably bot-authored per the three-conjunct
-    /// rule. A null <see cref="AutoFixOptions.CommitAuthorEmail"/> (Suggestion mode) can never
-    /// match — the guard is inert unless CommitOnHead is configured.</summary>
-    public static bool IsBotAuthoredHead(TipCommitInfo info, AutoFixOptions options)
-        => options.IsCommitOnHead
-           && !string.IsNullOrWhiteSpace(options.CommitAuthorEmail)
+    /// rule. A null or blank configured identity can never match.</summary>
+    public static bool IsBotAuthoredHead(TipCommitInfo info, string? commitAuthorEmail)
+        => !string.IsNullOrWhiteSpace(commitAuthorEmail)
            && TryParseRunTrailer(info.Message, out _)
-           && string.Equals(info.AuthorEmail, options.CommitAuthorEmail, StringComparison.OrdinalIgnoreCase);
+           && string.Equals(info.AuthorEmail, commitAuthorEmail, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Exact-trailer parse: a <c>ReviewForge-Run: {guid}</c> line inside the commit
     /// message's trailer block (the trailing run of <c>Name: value</c> lines). A mention in

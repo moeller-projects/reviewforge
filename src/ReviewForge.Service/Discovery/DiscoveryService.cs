@@ -6,7 +6,7 @@ using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
-using ReviewForge.Service.Queue;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Service;
 
@@ -180,7 +180,14 @@ public sealed class DiscoveryService(
                     deferredThreadIds.Contains(thread.Id)
                     && thread.Status is not (ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed)
                     && thread.Comments.Any(comment => comment.IsHuman));
-                resolveRun = resolveCommand is not null || (_Resolve.DiscoveryEnabled && (newHumanComment || hasDeferredActions));
+                if (_Resolve.RequireCommand)
+                {
+                    resolveRun = resolveCommand is not null || (_Resolve.DiscoveryEnabled && hasDeferredActions);
+                }
+                else
+                {
+                    resolveRun = resolveCommand is not null || (_Resolve.DiscoveryEnabled && (newHumanComment || hasDeferredActions));
+                }
             }
 
             var workItems = await source.GetLinkedWorkItemsAsync(candidate.Key, token);
@@ -243,7 +250,8 @@ public sealed class DiscoveryService(
             {
                 var headInfo = await _Pool.GetMirrorCommitInfoAsync(
                     candidate.Key.RepositoryId, candidate.Pr.SourceCommitSha, token);
-                if (headInfo is not null && LoopGuard.IsBotAuthoredHead(headInfo, autoFix))
+                if (headInfo is not null && autoFix.IsCommitOnHead
+                    && LoopGuard.IsBotAuthoredHead(headInfo, autoFix.CommitAuthorEmail))
                 {
                     ReviewTelemetry.LoopGuardSkips.Add(1, new TagList {{"source", "discovery"}});
                     Skip(candidate.Key, "bot-authored head");

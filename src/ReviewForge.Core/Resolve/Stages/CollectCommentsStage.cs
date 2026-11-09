@@ -1,16 +1,20 @@
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Ports;
 
-namespace ReviewForge.Core.Pipeline.Stages;
+namespace ReviewForge.Core.Resolve.Stages;
 
 public sealed class CollectCommentsStage(
     IPullRequestSource source,
     IFindingStore store,
     IReadOnlySet<string> allowedCommenters,
     TimeProvider? clock = null,
-    ILogger<CollectCommentsStage>? logger = null) : IReviewStage
+    ILogger<CollectCommentsStage>? logger = null,
+    bool requireCommand = false) : IReviewStage
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
     public string Name => "collect-comments";
@@ -31,9 +35,6 @@ public sealed class CollectCommentsStage(
             var deferred = previousAction?.Outcome == ResolutionOutcome.Deferred;
             if (thread.Status is ReviewThreadStatus.Fixed or ReviewThreadStatus.Closed || thread.Comments.Count == 0)
                 continue;
-            if (!deferred && (thread.LastNonSystemComment is not {IsHuman: true}
-                              || (thread.DedupeKey is not null && !thread.HasPendingHumanReply)))
-                continue;
             var latestHuman = thread.Comments.LastOrDefault(c => c.IsHuman);
             if (latestHuman is null
                 || (!deferred && resolve.ResolveWatermark is { } watermark && latestHuman.PublishedAt <= watermark)
@@ -45,16 +46,27 @@ public sealed class CollectCommentsStage(
             // the command was acknowledged.
             if (Command(latestHuman.Text, "/fixit"))
                 continue;
+            var resolveCommand = ResolveCommandDetector.Find(
+                thread, ctx.RequirePullRequest().CreatorId, resolve.ResolveWatermark);
+            if (requireCommand && resolveCommand is null && !deferred)
+                continue;
+            if (!deferred && resolveCommand is null
+                && (thread.LastNonSystemComment is not {IsHuman: true}
+                    || (thread.DedupeKey is not null && !thread.HasPendingHumanReply)))
+                continue;
             var allowed = authorOnly
                 ? string.Equals(latestHuman.AuthorId, ctx.RequirePullRequest().CreatorId, StringComparison.OrdinalIgnoreCase)
                 : allowedCommenters.Contains(latestHuman.AuthorId);
+            var requestText = requireCommand && resolveCommand is not null
+                ? resolveCommand.RequestText
+                : latestHuman.Text;
             comments.Add(new ResolvableComment(
                 thread.Id,
                 thread.Anchor is null ? null : thread.Anchor with {FilePath = RepoPath.Normalize(thread.Anchor.FilePath)},
                 latestHuman.AuthorId,
                 latestHuman.AuthorName,
                 thread.Comments.Where(comment => comment.Origin != ThreadCommentOrigin.System).ToArray(),
-                latestHuman.Text.Length <= 1000 ? latestHuman.Text : latestHuman.Text[..1000],
+                requestText.Length <= 1000 ? requestText : requestText[..1000],
                 allowed));
         }
 

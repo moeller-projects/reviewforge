@@ -1,8 +1,9 @@
 using System.Security;
 using System.Text;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Resolve.Domain;
 
-namespace ReviewForge.Core.Reasoning;
+namespace ReviewForge.Core.Resolve;
 
 public static class ResolvePromptBuilder
 {

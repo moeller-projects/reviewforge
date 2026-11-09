@@ -1,3 +1,6 @@
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
+using ReviewForge.Core.Resolve.Stages;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Pipeline.Stages;
@@ -168,6 +171,122 @@ public sealed class CollectCommentsStageTests
         ctx.Resolve!.ResolveWatermark = Now;
 
         await new CollectCommentsStage(source, store, new HashSet<string>(), TimeProvider.System).ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal(9, Assert.Single(ctx.Resolve!.ResolvableComments).ThreadId);
+    }
+
+    [Fact]
+    public async Task Execute_require_command_collects_only_resolve_threads()
+    {
+        var source = new FakePullRequestSource
+        {
+            Threads =
+            [
+                Thread(1, [Human("creator", "plain request", Now.AddMinutes(1))]),
+                Thread(2, [Human("creator", "/resolve fix this", Now.AddMinutes(1))]),
+            ],
+        };
+        var ctx = Context(source);
+        ctx.Resolve!.ResolveWatermark = Now;
+
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), requireCommand: true)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal([2], ctx.Resolve!.ResolvableComments.Select(comment => comment.ThreadId));
+    }
+
+    [Fact]
+    public async Task Execute_require_command_uses_command_text_as_request_text()
+    {
+        var source = new FakePullRequestSource
+        {
+            Threads = [Thread(2, [Human("creator", "/resolve fix this", Now.AddMinutes(1))])],
+        };
+        var ctx = Context(source);
+        ctx.Resolve!.ResolveWatermark = Now;
+
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), requireCommand: true)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        Assert.Equal("fix this", Assert.Single(ctx.Resolve!.ResolvableComments).RequestText);
+    }
+
+    [Fact]
+    public async Task Execute_require_command_collects_command_followed_by_bot_acknowledgement()
+    {
+        var source = new FakePullRequestSource
+        {
+            Threads =
+            [
+                Thread(2,
+                [
+                    Human("creator", "/resolve fix this", Now.AddMinutes(1)),
+                    new ThreadComment("bot", "ReviewForge", true, "Resolve run queued", Now.AddMinutes(2)),
+                ]),
+            ],
+        };
+        var ctx = Context(source);
+        ctx.Resolve!.ResolveWatermark = Now;
+
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>(), requireCommand: true)
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var collected = Assert.Single(ctx.Resolve!.ResolvableComments);
+        Assert.Equal(2, collected.ThreadId);
+        Assert.Equal("fix this", collected.RequestText);
+    }
+
+    [Fact]
+    public async Task Execute_default_mode_collects_acknowledged_resolve_command()
+    {
+        var source = new FakePullRequestSource
+        {
+            Threads =
+            [
+                Thread(2,
+                [
+                    Human("creator", "/resolve fix this", Now.AddMinutes(1)),
+                    new ThreadComment("bot", "ReviewForge", true, "Resolve run queued", Now.AddMinutes(2)),
+                ]),
+            ],
+        };
+        var ctx = Context(source);
+        ctx.Resolve!.ResolveWatermark = Now;
+
+        await new CollectCommentsStage(source, new FakeFindingStore(), new HashSet<string>())
+            .ExecuteAsync(ctx, CancellationToken.None);
+
+        var collected = Assert.Single(ctx.Resolve!.ResolvableComments);
+        Assert.Equal(2, collected.ThreadId);
+        Assert.Equal("/resolve fix this", collected.RequestText);
+    }
+
+    [Fact]
+    public async Task Execute_require_command_still_includes_deferred_threads()
+    {
+        var source = new FakePullRequestSource
+        {
+            Threads =
+            [
+                Thread(9, [
+                    Human("creator", "please retry", Now.AddMinutes(-2)),
+                    new ThreadComment("bot", "bot", true, "Deferred", Now.AddMinutes(1)),
+                ], "finding-key"),
+            ],
+        };
+        var pr = new PrKey("o", "p", "r", 1);
+        var store = new FakeFindingStore();
+        var run = Guid.NewGuid();
+        await store.SaveResolveActionsAsync(pr, run,
+        [
+            new ResolveAction(0, run, 9, TriageVerdict.Actionable, ResolutionOutcome.Deferred,
+                null, true, Now.AddMinutes(1))
+        ], CancellationToken.None);
+        var ctx = Context(source);
+        ctx.Resolve!.ResolveWatermark = Now;
+
+        await new CollectCommentsStage(source, store, new HashSet<string>(), requireCommand: true)
+            .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(9, Assert.Single(ctx.Resolve!.ResolvableComments).ThreadId);
     }

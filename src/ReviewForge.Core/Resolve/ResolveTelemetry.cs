@@ -1,7 +1,9 @@
 using System.Diagnostics.Metrics;
+using ReviewForge.Core.Telemetry;
 
-namespace ReviewForge.Core.Pipeline;
+namespace ReviewForge.Core.Resolve;
 
+// Resolve telemetry lives with the resolve feature rather than the shared telemetry namespace.
 public static class ResolveTelemetry
 {
     public static readonly Counter<long> ResolveThreadsTriaged =

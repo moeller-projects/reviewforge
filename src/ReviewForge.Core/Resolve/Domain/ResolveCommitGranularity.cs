@@ -1,4 +1,4 @@
-namespace ReviewForge.Core.Domain;
+namespace ReviewForge.Core.Resolve.Domain;
 
 public enum ResolveCommitGranularity
 {

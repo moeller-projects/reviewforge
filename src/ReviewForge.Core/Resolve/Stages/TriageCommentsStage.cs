@@ -3,9 +3,12 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Reasoning;
 
-namespace ReviewForge.Core.Pipeline.Stages;
+namespace ReviewForge.Core.Resolve.Stages;
 
 public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize = 20, ILogger<TriageCommentsStage>? logger = null) : IReviewStage
 {

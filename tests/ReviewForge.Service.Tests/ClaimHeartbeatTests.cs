@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Time.Testing;
 using ReviewForge.Core.Domain;
-using ReviewForge.Service.Queue;
 using Xunit;
 
 namespace ReviewForge.Service.Tests;

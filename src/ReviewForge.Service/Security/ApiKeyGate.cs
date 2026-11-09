@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Primitives;
 
-namespace ReviewForge.Service.Security;
+namespace ReviewForge.Service;
 
 /// <summary>
 /// Shared X-Api-Key evaluation behind <see cref="ApiKeyEndpointFilter"/> (route-handler

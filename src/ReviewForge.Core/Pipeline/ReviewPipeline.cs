@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Core.Pipeline;
 

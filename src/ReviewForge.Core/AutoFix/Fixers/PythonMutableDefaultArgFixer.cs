@@ -1,3 +1,4 @@
+using ReviewForge.Core.Domain;
 using System.Text.RegularExpressions;
 
 namespace ReviewForge.Core.AutoFix.Fixers;

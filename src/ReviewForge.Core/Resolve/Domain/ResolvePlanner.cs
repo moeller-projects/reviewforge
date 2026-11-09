@@ -1,6 +1,7 @@
 using ReviewForge.Core.Analysis;
 
-namespace ReviewForge.Core.Domain;
+using ReviewForge.Core.Domain;
+namespace ReviewForge.Core.Resolve.Domain;
 
 
 public static class ResolvePlanner

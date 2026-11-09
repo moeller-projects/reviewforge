@@ -1,4 +1,4 @@
-namespace ReviewForge.Service.Security;
+namespace ReviewForge.Service;
 
 /// <summary>API-key authentication for the /reviews surface.</summary>
 public sealed class ApiKeyOptions

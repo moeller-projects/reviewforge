@@ -1,4 +1,5 @@
-namespace ReviewForge.Core.Analysis;
+using ReviewForge.Core.Analysis;
+namespace ReviewForge.Core.Editing;
 
 /// <summary>One hash-anchored line edit. <see cref="FromHash"/> identifies the line to
 /// replace (unique in the file, or disambiguated by <see cref="FromLine"/>); when

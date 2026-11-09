@@ -1,4 +1,5 @@
-namespace ReviewForge.Core.AutoFix;
+using ReviewForge.Core.Domain;
+namespace ReviewForge.Core.Reasoning;
 
 /// <summary>Builds the fix-pass user prompt. All PR-supplied text (comment, instruction)
 /// is wrapped in &lt;pr-supplied-data&gt; — data, never instructions.</summary>

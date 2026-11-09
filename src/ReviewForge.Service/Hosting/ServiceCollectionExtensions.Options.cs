@@ -5,7 +5,7 @@ using ReviewForge.Core.Pipeline;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Infrastructure.Persistence;
-using ReviewForge.Service.Queue;
+using ReviewForge.Core.Resolve.Domain;
 
 namespace ReviewForge.Service;
 

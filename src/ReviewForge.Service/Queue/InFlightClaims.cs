@@ -1,7 +1,8 @@
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Telemetry;
 
-namespace ReviewForge.Service.Queue;
+namespace ReviewForge.Service;
 
 /// <summary>
 /// In-flight reservation per PR. The review gate's PriorRun read is not a reservation, so

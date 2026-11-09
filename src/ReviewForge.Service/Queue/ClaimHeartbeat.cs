@@ -1,6 +1,6 @@
 using ReviewForge.Core.Domain;
 
-namespace ReviewForge.Service.Queue;
+namespace ReviewForge.Service;
 
 /// <summary>
 /// Periodically renews an in-flight claim while its run executes, so a long review does not

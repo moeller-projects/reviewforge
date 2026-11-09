@@ -2,7 +2,6 @@ using System.Text.Json;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
-using ReviewForge.Service.Queue;
 
 namespace ReviewForge.Service;
 

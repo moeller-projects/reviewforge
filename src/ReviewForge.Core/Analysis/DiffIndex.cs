@@ -1,3 +1,4 @@
+using ReviewForge.Core.Domain;
 namespace ReviewForge.Core.Analysis;
 
 public enum DiffEntryKind

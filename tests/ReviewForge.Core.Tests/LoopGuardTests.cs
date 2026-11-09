@@ -1,3 +1,5 @@
+using ReviewForge.Core.Domain;
+using ReviewForge.Core.Commits;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Ports;
 using Xunit;
@@ -25,7 +27,7 @@ public sealed class LoopGuardTests
     {
         var info = new TipCommitInfo("reviewforge@example.com", Message($"ReviewForge-Run: {RunId:D}"));
 
-        Assert.True(LoopGuard.IsBotAuthoredHead(info, Options()));
+        Assert.True(LoopGuard.IsBotAuthoredHead(info, Options().CommitAuthorEmail));
     }
 
     [Fact]
@@ -33,7 +35,7 @@ public sealed class LoopGuardTests
     {
         var info = new TipCommitInfo("ReviewForge@Example.COM", Message($"ReviewForge-Run: {RunId:D}"));
 
-        Assert.True(LoopGuard.IsBotAuthoredHead(info, Options()));
+        Assert.True(LoopGuard.IsBotAuthoredHead(info, Options().CommitAuthorEmail));
     }
 
     [Fact]
@@ -41,7 +43,7 @@ public sealed class LoopGuardTests
     {
         var info = new TipCommitInfo("attacker@example.com", Message($"ReviewForge-Run: {RunId:D}"));
 
-        Assert.False(LoopGuard.IsBotAuthoredHead(info, Options()));
+        Assert.False(LoopGuard.IsBotAuthoredHead(info, Options().CommitAuthorEmail));
     }
 
     [Fact]
@@ -49,30 +51,17 @@ public sealed class LoopGuardTests
     {
         var info = new TipCommitInfo("reviewforge@example.com", "fix(src): subject\n\nno trailers here\n");
 
-        Assert.False(LoopGuard.IsBotAuthoredHead(info, Options()));
+        Assert.False(LoopGuard.IsBotAuthoredHead(info, Options().CommitAuthorEmail));
     }
 
     [Fact]
-    public void Guard_is_inert_without_a_configured_bot_email()
+    public void LoopGuard_is_inert_without_configured_email()
     {
         var info = new TipCommitInfo("reviewforge@example.com", Message($"ReviewForge-Run: {RunId:D}"));
 
-        Assert.False(LoopGuard.IsBotAuthoredHead(info, Options(email: null)));
+        Assert.False(LoopGuard.IsBotAuthoredHead(info, Options(email: null).CommitAuthorEmail));
     }
 
-    [Fact]
-    public void Guard_is_inert_outside_commit_on_head_mode()
-    {
-        var options = new AutoFixOptions
-        {
-            Enabled = true,
-            PublishMode = AutoFixOptions.ModeSuggestion,
-            CommitAuthorEmail = "reviewforge@example.com",
-        };
-        var info = new TipCommitInfo("reviewforge@example.com", Message($"ReviewForge-Run: {RunId:D}"));
-
-        Assert.False(LoopGuard.IsBotAuthoredHead(info, options));
-    }
 
     [Fact]
     public void Trailer_parse_rejects_a_mention_in_prose()

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace ReviewForge.Core.Pipeline;
+namespace ReviewForge.Core.Telemetry;
 
 /// <summary>Single ActivitySource/Meter for the whole pipeline; the host wires them into OTel.</summary>
 public static class ReviewForgeTelemetry

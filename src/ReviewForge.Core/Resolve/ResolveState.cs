@@ -1,7 +1,9 @@
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Editing;
 using ReviewForge.Core.Domain;
-using ReviewForge.Core.Reasoning;
+using ReviewForge.Core.Resolve.Domain;
 
-namespace ReviewForge.Core.Pipeline;
+namespace ReviewForge.Core.Resolve;
 
 /// <summary>Resolve-only stage outputs. A review run leaves <see cref="ReviewContext.Resolve"/> null.</summary>
 public sealed record ResolveState

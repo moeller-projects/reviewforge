@@ -1,4 +1,4 @@
-namespace ReviewForge.Core.Analysis;
+namespace ReviewForge.Core.Domain;
 
 /// <summary>
 /// Canonical repo-relative path form: forward slashes, no leading slash. Used anywhere a

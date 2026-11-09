@@ -1,10 +1,17 @@
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Pipeline;
+using ReviewForge.Core.Resolve;
+using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Ports;
 
-namespace ReviewForge.Core.Pipeline.Stages;
+namespace ReviewForge.Core.Resolve.Stages;
 
-public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> allowedAuthors, ILogger<ResolveGateStage>? logger = null) : IReviewStage
+public sealed class ResolveGateStage(
+    IFindingStore store,
+    IReadOnlySet<string> allowedAuthors,
+    ILogger<ResolveGateStage>? logger = null,
+    bool requireCommand = false) : IReviewStage
 {
     public string Name => "resolve-gate";
 
@@ -32,7 +39,9 @@ public sealed class ResolveGateStage(IFindingStore store, IReadOnlySet<string> a
         logger?.LogDebug("resolve gate inputs: threads={ThreadCount}, active={ActiveThreadCount}, deferred={DeferredThreadCount}, manual={Manual}, watermarkPresent={WatermarkPresent}",
             ctx.Fetch.Threads.Count, activeThreads.Count, deferredThreadIds.Count, apiManual, resolve.ResolveWatermark is not null);
         var decision = ResolveGate.Evaluate(
-            pr, ctx.Fetch.Threads, resolve.ResolveWatermark, apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds);
+            pr, ctx.Fetch.Threads, resolve.ResolveWatermark,
+            apiManual || allowedAuthors.Contains(pr.CreatorId), deferredThreadIds,
+            requireCommand, pr.CreatorId);
         logger?.LogDebug("resolve gate decision: {Decision}", decision);
         if (decision != ResolveGateDecision.Continue)
         {
