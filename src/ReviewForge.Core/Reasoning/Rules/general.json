@@ -1,7 +1,7 @@
 {
   "id": "general",
   "title": "General clean-code and complexity rules",
-  "version": 1,
+  "version": 2,
   "activation": {
     "always": true,
     "extensions": [],
@@ -71,6 +71,86 @@
       "description": "A linked work item's acceptance criterion is unmet due to a concrete gap in the changed code. Record the finding at the code location that should have implemented it; cite the criterion in the description.",
       "category": "bug",
       "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "general.regression.contract-change",
+      "title": "Changed contract breaks existing callers",
+      "description": "The change alters a public or shared contract (signature, parameter order or meaning, return value, nullability, thrown exceptions, default value, serialized shape) and at least one existing caller or consumer is not updated or cannot handle it. Before recording: find callers with repo_grep (symbol name, interface, overrides) and read at least one affected call site. Record the finding on the changed line (the declaration or changed expression), name the concrete caller as file:line in the description, and state what breaks. Do not record when all callers were updated in this diff, when no caller exists, or when the claim rests on an assumption you did not verify. Prefer record_uncertainty over a guess.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "general.regression.behavior-change",
+      "title": "Changed behavior that existing code relies on",
+      "description": "The signature stays the same but the semantics change (ordering, filtering, rounding, null/empty handling, error handling, transaction or retry boundaries, caching, side effects, timing) and an existing caller, test or persisted data depends on the old behavior. Before recording: locate callers or tests with repo_grep and read the code that depends on the old behavior. Record on the changed line, cite the dependent file:line, and describe old versus new behavior and the concrete wrong outcome. Do not record intentional behavior changes that the PR description or a linked work item states, or when no dependent code can be shown.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "general.regression.incomplete-change",
+      "title": "Change applied in one place but not its counterparts",
+      "description": "A change must be mirrored elsewhere and was not: other implementers of an interface or subclasses of a base class, switch/if chains over an enum or union that gain a new member, mappers/serializers/validators/DTOs for a new or renamed field, migrations or schema for a changed model, config, docs or client code tied to a changed endpoint. Before recording: search for the sibling sites (repo_grep for the type, enum member, field name or route) and name the concrete missed location as file:line. Record on the changed line that created the gap. Do not record when the sibling code handles the case generically or is out of scope for this repository.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "general.logic.new-code-defect",
+      "title": "Logic error in the new code",
+      "description": "A concrete logic defect in code added or changed by this diff: inverted or incomplete condition, off-by-one, wrong operator or operand, unhandled edge case (empty, null, zero, max, duplicate), unreachable branch, wrong variable used, state not reset. Describe the specific input or sequence that produces the wrong result and the expected result. Use a more specific rule when one fits (for example csharp.null-deref or general.concurrency.race). Do not record style preferences, hypothetical inputs that cannot occur given the callers you checked, or issues in unchanged code.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "general.concurrency.race",
+      "title": "Race condition or unsynchronized shared state",
+      "description": "Check-then-act on shared state, read-modify-write without synchronization or atomic operations, lazy initialization that is not thread-safe, or shared mutable state reachable from concurrent requests, tasks or workers. Name the shared state, the two code paths that can interleave, and the wrong outcome. Use csharp.shared-mutable-state when the issue is a non-thread-safe collection or static in C#. Do not record state that is only touched from a single thread or is protected by a lock, transaction or atomic operation you have seen.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "general.data.migration-risk",
+      "title": "Risky schema or data migration",
+      "description": "A migration or schema change that can lose data or break a running system: dropping or renaming a column or collection still read by deployed code, adding a non-nullable column without a default or backfill, changing a type lossy, long-running lock on a large table, no rollback path, or a model change without the matching migration (and the reverse). Name the migration file and line and the concrete failure mode, and say whether old and new application versions must coexist during deploy. Do not record additive, nullable, backward-compatible changes.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "general.tests.missing-coverage",
+      "title": "Changed logic without a test",
+      "description": "The diff adds or changes non-trivial logic (new branch, bug fix, boundary handling, error path) and no test in the diff or in the repository covers it. Before recording: check the changed files for test changes and use repo_grep for existing tests of the changed symbol. Name the specific behavior that is untested and the test that should exist. Do not record for pure refactors with unchanged behavior, generated code, configuration, trivial getters, or when an existing test demonstrably covers the changed path.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "general.tests.weak-assertion",
+      "title": "Test that cannot fail or is unreliable",
+      "description": "A test that gives false confidence: no assertion, assertion on a constant or on the mock's own setup, catching and ignoring the exception it should assert, over-mocked so the code under test is not exercised, or nondeterministic (Thread.Sleep or fixed delays, real clock, real network, random without seed, order-dependent shared state). Quote the offending lines and state what regression it would miss. Do not record intentionally smoke-level tests that say so.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "general.scope.unrelated-change",
+      "title": "Change unrelated to the stated work item",
+      "description": "The diff contains substantial changes that neither the PR description nor any linked work item explains (drive-by refactors, formatting churn across untouched code, unrelated features or config changes). This makes the PR harder to review and revert. Name the unrelated files or hunks and the work item they do not belong to. Do not record small incidental fixes needed for the change to compile or work, or when no description or work item is available to compare against.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "general.clean-code.debug-leftover",
+      "title": "Debug or temporary code left in",
+      "description": "Debug output (Console.WriteLine, console.log, print, debugger statements), temporary hardcoded values, disabled or skipped tests, TODO/FIXME markers for work that this change claims to complete, or test-only bypasses (feature flags forced on, auth skipped) left in production code. Quote the line and say what must be removed or finished. Do not record intentional, structured logging or documented TODOs that reference a tracked item.",
+      "category": "style",
+      "defaultSeverity": "low",
       "enabled": true
     }
   ]

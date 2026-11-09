@@ -1,13 +1,14 @@
 {
   "id": "csharp",
   "title": "C# rules",
-  "version": 1,
+  "version": 2,
   "activation": {
     "always": false,
     "extensions": [
       ".cs",
       ".csx",
-      ".razor"
+      ".razor",
+      ".cshtml"
     ],
     "pathPatterns": [],
     "rootFiles": []
@@ -32,7 +33,7 @@
     {
       "id": "csharp.disposable-leak",
       "title": "IDisposable not disposed",
-      "description": "IDisposable/IAsyncDisposable created without using/await using or a guaranteed Dispose path (streams, HttpClient, scopes).",
+      "description": "IDisposable/IAsyncDisposable created without using/await using or a guaranteed Dispose path (streams, DbConnection, scopes, timers). Do not use this rule for HttpClient: it should be reused, not disposed per call (see csharp.httpclient-misuse).",
       "category": "bug",
       "defaultSeverity": "medium",
       "enabled": true
@@ -67,6 +68,70 @@
       "description": "DateTime.Now (local time) used for timestamps that are persisted, compared across machines, or sent over the wire. Use DateTimeOffset.UtcNow.",
       "category": "bug",
       "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "csharp.file-per-type",
+      "title": "Multiple types in a file whose name does not reflect them",
+      "description": "A .cs file declares several top-level types and its file name matches only one of them or none, so a reader cannot predict the contents from the name (for example AppDbContext.cs that also declares the entity and a lookup entity). Recommend one file per type, named after the type. Only record when this diff adds a type to such a file or creates the file; do not record pre-existing layouts the diff does not touch. Do NOT record when: the file name is a collective term that describes its contents (Models.cs, Dtos.cs, Requests.cs, Responses.cs, Enums.cs, Constants.cs, Extensions.cs); the extra types are nested types, private helpers, or a type together with its generic variants (Result and Result<T>); the extra types are small records, enums or exceptions used only by the main type and the file is named after that main type; or the file is generated (*.g.cs, *.Designer.cs, migrations). Anchor on the declaration of the first extra type.",
+      "category": "style",
+      "defaultSeverity": "low",
+      "enabled": true
+    },
+    {
+      "id": "csharp.ef-early-materialization",
+      "title": "EF query materialized before filtering",
+      "description": "An EF Core/LINQ-to-database query is materialized (ToList, ToArray, AsEnumerable, foreach) before Where, Select, Count, Any, Skip or Take is applied, so the whole table is loaded and filtered in memory. Show the line where materialization happens and the operator that should have run in the database. Do not record when the source is already an in-memory collection.",
+      "category": "performance",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "csharp.ef-savechanges-in-loop",
+      "title": "SaveChanges inside a loop",
+      "description": "SaveChanges/SaveChangesAsync (or one database round trip per item) inside a loop over entities. Batch the changes and save once, or use set-based operations (ExecuteUpdate/ExecuteDelete, bulk APIs). Do not record when per-item commits are required for correctness (independent transactions, partial-failure tolerance) and the code says so.",
+      "category": "performance",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "csharp.di-lifetime",
+      "title": "Dependency injection lifetime mismatch",
+      "description": "A longer-lived service captures a shorter-lived one: a singleton or hosted service injecting a scoped or transient dependency (DbContext, per-request state), a scope created and never disposed, or a service resolved with GetService inside a singleton. Name both registrations or constructor and the resulting failure (stale state, disposed object, thread-safety). Do not record when an IServiceScopeFactory is used correctly.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "csharp.cancellation-not-propagated",
+      "title": "CancellationToken accepted but not passed on",
+      "description": "A method receives a CancellationToken (or is called from a request or worker that has one) but does not pass it to downstream async calls (HTTP, database, file, Task.Delay), or a new async method on a request path omits the parameter entirely. Requests then keep running after the caller is gone. Name the call that should receive the token. Do not record for fire-and-forget background work that intentionally outlives the request.",
+      "category": "bug",
+      "defaultSeverity": "medium",
+      "enabled": true
+    },
+    {
+      "id": "csharp.shared-mutable-state",
+      "title": "Non-thread-safe shared state",
+      "description": "A static field or singleton-lifetime service holds mutable state that concurrent requests or tasks can touch: Dictionary, List, HashSet or other non-concurrent collections, cached mutable objects, or counters incremented without Interlocked. Use a concurrent collection, immutable snapshot, lock or per-request instance. Name the field and the concurrent access path. Do not record state that is written once at startup and only read afterwards.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "csharp.httpclient-misuse",
+      "title": "HttpClient created per call or without limits",
+      "description": "new HttpClient() created per request or inside a loop (socket exhaustion, DNS staleness) instead of IHttpClientFactory, a typed client or a shared instance; or an HttpClient call path with no timeout or cancellation on a request-handling path. Do not record a single long-lived instance created once or a one-off CLI tool.",
+      "category": "bug",
+      "defaultSeverity": "high",
+      "enabled": true
+    },
+    {
+      "id": "csharp.logging-template",
+      "title": "Interpolated or concatenated log message",
+      "description": "A logger call uses string interpolation or concatenation instead of a message template with arguments ( _logger.LogInformation($\"user {id}\") instead of _logger.LogInformation(\"user {Id}\", id) ). This defeats structured logging, allocates even when the level is disabled, and can leak sensitive values into the template. Do not record non-logging string building.",
+      "category": "style",
+      "defaultSeverity": "low",
       "enabled": true
     }
   ]
