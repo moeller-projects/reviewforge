@@ -6,6 +6,8 @@
     "always": false,
     "extensions": [],
     "pathPatterns": [
+      "pipelines/**",
+      "builds/**",
       "azure-pipelines*.yml",
       "azure-pipelines*.yaml",
       ".azure-pipelines/**",
