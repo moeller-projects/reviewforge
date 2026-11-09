@@ -55,7 +55,7 @@ public sealed class OpenAIRequestPolicies
     /// <exception cref="ArgumentNullException"><paramref name="policy"/> is <see langword="null"/>.</exception>
     public void AddPolicy(PipelinePolicy policy, PipelinePosition position = PipelinePosition.PerCall)
     {
-        _ = policy;
+        ArgumentNullException.ThrowIfNull(policy);
 
         var newEntry = new Entry(policy, position);
 

@@ -1678,14 +1678,14 @@ internal sealed class ResponsesChatClientAdapter : IChatClient
 
             if (usageDetails.AdditionalCounts is { } additionalCounts)
             {
-                if (additionalCounts.TryGetValue($"{nameof(ResponseTokenUsage.InputTokenDetails)}.{nameof(ResponseInputTokenUsageDetails.CachedTokenCount)}", out int? cachedTokenCount))
+                if (additionalCounts.TryGetValue($"{nameof(ResponseTokenUsage.InputTokenDetails)}.{nameof(ResponseInputTokenUsageDetails.CachedTokenCount)}", out long cachedTokenCount))
                 {
-                    rtu.InputTokenDetails.CachedTokenCount = cachedTokenCount.GetValueOrDefault();
+                    rtu.InputTokenDetails.CachedTokenCount = checked((int)cachedTokenCount);
                 }
 
-                if (additionalCounts.TryGetValue($"{nameof(ResponseTokenUsage.OutputTokenDetails)}.{nameof(ResponseOutputTokenUsageDetails.ReasoningTokenCount)}", out int? reasoningTokenCount))
+                if (additionalCounts.TryGetValue($"{nameof(ResponseTokenUsage.OutputTokenDetails)}.{nameof(ResponseOutputTokenUsageDetails.ReasoningTokenCount)}", out long reasoningTokenCount))
                 {
-                    rtu.OutputTokenDetails.ReasoningTokenCount = reasoningTokenCount.GetValueOrDefault();
+                    rtu.OutputTokenDetails.ReasoningTokenCount = checked((int)reasoningTokenCount);
                 }
             }
         }
