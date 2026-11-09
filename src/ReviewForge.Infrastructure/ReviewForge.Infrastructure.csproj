@@ -21,7 +21,7 @@
         <PackageReference Include="LibGit2Sharp"/>
         <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite"/>
         <PackageReference Include="OpenAI"/>
-        <PackageReference Include="Microsoft.Extensions.AI.OpenAI"/>
+        <PackageReference Include="Microsoft.Extensions.AI"/>
         <PackageReference Include="Microsoft.Extensions.Options"/>
     </ItemGroup>
 

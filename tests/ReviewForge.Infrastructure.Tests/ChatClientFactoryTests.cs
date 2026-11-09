@@ -406,6 +406,87 @@ public class ChatClientFactoryTests
     }
 
     [Fact]
+    public async Task Responses_streaming_maps_text_and_completed_function_calls()
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var handler = new StreamingResponseHandler("""
+                event: response.created
+                data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":1760000000,"status":"in_progress","model":"gpt-5","output":[]}}
+
+                event: response.output_item.added
+                data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+                event: response.output_text.delta
+                data: {"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_1","output_index":0,"content_index":0,"delta":"hello"}
+
+                event: response.output_item.added
+                data: {"type":"response.output_item.added","sequence_number":3,"output_index":1,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"echo","arguments":""}}
+
+                event: response.function_call_arguments.delta
+                data: {"type":"response.function_call_arguments.delta","sequence_number":4,"item_id":"fc_1","output_index":1,"delta":"{\"value\":\"ok\"}"}
+
+                event: response.function_call_arguments.done
+                data: {"type":"response.function_call_arguments.done","sequence_number":5,"item_id":"fc_1","output_index":1,"arguments":"{\"value\":\"ok\"}"}
+
+                event: response.output_item.done
+                data: {"type":"response.output_item.done","sequence_number":6,"output_index":1,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"echo","arguments":"{\"value\":\"ok\"}"}}
+
+                event: response.completed
+                data: {"type":"response.completed","sequence_number":7,"response":{"id":"resp_1","object":"response","created_at":1760000000,"status":"completed","model":"gpt-5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"echo","arguments":"{\"value\":\"ok\"}"}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}
+                """);
+            using var factory = new ChatClientFactory(new ChatProviderOptions
+            {
+                Provider = ChatProviderKind.OpenAi,
+                Model = "gpt-5",
+            }, handler);
+            var options = new ChatOptions
+            {
+                ModelId = "gpt-5",
+                Tools = [AIFunctionFactory.Create(Echo, "echo")],
+            };
+            var updates = new List<ChatResponseUpdate>();
+            await foreach (var update in factory.Create(ChatTier.Full).GetStreamingResponseAsync(
+                               [new ChatMessage(ChatRole.User, "review")], options))
+            {
+                updates.Add(update);
+            }
+
+            Assert.Contains(updates.SelectMany(update => update.Contents), content =>
+                content is TextContent { Text: "hello" });
+            var call = Assert.Single(updates.SelectMany(update => update.Contents).OfType<FunctionCallContent>());
+            Assert.Equal("echo", call.Name);
+            Assert.Equal("call_1", call.CallId);
+            using var body = JsonDocument.Parse(handler.RequestBody!);
+            Assert.Equal("echo", body.RootElement.GetProperty("tools")[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous);
+        }
+    }
+
+    private static string Echo(string value) => value;
+
+    private sealed class StreamingResponseHandler(string responseBody) : HttpMessageHandler
+    {
+        public string? RequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseBody, null, "text/event-stream"),
+            };
+        }
+    }
+
+    [Fact]
     public void Validate_with_blank_model_yields_nothing_for_required_to_report()
     {
         // [Required] reports a missing Model; the cross-check has nothing to add.
