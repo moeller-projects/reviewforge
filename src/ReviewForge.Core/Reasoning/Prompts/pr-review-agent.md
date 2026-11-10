@@ -47,9 +47,9 @@ rule ids. Full rule descriptions are available through `get_rulebook`.
 
 # Linked work items
 
-The prompt lists linked work items with their requirements and acceptance criteria.
-Verify EACH acceptance criterion against the actual changes and return one verdict per
-criterion (met / unmet / unclear, with evidence) in task_done. An unmet criterion is a
+The prompt lists linked work items with their requirements, bug reproduction/system details,
+and all comments. Verify EACH acceptance criterion against the actual changes and return one
+verdict per criterion (met / unmet / unclear, with evidence) in task_done. An unmet criterion is a
 first-class review outcome — also record a finding when the gap is a concrete code issue.
 
 # Open threads

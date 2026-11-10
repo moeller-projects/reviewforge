@@ -84,6 +84,17 @@ public static class PromptBuilder
                     sb.AppendLine("Acceptance criteria:");
                     sb.AppendLine(PromptText.Clean(wi.AcceptanceCriteria.Trim()));
                 }
+
+                AppendWorkItemField(sb, "Repro steps", wi.ReproSteps);
+                AppendWorkItemField(sb, "System info", wi.SystemInfo);
+                if (wi.Comments is { Count: > 0 })
+                {
+                    sb.AppendLine("Comments:");
+                    foreach (var comment in wi.Comments)
+                    {
+                        sb.AppendLine(FormatWorkItemComment(comment));
+                    }
+                }
             }
 
             sb.AppendLine(UntrustedEnd);
@@ -219,6 +230,30 @@ public static class PromptBuilder
         var text = result.ToString();
         return text.EndsWith(nl) ? text[..(text.Length - 1)] : text;
     }
+    private static void AppendWorkItemField(StringBuilder sb, string name, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            sb.AppendLine($"{name}:");
+            sb.AppendLine(PromptText.Clean(value.Trim()));
+        }
+    }
+
+    private static string FormatWorkItemComment(WorkItemComment comment)
+    {
+        var metadata = comment.CreatedDate is { } created ? $"created {created:O}" : string.Empty;
+        if (comment.ModifiedDate is { } modified
+            && (comment.CreatedDate is null || modified > comment.CreatedDate.Value))
+        {
+            metadata = metadata.Length == 0
+                ? $"modified {modified:O}"
+                : $"{metadata}; modified {modified:O}";
+        }
+
+        var dateText = metadata.Length == 0 ? string.Empty : $" ({metadata})";
+        return $"{PromptText.Clean(comment.Author)}{dateText}: {PromptText.Clean(comment.Text)}";
+    }
+
 }
 
 /// <summary>Single trust boundary for PR-author-controlled text embedded in prompts (P2-29):

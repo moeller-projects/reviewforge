@@ -183,16 +183,38 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             $"GetWorkItems({pr.PrId})",
             ct).ConfigureAwait(false);
 
-        return
-        [
-            .. items.Select(wi => new WorkItem(
-                wi.Id ?? 0,
+        var result = new List<WorkItem>(items.Count);
+        foreach (var wi in items)
+        {
+            var id = wi.Id ?? 0;
+            var comments = id == 0
+                ? []
+                : await AdoWorkItemCommentsPager.FetchAsync(
+                    (continuationToken, attemptCt) => _Retry.ExecuteAsync(
+                        retryCt => wit.GetCommentsAsync(
+                            pr.Project,
+                            id,
+                            top: AdoWorkItemCommentsPager.PageSize,
+                            continuationToken: continuationToken,
+                            includeDeleted: false,
+                            order: WitModels.CommentSortOrder.Asc,
+                            cancellationToken: retryCt),
+                        $"GetWorkItemComments({id})",
+                        attemptCt),
+                    ct).ConfigureAwait(false);
+            result.Add(new WorkItem(
+                id,
                 Field(wi, "System.Title"),
                 Field(wi, "System.WorkItemType"),
                 FieldOrNull(wi, "System.Description"),
                 FieldOrNull(wi, "Microsoft.VSTS.Common.AcceptanceCriteria"),
-                Field(wi, "System.State")))
-        ];
+                Field(wi, "System.State"),
+                FieldOrNull(wi, "Microsoft.VSTS.TCM.ReproSteps"),
+                FieldOrNull(wi, "Microsoft.VSTS.TCM.SystemInfo"),
+                comments));
+        }
+
+        return result;
 
         static string Field(WitModels.WorkItem wi, string name)
             => wi.Fields.TryGetValue(name, out var value) ? value?.ToString() ?? string.Empty : string.Empty;

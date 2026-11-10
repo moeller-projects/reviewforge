@@ -13,7 +13,7 @@ public interface IPullRequestSource
     /// <summary>Org-wide active PRs across all projects and repositories.</summary>
     Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct);
 
-    /// <summary>Linked work items with title, description and acceptance criteria.</summary>
+    /// <summary>Linked work items, including acceptance criteria, bug repro/system fields and non-deleted comments with timestamps.</summary>
     Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct);
 
     /// <summary>Authoritative changed-file manifest for the current PR iteration.</summary>

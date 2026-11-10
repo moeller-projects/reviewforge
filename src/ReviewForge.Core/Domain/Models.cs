@@ -29,7 +29,18 @@ public sealed record WorkItem(
     string Type,
     string? Description,
     string? AcceptanceCriteria,
-    string State);
+    string State,
+    string? ReproSteps = null,
+    string? SystemInfo = null,
+    IReadOnlyList<WorkItemComment>? Comments = null);
+
+/// <summary>A visible linked-work-item comment and its creation and modification timestamps.</summary>
+[ExcludeFromCodeCoverage]
+public sealed record WorkItemComment(
+    string Author,
+    string Text,
+    DateTimeOffset? CreatedDate = null,
+    DateTimeOffset? ModifiedDate = null);
 
 [ExcludeFromCodeCoverage]
 public sealed record CurrentUser(string Id, string DisplayName);

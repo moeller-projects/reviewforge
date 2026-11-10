@@ -420,6 +420,38 @@ public class PromptBuilderTests
     }
 
     [Fact]
+    public void Bug_context_and_all_linked_work_item_comments_render_as_untrusted_data()
+    {
+        var input = BaseInput() with
+        {
+            WorkItems =
+            [
+                new WorkItem(42, "Bug", "Bug", "desc", "AC", "Active",
+                    ReproSteps: "repro steps", SystemInfo: "system info",
+                    Comments:
+                    [
+                        new WorkItemComment("Ada", "first comment",
+                            DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                            DateTimeOffset.Parse("2026-01-02T00:00:00Z")),
+                        new WorkItemComment("Grace", "second comment",
+                            DateTimeOffset.Parse("2026-01-03T00:00:00Z")),
+                    ]),
+            ],
+        };
+
+        var prompt = PromptBuilder.Build(input);
+
+        Assert.Contains("Repro steps:", prompt);
+        Assert.Contains("repro steps", prompt);
+        Assert.Contains("System info:", prompt);
+        Assert.Contains("system info", prompt);
+        Assert.Contains("Ada (created 2026-01-01T00:00:00.0000000+00:00; modified 2026-01-02T00:00:00.0000000+00:00): first comment", prompt);
+        Assert.Contains("Grace (created 2026-01-03T00:00:00.0000000+00:00): second comment", prompt);
+        Assert.Contains(PromptBuilder.UntrustedBegin + Environment.NewLine
+            + "### #42 [Bug] Bug (Active)", prompt);
+    }
+
+    [Fact]
     public void Pending_replies_render_thread_action_instruction()
     {
         var input = BaseInput() with

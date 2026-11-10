@@ -32,6 +32,40 @@ public sealed class ResolvePromptBuilderTests
     }
 
     [Fact]
+    public void Triage_and_fix_prompts_include_all_linked_work_item_context()
+    {
+        var item = new WorkItem(7, "Bug", "Bug", "description", "criteria", "Active",
+            ReproSteps: "reproduce it", SystemInfo: "runtime details",
+            Comments:
+            [
+                new WorkItemComment("Ada", "initial report", DateTimeOffset.Parse("2026-02-01T00:00:00Z")),
+                new WorkItemComment("Grace", "additional detail", DateTimeOffset.Parse("2026-02-02T00:00:00Z")),
+            ]);
+        var triagePrompt = ResolvePromptBuilder.BuildTriagePrompt([], [item]);
+        var fixPrompt = ResolvePromptBuilder.BuildFixPrompt([], [item]);
+
+        foreach (var prompt in new[] {triagePrompt, fixPrompt})
+        {
+            Assert.Contains("Repro steps:", prompt);
+            Assert.Contains("reproduce it", prompt);
+            Assert.Contains("System info:", prompt);
+            Assert.Contains("runtime details", prompt);
+            Assert.Contains("Ada (created 2026-02-01T00:00:00.0000000+00:00): initial report", prompt);
+            Assert.Contains("Grace (created 2026-02-02T00:00:00.0000000+00:00): additional detail", prompt);
+        }
+    }
+
+
+    [Fact]
+    public void Triage_prompt_fails_instead_of_truncating_linked_work_item_comments()
+    {
+        var item = new WorkItem(7, "Bug", "Bug", null, null, "Active",
+            Comments: [new WorkItemComment("Ada", new string('x', 70_000))]);
+
+        Assert.Throws<InvalidOperationException>(
+            () => ResolvePromptBuilder.BuildTriagePrompt([], [item]));
+    }
+    [Fact]
     public void Fix_prompt_bounds_request_and_evidence_text()
     {
         var fix = new PlannedFix(
