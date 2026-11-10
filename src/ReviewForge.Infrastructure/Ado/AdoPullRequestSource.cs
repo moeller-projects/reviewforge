@@ -214,13 +214,22 @@ public sealed class AdoPullRequestSource : IPullRequestSource
             return [];
         }
 
-        var changes = await _Retry.ExecuteAsync(
-            attemptCt => git.GetPullRequestIterationChangesAsync(pr.Project, pr.RepositoryId, pr.PrId, iterationId, cancellationToken: attemptCt),
-            $"GetIterationChanges({pr.PrId})",
+        var changes = await AdoIterationChangesPager.FetchAsync(
+            (top, skip, attemptCt) => _Retry.ExecuteAsync(
+                retryCt => git.GetPullRequestIterationChangesAsync(
+                    pr.Project,
+                    pr.RepositoryId,
+                    pr.PrId,
+                    iterationId,
+                    top,
+                    skip,
+                    cancellationToken: retryCt),
+                $"GetIterationChanges({pr.PrId}, skip={skip})",
+                attemptCt),
             ct).ConfigureAwait(false);
         return
         [
-            .. changes.ChangeEntries
+            .. changes
                 .Select(c => (Path: c.Item?.Path?.TrimStart('/'), Type: Convert.ToString(c.ChangeType, CultureInfo.InvariantCulture)))
                 .Where(c => !string.IsNullOrWhiteSpace(c.Path))
                 .Select(c => new ChangedFile(c.Path!, ParseChangeType(c.Type)))
