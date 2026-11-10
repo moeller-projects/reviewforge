@@ -42,9 +42,9 @@ tests/
                                FakeEnricher, FakeChatClientFactory) + ScriptedChatClient
   ReviewForge.{Core,Infrastructure,Service}.Tests/
   ReviewForge.Architecture.Tests/  assembly-boundary tests; no coverlet gate by design
-Prompts are embedded resources under src/ReviewForge.Core/Reasoning/Prompts/. Only the review
-prompt is overridable via Review:PromptOverridePath; fix-pass and resolve-triage prompts are
-intentionally not overridable.
+Prompts are embedded resources under src/ReviewForge.Core/Reasoning/Prompts/. Only the PR review
+agent prompt is overridable via Review:PromptOverridePath; author-commanded fix and resolve-comment
+triage prompts are intentionally not overridable.
 ```
 
 ## Hard rules (do not violate)
@@ -194,6 +194,6 @@ Container listens on 8080; compose maps host 5080 → 8080 to match the CLI defa
 - New PR host (GitHub/GitLab): `IPullRequestSource` — pipeline untouched.
 - New reasoning provider: `IChatClientFactory` (see `ChatClientFactory`).
 - Prompt tuning: `Review:PromptOverridePath` → markdown file; default is the embedded
-  resource `ReviewForge.Core.Reasoning.Prompts.native-review-system.md`.
+  resource `ReviewForge.Core.Reasoning.Prompts.pr-review-agent.md`.
 - Finding identity: `DedupeKey` = ruleId + file + normalized snippet (no line numbers —
   shift-proof across force-pushes). Bot threads carry the key in ADO thread properties.

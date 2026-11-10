@@ -10,9 +10,9 @@
     </ItemGroup>
 
     <ItemGroup>
-        <EmbeddedResource Include="Reasoning/Prompts/native-review-system.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.native-review-system.md"/>
-        <EmbeddedResource Include="Reasoning/Prompts/fix-pass-system.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.fix-pass-system.md"/>
-        <EmbeddedResource Include="Reasoning/Prompts/resolve-triage-system.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.resolve-triage-system.md"/>
+        <EmbeddedResource Include="Reasoning/Prompts/pr-review-agent.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.pr-review-agent.md"/>
+        <EmbeddedResource Include="Reasoning/Prompts/author-commanded-fix-agent.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.author-commanded-fix-agent.md"/>
+        <EmbeddedResource Include="Reasoning/Prompts/resolve-comment-triage-agent.md" LogicalName="ReviewForge.Core.Reasoning.Prompts.resolve-comment-triage-agent.md"/>
         <EmbeddedResource Include="Reasoning/Rules/*.json" LogicalName="ReviewForge.Core.Reasoning.Rules.%(Filename).json"/>
     </ItemGroup>
 

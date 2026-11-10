@@ -16,9 +16,9 @@ namespace ReviewForge.Core.Reasoning;
 /// </summary>
 public static class SystemPromptComposer
 {
-    private const string ResourceName = "ReviewForge.Core.Reasoning.Prompts.native-review-system.md";
-    private const string FixPassResourceName = "ReviewForge.Core.Reasoning.Prompts.fix-pass-system.md";
-    private const string TriageResourceName = "ReviewForge.Core.Reasoning.Prompts.resolve-triage-system.md";
+    private const string ResourceName = "ReviewForge.Core.Reasoning.Prompts.pr-review-agent.md";
+    private const string FixPassResourceName = "ReviewForge.Core.Reasoning.Prompts.author-commanded-fix-agent.md";
+    private const string TriageResourceName = "ReviewForge.Core.Reasoning.Prompts.resolve-comment-triage-agent.md";
 
     // Keyed by composition kind + source + rulebook version hash + override mtime. The
     // kind prefix separates review and fix-pass compositions of the same file.

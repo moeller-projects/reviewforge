@@ -13,7 +13,8 @@ src/
     Analysis/                 DedupeKey (shift-proof), DiffIndex, AnchorResolver, DiffBlockSplit,
                               homoglyph analyzer, LineEditEngine, PathSafety
     Reasoning/                NativeReviewAgent, RepoReadTools, prompt building, RuleBook,
-                              embedded prompts (native-review-system.md, fix-pass-system.md)
+                              embedded prompts (pr-review-agent.md, author-commanded-fix-agent.md,
+                              resolve-comment-triage-agent.md)
     AutoFix/                  fixer registry + deterministic fixers, fix-pass prompt, applied-fix rows
     Workspaces/               RepoCheckoutPool facade with MirrorManager, CheckoutLeaseStore,
                               CheckoutSizeCache, CheckoutEvictionPolicy, and eviction executor
@@ -488,7 +489,7 @@ production code, so it carries no coverlet threshold.
 - **New reasoning provider**: implement `IChatClientFactory` (see `ChatClientFactory`).
 - **Enrichment (CRG/MCP)**: implement `IContextEnricher`, register in DI — fail-safe contract.
 - **Prompt tuning**: `Review:PromptOverridePath` points at a markdown file; the embedded
-  default lives in `src/ReviewForge.Core/Reasoning/Prompts/native-review-system.md`.
+  default lives in `src/ReviewForge.Core/Reasoning/Prompts/pr-review-agent.md`.
 - **Finding identity**: `DedupeKey` = ruleId + file + normalized snippet (no line numbers —
   shift-proof across force-pushes). Bot threads carry the key in ADO thread Properties.
 
