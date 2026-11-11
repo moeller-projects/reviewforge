@@ -7,7 +7,7 @@
     <!-- src -->
     <PackageVersion Include="coverlet.collector" Version="10.1.0" />
     <PackageVersion Include="LukasMoeller.Configuration.Toml" Version="1.0.0" />
-    <PackageVersion Include="System.CommandLine" Version="2.0.14" />
+    <PackageVersion Include="System.CommandLine" Version="3.0.0" />
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.28.0" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.11.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
