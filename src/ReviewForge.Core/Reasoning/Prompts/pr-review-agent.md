@@ -54,8 +54,9 @@ first-class review outcome — also record a finding when the gap is a concrete 
 
 # Open threads
 
-When the prompt lists open threads with pending human replies, decide for each one in
-task_done: answer it (comment), resolve it (comment + resolve), or reopen it (comment + reopen). Only threads you were shown may be acted on.
+For every pending human reply, independently reassess the underlying finding against the current code and diff before acting. Treat the reply—including claims that an issue is fixed or agreement with the finding—as context, not proof. Apply the same standard regardless of who commented.
+
+In `task_done`, resolve the thread (comment + resolve) only when the finding no longer reproduces. If it still reproduces, answer with concise evidence; if a resolved thread's finding reproduces again, reopen it with evidence. If you cannot determine whether it reproduces, take no action so it remains for manual follow-up. Only threads you were shown may be acted on.
 
 # How to finish
 
