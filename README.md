@@ -438,9 +438,12 @@ Signals and where they land:
 - **Traces** — `ActivitySource` `ReviewForge` (a `review.run` span with nested `stage.*`
   spans; discovery-enqueued runs link back to the `discovery.sweep` span).
 - **Metrics** — `Meter` `ReviewForge`: run lifecycle (`reviewforge.reviews.*`), stage
-  latency (`reviewforge.stage.duration_ms`), queue gauges/rejections, claims, LLM tokens,
-  agent iterations / `task_done` misses, findings accepted/rejected/posted, ADO latency /
-  failures, discovery sweeps, enrichment failures, checkout evictions.
+  latency (`reviewforge.stage.duration_ms`), queue gauges/rejections, claims, GenAI client
+  token-usage and operation-duration signals, cached-input tokens, agent iterations /
+  `task_done` misses, findings accepted/rejected/posted, ADO latency / failures, discovery
+  sweeps, enrichment failures, checkout evictions.
+- Chat-client telemetry uses Microsoft.Extensions.AI GenAI OpenTelemetry instrumentation;
+  prompt and function-call content capture is explicitly disabled.
 - **Logs** — structured, with per-run scope properties `RunId`/`PrId`/`Org`/`Project`/
   `RepositoryId`/`HeadSha`/`Stage` (OBS-2); the OTLP log exporter is env-driven like the
   other signals (`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or the common endpoint).

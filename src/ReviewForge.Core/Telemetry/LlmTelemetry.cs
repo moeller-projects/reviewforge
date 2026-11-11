@@ -4,14 +4,8 @@ namespace ReviewForge.Core.Telemetry;
 
 public static class LlmTelemetry
 {
-    public static readonly Counter<long> LlmTokens =
-        ReviewForgeTelemetry.Meter.CreateCounter<long>("reviewforge.llm.tokens_total", "{token}"); // tags: token_type, model
-
     public static readonly Counter<long> LlmCachedTokens =
         ReviewForgeTelemetry.Meter.CreateCounter<long>("reviewforge.llm.tokens.cached_total", "{token}"); // tags: model
-
-    public static readonly Counter<long> LlmRequests =
-        ReviewForgeTelemetry.Meter.CreateCounter<long>("reviewforge.llm.requests_total"); // tags: model
 
     public static readonly Histogram<double> LlmGovernorWait =
         ReviewForgeTelemetry.Meter.CreateHistogram<double>("reviewforge.llm.governor.wait_ms", "ms"); // slot acquisition wait

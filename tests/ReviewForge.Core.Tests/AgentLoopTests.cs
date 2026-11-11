@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Reasoning;
@@ -127,6 +128,63 @@ public class AgentLoopTests : IDisposable
 
         Assert.True(collector.Done);
         Assert.Equal("agentic tool loop", result.ReviewDepth);
+    }
+
+    [Fact]
+    public async Task Agent_chat_calls_emit_standard_GenAI_usage_telemetry()
+    {
+        var response = new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [new FunctionCallContent("call-0-TaskDone", "TaskDone",
+                new Dictionary<string, object?> { ["reviewSummary"] = "ok" })]))
+        {
+            Usage = new UsageDetails { InputTokenCount = 12, OutputTokenCount = 7, TotalTokenCount = 19 },
+        };
+        var activities = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "ReviewForge",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activities.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var inputUsage = 0;
+        var outputUsage = 0;
+        using var meterListener = new MeterListener
+        {
+            InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == "ReviewForge" && instrument.Name == "gen_ai.client.token.usage")
+                    listener.EnableMeasurementEvents(instrument);
+            },
+        };
+        meterListener.SetMeasurementEventCallback<int>((_, value, tags, _) =>
+        {
+            string? model = null;
+            string? tokenType = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "gen_ai.request.model") model = tag.Value as string;
+                if (tag.Key == "gen_ai.token.type") tokenType = tag.Value as string;
+            }
+            if (model != "otel-regression-model") return;
+            if (tokenType == "input") Interlocked.Exchange(ref inputUsage, value);
+            if (tokenType == "output") Interlocked.Exchange(ref outputUsage, value);
+        });
+        meterListener.Start();
+
+        var agent = new NativeReviewAgent(new FakeChatClientFactory(
+            new ScriptedChatClient(response), model: "otel-regression-model"));
+        var result = await agent.RunAsync(new AgentRunRequest(
+            "review this", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Review),
+            CancellationToken.None);
+
+        Assert.Equal("agentic tool loop", result.ReviewDepth);
+        var activity = Assert.Single(activities, a => a.DisplayName == "chat otel-regression-model");
+        Assert.Equal(12, activity.GetTagItem("gen_ai.usage.input_tokens"));
+        Assert.Equal(7, activity.GetTagItem("gen_ai.usage.output_tokens"));
+        Assert.Null(activity.GetTagItem("gen_ai.input.messages"));
+        Assert.Equal(12, Volatile.Read(ref inputUsage));
+        Assert.Equal(7, Volatile.Read(ref outputUsage));
     }
 
     [Fact]

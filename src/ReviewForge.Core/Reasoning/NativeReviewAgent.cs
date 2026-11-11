@@ -158,7 +158,12 @@ public sealed class NativeReviewAgent(
 
     private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier, int maxIterations)
     {
-        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(tier));
+        IChatClient instrumented = new ChatClientBuilder(chatClientFactory.Create(tier))
+            .UseOpenTelemetry(
+                sourceName: ReviewForgeTelemetry.SourceName,
+                configure: client => client.EnableSensitiveData = false)
+            .Build();
+        IChatClient guarded = new TaskDoneGuardChatClient(collector, instrumented);
         IChatClient retrying = new RetryingChatClient(guarded, chatClientFactory.IsTransientFailure, _Logger);
         IChatClient invoking = new ChatClientBuilder(retrying)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)
@@ -289,18 +294,8 @@ public sealed class NativeReviewAgent(
             var response = await base.GetResponseAsync(messages, options, cancellationToken);
             usage.Add(response.Usage);
             var model = options?.ModelId ?? "default";
-            LlmTelemetry.LlmRequests.Add(1, new TagList {{"model", model}});
             var inputTokens = response.Usage?.InputTokenCount ?? 0;
             var outputTokens = response.Usage?.OutputTokenCount ?? 0;
-            if (inputTokens > 0)
-            {
-                LlmTelemetry.LlmTokens.Add(inputTokens, new TagList {{"token_type", "input"}, {"model", model}});
-            }
-
-            if (outputTokens > 0)
-            {
-                LlmTelemetry.LlmTokens.Add(outputTokens, new TagList {{"token_type", "output"}, {"model", model}});
-            }
 
             // Prompt-cache measurement: emitted only when the provider reports cached
             // input tokens — absence means "unsupported/unknown", never zero-spam.
