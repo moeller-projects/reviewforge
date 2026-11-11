@@ -413,21 +413,15 @@ public sealed class AutoFixFindingsStage : IReviewStage
                 continue;
             }
 
-            // Dedupe: only active bot threads provide coverage; closed/fixed threads do not.
-            var alreadyCovered =
-                ctx.Fetch.Threads.Any(t =>
-                    t.Status == ReviewThreadStatus.Active
-                    && t.DedupeKey is not null
-                    && t.Anchor is { } a
-                    && string.Equals(RepoPath.Normalize(a.FilePath), path, RepoPath.PathComparison)
-                    && RangesOverlap(a.StartLine, a.EndLine, anchor.StartLine, anchor.EndLine))
-                || applied.Any(f =>
-                    string.Equals(f.Proposal.FilePath, path, RepoPath.PathComparison)
-                    && RangesOverlap(f.Proposal.StartLine, f.Proposal.EndLine, anchor.StartLine, anchor.EndLine));
+            // Only fixes prepared in this run suppress overlapping commands. An active finding
+            // thread is not evidence that a fix was posted; /fixit commonly arrives on that thread.
+            var alreadyCovered = applied.Any(f =>
+                string.Equals(RepoPath.Normalize(f.Proposal.FilePath), path, RepoPath.PathComparison)
+                && RangesOverlap(f.Proposal.StartLine, f.Proposal.EndLine, anchor.StartLine, anchor.EndLine));
             if (alreadyCovered)
             {
                 replies.Add((command.ThreadId,
-                    $"A fix covering {path}:{anchor.StartLine}–{anchor.EndLine} is already posted — see the suggestion on this thread's file."));
+                    $"A fix covering {path}:{anchor.StartLine}–{anchor.EndLine} is already being fixed in this run."));
                 continue;
             }
 

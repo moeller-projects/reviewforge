@@ -488,17 +488,19 @@ public sealed class AutoFixStageTests : IDisposable
     }
 
     [Fact]
-    public async Task Closed_bot_thread_does_not_cover_a_command()
+    public async Task Active_finding_thread_does_not_suppress_its_fix_command()
     {
         var ctx = CommandCtx("echo $name");
         ctx.Fetch = ctx.Fetch with
         {
             Threads =
             [
-                .. ctx.Fetch.Threads,
                 new ReviewThread(
-                    99, "existing-fix", ReviewThreadStatus.Closed,
-                    [new ThreadComment("reviewforge-bot", "reviewforge bot", true, "fixed", DateTimeOffset.UtcNow.AddMinutes(-2))],
+                    42, "existing-finding", ReviewThreadStatus.Active,
+                    [
+                        new ThreadComment("reviewforge-bot", "reviewforge bot", true, "finding comment", DateTimeOffset.UtcNow.AddMinutes(-3)),
+                        new ThreadComment("creator-1", "PR Author", false, "/fixit", DateTimeOffset.UtcNow.AddMinutes(-1)),
+                    ],
                     new ThreadAnchor("script.sh", 1, 1)),
             ],
         };
@@ -507,6 +509,7 @@ public sealed class AutoFixStageTests : IDisposable
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Single(ctx.AutoFix.AppliedFixes);
+        Assert.Empty(ctx.AutoFix.FixCommandReplies);
     }
 
     [Fact]
@@ -520,7 +523,7 @@ public sealed class AutoFixStageTests : IDisposable
 
         Assert.Single(ctx.AutoFix.AppliedFixes); // only the deterministic fix
         var reply = Assert.Single(ctx.AutoFix.FixCommandReplies);
-        Assert.Contains("already posted", reply.Text);
+        Assert.Contains("already being fixed", reply.Text);
     }
 
     [Fact]

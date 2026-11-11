@@ -291,6 +291,32 @@ public sealed class CommitFixesStageTests
         Assert.True(row.AiDrafted);
     }
 
+
+    [Fact]
+    public async Task Null_commit_sha_causes_null_reference_after_successful_push()
+    {
+        var git = new NullCommitShaGitOps();
+        var store = new FakeFindingStore();
+        var ctx = Ctx(null, Fix("thread-42", "src/a.sh", threadId: 42));
+
+        await Assert.ThrowsAsync<NullReferenceException>(
+            () => Stage(git, store, Options()).ExecuteAsync(ctx, CancellationToken.None));
+
+        Assert.Single(git.Pushes);
+        Assert.Null(ctx.AutoFix.PushedHeadSha);
+        Assert.True(Assert.Single(store.PushedFixes).Pushed);
+    }
+
+    private sealed class NullCommitShaGitOps : FakeGitOps
+    {
+        public override async Task<string> CommitAsync(
+            string repoPath, string message, string authorName, string authorEmail,
+            IReadOnlyList<string>? paths, CancellationToken ct)
+        {
+            _ = await base.CommitAsync(repoPath, message, authorName, authorEmail, paths, ct);
+            return null!;
+        }
+    }
     [Fact]
     public async Task Pushed_head_is_stamped_for_the_publish_head_check()
     {
