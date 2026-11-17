@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Resolve;
 using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Ports;
 

@@ -1,7 +1,7 @@
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Collections.Concurrent;
-using System.Net;
+using System.Threading.RateLimiting;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenAI.Responses;
@@ -20,22 +20,32 @@ namespace ReviewForge.Infrastructure.Chat;
 public sealed class ChatClientFactory : IChatClientFactory, IDisposable
 {
     public const string CodexEndpoint = "https://chatgpt.com/backend-api/codex";
+    public const string CodexHttpClientName = "ReviewForge.Codex";
+    public const string OpenAiHttpClientName = "ReviewForge.OpenAI";
     private readonly ConcurrentDictionary<ChatTier, Lazy<IChatClient>> _Clients = new();
     private readonly HttpMessageHandler? _HttpHandler;
+    private readonly IHttpClientFactory? _HttpClientFactory;
+    private readonly ConcurrencyLimiter? _RequestLimiter;
 
     private readonly ChatProviderOptions _Options;
 
     public ChatClientFactory(
         ChatProviderOptions options,
         HttpMessageHandler? httpHandler = null,
-        LlmGovernor? governor = null)
+        IHttpClientFactory? httpClientFactory = null)
     {
         _Options = options;
         _HttpHandler = httpHandler;
-        _Governor = governor;
+        _HttpClientFactory = httpClientFactory;
+        _RequestLimiter = options.MaxConcurrentRequests > 0
+            ? new ConcurrencyLimiter(new ConcurrencyLimiterOptions
+            {
+                PermitLimit = options.MaxConcurrentRequests,
+                QueueLimit = options.MaxQueuedRequests,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            })
+            : null;
     }
-
-    private readonly LlmGovernor? _Governor;
 
     public string ModelName(ChatTier tier)
         // Whitespace FollowUpModel counts as UNSET here and in Create(Fast): a blank value
@@ -54,16 +64,7 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
         return _Clients.GetOrAdd(tier, static (_, self) => new Lazy<IChatClient>(self.BuildClient, true), this).Value;
     }
 
-    public bool IsTransientFailure(Exception exception) => exception switch
-    {
-        HttpRequestException {StatusCode: null} => true,
-        HttpRequestException {StatusCode: HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests} => true,
-        HttpRequestException {StatusCode: { } status} when (int) status >= 500 => true,
-        TimeoutException => true,
-        _ => false,
-    };
 
-    /// <summary>Releases every created client's transport (if any) on host shutdown.</summary>
     public void Dispose()
     {
         foreach (var lazy in _Clients.Values)
@@ -73,6 +74,7 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
                 d.Dispose();
             }
         }
+        _RequestLimiter?.Dispose();
     }
 
     private IChatClient BuildClient()
@@ -84,10 +86,9 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
             _ => throw new InvalidOperationException($"unknown reasoning provider '{_Options.Provider}'"),
         };
 
-        // Between usage tracking and the transport: tracking measures real provider
-        // traffic, the governor shapes it. Both tiers share one process-wide governor.
-        return _Governor is { } governor
-            ? new GovernedChatClient(raw, governor, _Options.GovernorAcquireTimeoutSeconds)
+        return _RequestLimiter is { } limiter
+            ? new ConcurrencyLimitedChatClient(
+                raw, limiter, TimeSpan.FromSeconds(_Options.MaxQueueWaitSeconds))
             : raw;
     }
 
@@ -99,17 +100,11 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
 
     private IChatClient CreateCodexClient()
     {
-        var credential = new CodexCredential(
-            _Options.CredentialPath ?? ChatProviderOptions.DefaultCredentialPath(), _HttpHandler);
-        var authHandler = new CodexAuthHandler(credential)
-        {
-            InnerHandler = _HttpHandler ?? new HttpClientHandler(),
-        };
-        HttpMessageHandler transportHandler = authHandler;
-        if (string.Equals(
-                Environment.GetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable),
-                "1",
-                StringComparison.Ordinal))
+        var debugEnabled = string.Equals(
+            Environment.GetEnvironmentVariable(CodexHttpDebugHandler.EnvironmentVariable),
+            "1",
+            StringComparison.Ordinal);
+        if (debugEnabled)
         {
             var aspnetEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
             var dotnetEnvironment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
@@ -124,10 +119,26 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
             Console.Error.WriteLine(
                 $"[codex-http] WARNING: wire debug logging enabled ({CodexHttpDebugHandler.EnvironmentVariable}=1); " +
                 "truncated request/response bodies (may contain source code) are written to stderr.");
-            transportHandler = new CodexHttpDebugHandler {InnerHandler = authHandler};
         }
 
-        var authHttp = new HttpClient(transportHandler);
+        HttpClient authHttp;
+        if (_HttpClientFactory is not null)
+        {
+            authHttp = _HttpClientFactory.CreateClient(CodexHttpClientName);
+        }
+        else
+        {
+            var credential = new CodexCredential(
+                _Options.CredentialPath ?? ChatProviderOptions.DefaultCredentialPath(), _HttpHandler);
+            var authHandler = new CodexAuthHandler(credential)
+            {
+                InnerHandler = _HttpHandler ?? new HttpClientHandler(),
+            };
+            HttpMessageHandler transportHandler = debugEnabled
+                ? new CodexHttpDebugHandler {InnerHandler = authHandler}
+                : authHandler;
+            authHttp = new HttpClient(transportHandler);
+        }
 
         var client = new ResponsesChatClientAdapter(
             new OpenAIClient(new ApiKeyCredential("unused"), new OpenAIClientOptions
@@ -153,11 +164,19 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
         var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")
                      ?? throw new InvalidOperationException("OPENAI_API_KEY environment variable missing");
 
-        var clientOptions = _HttpHandler is null
-            ? new OpenAIClientOptions()
-            : new OpenAIClientOptions {Transport = new HttpClientPipelineTransport(new HttpClient(_HttpHandler, disposeHandler: false))};
+        var clientOptions = new OpenAIClientOptions();
+        if (_HttpClientFactory is not null)
+        {
+            clientOptions.Transport = new HttpClientPipelineTransport(
+                _HttpClientFactory.CreateClient(OpenAiHttpClientName));
+        }
+        else if (_HttpHandler is not null)
+        {
+            clientOptions.Transport = new HttpClientPipelineTransport(
+                new HttpClient(_HttpHandler, disposeHandler: false));
+        }
 
         return new ResponsesChatClientAdapter(
             new OpenAIClient(new ApiKeyCredential(apiKey), clientOptions).GetResponsesClient());
-    }
+}
 }

@@ -5,7 +5,6 @@ using ReviewForge.Core.Editing;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;
 using ReviewForge.Testing;
@@ -49,7 +48,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1), Comment(2)];
 
-        await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat))).ExecuteAsync(ctx, CancellationToken.None);
+        await new TriageCommentsStage(new RepositoryAgentRunner(new FakeChatClientFactory(chat))).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(2, ctx.Resolve!.ThreadVerdicts.Count);
         Assert.Equal(TriageVerdict.OutOfScope, ctx.Resolve!.ThreadVerdicts[0].Verdict);
@@ -68,7 +67,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1), Comment(2)];
 
-        await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat))).ExecuteAsync(ctx, CancellationToken.None);
+        await new TriageCommentsStage(new RepositoryAgentRunner(new FakeChatClientFactory(chat))).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(TriageVerdict.OutOfScope, ctx.Resolve!.ThreadVerdicts[0].Verdict);
         Assert.Equal("evidence did not include a file:line citation", ctx.Resolve!.ThreadVerdicts[0].Evidence);
@@ -86,7 +85,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var ctx = Context();
         ctx.Resolve!.ResolvePlan = new ResolvePlan([new PlannedFix(1, new ThreadAnchor("A.cs", 1, 1), "fix", "A.cs:1", ["A.cs"])], new HashSet<string> {"A.cs"}, []);
 
-        await new ApplyFixesStage(new NativeReviewAgent(new FakeChatClientFactory(chat)), 2).ExecuteAsync(ctx, CancellationToken.None);
+        await new ApplyFixesStage(new RepositoryAgentRunner(new FakeChatClientFactory(chat)), 2).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal("old\n", File.ReadAllText(path));
         Assert.Equal(ResolutionOutcome.AgentDeclined, ctx.Resolve!.ResolutionOutcomes[1]);
@@ -332,7 +331,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             })),
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["summary"] = "done"})));
 
-        await new NativeReviewAgent(new FakeChatClientFactory(chat)).RunTriageAsync(
+        await new RepositoryAgentRunner(new FakeChatClientFactory(chat)).RunTriageAsync(
             "triage", new ReviewCollector(), new ContextStore(), _Root,
             new HashSet<string>(), null, null, new HashSet<long> {1}, CancellationToken.None);
 
@@ -366,7 +365,7 @@ public sealed class ResolveStageBoundaryTests : IDisposable
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1)];
 
-        await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat)))
+        await new TriageCommentsStage(new RepositoryAgentRunner(new FakeChatClientFactory(chat)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal("original\n", File.ReadAllText(file));

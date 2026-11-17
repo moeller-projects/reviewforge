@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.Extensions.AI;
 using ReviewForge.Infrastructure.Chat;
 using Xunit;
 

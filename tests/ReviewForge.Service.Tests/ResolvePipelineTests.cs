@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Pipeline.Stages;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Reasoning;
 using ReviewForge.Testing;
@@ -65,7 +64,7 @@ public sealed class ResolvePipelineTests : IDisposable
             ChangedFileManifest = [new ChangedFile("src/A.cs", ChangedFileType.Edit)],
         };
 
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(chat));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(chat));
         var process = new SuccessfulProcessRunner();
         await new ReviewPipeline([
             new TriageCommentsStage(agent),

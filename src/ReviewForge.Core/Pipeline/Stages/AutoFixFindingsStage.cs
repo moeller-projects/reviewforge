@@ -34,7 +34,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 public sealed class AutoFixFindingsStage : IReviewStage
 {
     private readonly FindingFixerRegistry _Registry;
-    private readonly NativeReviewAgent _Agent;
+    private readonly RepositoryAgentRunner _Agent;
     private readonly AutoFixOptions _Options;
     private readonly ILogger<AutoFixFindingsStage> _Logger;
     private readonly Func<string, string[]> _LineReader;
@@ -43,7 +43,7 @@ public sealed class AutoFixFindingsStage : IReviewStage
 
     public AutoFixFindingsStage(
         FindingFixerRegistry registry,
-        NativeReviewAgent agent,
+        RepositoryAgentRunner agent,
         AutoFixOptions options,
         ILogger<AutoFixFindingsStage> logger,
         Func<string, string[]>? lineReader = null,

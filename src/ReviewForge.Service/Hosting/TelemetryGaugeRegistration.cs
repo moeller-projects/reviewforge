@@ -1,7 +1,5 @@
-using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Workspaces;
-using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Service;
@@ -13,8 +11,7 @@ namespace ReviewForge.Service;
 public sealed class TelemetryGaugeRegistration(
     IReviewQueue queue,
     InFlightClaims claims,
-    RepoCheckoutPool pool,
-    LlmGovernor governor) : IHostedService
+    RepoCheckoutPool pool) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -23,7 +20,6 @@ public sealed class TelemetryGaugeRegistration(
             () => queue.Capacity);
         ClaimsTelemetry.RegisterGauges(() => claims.ActiveCount);
         CheckoutTelemetry.RegisterGauges(() => pool.CheckoutDirectoryCount());
-        LlmTelemetry.RegisterGauges(() => governor.Inflight);
         return Task.CompletedTask;
     }
 

@@ -16,6 +16,9 @@ public sealed class ReviewOptions
     /// <summary>Optional directory containing rule-pack JSON overrides.</summary>
     public string? RuleSetsPath { get; init; }
 
+    /// <summary>Host-managed directories containing focused agent skills. Never point this at a PR checkout.</summary>
+    public string[] SkillDirectories { get; init; } = [];
+
     /// <summary>Maximum review context size passed to the agent.</summary>
     public int MaxContextTokens { get; init; } = 150_000;
 

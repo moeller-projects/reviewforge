@@ -1,5 +1,4 @@
 using ReviewForge.Core.Workspaces;
-using ReviewForge.Infrastructure.Chat;
 using ReviewForge.Testing;
 using Xunit;
 
@@ -22,7 +21,7 @@ public sealed class TelemetryGaugeRegistrationTests : IDisposable
     {
         var pool = new RepoCheckoutPool(new FakeGitOps(), new FakeWorkspaceFs(), _Root);
         var service = new TelemetryGaugeRegistration(
-            new ReviewQueue(), new InFlightClaims(), pool, new LlmGovernor(maxConcurrentRequests: 2));
+            new ReviewQueue(), new InFlightClaims(), pool);
 
         await service.StartAsync(CancellationToken.None);
         await service.StopAsync(CancellationToken.None);

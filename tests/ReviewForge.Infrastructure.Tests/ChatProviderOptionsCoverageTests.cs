@@ -2,7 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
-using ReviewForge.Core.Ports;
 using ReviewForge.Infrastructure.Chat;
 using Xunit;
 

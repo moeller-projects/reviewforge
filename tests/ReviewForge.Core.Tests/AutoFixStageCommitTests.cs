@@ -82,7 +82,7 @@ public sealed class AutoFixStageCommitTests : IDisposable
         Func<RepoPathGuard, IReadOnlySet<string>, HashLineEditor>? editorFactory = null)
     {
         var registry = new FindingFixerRegistry([new BashUnquotedVarsFixer()]);
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(chat ?? new ScriptedChatClient()));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(chat ?? new ScriptedChatClient()));
         return new AutoFixFindingsStage(
             registry, agent, options, NullLogger<AutoFixFindingsStage>.Instance,
             editorFactory: editorFactory);

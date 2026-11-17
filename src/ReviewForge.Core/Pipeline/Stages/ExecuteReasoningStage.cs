@@ -13,7 +13,7 @@ namespace ReviewForge.Core.Pipeline.Stages;
 /// never interleave partial lines into a shared sink.
 /// </summary>
 public sealed class ExecuteReasoningStage(
-    NativeReviewAgent agent,
+    RepositoryAgentRunner agent,
     int maxDiffChars,
     int maxDiffCharsPerFile,
     string? findingsDir = null,

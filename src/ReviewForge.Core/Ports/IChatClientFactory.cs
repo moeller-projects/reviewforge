@@ -20,19 +20,6 @@ public interface IChatClientFactory
 {
     /// <summary>Model id for <paramref name="tier"/> (without any provider routing prefix).</summary>
     string ModelName(ChatTier tier);
-
-    /// <summary>Creates request options with the model selected for <paramref name="tier"/>.
-    /// Callers can add request-specific instructions, tools, and other options.</summary>
-    ChatOptions CreateChatOptions(ChatTier tier, ReasoningEffort? reasoningEffort = null)
-        => new()
-        {
-            ModelId = ModelName(tier),
-            Reasoning = reasoningEffort is { } effort ? new ReasoningOptions {Effort = effort} : null,
-        };
-
     IChatClient Create(ChatTier tier);
 
-    /// <summary>Whether a provider transport failure is safe to retry before a response is observed.
-    /// Custom providers can override this to classify their own transport exceptions.</summary>
-    bool IsTransientFailure(Exception exception) => exception is TimeoutException;
 }

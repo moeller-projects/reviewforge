@@ -28,11 +28,10 @@ public static partial class ServiceCollectionExtensions
         });
         services.AddSingleton<IPullRequestSource>(sp => new InstrumentedPullRequestSource(
             new AdoPullRequestSource(sp.GetRequiredService<IOptions<AdoOptions>>().Value)));
-        services.AddSingleton(sp =>
-            new LlmGovernor(sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value.MaxConcurrentRequests));
+        services.AddReviewForgeChatHttpClients();
         services.AddSingleton<IChatClientFactory>(sp => new ChatClientFactory(
             sp.GetRequiredService<IOptions<ChatProviderOptions>>().Value,
-            governor: sp.GetRequiredService<LlmGovernor>()));
+            httpClientFactory: sp.GetRequiredService<IHttpClientFactory>()));
         services.AddSingleton(sp => new GitOperationScheduler(
             sp.GetRequiredService<IOptions<GitOptions>>().Value.MaxConcurrency));
         services.AddSingleton<IGitOps>(sp => new LibGit2SharpGitOps(

@@ -91,27 +91,28 @@ public sealed class FindingsVerifierPromptTests
         var message = Assert.Single(messages);
         Assert.Equal(ChatRole.User, message.Role);
         Assert.StartsWith(FindingsVerifierPrompt.System, message.Text);
+        Assert.Contains("{\"verdicts\":[{\"key\":", FindingsVerifierPrompt.System);
         Assert.EndsWith("verify these", message.Text);
     }
 
     [Fact]
-    public void RetryMessages_keeps_identity_and_adds_json_only_nudge()
+    public void RetryMessages_keeps_identity_and_requests_the_json_object_shape()
     {
         var messages = FindingsVerifierPrompt.RetryMessages("verify these");
 
         Assert.All(messages, message => Assert.Equal(ChatRole.User, message.Role));
         Assert.StartsWith(FindingsVerifierPrompt.System, messages[0].Text);
-        Assert.Contains("ONLY the JSON array", messages[1].Text);
+        Assert.Contains("ONLY the JSON object containing a verdicts array", messages[1].Text);
     }
 }
 
 public sealed class VerdictParserTests
 {
     [Fact]
-    public void Parse_extracts_verdicts_by_key()
+    public void Parse_extracts_verdicts_from_object_envelope()
     {
         var verdicts = VerdictParser.Parse(
-            """[{"key":"k1","verdict":"rejected","reason":"misread"},{"key":"k2","verdict":"confirmed","reason":"ok"}]""");
+            """{"verdicts":[{"key":"k1","verdict":"rejected","reason":"misread"},{"key":"k2","verdict":"confirmed","reason":"ok"}]}""");
 
         Assert.NotNull(verdicts);
         Assert.True(verdicts["k1"].Rejected);
@@ -120,21 +121,21 @@ public sealed class VerdictParserTests
     }
 
     [Fact]
-    public void Parse_tolerates_prose_around_the_array()
+    public void Parse_does_not_treat_prose_or_fences_as_structured_output()
     {
         var verdicts = VerdictParser.Parse(
-            "Here are my verdicts:\n```json\n[{\"key\":\"k1\",\"verdict\":\"rejected\"}]\n```\nDone.");
+            "Here are my verdicts:\n```json\n{\"verdicts\":[{\"key\":\"k1\",\"verdict\":\"rejected\"}]}\n```\nDone.");
 
-        Assert.NotNull(verdicts);
-        Assert.True(verdicts["k1"].Rejected);
+        Assert.Null(verdicts);
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("no array at all")]
-    [InlineData("[{not json}]")]
+    [InlineData("no JSON object")]
+    [InlineData("{not json}")]
+    [InlineData("[{\"key\":\"k1\",\"verdict\":\"rejected\"}]")]
     public void Parse_unparseable_returns_null(string? text)
     {
         Assert.Null(VerdictParser.Parse(text));
@@ -143,7 +144,8 @@ public sealed class VerdictParserTests
     [Fact]
     public void Parse_ignores_entries_without_key()
     {
-        var verdicts = VerdictParser.Parse("""[{"verdict":"rejected"},{"key":"","verdict":"rejected"},{"key":"k1","verdict":"REJECTED"}]""");
+        var verdicts = VerdictParser.Parse(
+            """{"verdicts":[{"verdict":"rejected"},{"key":"","verdict":"rejected"},{"key":"k1","verdict":"REJECTED"}]}""");
 
         Assert.NotNull(verdicts);
         Assert.Single(verdicts);
@@ -153,7 +155,7 @@ public sealed class VerdictParserTests
     [Fact]
     public void Parse_non_rejected_verdict_values_keep_the_finding()
     {
-        var verdicts = VerdictParser.Parse("""[{"key":"k1","verdict":"unsure"}]""");
+        var verdicts = VerdictParser.Parse("""{"verdicts":[{"key":"k1","verdict":"unsure"}]}""");
 
         Assert.NotNull(verdicts);
         Assert.False(verdicts["k1"].Rejected);

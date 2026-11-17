@@ -12,7 +12,7 @@ src/
     Domain/                   models, ReviewGate, RunClassifier, ThreadTriage, FailureBackoff
     Analysis/                 DedupeKey (shift-proof), DiffIndex, AnchorResolver, DiffBlockSplit,
                               homoglyph analyzer, LineEditEngine, PathSafety
-    Reasoning/                NativeReviewAgent, RepoReadTools, prompt building, RuleBook,
+    Reasoning/                RepositoryAgentRunner, RepoReadTools, prompt building, RuleBook,
                               embedded prompts (pr-review-agent.md, author-commanded-fix-agent.md,
                               resolve-comment-triage-agent.md)
     AutoFix/                  fixer registry + deterministic fixers, fix-pass prompt, applied-fix rows
@@ -23,7 +23,8 @@ src/
                               IContextEnricher, IReviewQueue, IWorkspaceFs
   ReviewForge.Infrastructure/ adapters: Ado/ (ADO SDK + retry policy), Git/ (LibGit2Sharp + operation
                               scheduler), Codex/ (OAuth file, streaming client), Chat/ (OpenAI/Codex
-                              clients + LLM governor), Persistence/ (SQLite via EF Core), Filesystem/
+                              clients + standard HTTP resilience), Persistence/ (SQLite via EF Core),
+                              Filesystem/ (IWorkspaceFs)
   ReviewForge.Service/        ASP.NET host: Endpoints, Queue/ (ReviewQueue+RunTracker, InFlightClaims),
                               Security/ (API-key filter), Logging/ (per-run JSONL), hosted workers
                               (ReviewWorker, DiscoverySweepWorker, CheckoutEvictionWorker,
@@ -233,6 +234,9 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
 - `Review:ReasoningEffort` — reasoning effort for the review agent (`None`, `Low`,
   `Medium`, `High`, `ExtraHigh`). Omit it (or leave unset) to keep the provider default. The
   Codex endpoint may ignore or restrict effort per model — verify against the deployed model.
+- `Review:SkillDirectories` — optional array of existing, host-managed skills roots.
+  Defaults to empty; configured paths must exist at startup. Skills are available to review,
+  triage, and fix agents. See [Focused agent skills](#focused-agent-skills).
 - `Persistence:JournalMode` — `Wal` (default) or `Delete`. WAL lets readers proceed
   during writes and tolerates a power loss losing only the last transaction — safe for this
   dedupe/audit store. WAL requires POSIX advisory locks: keep `Persistence:StoreConnectionString` on a
@@ -254,12 +258,13 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
   adds zero reviewable lines (lockfile-only churn, deletions-only) with no open threads get
   a clean vote without an LLM call; counted by `reviewforge.reviews.trivial_total`. The
   deterministic homoglyph analyzer still runs. Set false to restore the always-run behavior.
-- `Reasoning:MaxConcurrentRequests` / `Reasoning:GovernorAcquireTimeoutSeconds` — the
-  process-wide LLM governor bounds concurrent provider HTTP requests (across both model
-  tiers) so `WorkerCount × iterations` cannot burst the provider into 429s. Unset cap
-  defaults to `Host:WorkerCount × 2`; an acquisition timeout fails the run with a
-  visible `LlmGovernorTimeoutException` (counted by `reviewforge.llm.governor.timeout_total`).
-  Watch `reviewforge.llm.governor.wait_ms` before tightening the cap.
+- `Review:MaxContextTokens` — token threshold for Agent Framework's sliding-window
+  compaction during tool loops (default 150,000).
+- `Reasoning:MaxConcurrentRequests` — maximum concurrent provider calls across model tiers.
+  `MaxQueuedRequests` bounds waiting calls (defaults to `Host:WorkerCount`); `MaxQueueWaitSeconds`
+  defaults to 300. A full queue or expired wait fails the run instead of silently dropping it.
+  The stream-aware chat limiter holds permits until the complete response is consumed; the
+  standard HTTP resilience handlers retain a 100-second attempt and 10-minute total timeout.
 - `Host:WorkerCount` — concurrent queue workers (validated 1–64; unset defaults to
   `processorCount/2` clamped to 2–8).
 - `Review:CleanRunVote` — reviewer vote on clean runs (no findings, all AC met, no
@@ -352,10 +357,12 @@ and AI-drafted fixes are marked as such.
 ## Findings verification (challenge stage, off by default)
 
 `VerifyFindings` (env overrides use `VerifyFindings__…`) adds an adversarial stage between
-validation and auto-fix: one bounded, tool-free Fast-tier request tries to *disprove* each
-accepted finding from a deterministic ±15-line file slice around its anchor. It can only
-subtract findings — never add or rewrite — and fails open: any verifier failure keeps the
-findings. Cost is one request of ≤24k prompt chars per run (~1–3% of a typical review).
+validation and auto-fix. A bounded, tool-free Fast-tier request uses schema-constrained
+`{"verdicts":[...]}` output to try to *disprove* each accepted finding from a deterministic
+±15-line file slice around its anchor. It retries once on malformed output and can only
+subtract findings — never add or rewrite. Ordinary reviews fail open; drafts require every verdict.
+Normally one request of ≤24k prompt chars per run; malformed output triggers one additional
+request.
 
 ```json
 "VerifyFindings": {
@@ -380,6 +387,39 @@ packs. Repeated override files for the same pack are processed in filename order
 later rules replacing earlier rules by ID; extension packs must use unique rule IDs.
 Findings must use an active rule id. Use `general.other` for a verified issue that has no
 more specific active rule.
+
+## Focused agent skills
+
+Set `Review:SkillDirectories` to one or more trusted directories outside PR checkouts. Each root
+contains skill folders with a `SKILL.md`; optional references may be Markdown or text files.
+Skills are loaded on demand through Microsoft Agent Framework. Scripts and other resource
+formats are not exposed.
+
+A skill uses standard Agent Skills frontmatter:
+
+```markdown
+---
+name: review-standards
+description: Apply team-specific review guidance when relevant.
+---
+
+Use the guidance here only when it applies to the current task.
+```
+
+All agent profiles share the configured skills, but their existing repository and edit tools
+remain unchanged. Skill text is injected as-is and can contain prompt injection, so only use
+operator-controlled directories. Changes to the skill catalog require a service restart.
+
+For Docker Compose, mount a host-managed skill root read-only with the optional overlay:
+
+```bash
+export REVIEWFORGE_SKILLS_DIR=/srv/reviewforge/skills
+docker compose -f docker-compose.yml -f docker-compose.skills.yml up --build -d
+```
+
+The overlay sets `Review:SkillDirectories:0` to `/opt/reviewforge/skills`; the host directory
+should contain skill folders such as `review-standards/SKILL.md`.
+Ensure the mounted files are readable by the container's `app` user (uid 1654).
 
 ## Org-wide discovery
 
@@ -498,8 +538,10 @@ production code, so it carries no coverlet threshold.
 
 ## Security constraints
 
-- Agent filesystem is read-only, rooted at the checkout, escape-proof, deny-regex for
-  `.git`, `.env*`, `*.pem`, `*.key`, `secrets`. No shell tool exists.
+- Repository tools are read-only, rooted at the checkout, escape-proof, and deny `.git`,
+  `.env*`, `*.pem`, `*.key`, and `secrets`. No shell tool exists.
+- Skills are injected as-is from operator-controlled roots outside PR checkouts; only
+  Markdown/text resources are exposed, and skill scripts are unavailable.
 - ADO writes happen only in stages 8–10. PAT is never logged.
 - Codex auth file is rewritten atomically (temp + move) on token rotation.
 - No engine fallback: a failed stage fails the run (exit/visible in status), never silently.

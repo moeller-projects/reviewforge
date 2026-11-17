@@ -15,7 +15,7 @@ public class TaskDoneGuardTests
     {
         var collector = new ReviewCollector();
         var inner = new ScriptedChatClient(ScriptedChatClient.Text("real answer"));
-        var guard = new TaskDoneGuardChatClient(collector, inner);
+        var guard = TaskDoneChatClientMiddleware.Create(collector, inner);
 
         var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
         Assert.Equal("real answer", first.Text);
@@ -32,7 +32,7 @@ public class TaskDoneGuardTests
     {
         var collector = new ReviewCollector();
         collector.Complete(new ReviewNarrative {ReviewSummary = "done"});
-        var guard = new TaskDoneGuardChatClient(collector, new ScriptedChatClient());
+        var guard = TaskDoneChatClientMiddleware.Create(collector, new ScriptedChatClient());
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var update in guard.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "x")]))
@@ -51,7 +51,7 @@ public class TaskDoneGuardTests
         // next run's token metrics — each short-circuit must return its own response.
         var collector = new ReviewCollector();
         var inner = new ScriptedChatClient();
-        var guard = new TaskDoneGuardChatClient(collector, inner);
+        var guard = TaskDoneChatClientMiddleware.Create(collector, inner);
         collector.Complete(new ReviewNarrative {ReviewSummary = "done"});
 
         var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "a")]);
@@ -98,7 +98,7 @@ public class AgentLoopTests : IDisposable
                     },
                 })));
 
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script));
         var collector = new ReviewCollector();
         var result = await agent.RunAsync(new AgentRunRequest(
             "review this", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
@@ -120,7 +120,7 @@ public class AgentLoopTests : IDisposable
             Usage = new UsageDetails { InputTokenCount = 12, OutputTokenCount = 7, TotalTokenCount = 19 },
         };
         var script = new ScriptedChatClient(withUsage);
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script));
         var collector = new ReviewCollector();
 
         var result = await agent.RunAsync(new AgentRunRequest(
@@ -172,7 +172,7 @@ public class AgentLoopTests : IDisposable
         });
         meterListener.Start();
 
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(
             new ScriptedChatClient(response), model: "otel-regression-model"));
         var result = await agent.RunAsync(new AgentRunRequest(
             "review this", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Review),
@@ -203,7 +203,7 @@ public class AgentLoopTests : IDisposable
         var script = new ScriptedChatClient(withCached);
         // Model tag scopes the listener: MeterListener measurement events are process-wide,
         // so a parallel test's emissions on this instrument would otherwise cross-talk.
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script, model: "cached-model"));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script, model: "cached-model"));
         var collector = new ReviewCollector();
 
         long cached = 0;
@@ -244,7 +244,7 @@ public class AgentLoopTests : IDisposable
             Usage = new UsageDetails { InputTokenCount = 12, OutputTokenCount = 7, TotalTokenCount = 19 },
         };
         var script = new ScriptedChatClient(withUsage);
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script, model: "no-cached-model"));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script, model: "no-cached-model"));
         var collector = new ReviewCollector();
 
         var sawCachedMeasurement = false;
@@ -284,7 +284,7 @@ public class AgentLoopTests : IDisposable
             .ToArray();
         var script = new ScriptedChatClient(noisy);
 
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script), new AgentOptions {MaxIterations = 2});
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script), new AgentOptions {MaxIterations = 2});
         var collector = new ReviewCollector();
         var result = await agent.RunAsync(new AgentRunRequest(
             "review this", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
@@ -302,7 +302,7 @@ public class AgentLoopTests : IDisposable
             ScriptedChatClient.FunctionCalls(
                 ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "read the file"})));
 
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script));
         var collector = new ReviewCollector();
         await agent.RunAsync(new AgentRunRequest(
             "go", collector, new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
@@ -319,7 +319,7 @@ public class AgentLoopTests : IDisposable
     {
         var script = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script), new AgentOptions {Effort = ReasoningEffort.High});
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script), new AgentOptions {Effort = ReasoningEffort.High});
 
         await agent.RunAsync(new AgentRunRequest(
             "go", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
@@ -332,7 +332,7 @@ public class AgentLoopTests : IDisposable
     {
         var script = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script));
 
         await agent.RunAsync(new AgentRunRequest(
             "go", new ReviewCollector(), new ContextStore(), _RepoDir, ToolProfile.Review), CancellationToken.None);
@@ -344,7 +344,7 @@ public class AgentLoopTests : IDisposable
     [Fact]
     public async Task Invalid_profile_fields_fail_before_model_call()
     {
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(
             new ScriptedChatClient(ScriptedChatClient.Text("unexpected"))));
 
         await Assert.ThrowsAsync<ArgumentException>(() => agent.RunAsync(

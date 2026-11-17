@@ -1,8 +1,10 @@
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
+using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Service;
 
@@ -17,10 +19,11 @@ public sealed class ReviewPipelineBuilder(
     IOptions<VerifyFindingsOptions> verifyFindingsOptions,
     AutoFixOptions autoFixOptions,
     IGitOps? gitOps,
-    AgentFactory agentFactory,
+    IChatClientFactory chatClientFactory,
     StageCatalog stageCatalog,
     ResolveContextInitializer resolveContextInitializer,
-    ILoggerFactory loggerFactory) : IPipelineBuilder
+    ILoggerFactory loggerFactory,
+    AgentSkillsProvider? skillsProvider = null) : IPipelineBuilder
 {
     public ReviewPipeline Build(RunKind kind, ReviewRequest request, ReviewContext context)
     {
@@ -42,7 +45,19 @@ public sealed class ReviewPipelineBuilder(
         if (kind == RunKind.Resolve)
             resolveContextInitializer.Initialize(request, context);
 
-        var build = new PipelineBuildContext(definition, request, agentFactory.Create());
+        var review = reviewOptions.Value;
+        var agent = new RepositoryAgentRunner(chatClientFactory, new AgentOptions
+        {
+            MaxContextTokens = review.MaxContextTokens,
+            MaxIterations = review.MaxIterations,
+            PromptOverridePath = review.PromptOverridePath,
+            RuleSetsPath = review.RuleSetsPath,
+            Effort = review.ReasoningEffort,
+            DebugLogging = review.AgentDebugLogging,
+            GrepMaxMs = review.GrepMaxMs,
+            GrepMaxLines = review.GrepMaxLines,
+        }, loggerFactory.CreateLogger<RepositoryAgentRunner>(), skillsProvider);
+        var build = new PipelineBuildContext(definition, request, agent);
         var stages = definition.Stages.Select(id => stageCatalog.Create(id, build));
         return new ReviewPipeline(stages, loggerFactory.CreateLogger<ReviewPipeline>());
     }

@@ -100,6 +100,52 @@ public sealed class ResponsesRequestMappingTests
     }
 
     [Fact]
+    public async Task Nested_array_json_schema_is_sent_as_structured_output()
+    {
+        var transport = new QueueingResponsesHandler(CompletedResponse("done"));
+        using var schemaDocument = JsonDocument.Parse(
+            """
+            {
+              "type": "object",
+              "properties": {
+                "verdicts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "key": { "type": "string" },
+                      "verdict": { "type": "string" },
+                      "reason": { "type": "string" }
+                    },
+                    "required": ["key", "verdict", "reason"]
+                  }
+                }
+              },
+              "required": ["verdicts"]
+            }
+            """);
+
+        await SendAsync(
+            transport,
+            [new ChatMessage(ChatRole.User, "verify findings")],
+            new ChatOptions
+            {
+                ModelId = "gpt-test",
+                ResponseFormat = ChatResponseFormat.ForJsonSchema(
+                    schemaDocument.RootElement, "verifier_output", "Finding verdicts"),
+                AdditionalProperties = new() {["strict"] = true},
+            });
+
+        using var document = JsonDocument.Parse(Assert.Single(transport.RequestBodies));
+        var format = document.RootElement.GetProperty("text").GetProperty("format");
+        Assert.Equal("json_schema", format.GetProperty("type").GetString());
+        Assert.True(format.GetProperty("strict").GetBoolean());
+        var verdicts = format.GetProperty("schema").GetProperty("properties").GetProperty("verdicts");
+        Assert.Equal("array", verdicts.GetProperty("type").GetString());
+        Assert.Equal("object", verdicts.GetProperty("items").GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task Continuation_token_fetches_the_background_response_by_id()
     {
         var transport = new QueueingResponsesHandler(CompletedResponse("resumed", "resp_resume"));

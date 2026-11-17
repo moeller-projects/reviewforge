@@ -12,8 +12,8 @@ MaxDelay = "00:00:30"
 [Reasoning]
 Provider = "openai-codex"
 Model = "openai-codex:gpt-5.6-luna"
-GovernorAcquireTimeoutSeconds = 300
 MaxConcurrentRequests = 8
+MaxQueueWaitSeconds = 300
 
 [Workspace]
 WorkDir = "./work"
@@ -36,6 +36,8 @@ Days = 30
 MinRunsPerPr = 5
 
 [Review]
+# Optional host-managed skills; only Markdown/text resources are exposed to agents.
+SkillDirectories = []
 MaxContextTokens = 150000
 MaxIterations = 30
 CleanRunVote = "NoResponse"
@@ -125,4 +127,6 @@ FailureBackoffMax = "08:00:00"
 Default = "Information"
 "ReviewForge.Core.Reasoning" = "Information"
 "Microsoft.AspNetCore" = "Warning"
-"Microsoft.Extensions.Http" = "Warning"
+"System.Net.Http.HttpClient.ReviewForge.Codex.LogicalHandler" = "Warning"
+"System.Net.Http.HttpClient.ReviewForge.Codex.ClientHandler" = "Warning"
+"Polly" = "Warning"

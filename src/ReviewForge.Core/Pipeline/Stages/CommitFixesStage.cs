@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
-using ReviewForge.Core.Analysis;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Commits;
 using ReviewForge.Core.Domain;

@@ -1,0 +1,11 @@
+services:
+  reviewforge:
+    environment:
+      Review__SkillDirectories__0: /opt/reviewforge/skills
+    volumes:
+      - type: bind
+        source: ${REVIEWFORGE_SKILLS_DIR:?set REVIEWFORGE_SKILLS_DIR to a host-managed skills directory}
+        target: /opt/reviewforge/skills
+        bind:
+          create_host_path: false
+        read_only: true

@@ -28,7 +28,7 @@ public class CoverageGapTests : IDisposable
     {
         var source = new FakePullRequestSource();
         var store = new FakeFindingStore();
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(new ScriptedChatClient()));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(new ScriptedChatClient()));
 
         IReviewStage[] stages =
         [

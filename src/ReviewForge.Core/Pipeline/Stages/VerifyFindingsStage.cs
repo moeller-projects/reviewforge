@@ -81,8 +81,13 @@ public sealed class VerifyFindingsStage(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var client = new RetryingChatClient(chatClientFactory.Create(ChatTier.Fast), chatClientFactory.IsTransientFailure, logger);
-            var chatOptions = chatClientFactory.CreateChatOptions(ChatTier.Fast);
+            var client = chatClientFactory.Create(ChatTier.Fast);
+            var chatOptions = new ChatOptions
+            {
+                ModelId = chatClientFactory.ModelName(ChatTier.Fast),
+                ResponseFormat = FindingsVerifierResponseFormat.Format,
+                AdditionalProperties = new() {["strict"] = true},
+            };
             var response = await client.GetResponseAsync(
                 FindingsVerifierPrompt.Messages(prompt),
                 chatOptions,

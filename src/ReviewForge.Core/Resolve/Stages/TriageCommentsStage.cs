@@ -1,16 +1,14 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
-using ReviewForge.Core.Analysis;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
-using ReviewForge.Core.Resolve;
 using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Reasoning;
 
 namespace ReviewForge.Core.Resolve.Stages;
 
-public sealed class TriageCommentsStage(NativeReviewAgent agent, int batchSize = 20, ILogger<TriageCommentsStage>? logger = null) : IReviewStage
+public sealed class TriageCommentsStage(RepositoryAgentRunner agent, int batchSize = 20, ILogger<TriageCommentsStage>? logger = null) : IReviewStage
 {
     private static readonly Regex EvidenceCitation = new(@"(?:^|\s|\()([^\s():]+):([1-9][0-9]*)(?:\b|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     public string Name => "triage-comments";

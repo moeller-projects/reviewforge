@@ -517,7 +517,7 @@ public class StageTests : IDisposable
     }
 
     private static ExecuteReasoningStage ReasoningStage(
-        NativeReviewAgent agent, string? findingsDir = null, bool trivialDiffSkipEnabled = true)
+        RepositoryAgentRunner agent, string? findingsDir = null, bool trivialDiffSkipEnabled = true)
         => new(agent, 200_000, 40_000, findingsDir, trivialDiffSkipEnabled);
 
     [Fact]
@@ -525,7 +525,7 @@ public class StageTests : IDisposable
     {
         var script = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script));
         var ctx = Ctx();
         ctx.Fetch = ctx.Fetch with {PriorRun = new PriorRun(Key, "s", DateTimeOffset.UtcNow, ["known-key"])};
 
@@ -548,7 +548,7 @@ public class StageTests : IDisposable
         var ctx = Ctx();
         ctx.Classification = ctx.Classification with {Kind = kind};
 
-        await ReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+        await ReasoningStage(new RepositoryAgentRunner(factory)).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Contains(expectedTier, factory.RequestedTiers);
         Assert.DoesNotContain(expectedTier == ChatTier.Fast ? ChatTier.Full : ChatTier.Fast, factory.RequestedTiers);
@@ -563,7 +563,7 @@ public class StageTests : IDisposable
         var ctx = Ctx();
         ctx.Classification = ctx.Classification with {Kind = ReviewKind.FollowUp};
 
-        await ReasoningStage(new NativeReviewAgent(factory)).ExecuteAsync(ctx, CancellationToken.None);
+        await ReasoningStage(new RepositoryAgentRunner(factory)).ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Contains(script.ReceivedOptions, o => o?.ModelId == "fast-model");
     }
@@ -588,7 +588,7 @@ public class StageTests : IDisposable
         ctx.Repository = ctx.Repository with {Diff = DiffIndex.Parse(ctx.Repository.DiffText)};
         ctx.Repository = ctx.Repository with {ReviewableFiles = ["src/A.cs"]};
 
-        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new RepositoryAgentRunner(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, script.Calls);
@@ -617,7 +617,7 @@ public class StageTests : IDisposable
         ctx.Repository = ctx.Repository with {ReviewableFiles = ["src/A.cs"]};
 
         await ReasoningStage(
-                new NativeReviewAgent(new FakeChatClientFactory(script)), trivialDiffSkipEnabled: false)
+                new RepositoryAgentRunner(new FakeChatClientFactory(script)), trivialDiffSkipEnabled: false)
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.NotEqual(0, script.Calls);
@@ -644,7 +644,7 @@ public class StageTests : IDisposable
         ctx.Repository = ctx.Repository with {ReviewableFiles = ["src/A.cs"]};
         ctx.Classification = ctx.Classification with {PendingReplies = [new PendingReply(1, "k", "alice", "please fix")]};
 
-        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new RepositoryAgentRunner(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.NotEqual(0, script.Calls);
@@ -670,7 +670,7 @@ public class StageTests : IDisposable
         ctx.Repository = ctx.Repository with {Diff = DiffIndex.Parse(ctx.Repository.DiffText)};
         ctx.Repository = ctx.Repository with {ReviewableFiles = ["src/A.cs"]};
 
-        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new RepositoryAgentRunner(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         Assert.Equal(0, script.Calls); // trivial: zero added lines in reviewable files
@@ -699,7 +699,7 @@ public class StageTests : IDisposable
                        """
         };
 
-        await ReasoningStage(new NativeReviewAgent(new FakeChatClientFactory(script)))
+        await ReasoningStage(new RepositoryAgentRunner(new FakeChatClientFactory(script)))
             .ExecuteAsync(ctx, CancellationToken.None);
 
         var finding = Assert.Single(ctx.Reasoning.Collector.Findings);
@@ -714,7 +714,7 @@ public class StageTests : IDisposable
     {
         var script = new ScriptedChatClient(
             ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script));
         const string diff = """
                             diff --git a/src/A.cs b/src/A.cs
                             --- a/src/A.cs
@@ -787,7 +787,7 @@ public class StageTests : IDisposable
                         ["filePath"] = "src/A.cs", ["startLine"] = 2,
                     }),
                     ("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "ok"})));
-            var agent = new NativeReviewAgent(new FakeChatClientFactory(script));
+            var agent = new RepositoryAgentRunner(new FakeChatClientFactory(script));
             var ctx = Ctx();
 
             await ReasoningStage(agent, findingsDir).ExecuteAsync(ctx, CancellationToken.None);

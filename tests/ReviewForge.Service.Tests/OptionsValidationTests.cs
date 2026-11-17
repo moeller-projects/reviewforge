@@ -1,3 +1,4 @@
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -49,6 +50,7 @@ public class OptionsValidationTests
         Assert.NotNull(provider.GetRequiredService<IOptions<HostOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<DiscoveryOptions>>().Value);
         Assert.NotNull(provider.GetRequiredService<IOptions<ApiDocsOptions>>().Value);
+        Assert.Null(provider.GetService<AgentSkillsProvider>());
     }
 
     [Fact]
@@ -79,6 +81,69 @@ public class OptionsValidationTests
         Assert.Equal(5678, options.GrepMaxLines);
         Assert.True(options.Enrichment.SymbolUsageEnabled);
         Assert.IsType<SymbolUsageEnricher>(provider.GetRequiredService<IContextEnricher>());
+    }
+
+    [Fact]
+    public void Review_skill_directories_bind_multiple_host_paths()
+    {
+        var first = Path.Combine(Path.GetTempPath(), "reviewforge-skills-" + Guid.NewGuid().ToString("N"));
+        var second = Path.Combine(Path.GetTempPath(), "reviewforge-skills-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        try
+        {
+            using var provider = Build([..With(ValidConfig(),
+                ("Review:SkillDirectories:0", first),
+                ("Review:SkillDirectories:1", second))]);
+
+            Assert.Equal(
+                new[] {first, second},
+                provider.GetRequiredService<IOptions<ReviewOptions>>().Value.SkillDirectories);
+        }
+        finally
+        {
+            Directory.Delete(first, recursive: true);
+            Directory.Delete(second, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Missing_review_skill_directory_is_rejected_at_options_validation()
+    {
+        using var provider = Build([..With(ValidConfig(),
+            ("Review:SkillDirectories:0",
+                Path.Combine(Path.GetTempPath(), "reviewforge-missing-skills-" + Guid.NewGuid().ToString("N"))))]);
+
+        var exception = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ReviewOptions>>().Value);
+
+        Assert.Contains("Review:SkillDirectories", exception.Message);
+    }
+
+    [Fact]
+    public void Configured_skill_directory_registers_framework_provider()
+    {
+        var skillsRoot = Path.Combine(Path.GetTempPath(), "reviewforge-skills-" + Guid.NewGuid().ToString("N"));
+        var skillDirectory = Path.Combine(skillsRoot, "review-standards");
+        Directory.CreateDirectory(skillDirectory);
+        File.WriteAllText(Path.Combine(skillDirectory, "SKILL.md"), """
+            ---
+            name: review-standards
+            description: Apply team review standards.
+            ---
+            Read-only guidance.
+            """);
+        try
+        {
+            using var provider = Build([..With(ValidConfig(),
+                ("Review:SkillDirectories:0", skillsRoot))]);
+
+            Assert.IsType<AgentSkillsProvider>(provider.GetRequiredService<AgentSkillsProvider>());
+        }
+        finally
+        {
+            Directory.Delete(skillsRoot, recursive: true);
+        }
     }
 
     [Fact]
@@ -247,17 +312,9 @@ public class OptionsValidationTests
         Assert.Null(options.FollowUpModel);
     }
 
-    [Fact]
-    public void Governor_acquire_timeout_below_one_is_rejected()
-    {
-        using var provider = Build([.. With(ValidConfig(), ("Reasoning:GovernorAcquireTimeoutSeconds", "0"))]);
-
-        Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
-    }
 
     [Fact]
-    public void Governor_max_concurrent_requests_below_one_is_rejected()
+    public void Max_concurrent_requests_below_one_is_rejected()
     {
         using var provider = Build([.. With(ValidConfig(), ("Reasoning:MaxConcurrentRequests", "0"))]);
 
@@ -266,15 +323,31 @@ public class OptionsValidationTests
     }
 
     [Fact]
-    public void Governor_resolves_default_cap_from_worker_count()
+    public void Max_concurrent_requests_defaults_from_worker_count()
     {
         using var provider = Build([.. With(ValidConfig(), ("Host:WorkerCount", "3"))]);
 
         var options = provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value;
         Assert.Equal(6, options.MaxConcurrentRequests);
-        var governor = provider.GetRequiredService<LlmGovernor>();
+        Assert.Equal(3, options.MaxQueuedRequests);
+    }
 
-        Assert.Equal(options.MaxConcurrentRequests, governor.MaxConcurrency);
+    [Fact]
+    public void Max_queued_requests_below_zero_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Reasoning:MaxQueuedRequests", "-1"))]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
+    }
+
+    [Fact]
+    public void Max_queue_wait_below_one_is_rejected()
+    {
+        using var provider = Build([.. With(ValidConfig(), ("Reasoning:MaxQueueWaitSeconds", "0"))]);
+
+        Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<ChatProviderOptions>>().Value);
     }
 
     [Fact]

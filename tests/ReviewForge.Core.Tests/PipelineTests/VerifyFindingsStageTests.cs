@@ -64,10 +64,22 @@ public sealed class VerifyFindingsStageTests : IDisposable
             NullLogger<VerifyFindingsStage>.Instance);
 
     [Fact]
+    public async Task Verifier_requests_strict_json_schema_output()
+    {
+        var chat = new ScriptedChatClient(ScriptedChatClient.Text("""{"verdicts":[]}"""));
+
+        await Stage(chat).ExecuteAsync(Ctx(Finding("k1")), CancellationToken.None);
+
+        var options = Assert.IsType<ChatOptions>(Assert.Single(chat.ReceivedOptions));
+        Assert.IsType<ChatResponseFormatJson>(options.ResponseFormat);
+        Assert.Equal(true, options.AdditionalProperties?["strict"]);
+    }
+
+    [Fact]
     public async Task Confirmed_verdicts_keep_all_findings()
     {
         var chat = new ScriptedChatClient(ScriptedChatClient.Text(
-            """[{"key":"k1","verdict":"confirmed","reason":"real issue"}]"""));
+            """{"verdicts":[{"key":"k1","verdict":"confirmed","reason":"real issue"}]}"""));
         var ctx = Ctx(Finding("k1"));
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
@@ -79,7 +91,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
     public async Task Rejected_verdict_removes_finding()
     {
         var chat = new ScriptedChatClient(ScriptedChatClient.Text(
-            """[{"key":"k1","verdict":"rejected","reason":"context disproves it"},{"key":"k2","verdict":"confirmed","reason":"real"}]"""));
+            """{"verdicts":[{"key":"k1","verdict":"rejected","reason":"context disproves it"},{"key":"k2","verdict":"confirmed","reason":"real"}]}"""));
         var ctx = Ctx(Finding("k1"), Finding("k2"));
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
@@ -91,7 +103,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
     public async Task Unknown_key_in_verdict_is_ignored_and_missing_key_is_kept()
     {
         var chat = new ScriptedChatClient(ScriptedChatClient.Text(
-            """[{"key":"ghost","verdict":"rejected","reason":"not ours"}]"""));
+            """{"verdicts":[{"key":"ghost","verdict":"rejected","reason":"not ours"}]}"""));
         var ctx = Ctx(Finding("k1"));
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
@@ -102,7 +114,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
     [Fact]
     public async Task Draft_requires_a_verdict_for_each_model_finding()
     {
-        var chat = new ScriptedChatClient(ScriptedChatClient.Text("[]"));
+        var chat = new ScriptedChatClient(ScriptedChatClient.Text("""{"verdicts":[]}"""));
         var ctx = DraftCtx(Finding("k1"));
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -115,7 +127,7 @@ public sealed class VerifyFindingsStageTests : IDisposable
     public async Task Draft_accepts_a_finding_when_the_verifier_returns_its_verdict()
     {
         var chat = new ScriptedChatClient(ScriptedChatClient.Text(
-            """[{"key":"k1","verdict":"confirmed","reason":"supported by code"}]"""));
+            """{"verdicts":[{"key":"k1","verdict":"confirmed","reason":"supported by code"}]}"""));
         var ctx = DraftCtx(Finding("k1"));
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
@@ -151,8 +163,8 @@ public sealed class VerifyFindingsStageTests : IDisposable
     public async Task Malformed_then_valid_retry_applies_verdicts()
     {
         var chat = new ScriptedChatClient(
-            ScriptedChatClient.Text("I cannot help with that."),
-            ScriptedChatClient.Text("""[{"key":"k1","verdict":"rejected","reason":"misread"}]"""));
+            ScriptedChatClient.Text("""[{"key":"k1","verdict":"rejected","reason":"misread"}]"""),
+            ScriptedChatClient.Text("""{"verdicts":[{"key":"k1","verdict":"rejected","reason":"misread"}]}"""));
         var ctx = Ctx(Finding("k1"));
 
         await Stage(chat).ExecuteAsync(ctx, CancellationToken.None);
@@ -191,10 +203,10 @@ public sealed class VerifyFindingsStageTests : IDisposable
     }
 
     [Fact]
-    public async Task Transient_provider_failure_is_retried_and_verdict_applied()
+    public async Task Verifier_does_not_retry_chat_client_failures_and_fails_open()
     {
         var chat = new TransientThenSuccessChatClient(
-            """[{"key":"k1","verdict":"rejected","reason":"not a defect"}]""");
+            """{"verdicts":[{"key":"k1","verdict":"rejected","reason":"not a defect"}]}""");
         var stage = new VerifyFindingsStage(
             new FakeChatClientFactory(chat),
             new VerifyFindingsOptions {Enabled = true},
@@ -203,8 +215,8 @@ public sealed class VerifyFindingsStageTests : IDisposable
 
         await stage.ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Equal(2, chat.Calls);
-        Assert.Empty(ctx.Validation.AcceptedFindings);
+        Assert.Equal(1, chat.Calls);
+        Assert.Single(ctx.Validation.AcceptedFindings);
     }
 
 

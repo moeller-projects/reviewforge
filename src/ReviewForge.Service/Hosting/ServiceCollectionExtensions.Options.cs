@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
-using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
 using ReviewForge.Infrastructure.Ado;
 using ReviewForge.Infrastructure.Chat;
@@ -45,6 +44,8 @@ public static partial class ServiceCollectionExtensions
             {
                 if (configuration[$"{ChatProviderOptions.SectionName}:MaxConcurrentRequests"] is null)
                     o.MaxConcurrentRequests = host.Value.WorkerCount * 2;
+                if (configuration[$"{ChatProviderOptions.SectionName}:MaxQueuedRequests"] is null)
+                    o.MaxQueuedRequests = host.Value.WorkerCount;
             })
             .ValidateDataAnnotations()
             .ValidateOnStart();
@@ -75,6 +76,10 @@ public static partial class ServiceCollectionExtensions
                         "Review:Sharding configuration is obsolete and ignored; large diffs use Review:MaxDiffChars truncation.");
             })
             .ValidateDataAnnotations()
+            .Validate(o => o.SkillDirectories is not null
+                           && o.SkillDirectories.All(path =>
+                               !string.IsNullOrWhiteSpace(path) && Directory.Exists(path)),
+                "Review:SkillDirectories entries must be non-empty paths to existing directories")
             .Validate(o => ReviewOptions.IsValidCleanRunVote(o.CleanRunVote),
                 "Review:CleanRunVote must be NoResponse | Approved | ApprovedWithSuggestions | None")
             .ValidateOnStart();

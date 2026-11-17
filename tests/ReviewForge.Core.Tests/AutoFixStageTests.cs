@@ -64,7 +64,7 @@ public sealed class AutoFixStageTests : IDisposable
     {
         var registry = new FindingFixerRegistry(
             [new BashUnquotedVarsFixer(), new BashSetEMissingFixer(), new DockerAddToCopyFixer()]);
-        var agent = new NativeReviewAgent(new FakeChatClientFactory(chat ?? new ScriptedChatClient()));
+        var agent = new RepositoryAgentRunner(new FakeChatClientFactory(chat ?? new ScriptedChatClient()));
         return new AutoFixFindingsStage(
             registry, agent, options,
             NullLogger<AutoFixFindingsStage>.Instance, lineReader, editorFactory);

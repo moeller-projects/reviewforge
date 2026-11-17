@@ -50,14 +50,13 @@ internal static class PipelineBuilderTestFactory
             git,
             new UnusedProcessRunner(),
             credentials);
-        var agentFactory = new AgentFactory(chatClientFactory, reviewOptions, loggerFactory);
         return new ReviewPipelineBuilder(
             reviewOptions,
             resolveOptions,
             verifyOptions,
             autoFixOptions,
             git,
-            agentFactory,
+            chatClientFactory,
             catalog,
             new ResolveContextInitializer(),
             loggerFactory);

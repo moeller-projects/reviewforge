@@ -1,17 +1,23 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.AI;
 
 namespace ReviewForge.Core.Reasoning;
 
 /// <summary>
-/// Parses the findings verifier's JSON reply. Extracts from the first '[' to the last ']'
-/// and deserializes a small DTO; unknown keys are ignored (per-finding fail-open) and any
-/// verdict value other than "rejected" (case-insensitive) keeps the finding. The verifier
-/// can only subtract — it never edits titles, severities, or anchors.
+/// Parses the findings verifier's schema-constrained JSON response. Unknown and missing finding
+/// keys are ignored (per-finding fail-open); only a "rejected" verdict removes a finding. The
+/// verifier can only subtract — it never edits titles, severities, or anchors.
 /// </summary>
 public static class VerdictParser
 {
-    /// <summary>Verdicts keyed by dedupe key; null when the response carries no parseable
-    /// JSON array at all (the caller retries once, then fails open).</summary>
+    private static readonly JsonSerializerOptions SerializerOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    /// <summary>Verdicts keyed by dedupe key; null when the response is not a valid object
+    /// containing a verdicts array (the caller retries once, then fails open).</summary>
     public static IReadOnlyDictionary<string, FindingsVerifierPrompt.Verdict>? Parse(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -19,26 +25,17 @@ public static class VerdictParser
             return null;
         }
 
-        var start = text.IndexOf('[');
-        var end = text.LastIndexOf(']');
-        if (start < 0 || end <= start)
-        {
-            return null;
-        }
-
-        Entry?[]? entries;
+        ResponseEnvelope? response;
         try
         {
-            entries = JsonSerializer.Deserialize<Entry?[]>(
-                text.AsSpan(start, end - start + 1),
-                new JsonSerializerOptions {PropertyNameCaseInsensitive = true});
+            response = JsonSerializer.Deserialize<ResponseEnvelope>(text, SerializerOptions);
         }
         catch (JsonException)
         {
             return null;
         }
 
-        if (entries is null)
+        if (response?.Verdicts is not { } entries)
         {
             return null;
         }
@@ -58,5 +55,35 @@ public static class VerdictParser
         return verdicts;
     }
 
-    private sealed record Entry(string? Key, string? Verdict, string? Reason);
+    internal sealed class ResponseEnvelope
+    {
+        public ResponseEnvelope()
+        {
+        }
+
+        [JsonPropertyName("verdicts")]
+        public List<ResponseEntry> Verdicts { get; init; } = null!;
+    }
+
+    internal sealed class ResponseEntry
+    {
+        public ResponseEntry()
+        {
+        }
+
+        [JsonPropertyName("key")]
+        public string Key { get; init; } = null!;
+
+        [JsonPropertyName("verdict")]
+        public string Verdict { get; init; } = null!;
+
+        [JsonPropertyName("reason")]
+        public string Reason { get; init; } = null!;
+    }
+}
+
+internal static class FindingsVerifierResponseFormat
+{
+    internal static ChatResponseFormat Format { get; } =
+        ChatResponseFormat.ForJsonSchema<VerdictParser.ResponseEnvelope>();
 }

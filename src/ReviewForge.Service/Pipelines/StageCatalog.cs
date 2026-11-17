@@ -1,7 +1,5 @@
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.AutoFix;
-using ReviewForge.Core.Domain;
-using ReviewForge.Core.Resolve;
 using ReviewForge.Core.Resolve.Domain;
 using ReviewForge.Core.Resolve.Stages;
 using ReviewForge.Core.Pipeline;
@@ -15,11 +13,11 @@ namespace ReviewForge.Service;
 public sealed class PipelineBuildContext(
     PipelineDefinition definition,
     ReviewRequest request,
-    NativeReviewAgent agent)
+    RepositoryAgentRunner agent)
 {
     public PipelineDefinition Definition { get; } = definition;
     public ReviewRequest Request { get; } = request;
-    public NativeReviewAgent Agent { get; } = agent;
+    public RepositoryAgentRunner Agent { get; } = agent;
 }
 
 public sealed class StageCatalog

@@ -49,16 +49,20 @@ public sealed class ChatProviderOptions : IValidatableObject
     public string? CredentialPath { get; init; }
 
     /// <summary>
-    /// Process-wide cap on concurrent provider HTTP requests (across both model tiers).
+    /// Process-wide cap on concurrent provider calls across both model tiers.
     /// Defaults to Host:WorkerCount × 2 during options post-configuration.
     /// </summary>
     [Range(1, 10_000)]
     public int MaxConcurrentRequests { get; set; }
 
-    /// <summary>Seconds a request waits for a governor slot before the run fails with a
-    /// visible <see cref="LlmGovernorTimeoutException"/>. Default 300.</summary>
+    /// <summary>Maximum provider calls waiting for a concurrency permit; defaults to Host:WorkerCount.</summary>
+    [Range(0, 10_000)]
+    public int MaxQueuedRequests { get; set; }
+
+    /// <summary>Maximum time a provider call waits for a concurrency permit before failing.</summary>
     [Range(1, 3_600)]
-    public int GovernorAcquireTimeoutSeconds { get; init; } = 300;
+    public int MaxQueueWaitSeconds { get; set; } = 300;
+
 
     public static string DefaultCredentialPath()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");

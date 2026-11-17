@@ -61,12 +61,6 @@ public sealed class DiscoveryService(
         var gate = new object(); // guards the cap-check/claim/enqueue critical section
         var warmups = _WarmupGate is null ? (List<Task>?) null : []; // mirror prefetches, awaited before the sweep returns
 
-        void Skip(PrKey pr, string reason)
-        {
-            skipped.Enqueue(new SkippedPr(pr, reason));
-            DiscoveryTelemetry.DiscoverySkipped.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, NormalizeReason(reason)}});
-        }
-
         // Phase 1 — cheap rules only (draft/branch/creator), no I/O.
         var survivors = new List<PullRequestCandidate>();
         foreach (var candidate in candidates)
@@ -143,19 +137,25 @@ public sealed class DiscoveryService(
         // Retention tail (P2-26): prune the store at most once per hour, after the sweep's
         // own work is done so prune cost never delays candidate processing.
         var now = _Clock.GetUtcNow();
-        if (now - _LastPrune >= TimeSpan.FromHours(1))
+        if (now - _LastPrune < TimeSpan.FromHours(1))
+            return report;
+        
+        _LastPrune = now;
+        var pruned = await store.PruneAsync(now.AddDays(-retention.Days), retention.MinRunsPerPr, ct);
+        if (pruned > 0)
         {
-            _LastPrune = now;
-            var pruned = await store.PruneAsync(now.AddDays(-retention.Days), retention.MinRunsPerPr, ct);
-            if (pruned > 0)
-            {
-                logger?.LogInformation(
-                    "retention pruned {Pruned} runs older than {RetentionDays} days (kept last {MinRunsPerPr} runs per PR)",
-                    pruned, retention.Days, retention.MinRunsPerPr);
-            }
+            logger?.LogInformation(
+                "retention pruned {Pruned} runs older than {RetentionDays} days (kept last {MinRunsPerPr} runs per PR)",
+                pruned, retention.Days, retention.MinRunsPerPr);
         }
 
         return report;
+
+        void Skip(PrKey pr, string reason)
+        {
+            skipped.Enqueue(new SkippedPr(pr, reason));
+            DiscoveryTelemetry.DiscoverySkipped.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, NormalizeReason(reason)}});
+        }
 
         async Task EvaluateCandidateAsync(PullRequestCandidate candidate, CancellationToken token)
         {

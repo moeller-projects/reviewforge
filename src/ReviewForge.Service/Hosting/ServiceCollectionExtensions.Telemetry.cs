@@ -1,7 +1,6 @@
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Telemetry;
 
 namespace ReviewForge.Service;

@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 using ReviewForge.Core.Domain;
-using ReviewForge.Core.Pipeline;
 using ReviewForge.Core.Ports;
 using ReviewForge.Core.Telemetry;
 

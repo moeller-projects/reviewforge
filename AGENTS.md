@@ -18,7 +18,7 @@ src/
     Domain/                    models, ReviewGate, RunClassifier, ThreadTriage, FailureBackoff
     Analysis/                  DedupeKey (shift-proof), DiffIndex, AnchorResolver, DiffBlockSplit,
                                homoglyph analyzer, LineEditEngine, PathSafety
-    Reasoning/                 NativeReviewAgent, RepoReadTools, RepoPathGuard, prompt building,
+    Reasoning/                 RepositoryAgentRunner, RepoReadTools, RepoPathGuard, prompt building,
                                RuleBook + embedded rule-pack JSONs, embedded system prompts
     AutoFix/                   FindingFixerRegistry + deterministic fixers, FixPromptBuilder,
                                AppliedFixPersistence
