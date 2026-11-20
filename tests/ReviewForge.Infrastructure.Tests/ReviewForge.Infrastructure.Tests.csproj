@@ -3,6 +3,9 @@
     <PropertyGroup>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
+        <OutputType>Exe</OutputType>
+        <!-- Keep VSTest and the existing coverlet coverage gate. -->
+        <IsTestingPlatformApplication>false</IsTestingPlatformApplication>
         <Include>[ReviewForge.Infrastructure]*</Include>
         <!-- Platform-conditional branches (PATHEXT resolution, Win32 process
              races) can only ever be covered on one OS. -->
@@ -26,7 +29,7 @@
             <PrivateAssets>all</PrivateAssets>
         </PackageReference>
         <PackageReference Include="Microsoft.NET.Test.Sdk"/>
-        <PackageReference Include="xunit"/>
+        <PackageReference Include="xunit.v3"/>
         <PackageReference Include="xunit.runner.visualstudio">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

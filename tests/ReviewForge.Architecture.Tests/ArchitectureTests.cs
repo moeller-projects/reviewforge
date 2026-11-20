@@ -187,7 +187,7 @@ public sealed class ArchitectureTests
         }
     }
 
-    private static void AssertRule(TestResult result)
+    private static void AssertRule(NetArchTest.Rules.TestResult result)
     {
         Assert.True(result.IsSuccessful,
             string.Join("; ", result.FailingTypeNames ?? Array.Empty<string>()));
