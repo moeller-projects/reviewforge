@@ -18,13 +18,13 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
 {
     private readonly string _SharedDir = Path.Combine(Path.GetTempPath(), "rf-restart-" + Guid.NewGuid().ToString("N"));
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         Directory.CreateDirectory(_SharedDir);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         Environment.SetEnvironmentVariable("Persistence__QueueMode", null);
         if (Directory.Exists(_SharedDir))
@@ -32,7 +32,7 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
             Directory.Delete(_SharedDir, recursive: true);
         }
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]

@@ -182,12 +182,12 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         private readonly ReviewForgeFactory _Factory = new();
 
 
-        public Task InitializeAsync() => Task.CompletedTask;
+        public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-        public Task DisposeAsync()
+        public ValueTask DisposeAsync()
         {
             _Factory.Dispose();
-            return Task.CompletedTask;
+            return ValueTask.CompletedTask;
         }
 
         private async Task<RunStatus> WaitForState(Guid runId, params RunState[] final)
@@ -989,12 +989,12 @@ public class ApiDocsDisabledTests : IAsyncLifetime
 {
     private readonly ReviewForgeFactory _Factory = new();
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
@@ -1019,13 +1019,13 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         Environment.SetEnvironmentVariable("ApiDocs__Enabled", "true");
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
         Environment.SetEnvironmentVariable("ApiDocs__Enabled", null);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
@@ -1100,13 +1100,13 @@ public class OtlpEnabledTests : IAsyncLifetime
         Environment.SetEnvironmentVariable("Host__OtlpEnabled", "true");
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
         Environment.SetEnvironmentVariable("Host__OtlpEnabled", null);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
