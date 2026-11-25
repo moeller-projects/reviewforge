@@ -11,6 +11,7 @@ using Xunit;
 
 namespace ReviewForge.Service.Tests;
 
+[Collection("ReviewForge service host")]
 public class OptionsValidationTests
 {
     private static ServiceProvider Build(params (string Key, string Value)[] config)
