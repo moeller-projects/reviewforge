@@ -28,6 +28,7 @@ public static class Endpoints
             .AddEndpointFilter<ApiKeyEndpointFilter>();
 
         reviews.MapPost("/", SubmitReview)
+            .WithMetadata(new DashboardSessionAccess())
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
@@ -54,6 +55,7 @@ public static class Endpoints
             .Produces<DiscoveryReport>();
 
         reviews.MapGet("/dashboard", GetDashboard)
+            .WithMetadata(new DashboardSessionAccess())
             .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
             .WithName("GetDashboard")
             .Produces<DashboardResponse>();

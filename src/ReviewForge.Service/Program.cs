@@ -31,6 +31,7 @@ builder.Services.AddHealthChecks()
     .AddCheck<LivenessHealthCheck>(LivenessHealthCheck.Name);
 builder.Services.AddReviewForge(builder.Configuration);
 builder.Services.AddOpenApi(ApiDocsRegistration.Configure);
+builder.Services.AddDashboard();
 
 var app = builder.Build();
 
@@ -57,7 +58,6 @@ app.Logger.LogInformation(
     effectiveOtlpStatus.TracesEnabled ? effectiveOtlpStatus.EffectiveTracesEndpoint ?? "(SDK default)" : "(none)",
     effectiveOtlpStatus.MetricsEnabled,
     effectiveOtlpStatus.MetricsEnabled ? effectiveOtlpStatus.EffectiveMetricsEndpoint ?? "(SDK default)" : "(none)");
-app.UseRateLimiter();
 app.Use(async (ctx, next) =>
 {
     // Defense-in-depth for a JSON API that browsers can be pointed at.
@@ -65,6 +65,10 @@ app.Use(async (ctx, next) =>
     ctx.Response.Headers.CacheControl = "no-store";
     await next();
 });
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseRateLimiter();
+app.UseAntiforgery();
 app.MapHealthChecks("/health");
 app.MapHealthChecks("/alive", new HealthCheckOptions
 {
@@ -72,6 +76,7 @@ app.MapHealthChecks("/alive", new HealthCheckOptions
 });
 app.MapReviewForgeEndpoints();
 app.MapDocsEndpoints();
+app.MapDashboard();
 app.Run();
 
 // Exposed for WebApplicationFactory in tests; startup wiring itself is not unit-tested.

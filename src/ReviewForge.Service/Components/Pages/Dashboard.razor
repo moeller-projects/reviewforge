@@ -1,0 +1,11 @@
+@page "/dashboard"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+<PageTitle>ReviewForge dashboard</PageTitle>
+<main class="dashboard">
+    <h1>ReviewForge dashboard</h1>
+    <p role="status">Loading pull requests…</p>
+    <form method="post" action="/dashboard/logout">
+        <AntiforgeryToken />
+        <RadzenButton Text="Log out" ButtonType="ButtonType.Submit" />
+    </form>
+</main>
