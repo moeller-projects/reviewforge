@@ -79,7 +79,7 @@ public class ApiKeyAuthTests
         using var discover = await client.PostAsJsonAsync("/reviews/discover", new { });
         Assert.Equal(HttpStatusCode.Unauthorized, discover.StatusCode);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync($"/reviews/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync($"/reviews/{Guid.NewGuid()}", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class ApiKeyAuthTests
         // Routing is case-insensitive; the endpoint filter must run on every variant (P1-13).
         Assert.Equal(HttpStatusCode.Unauthorized, await PostReview(client, null, 1, "/REVIEWS"));
         Assert.Equal(HttpStatusCode.Unauthorized, await PostReview(client, null, 1, "/ReViews"));
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync($"/REVIEWS/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync($"/REVIEWS/{Guid.NewGuid()}", TestContext.Current.CancellationToken)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/REVIEWS/DISCOVER", new { })).StatusCode);
     }
 
@@ -103,7 +103,7 @@ public class ApiKeyAuthTests
 
         Assert.Equal(HttpStatusCode.Accepted, await PostReview(client, "test-key-1", 7, "/REVIEWS"));
         // Unknown run id → 404 proves the request passed auth and reached the handler.
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/REVIEWS/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/REVIEWS/{Guid.NewGuid()}", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class ApiKeyAuthTests
         using var client = factory.Server.CreateClient();
 
         // /reviewsx must not match the group (segment-exact) and must not hit the filter.
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/reviewsx")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/reviewsx", TestContext.Current.CancellationToken)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, await PostReview(client, null, 1, "/reviewsfoo"));
     }
 
@@ -188,8 +188,8 @@ public class ApiKeyAuthTests
         using var factory = new ReviewForgeFactory();
         using var client = factory.Server.CreateClient();
 
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/alive")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/alive", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -222,9 +222,9 @@ public class ApiKeyAuthTests
         using var factory = new ReviewForgeFactory().WithStatusLimit(2, 600).WithoutWorkers();
         using var client = factory.CreateClient();
 
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}")).StatusCode);
-        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync($"/reviews/{Guid.NewGuid()}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync($"/reviews/{Guid.NewGuid()}", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]

@@ -227,7 +227,7 @@ public class CheckoutEvictionWorkerTests
                 NullLogger<CheckoutEvictionWorker>.Instance);
 
             await worker.StartAsync(CancellationToken.None);
-            await Task.Delay(80); // several would-be ticks
+            await Task.Delay(80, TestContext.Current.CancellationToken); // several would-be ticks
             Assert.True(Directory.Exists(checkout));
 
             await worker.StopAsync(CancellationToken.None);

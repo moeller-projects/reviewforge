@@ -67,7 +67,7 @@ public class OtlpEndpointLogTests : IAsyncLifetime
     public async Task Startup_logs_the_effective_otlp_endpoint()
     {
         using var client = _Factory.CreateClient();
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(_Logs, line => line.Contains("OTLP logs exporter enabled: True") && line.Contains("http://example:4317"));
@@ -98,7 +98,7 @@ public class OtlpEndpointDisabledLogTests : IAsyncLifetime
     public async Task Startup_logs_disabled_when_endpoint_unset()
     {
         using var client = _Factory.CreateClient();
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(_Logs, line => line.Contains("OTLP logs exporter enabled: False") && line.Contains("(none)"));

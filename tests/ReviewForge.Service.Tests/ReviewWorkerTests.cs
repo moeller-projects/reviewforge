@@ -94,7 +94,7 @@ public class ReviewWorkerTests
         try
         {
             for (var i = 0; i < 200 && barrier.CurrentPhaseNumber == 0; i++)
-                await Task.Delay(10);
+                await Task.Delay(10, TestContext.Current.CancellationToken);
 
             Assert.Equal(1, barrier.CurrentPhaseNumber);
             Assert.Equal(3, source.WorkItemFetches);
@@ -123,7 +123,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runA)?.State != RunState.Skipped; i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         var status = h.Tracker.Get(runA);
@@ -157,7 +157,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runA)?.State != RunState.Completed; i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(RunState.Completed, h.Tracker.Get(runA)?.State);
@@ -187,7 +187,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runA)?.State != RunState.Completed; i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(RunState.Completed, h.Tracker.Get(runA)?.State);
@@ -218,7 +218,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(RunState.Failed, h.Tracker.Get(runId)?.State);
@@ -251,7 +251,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         var failed = Assert.Single(h.Store.RecentRuns);
@@ -286,7 +286,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runB)?.State != RunState.Failed; i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         // The throwing store did not kill the worker: both runs failed and were drained.
@@ -324,7 +324,7 @@ public class ReviewWorkerTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = h.Worker.StartAsync(cts.Token);
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Skipped; i++)
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
 
         Assert.Equal(RunState.Skipped, h.Tracker.Get(runId)?.State);
         Assert.False(h.Claims.IsHeldBy(Key, runId));
@@ -346,7 +346,7 @@ public class ReviewWorkerTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var workerTask = h.Worker.StartAsync(cts.Token);
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
 
         Assert.Equal(RunState.Failed, h.Tracker.Get(runId)?.State);
         var failure = Assert.Single(h.Store.RecentRuns);
@@ -386,7 +386,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Running; i++)
         {
-            await Task.Delay(10);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(RunState.Running, h.Tracker.Get(runId)?.State); // stalled inside the run
@@ -471,7 +471,7 @@ public class ReviewWorkerTests
 
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         var status = h.Tracker.Get(runId);

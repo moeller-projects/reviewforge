@@ -13,7 +13,7 @@ public sealed class HealthEndpointTests
         factory.Store.ThrowOnPing = new InvalidOperationException("store unavailable");
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/alive");
+        var response = await client.GetAsync("/alive", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -25,7 +25,7 @@ public sealed class HealthEndpointTests
         factory.Store.ThrowOnPing = new InvalidOperationException("store unavailable");
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -36,7 +36,7 @@ public sealed class HealthEndpointTests
         await using var factory = new ReviewForgeFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
