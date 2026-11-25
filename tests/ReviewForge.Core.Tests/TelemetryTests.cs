@@ -15,7 +15,8 @@ public sealed class TelemetryTests
     {
         var depth = 0;
 
-        var readings = new Dictionary<string, long>();
+        // Measurements can arrive from parallel tests on other threads.
+        var readings = new ConcurrentDictionary<string, long>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) => l.EnableMeasurementEvents(instrument);
         listener.SetMeasurementEventCallback<int>((instrument, measurement, tags, state) =>
