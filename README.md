@@ -82,9 +82,9 @@ export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for review 
 
 dotnet run --project src/ReviewForge.Service          # serves http://localhost:5080
 
-dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll submit \
+dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll submit \
   --org my-org --project my-project --repo my-repo --pr 1234 --api-key ...
-dotnet src/ReviewForge.Cli/bin/Debug/net10.0/reviewforge.dll status --run-id <guid> --api-key ...
+dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll status --run-id <guid> --api-key ...
 ```
 
 Endpoints (`/reviews*` and `/resolutions` require the `X-Api-Key` header; keys are configured via the
