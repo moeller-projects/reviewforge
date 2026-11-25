@@ -1073,12 +1073,12 @@ public class DiscoveryEndpointTests : IAsyncLifetime
 {
     private readonly ReviewForgeFactory _Factory = new();
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
@@ -1091,10 +1091,10 @@ public class DiscoveryEndpointTests : IAsyncLifetime
         _Factory.Source.OpenPullRequests = [candidate];
         _Factory.Source.WorkItems = [new WorkItem(1, "t", "bug", null, null, "New")];
 
-        var response = await _Factory.CreateClient().PostAsync("/reviews/discover", null);
+        var response = await _Factory.CreateClient().PostAsync("/reviews/discover", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var report = await response.Content.ReadFromJsonAsync<DiscoveryReport>();
+        var report = await response.Content.ReadFromJsonAsync<DiscoveryReport>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(report);
         Assert.Equal(1, report.Candidates);
         Assert.Equal(1, report.Interesting);

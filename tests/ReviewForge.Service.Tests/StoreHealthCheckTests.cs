@@ -15,7 +15,7 @@ public class StoreHealthCheckTests
     {
         var check = new StoreHealthCheck(new HealthyStore());
 
-        var result = await check.CheckHealthAsync(Ctx);
+        var result = await check.CheckHealthAsync(Ctx, TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Healthy, result.Status);
     }
@@ -28,7 +28,7 @@ public class StoreHealthCheckTests
             ThrowOnPing = new InvalidOperationException("db down"),
         });
 
-        var result = await check.CheckHealthAsync(Ctx);
+        var result = await check.CheckHealthAsync(Ctx, TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
     }

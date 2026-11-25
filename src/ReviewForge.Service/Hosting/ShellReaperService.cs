@@ -14,7 +14,7 @@ namespace ReviewForge.Service;
 /// </summary>
 /// <remarks>
 /// The reap lives in <see cref="ReapOnceAsync"/> rather than inline in ExecuteAsync so tests
-/// can await it deterministically: .NET 10 BackgroundService.StartAsync schedules
+/// can await it deterministically: .NET 11 BackgroundService.StartAsync schedules
 /// ExecuteAsync via Task.Run(stoppingCts.Token, ...), and an immediate StopAsync cancels
 /// that token before the thread pool runs the delegate — the reap would be silently
 /// dropped (StopAsync suppresses the resulting cancellation). In the hosted path the

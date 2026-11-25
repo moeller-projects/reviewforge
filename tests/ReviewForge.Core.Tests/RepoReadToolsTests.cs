@@ -110,7 +110,7 @@ public class RepoReadToolsTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_Root, "appsettings.Production.json"), "SECRETVALUE=xyz");
         File.WriteAllText(Path.Combine(_Root, "appsettings.Production.toml"), "SECRETVALUE=xyz");
-        Assert.Equal("no matches", Tools().Grep("SECRETVALUE"));
+        Assert.Equal("no matches", Tools().Grep("SECRETVALUE", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -172,21 +172,21 @@ public class RepoReadToolsTests : IDisposable
     [Fact]
     public void Grep_finds_matches_with_location()
     {
-        var result = Tools().Grep("TARGET");
+        var result = Tools().Grep("TARGET", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("src/A.cs:2", result);
     }
 
     [Fact]
     public void Grep_no_matches_and_invalid_pattern()
     {
-        Assert.Equal("no matches", Tools().Grep("zzz-not-there"));
-        Assert.Contains("invalid pattern", Tools().Grep("(unclosed"));
+        Assert.Equal("no matches", Tools().Grep("zzz-not-there", cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("invalid pattern", Tools().Grep("(unclosed", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void Grep_skips_denied_and_binary()
     {
-        var result = Tools().Grep("SECRET|gitconfig|a");
+        var result = Tools().Grep("SECRET|gitconfig|a", cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(".env", result);
         Assert.DoesNotContain(".git", result);
     }
@@ -194,8 +194,8 @@ public class RepoReadToolsTests : IDisposable
     [Fact]
     public void Grep_with_glob_and_subdir()
     {
-        Assert.Contains("A.cs", Tools().Grep("one", path: "src", glob: "*.cs"));
-        Assert.Contains("not a directory", Tools().Grep("x", path: "nope"));
+        Assert.Contains("A.cs", Tools().Grep("one", path: "src", glob: "*.cs", cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("not a directory", Tools().Grep("x", path: "nope", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class RepoReadToolsTests : IDisposable
         File.WriteAllText(Path.Combine(_Root, "node_modules", "pkg", "index.js"), "NEEDLE in node_modules");
         File.WriteAllText(Path.Combine(_Root, "obj", "x.cs"), "NEEDLE in obj");
 
-        var result = Tools().Grep("NEEDLE");
+        var result = Tools().Grep("NEEDLE", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("src/app.cs", result);
         Assert.DoesNotContain("bin/", result);
@@ -233,7 +233,7 @@ public class RepoReadToolsTests : IDisposable
         File.WriteAllText(Path.Combine(_Root, "gen", "y.cs"), "NEEDLE in gen");
 
         var tools = new RepoReadTools(_Root, excludeDirs: ["gen"]);
-        var result = tools.Grep("NEEDLE");
+        var result = tools.Grep("NEEDLE", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("bin/x.cs", result); // no longer excluded
         Assert.DoesNotContain("gen/", result);
@@ -250,7 +250,7 @@ public class RepoReadToolsTests : IDisposable
 
         File.WriteAllText(big, new string('a', 1024 * 1024) + "NEEDLE" + new string('b', 1024 * 1024));
 
-        Assert.Equal("no matches", Tools().Grep("NEEDLE"));
+        Assert.Equal("no matches", Tools().Grep("NEEDLE", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -289,7 +289,7 @@ public class RepoReadToolsTests : IDisposable
                 return;
             }
 
-            Assert.Equal("no matches", Tools().Grep("NEEDLE"));
+            Assert.Equal("no matches", Tools().Grep("NEEDLE", cancellationToken: TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -320,7 +320,7 @@ public class RepoReadToolsTests : IDisposable
                 return;
             }
 
-            Assert.Equal("no matches", Tools().Grep("NEEDLE"));
+            Assert.Equal("no matches", Tools().Grep("NEEDLE", cancellationToken: TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -369,7 +369,7 @@ public class RepoReadToolsTests : IDisposable
         }
 
         Assert.Equal("access denied: src/readme.txt", Tools().ReadFile("src/readme.txt"));
-        Assert.Equal("no matches", Tools().Grep("SECRET"));
+        Assert.Equal("no matches", Tools().Grep("SECRET", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -402,7 +402,7 @@ public class RepoReadToolsTests : IDisposable
         }
 
         Assert.Equal("access denied: src/leaf.txt", Tools().ReadFile("src/leaf.txt"));
-        Assert.Equal("no matches", Tools().Grep("SECRET"));
+        Assert.Equal("no matches", Tools().Grep("SECRET", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -413,7 +413,7 @@ public class RepoReadToolsTests : IDisposable
             return;
         }
 
-        Assert.Equal("access denied: docs", Tools().Grep("TARGET", path: "docs"));
+        Assert.Equal("access denied: docs", Tools().Grep("TARGET", path: "docs", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -454,7 +454,7 @@ public class RepoReadToolsTests : IDisposable
     public void Grep_aborts_on_aggregate_line_budget_and_marks_truncation()
     {
         File.WriteAllText(Path.Combine(_Root, "big.log"), string.Join("\n", Enumerable.Repeat("filler line", 50)));
-        var result = new RepoReadTools(_Root, grepMaxLines: 10).Grep("filler");
+        var result = new RepoReadTools(_Root, grepMaxLines: 10).Grep("filler", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("…[truncated: budget-lines]", result);
     }
 
@@ -466,7 +466,7 @@ public class RepoReadToolsTests : IDisposable
             File.WriteAllText(Path.Combine(_Root, $"f{i:D3}.txt"), string.Join("\n", Enumerable.Repeat("needle line", 20)));
         }
 
-        var result = new RepoReadTools(_Root, grepMaxMs: 1).Grep("needle");
+        var result = new RepoReadTools(_Root, grepMaxMs: 1).Grep("needle", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("…[truncated: budget-time]", result);
     }
 
@@ -495,7 +495,7 @@ public class RepoReadToolsTests : IDisposable
     [Fact]
     public void Grep_falls_back_for_lookaround_patterns_and_marks_result()
     {
-        var result = Tools().Grep("two(?= TARGET)");
+        var result = Tools().Grep("two(?= TARGET)", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("src/A.cs:2: two TARGET", result);
         Assert.Contains("…[pattern-fallback]", result);
     }
@@ -504,7 +504,7 @@ public class RepoReadToolsTests : IDisposable
     public void Grep_handles_catastrophic_pattern_within_budget()
     {
         File.WriteAllText(Path.Combine(_Root, "bomb.txt"), new string('a', 10_000) + "b!");
-        var result = new RepoReadTools(_Root, grepMaxMs: 5_000).Grep("(a+)+$");
+        var result = new RepoReadTools(_Root, grepMaxMs: 5_000).Grep("(a+)+$", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("no matches", result);
     }
 
@@ -553,7 +553,7 @@ public class RepoReadToolsTests : IDisposable
         File.WriteAllLines(Path.Combine(_Root, "src", "refs.cs"), ["Foo()", "FooBar", "MyFoo", "fOo"]);
         File.WriteAllText(Path.Combine(_Root, "src", "changed.cs"), "Foo();");
         var result = new RepoReadTools(_Root, changedFiles: new HashSet<string>(["src/changed.cs"]))
-            .FindReferences("Foo");
+            .FindReferences("Foo", TestContext.Current.CancellationToken);
         Assert.Contains("src/refs.cs:1", result);
         Assert.Contains("src/refs.cs:4", result);
         Assert.DoesNotContain("FooBar", result);
@@ -564,13 +564,13 @@ public class RepoReadToolsTests : IDisposable
     [Fact]
     public void FindReferences_rejects_invalid_skips_denied_and_marks_budget()
     {
-        Assert.Equal("invalid identifier", Tools().FindReferences("x"));
+        Assert.Equal("invalid identifier", Tools().FindReferences("x", TestContext.Current.CancellationToken));
         var denied = new RepoReadTools(_Root);
         File.WriteAllText(Path.Combine(_Root, ".env.foo"), "Foo");
-        Assert.Equal("no references", denied.FindReferences("Foo"));
+        Assert.Equal("no references", denied.FindReferences("Foo", TestContext.Current.CancellationToken));
 
         File.WriteAllText(Path.Combine(_Root, "many.txt"), string.Join('\n', Enumerable.Repeat("Foo", 50)));
-        var result = new RepoReadTools(_Root, grepMaxLines: 2).FindReferences("Foo");
+        var result = new RepoReadTools(_Root, grepMaxLines: 2).FindReferences("Foo", TestContext.Current.CancellationToken);
         Assert.Contains("…[truncated: budget-lines]", result);
     }
 

@@ -1,5 +1,3 @@
-using Projects;
-
 var builder = DistributedApplication.CreateBuilder(args);
 
 // Secrets as parameters: the dashboard marks them and Aspire fails fast with a clear
@@ -14,7 +12,7 @@ var apiKey = builder.AddParameter("api-key", secret: true);
 // var reviewforgeWorkDir = Path.Combine(Path.GetTempPath(), "reviewforge");
 // Directory.CreateDirectory(reviewforgeWorkDir);
 
-builder.AddProject<ReviewForge_Service>("reviewforge")
+builder.AddDotnetProject("reviewforge", "../ReviewForge.Service/ReviewForge.Service.csproj")
     .WithHttpEndpoint(name: "http", targetPort: 5080)
     // The dashboard health tile reflects readiness; liveness remains available to orchestrators.
     .WithHttpHealthCheck("/health")

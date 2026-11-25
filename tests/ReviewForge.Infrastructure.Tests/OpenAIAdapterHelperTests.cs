@@ -140,7 +140,7 @@ public sealed class OpenAIAdapterHelperTests
 
             policies.AddPolicy(new RecordingPolicy(1, order));
             policies.AddPolicy(new RecordingPolicy(2, order));
-            await client.GetResponseAsync([new ChatMessage(ChatRole.User, "request")]);
+            await client.GetResponseAsync([new ChatMessage(ChatRole.User, "request")], cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Equal(new[] { 1, 2 }, order);
             Assert.Contains("MEAI/", handler.UserAgent);

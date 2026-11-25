@@ -12,7 +12,7 @@ public class CodexStreamingChatClientTests
     {
         var client = new CodexStreamingChatClient(new FakeStreamingClient());
 
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("hello", response.Text);
     }

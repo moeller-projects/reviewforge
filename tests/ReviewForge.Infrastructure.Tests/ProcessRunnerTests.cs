@@ -12,10 +12,7 @@ public sealed class ProcessRunnerTests
     public async Task Runs_executable_with_argument_and_returns_exit_result()
     {
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(
-            [RuntimeExecutable(), "--version"],
-            workingDirectory: null,
-            timeout: TimeSpan.FromSeconds(30));
+        var result = await runner.RunAsync([RuntimeExecutable(), "--version"], workingDirectory: null, timeout: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal(0, result.ExitCode);
@@ -28,10 +25,7 @@ public sealed class ProcessRunnerTests
     public async Task Captures_stdout_and_stderr_and_preserves_nonzero_exit_code()
     {
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(
-            OutputAndFailureCommand(),
-            workingDirectory: null,
-            timeout: TimeSpan.FromSeconds(30));
+        var result = await runner.RunAsync(OutputAndFailureCommand(), workingDirectory: null, timeout: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal(7, result.ExitCode);
@@ -44,10 +38,7 @@ public sealed class ProcessRunnerTests
     public async Task Caps_combined_output_without_timing_out()
     {
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(
-            LargeOutputCommand(),
-            workingDirectory: null,
-            timeout: TimeSpan.FromSeconds(30));
+        var result = await runner.RunAsync(LargeOutputCommand(), workingDirectory: null, timeout: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.False(result.TimedOut);
@@ -60,10 +51,7 @@ public sealed class ProcessRunnerTests
     {
         // A char-counted cap would retain up to 4x the promised 64 KiB for non-ASCII output.
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(
-            MultibyteOutputCommand(),
-            workingDirectory: null,
-            timeout: TimeSpan.FromSeconds(30));
+        var result = await runner.RunAsync(MultibyteOutputCommand(), workingDirectory: null, timeout: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         var bytes = Encoding.UTF8.GetByteCount(result.StandardOutput) + Encoding.UTF8.GetByteCount(result.StandardError);
@@ -83,8 +71,7 @@ public sealed class ProcessRunnerTests
         try
         {
             var runner = new ProcessRunner();
-            var result = await runner.RunAsync(
-                EnvProbeCommand(name), workingDirectory: null, timeout: TimeSpan.FromSeconds(30));
+            var result = await runner.RunAsync(EnvProbeCommand(name), workingDirectory: null, timeout: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Equal("unset", result.StandardOutput.Trim());
         }
@@ -98,8 +85,7 @@ public sealed class ProcessRunnerTests
     public async Task Passes_through_the_operational_allowlist()
     {
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(
-            EnvProbeCommand("PATH"), workingDirectory: null, timeout: TimeSpan.FromSeconds(30));
+        var result = await runner.RunAsync(EnvProbeCommand("PATH"), workingDirectory: null, timeout: TimeSpan.FromSeconds(30), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("set", result.StandardOutput.Trim());
     }
@@ -126,11 +112,11 @@ public sealed class ProcessRunnerTests
     {
         var runner = new ProcessRunner();
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
-            runner.RunAsync(null!, null, TimeSpan.FromSeconds(1)));
+            runner.RunAsync(null!, null, TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            runner.RunAsync([], null, TimeSpan.FromSeconds(1)));
+            runner.RunAsync([], null, TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            runner.RunAsync(["dotnet"], null, TimeSpan.Zero));
+            runner.RunAsync(["dotnet"], null, TimeSpan.Zero, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -139,7 +125,7 @@ public sealed class ProcessRunnerTests
         var runner = new ProcessRunner();
         using var cancellation = new CancellationTokenSource();
         var execution = runner.RunAsync(BlockingCommand(), null, TimeSpan.FromSeconds(20), cancellation.Token);
-        await Task.Delay(TimeSpan.FromMilliseconds(250));
+        await Task.Delay(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
@@ -149,8 +135,7 @@ public sealed class ProcessRunnerTests
     public async Task Reports_timeout_and_kills_the_process()
     {
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(
-            BlockingCommand(), null, TimeSpan.FromMilliseconds(250));
+        var result = await runner.RunAsync(BlockingCommand(), null, TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
 
         Assert.True(result.TimedOut);
         Assert.Equal(-1, result.ExitCode);
@@ -162,8 +147,7 @@ public sealed class ProcessRunnerTests
         // The direct child exits immediately; a spawned descendant inherits stdout/stderr
         // and keeps the pipes open. The drain must honor the same timeout.
         var runner = new ProcessRunner();
-        var result = await runner.RunAsync(
-            DescendantPipeCommand(), workingDirectory: null, timeout: TimeSpan.FromSeconds(1));
+        var result = await runner.RunAsync(DescendantPipeCommand(), workingDirectory: null, timeout: TimeSpan.FromSeconds(1), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.TimedOut);
     }
@@ -178,8 +162,7 @@ public sealed class ProcessRunnerTests
     {
         var runner = new ProcessRunner();
         var workingDirectory = Path.GetFullPath(Path.GetTempPath());
-        var result = await runner.RunAsync(
-            CurrentDirectoryCommand(), workingDirectory, TimeSpan.FromSeconds(30));
+        var result = await runner.RunAsync(CurrentDirectoryCommand(), workingDirectory, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.True(string.Equals(workingDirectory.TrimEnd(Path.DirectorySeparatorChar),
@@ -192,7 +175,7 @@ public sealed class ProcessRunnerTests
     {
         var runner = new ProcessRunner();
         await Assert.ThrowsAsync<Win32Exception>(() =>
-            runner.RunAsync(["reviewforge-missing-process-74c4"], null, TimeSpan.FromSeconds(1)));
+            runner.RunAsync(["reviewforge-missing-process-74c4"], null, TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken));
     }
 
     private static IReadOnlyList<string> BlockingCommand() =>

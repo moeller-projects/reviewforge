@@ -58,13 +58,11 @@ public sealed class ResponsesToolMappingTests
         var noDeferred = AIFunctionFactory.Create((string id) => id, "immediate", "Immediate function");
         var unrecognized = new UnsupportedTestTool();
 
-        await factory.Create(ChatTier.Full).GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "search")],
-            new ChatOptions
+        await factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "search")], new ChatOptions
             {
                 Tools = [search, lookup, docs, connector, fileSearch, code, image, noDeferred, unrecognized],
                 AllowMultipleToolCalls = false,
-            });
+            }, TestContext.Current.CancellationToken);
 
         using var request = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
         var tools = request.RootElement.GetProperty("tools").EnumerateArray().ToArray();
@@ -140,9 +138,7 @@ public sealed class ResponsesToolMappingTests
         {
             using var handler = new RequestHandler(CompletedResponse);
             using var factory = new ChatClientFactory(new ChatProviderOptions { Provider = ChatProviderKind.OpenAi, Model = "gpt-test" }, handler);
-            await factory.Create(ChatTier.Full).GetResponseAsync(
-                [new ChatMessage(ChatRole.User, "find")],
-                new ChatOptions { Tools = [function], ToolMode = mode });
+            await factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "find")], new ChatOptions { Tools = [function], ToolMode = mode }, TestContext.Current.CancellationToken);
 
             using var request = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
             Assert.Equal(expectedChoice, request.RootElement.GetProperty("tool_choice").GetString());

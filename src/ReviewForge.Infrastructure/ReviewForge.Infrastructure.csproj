@@ -22,7 +22,6 @@
         <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite"/>
         <PackageReference Include="OpenAI"/>
         <PackageReference Include="Microsoft.Extensions.AI"/>
-        <PackageReference Include="Microsoft.Extensions.Options"/>
     </ItemGroup>
 
 </Project>

@@ -58,7 +58,7 @@ public class CodexAuthHandlerTests : IDisposable
     public async Task Attaches_auth_headers()
     {
         var (client, api, _, validToken, _) = Setup(token => token is not null);
-        var response = await client.GetAsync("https://chatgpt.com/backend-api/codex/responses");
+        var response = await client.GetAsync("https://chatgpt.com/backend-api/codex/responses", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var request = Assert.Single(api.Requests);
@@ -74,7 +74,7 @@ public class CodexAuthHandlerTests : IDisposable
         var (client, api, refresh, _, rotatedToken) = Setup(token => token == rotated);
         rotated = rotatedToken;
         // First call: valid token rejected (401) → force refresh → retry with rotated token (200).
-        var response = await client.GetAsync("https://chatgpt.com/backend-api/codex/responses");
+        var response = await client.GetAsync("https://chatgpt.com/backend-api/codex/responses", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(2, api.Requests.Count);

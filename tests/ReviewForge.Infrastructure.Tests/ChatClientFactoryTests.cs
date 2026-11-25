@@ -390,9 +390,7 @@ public class ChatClientFactoryTests
             }, handler);
 
             var exception = await Assert.ThrowsAsync<ClientResultException>(() =>
-                factory.Create(ChatTier.Full).GetResponseAsync(
-                    [new ChatMessage(ChatRole.User, "review")],
-                    new ChatOptions {ModelId = factory.ModelName(ChatTier.Full)}));
+                factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "review")], new ChatOptions {ModelId = factory.ModelName(ChatTier.Full)}, TestContext.Current.CancellationToken));
 
             Assert.Equal((int) HttpStatusCode.BadRequest, exception.Status);
             using var body = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
@@ -424,9 +422,7 @@ public class ChatClientFactoryTests
             message.Contents.Add(new TextContent("describe this image"));
             message.Contents.Add(new UriContent(new Uri("https://example.test/image.png"), "image/png"));
 
-            await factory.Create(ChatTier.Full).GetResponseAsync(
-                [message],
-                new ChatOptions { ModelId = "gpt-5" });
+            await factory.Create(ChatTier.Full).GetResponseAsync([message], new ChatOptions { ModelId = "gpt-5" }, TestContext.Current.CancellationToken);
 
             using var body = JsonDocument.Parse(handler.RequestBody!);
             var content = body.RootElement.GetProperty("input")[0].GetProperty("content");
@@ -473,20 +469,16 @@ public class ChatClientFactoryTests
             }, handler);
             var client = factory.Create(ChatTier.Full);
 
-            var initial = await client.GetResponseAsync(
-                [],
-                new ChatOptions { ModelId = "gpt-5", AllowBackgroundResponses = true });
+            var initial = await client.GetResponseAsync([], new ChatOptions { ModelId = "gpt-5", AllowBackgroundResponses = true }, TestContext.Current.CancellationToken);
             Assert.NotNull(initial.ContinuationToken);
 
             var updates = new List<ChatResponseUpdate>();
-            await foreach (var update in client.GetStreamingResponseAsync(
-                               [],
-                               new ChatOptions
+            await foreach (var update in client.GetStreamingResponseAsync([], new ChatOptions
                                {
                                    ModelId = "gpt-5",
                                    AllowBackgroundResponses = true,
                                    ContinuationToken = initial.ContinuationToken,
-                               }))
+                               }, TestContext.Current.CancellationToken))
             {
                 updates.Add(update);
             }
@@ -546,8 +538,7 @@ public class ChatClientFactoryTests
                 Tools = [AIFunctionFactory.Create(Echo, "echo")],
             };
             var updates = new List<ChatResponseUpdate>();
-            await foreach (var update in factory.Create(ChatTier.Full).GetStreamingResponseAsync(
-                               [new ChatMessage(ChatRole.User, "review")], options))
+            await foreach (var update in factory.Create(ChatTier.Full).GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "review")], options, TestContext.Current.CancellationToken))
             {
                 updates.Add(update);
             }

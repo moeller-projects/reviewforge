@@ -18,13 +18,13 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
 {
     private readonly string _SharedDir = Path.Combine(Path.GetTempPath(), "rf-restart-" + Guid.NewGuid().ToString("N"));
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         Directory.CreateDirectory(_SharedDir);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         Environment.SetEnvironmentVariable("Persistence__QueueMode", null);
         if (Directory.Exists(_SharedDir))
@@ -32,7 +32,7 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
             Directory.Delete(_SharedDir, recursive: true);
         }
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
@@ -44,12 +44,12 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
             var submit = await host1.CreateClient().PostAsJsonAsync(
                 "/reviews", new SubmitReviewRequest("o", "p", "repo", 5));
             Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
-            runId = (await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>())!.RunId;
+            runId = (await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken))!.RunId;
         } // host1 disposed — the run was never started and never acked
 
         await using (var host2 = new RestartFactory(_SharedDir, withoutWorkers: true))
         {
-            var status = await host2.CreateClient().GetFromJsonAsync<RunStatus>($"/reviews/{runId}");
+            var status = await host2.CreateClient().GetFromJsonAsync<RunStatus>($"/reviews/{runId}", cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(RunState.Queued, status!.State); // queue read-through on a fresh tracker
         }
 
@@ -62,11 +62,10 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
                 // 404 is a legitimate in-flight window: the worker's claim removed the
                 // queue row and BeginRunStage has not yet persisted the run shell. Linux
                 // CI never lands in it; Windows timing does.
-                var response = await client.GetAsync($"/reviews/{runId}");
+                var response = await client.GetAsync($"/reviews/{runId}", TestContext.Current.CancellationToken);
                 status = response.IsSuccessStatusCode
-                    ? await response.Content.ReadFromJsonAsync<RunStatus>()
-                    : null;
-                await Task.Delay(50);
+                    ? await response.Content.ReadFromJsonAsync<RunStatus>(cancellationToken: TestContext.Current.CancellationToken) : null;
+                await Task.Delay(50, TestContext.Current.CancellationToken);
             }
 
             Assert.Equal(RunState.Completed, status!.State); // the queued run completed on a new host
@@ -74,7 +73,7 @@ public sealed class DurableQueueRestartTests : IAsyncLifetime
 
         await using (var host4 = new RestartFactory(_SharedDir, withoutWorkers: true))
         {
-            var status = await host4.CreateClient().GetFromJsonAsync<RunStatus>($"/reviews/{runId}");
+            var status = await host4.CreateClient().GetFromJsonAsync<RunStatus>($"/reviews/{runId}", cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(RunState.Completed, status!.State); // store read-through after tracker loss
         }
     }

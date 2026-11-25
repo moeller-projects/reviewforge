@@ -182,12 +182,12 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         private readonly ReviewForgeFactory _Factory = new();
 
 
-        public Task InitializeAsync() => Task.CompletedTask;
+        public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-        public Task DisposeAsync()
+        public ValueTask DisposeAsync()
         {
             _Factory.Dispose();
-            return Task.CompletedTask;
+            return ValueTask.CompletedTask;
         }
 
         private async Task<RunStatus> WaitForState(Guid runId, params RunState[] final)
@@ -209,14 +209,14 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         [Fact]
         public async Task Health_is_ok()
         {
-            var response = await _Factory.CreateClient().GetAsync("/health");
+            var response = await _Factory.CreateClient().GetAsync("/health", TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
         [Fact]
         public async Task Environment_options_override_TOML_configuration()
         {
-            var response = await _Factory.CreateClient().GetAsync("/alive");
+            var response = await _Factory.CreateClient().GetAsync("/alive", TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
             var workspace = _Factory.Services.GetRequiredService<IOptions<WorkspaceOptions>>().Value;
@@ -245,7 +245,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 new {org = "o", project = "p", repositoryId = "r", prId = 77});
 
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-            var conflict = await response.Content.ReadFromJsonAsync<ConflictResponse>();
+            var conflict = await response.Content.ReadFromJsonAsync<ConflictResponse>(cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal("a run for this pull request is already in flight", conflict?.Error);
             Assert.Equal(holder, conflict?.RunId);
         }
@@ -253,7 +253,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         [Fact]
         public async Task Unknown_run_is_404()
         {
-            var response = await _Factory.CreateClient().GetAsync($"/reviews/{Guid.NewGuid()}");
+            var response = await _Factory.CreateClient().GetAsync($"/reviews/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         }
 
@@ -265,14 +265,14 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 new {org = "o", project = "p", repositoryId = "r", prId = 42});
             Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
 
-            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
 
             Assert.Equal(RunState.Completed, status.State);
             Assert.Contains(_Factory.Source.GeneralComments, c => c.Contains("full review"));
             Assert.Single(_Factory.Store.Runs);
 
-            var statusResponse = await client.GetAsync(body.StatusUrl);
+            var statusResponse = await client.GetAsync(body.StatusUrl, TestContext.Current.CancellationToken);
 
             Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
         }
@@ -293,7 +293,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             var client = _Factory.CreateClient();
             var submit = await client.PostAsJsonAsync("/reviews",
                 new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             var status = await WaitForState(body!.RunId, RunState.Completed, RunState.Failed, RunState.Skipped);
 
             Assert.Equal(HttpStatusCode.Accepted, submit.StatusCode);
@@ -320,8 +320,8 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                     new {org = "o", project = "p", repositoryId = "r", prId = 51});
                 var second = await client.PostAsJsonAsync("/reviews",
                     new {org = "o", project = "p", repositoryId = "r", prId = 52});
-                var firstBody = await first.Content.ReadFromJsonAsync<SubmitReviewResponse>();
-                var secondBody = await second.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+                var firstBody = await first.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
+                var secondBody = await second.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
 
                 var statuses = await Task.WhenAll(
                     WaitForState(firstBody!.RunId, RunState.Completed),
@@ -347,7 +347,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 var client = _Factory.CreateClient();
                 var submit = await client.PostAsJsonAsync("/reviews",
                     new {org = "o", project = "p", repositoryId = "r", prId = 43});
-                var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+                var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
 
                 var status = await WaitForState(body!.RunId, RunState.Skipped, RunState.Failed);
                 Assert.Equal(RunState.Skipped, status.State);
@@ -390,7 +390,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
 
             for (var i = 0; i < 200 && tracker.Get(second)?.State != RunState.Failed; i++)
             {
-                await Task.Delay(50);
+                await Task.Delay(50, TestContext.Current.CancellationToken);
             }
 
             Assert.Equal(RunState.Failed, tracker.Get(first)?.State);
@@ -459,7 +459,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
 
             var client = _Factory.CreateClient();
             var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             await WaitForState(body1!.RunId, RunState.Completed);
 
             var run1 = Assert.Single(_Factory.Store.Runs);
@@ -472,7 +472,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
             for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
             {
-                await Task.Delay(25);
+                await Task.Delay(25, TestContext.Current.CancellationToken);
             }
 
             // Simulate the live ADO thread plus a new human comment (so run 2 clears the gate as FollowUp).
@@ -490,7 +490,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
 
             var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             await WaitForState(body2!.RunId, RunState.Completed);
 
             Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
@@ -531,7 +531,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
 
             var client = _Factory.CreateClient();
             var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             await WaitForState(body1!.RunId, RunState.Completed);
 
             var run1 = Assert.Single(_Factory.Store.Runs);
@@ -543,7 +543,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
             for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
             {
-                await Task.Delay(25);
+                await Task.Delay(25, TestContext.Current.CancellationToken);
             }
 
             // Simulate: the finding was auto-resolved (thread Fixed) and a human comment
@@ -564,7 +564,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
 
             var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             await WaitForState(body2!.RunId, RunState.Completed);
 
             Assert.Single(_Factory.Source.PostedFindings); // no duplicate thread
@@ -607,7 +607,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
 
             var client = _Factory.CreateClient();
             var submit1 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body1 = await submit1.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             await WaitForState(body1!.RunId, RunState.Failed);
 
             var posted = Assert.Single(_Factory.Source.PostedFindings); // exactly one landed before the fault
@@ -617,7 +617,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
             var claims = _Factory.Services.GetRequiredService<InFlightClaims>();
             for (var i = 0; i < 200 && claims.IsHeldBy(pr, body1.RunId); i++)
             {
-                await Task.Delay(25);
+                await Task.Delay(25, TestContext.Current.CancellationToken);
             }
 
             // The successfully-posted thread survives the failed run (ADO is the source of truth).
@@ -633,7 +633,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                 ScriptedChatClient.FunctionCalls(("TaskDone", new Dictionary<string, object?> {["reviewSummary"] = "done"})));
 
             var submit2 = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body2 = await submit2.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             await WaitForState(body2!.RunId, RunState.Completed);
 
             // Exactly two distinct threads ever created — one per finding, zero duplicates.
@@ -679,7 +679,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
 
             var client = _Factory.CreateClient();
             var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
             await WaitForState(body!.RunId, RunState.Completed);
 
             Assert.Single(_Factory.Source.PostedFindings); // plain finding, no fix label
@@ -719,7 +719,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
 
             var client = factory.CreateClient();
             var submit = await client.PostAsJsonAsync("/reviews", new {org = "o", project = "p", repositoryId = "r", prId = 42});
-            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+            var body = await submit.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
 
             var tracker = factory.Services.GetRequiredService<RunTracker>();
             RunStatus? status = null;
@@ -732,7 +732,7 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
                     break;
                 }
 
-                await Task.Delay(50);
+                await Task.Delay(50, TestContext.Current.CancellationToken);
             }
 
             Assert.NotNull(status);
@@ -989,12 +989,12 @@ public class ApiDocsDisabledTests : IAsyncLifetime
 {
     private readonly ReviewForgeFactory _Factory = new();
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
@@ -1002,8 +1002,8 @@ public class ApiDocsDisabledTests : IAsyncLifetime
     {
         var client = _Factory.CreateClient();
 
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/openapi/v1.json")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/scalar/v1")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/scalar/v1", TestContext.Current.CancellationToken)).StatusCode);
     }
 }
 
@@ -1019,23 +1019,23 @@ public class ApiDocsEnabledTests : IAsyncLifetime
         Environment.SetEnvironmentVariable("ApiDocs__Enabled", "true");
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
         Environment.SetEnvironmentVariable("ApiDocs__Enabled", null);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
     public async Task Openapi_document_is_served_with_metadata()
     {
         var client = _Factory.CreateClient();
-        var response = await client.GetAsync("/openapi/v1.json");
+        var response = await client.GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("/reviews", json);
         Assert.Contains("SubmitReviewRequest", json);
         Assert.Contains("reviewforge API", json);
@@ -1059,7 +1059,7 @@ public class ApiDocsEnabledTests : IAsyncLifetime
     public async Task Scalar_ui_is_served()
     {
         var client = _Factory.CreateClient();
-        var response = await client.GetAsync("/scalar/v1");
+        var response = await client.GetAsync("/scalar/v1", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
@@ -1100,20 +1100,20 @@ public class OtlpEnabledTests : IAsyncLifetime
         Environment.SetEnvironmentVariable("Host__OtlpEnabled", "true");
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
         Environment.SetEnvironmentVariable("Host__OtlpEnabled", null);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
     public async Task Host_boots_with_otlp_exporter_enabled()
     {
         var client = _Factory.CreateClient();
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -1146,14 +1146,14 @@ public sealed class QueueFailureTests
         var response = await client.PostAsJsonAsync("/reviews",
             new {org = "o", project = "p", repositoryId = "r", prId = 1});
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<SubmitReviewResponse>();
+        var body = await response.Content.ReadFromJsonAsync<SubmitReviewResponse>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(body);
 
         // Wait for the run to reach a terminal state, then keep polling briefly: the
         // sticky-terminal invariant guarantees it can never flip back to Queued.
         for (var i = 0; i < 400 && tracker.Get(body.RunId)?.State is not (RunState.Completed or RunState.Failed or RunState.Skipped); i++)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         Assert.True(tracker.Get(body.RunId)?.State is RunState.Completed or RunState.Failed,
@@ -1161,7 +1161,7 @@ public sealed class QueueFailureTests
         for (var i = 0; i < 20; i++)
         {
             Assert.NotEqual(RunState.Queued, tracker.Get(body.RunId)?.State);
-            await Task.Delay(10);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         }
     }
 }
@@ -1217,7 +1217,7 @@ public sealed class ApiDocsTests
         using var factory = new ReviewForgeFactory().WithoutWorkers();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/openapi/v1.json");
+        var response = await client.GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -1256,7 +1256,7 @@ public sealed class ApiDocsTests
             using var factory = new ReviewForgeFactory().WithoutWorkers();
             var client = factory.CreateClient();
 
-            var response = await client.GetAsync("/openapi/v1.json");
+            var response = await client.GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Contains("application/json", response.Content.Headers.ContentType?.MediaType);

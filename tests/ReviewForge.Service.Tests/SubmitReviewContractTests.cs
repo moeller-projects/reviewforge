@@ -24,7 +24,7 @@ public sealed class SubmitReviewContractTests
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         Assert.NotNull(response.Headers.Location);
 
-        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         var body = document.RootElement;
         Assert.Equal(new[] {"runId", "statusUrl"}, body.EnumerateObject()
             .Select(property => property.Name)

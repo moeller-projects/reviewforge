@@ -54,20 +54,20 @@ public class OtlpEndpointLogTests : IAsyncLifetime
         _Factory.WithLogCollector(_Logs);
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
         Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", null);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
     public async Task Startup_logs_the_effective_otlp_endpoint()
     {
         using var client = _Factory.CreateClient();
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(_Logs, line => line.Contains("OTLP logs exporter enabled: True") && line.Contains("http://example:4317"));
@@ -86,19 +86,19 @@ public class OtlpEndpointDisabledLogTests : IAsyncLifetime
         _Factory.WithLogCollector(_Logs);
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _Factory.Dispose();
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
     public async Task Startup_logs_disabled_when_endpoint_unset()
     {
         using var client = _Factory.CreateClient();
-        var response = await client.GetAsync("/health");
+        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(_Logs, line => line.Contains("OTLP logs exporter enabled: False") && line.Contains("(none)"));

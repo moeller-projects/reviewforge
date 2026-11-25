@@ -55,8 +55,8 @@ public class GitOperationSchedulerTests
             }, CancellationToken.None))
             .ToArray();
 
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        await Task.Delay(50); // let any (would-be) third item attempt to start
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken); // let any (would-be) third item attempt to start
         Assert.Equal(2, Volatile.Read(ref maxActive));
 
         release.Set();
@@ -95,7 +95,7 @@ public class GitOperationSchedulerTests
             return true;
         }, CancellationToken.None);
 
-        started.Wait(); // occupy the single thread
+        started.Wait(TestContext.Current.CancellationToken); // occupy the single thread
 
         using var cts = new CancellationTokenSource();
         var ran = false;
@@ -108,7 +108,7 @@ public class GitOperationSchedulerTests
         cts.Cancel();
         try
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued.WaitAsync(TimeSpan.FromSeconds(1)));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken));
             Assert.False(ran);
         }
         finally
@@ -135,7 +135,7 @@ public class GitOperationSchedulerTests
             return true;
         }, cts.Token);
 
-        started.Wait();
+        started.Wait(TestContext.Current.CancellationToken);
         cts.Cancel();
 
         Assert.False(task.IsCompleted);

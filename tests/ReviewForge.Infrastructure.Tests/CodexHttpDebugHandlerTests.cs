@@ -28,10 +28,10 @@ public class CodexHttpDebugHandlerTests
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
         request.Headers.TryAddWithoutValidation("X-Trace", "abc");
 
-        var response = await client.SendAsync(request);
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("{\"ok\":true}", await response.Content.ReadAsStringAsync());
+        Assert.Equal("{\"ok\":true}", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         var log = output.ToString();
         Assert.Contains("[codex-http] request POST https://chatgpt.com/backend-api/codex/responses", log);
@@ -52,9 +52,7 @@ public class CodexHttpDebugHandlerTests
         var client = new HttpClient(handler);
         var secret = new string('a', 32);
 
-        await client.PostAsync(
-            "https://chatgpt.com/backend-api/codex/responses",
-            new StringContent($"{{\"access_token\":\"{secret}\"}}", Encoding.UTF8, "application/json"));
+        await client.PostAsync("https://chatgpt.com/backend-api/codex/responses", new StringContent($"{{\"access_token\":\"{secret}\"}}", Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
 
         var log = output.ToString();
         Assert.DoesNotContain(secret, log);
@@ -69,7 +67,7 @@ public class CodexHttpDebugHandlerTests
         var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
         var client = new HttpClient(handler);
 
-        var response = await client.GetAsync("https://chatgpt.com/backend-api/codex/models");
+        var response = await client.GetAsync("https://chatgpt.com/backend-api/codex/models", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         var log = output.ToString();
@@ -89,9 +87,7 @@ public class CodexHttpDebugHandlerTests
         var client = new HttpClient(handler);
         var body = new string('x', 10_000);
 
-        await client.PostAsync(
-            "https://chatgpt.com/backend-api/codex/responses",
-            new StringContent(body, Encoding.UTF8, "application/json"));
+        await client.PostAsync("https://chatgpt.com/backend-api/codex/responses", new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
 
         var log = output.ToString();
         Assert.Contains("... [truncated 5904 bytes]", log);
@@ -106,9 +102,7 @@ public class CodexHttpDebugHandlerTests
         var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
         var client = new HttpClient(handler);
 
-        await client.PostAsync(
-            "https://chatgpt.com/backend-api/codex/responses",
-            new StringContent("short body", Encoding.UTF8, "application/json"));
+        await client.PostAsync("https://chatgpt.com/backend-api/codex/responses", new StringContent("short body", Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
 
         Assert.Contains("request body short body", output.ToString());
     }
@@ -125,7 +119,7 @@ public class CodexHttpDebugHandlerTests
         request.Headers.TryAddWithoutValidation("chatgpt-account-id", "acct-12345");
         request.Headers.TryAddWithoutValidation("OpenAI-Beta", "responses=v1");
 
-        await client.SendAsync(request);
+        await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         var log = output.ToString();
         Assert.Contains("chatgpt-account-id=[redacted]", log);
@@ -145,7 +139,7 @@ public class CodexHttpDebugHandlerTests
         var request = new HttpRequestMessage(HttpMethod.Post, "https://chatgpt.com/backend-api/codex/responses");
         request.Headers.TryAddWithoutValidation("x-request-id", "req-0001");
 
-        await client.SendAsync(request);
+        await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Contains("x-request-id=req-0001", output.ToString(), StringComparison.OrdinalIgnoreCase);
     }
@@ -162,9 +156,7 @@ public class CodexHttpDebugHandlerTests
             var handler = new CodexHttpDebugHandler(output) {InnerHandler = api};
             var client = new HttpClient(handler);
 
-            await client.PostAsync(
-                "https://chatgpt.com/backend-api/codex/responses",
-                new StringContent(new string('y', 100), Encoding.UTF8, "application/json"));
+            await client.PostAsync("https://chatgpt.com/backend-api/codex/responses", new StringContent(new string('y', 100), Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
 
             var log = output.ToString();
             Assert.Contains("... [truncated 84 bytes]", log);

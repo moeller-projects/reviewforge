@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. Read this before editing.
 
 ## What this is
 
-Automated PR review and autonomous comment resolution as a service (.NET 10, ASP.NET
+Automated PR review and autonomous comment resolution as a service (.NET 11, ASP.NET
 minimal API). Review requests run the 13-stage review pipeline; opt-in resolution requests
 run a separate pipeline that fetches context → gates → prepares a private checkout →
 collects comments → read-only triage → bounded edits → verification → commit/push →
@@ -115,7 +115,7 @@ triage prompts are intentionally not overridable.
 
 ## Conventions
 
-- `Directory.Build.props`: `net10.0`, nullable enable, implicit usings, `LangVersion=latest`.
+- `Directory.Build.props`: `net11.0`, nullable enable, implicit usings, `LangVersion=latest`.
   Experimental APIs suppressed centrally (`MAAI001`, `OPENAI001`, `MEAI001`).
 - Options are typed records/classes with DataAnnotations, validated fail-fast at startup.
   Config sections: `Ado`, `Reasoning`, `Review`, `Workspace`, `Persistence`, `Git`, `Host`, `Api`,

@@ -16,12 +16,12 @@ public class TaskDoneGuardTests
         var inner = new ScriptedChatClient(ScriptedChatClient.Text("real answer"));
         var guard = new TaskDoneGuardChatClient(collector, inner);
 
-        var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("real answer", first.Text);
         Assert.Equal(1, inner.Calls);
 
         collector.Complete(new ReviewNarrative {ReviewSummary = "done"});
-        var second = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "again")]);
+        var second = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "again")], cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("already marked as done", second.Text);
         Assert.Equal(1, inner.Calls); // inner not called again
     }
@@ -34,7 +34,7 @@ public class TaskDoneGuardTests
         var guard = new TaskDoneGuardChatClient(collector, new ScriptedChatClient());
 
         var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in guard.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "x")]))
+        await foreach (var update in guard.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "x")], cancellationToken: TestContext.Current.CancellationToken))
         {
             updates.Add(update);
         }
@@ -53,10 +53,10 @@ public class TaskDoneGuardTests
         var guard = new TaskDoneGuardChatClient(collector, inner);
         collector.Complete(new ReviewNarrative {ReviewSummary = "done"});
 
-        var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "a")]);
+        var first = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "a")], cancellationToken: TestContext.Current.CancellationToken);
         first.Messages[0].Contents.Add(new UsageContent(new UsageDetails {InputTokenCount = 5}));
 
-        var second = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "b")]);
+        var second = await guard.GetResponseAsync([new ChatMessage(ChatRole.User, "b")], cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(second.Messages[0].Contents, c => c is UsageContent);
         Assert.Contains("already marked as done", second.Text);
     }

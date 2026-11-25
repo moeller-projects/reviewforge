@@ -105,12 +105,10 @@ public sealed class ResponsesRequestMappingTests
         var transport = new QueueingResponsesHandler(CompletedResponse("resumed", "resp_resume"));
         var client = CreateClient(transport);
 
-        var response = await client.GetResponseAsync(
-            Array.Empty<ChatMessage>(),
-            new ChatOptions
+        var response = await client.GetResponseAsync(Array.Empty<ChatMessage>(), new ChatOptions
             {
                 ContinuationToken = new ResponsesClientContinuationToken("resp_resume"),
-            });
+            }, TestContext.Current.CancellationToken);
 
         Assert.Equal("resp_resume", response.ResponseId);
         Assert.EndsWith("/responses/resp_resume", Assert.Single(transport.RequestUris).AbsolutePath);

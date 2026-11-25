@@ -13,9 +13,8 @@ public sealed class SymbolUsageEnricherTests : IDisposable
     public async Task Builds_deterministic_usage_map_and_excludes_changed_files()
     {
         Directory.CreateDirectory(Path.Combine(_Root, "src"));
-        await File.WriteAllTextAsync(Path.Combine(_Root, "src", "Changed.cs"), "ParseConfig();\n");
-        await File.WriteAllTextAsync(Path.Combine(_Root, "src", "Consumer.cs"),
-            "public class Consumer { void Run() { ParseConfig(); } }\n");
+        await File.WriteAllTextAsync(Path.Combine(_Root, "src", "Changed.cs"), "ParseConfig();\n", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(_Root, "src", "Consumer.cs"), "public class Consumer { void Run() { ParseConfig(); } }\n", TestContext.Current.CancellationToken);
         var diff = """
             diff --git a/src/Changed.cs b/src/Changed.cs
             --- a/src/Changed.cs
@@ -36,7 +35,7 @@ public sealed class SymbolUsageEnricherTests : IDisposable
     [Fact]
     public async Task Reports_no_external_references_and_filters_keywords()
     {
-        await File.WriteAllTextAsync(Path.Combine(_Root, "Only.cs"), "class Only { }");
+        await File.WriteAllTextAsync(Path.Combine(_Root, "Only.cs"), "class Only { }", TestContext.Current.CancellationToken);
         var diff = """
             diff --git a/Only.cs b/Only.cs
             --- a/Only.cs
@@ -55,14 +54,13 @@ public sealed class SymbolUsageEnricherTests : IDisposable
     [Fact]
     public async Task Reports_multiple_symbols_caps_call_sites_and_counts_additional_references()
     {
-        await File.WriteAllLinesAsync(Path.Combine(_Root, "Consumer.cs"),
-        [
+        await File.WriteAllLinesAsync(Path.Combine(_Root, "Consumer.cs"), [
             "ParseConfig();",
             "ParseConfig();",
             "ParseConfig();",
             "ParseConfig();",
             "BuildResult();",
-        ]);
+        ], TestContext.Current.CancellationToken);
         var diff = "+public ParseConfig BuildResult() => new();\n";
 
         var result = await new SymbolUsageEnricher().EnrichAsync(_Root, diff, CancellationToken.None);
