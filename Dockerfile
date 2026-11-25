@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# Pinned by digest (resolved 2026-09-22); Dependabot's docker ecosystem proposes bumps.
-ARG DOTNET_VERSION=10.0
-ARG SDK_DIGEST=sha256:3cc3bbbbf93d82104892f42aa9106b6be4d120346dea0649643a97c801525256
-ARG ASPNET_DIGEST=sha256:f62a272ac1b46e83f56b8ed0416572f31cd1128e2c4a5e63eb34d348e4a36095
+# Pinned by digest (resolved 2026-11-25); Dependabot's docker ecosystem proposes bumps.
+ARG DOTNET_VERSION=11.0
+ARG SDK_DIGEST=sha256:52556c0fb9d0f609ae9aeab9efeeba96f4acc2f7038f7696f2235ccbdbb8e290
+ARG ASPNET_DIGEST=sha256:d39b72ad1534fa0faf52b488bffb0762df7ba269d120f0338713d4dda2a41bf5
 
 # ---------- restore: project files only → dependency layer stays cached across code changes ----------
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-alpine@${SDK_DIGEST} AS restore
