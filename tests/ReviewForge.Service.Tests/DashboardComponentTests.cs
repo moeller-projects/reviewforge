@@ -32,6 +32,45 @@ public class DashboardComponentTests
         .SetResult(new(status, data is null ? null : JsonSerializer.SerializeToElement(data)));
 
     [Fact]
+    public async Task Open_details_updates_relative_times_for_every_run_presentation()
+    {
+        await using var c = Context();
+        var clock = (Microsoft.Extensions.Time.Testing.FakeTimeProvider)c.Services.GetRequiredService<TimeProvider>();
+        clock.SetUtcNow(DateTimeOffset.UtcNow);
+        var now = clock.GetUtcNow();
+        var attempt = new DashboardRun(Guid.NewGuid(), "head-sha", RunKind.Review, RunState.Running,
+            StartedAt: now.AddMinutes(-5)) { UpdatedAt = now.AddMinutes(-2) };
+        var success = new DashboardRun(Guid.NewGuid(), "head-sha", RunKind.Review, RunState.Completed,
+            CompletedAt: now.AddMinutes(-10));
+        var blocker = new DashboardRun(Guid.NewGuid(), "old-head", RunKind.Resolve, RunState.Running)
+            { UpdatedAt = now.AddMinutes(-3) };
+        var row = Row() with { CurrentHeadReviewed = true, LastSuccessfulReview = success,
+            LatestAttempt = attempt, LatestPrAttempt = attempt, ActiveBlocker = blocker };
+        var state = new DashboardRerunState();
+        state.Reconcile(Data(row));
+        var dialog = c.Render<ReviewDetailsDialog>(p => p.Add(x => x.Row, row).Add(x => x.Reruns, state));
+        Assert.Contains("2m ago", dialog.FindComponents<RunPresentation>().Single(p => p.Instance.Heading == "Latest PR attempt").Markup);
+
+        await dialog.InvokeAsync(() =>
+        {
+            clock.Advance(TimeSpan.FromMinutes(5));
+            state.Reconcile(Data(row));
+        });
+        dialog.WaitForAssertion(() =>
+        {
+            var presentations = dialog.FindComponents<RunPresentation>();
+            Assert.Equal(4, presentations.Count);
+            Assert.All(presentations, p => Assert.Equal(clock.GetUtcNow(), p.Instance.Now));
+            Assert.Contains("7m ago", presentations.Single(p => p.Instance.Heading == "Latest PR attempt").Markup);
+        });
+
+        var updated = attempt with { UpdatedAt = clock.GetUtcNow() };
+        await dialog.InvokeAsync(() => state.Reconcile(Data(row with { LatestAttempt = updated, LatestPrAttempt = updated })));
+        dialog.WaitForAssertion(() => Assert.Contains("Just now", dialog.FindComponents<RunPresentation>()
+            .Single(p => p.Instance.Heading == "Latest PR attempt").Markup));
+    }
+
+    [Fact]
     public async Task Page_loads_after_interactive_render_and_filters_scoped_inventory()
     {
         await using var c = Context();
