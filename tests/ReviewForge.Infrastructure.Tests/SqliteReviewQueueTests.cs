@@ -32,6 +32,30 @@ public sealed class SqliteReviewQueueTests : IDisposable
         => new(Guid.NewGuid(), new PrKey("o", "p", "r", prId), enqueuedAt ?? DateTimeOffset.UtcNow);
 
     [Fact]
+    public async Task Dashboard_snapshot_includes_claimed_rows_after_restart_without_changing_claims()
+    {
+        var queue = NewQueue(_DbPath);
+        var claimed = Request(1) with { ForceReview = true, HeadSha = "head" };
+        var pending = Request(2);
+        queue.TryEnqueue(claimed);
+        queue.TryEnqueue(pending);
+        await ClaimOneAsync(queue);
+        var restarted = NewQueue(_DbPath);
+        var keys = Enumerable.Range(1, 501).Select(i => new PrKey("o", "p", "r", i)).ToArray();
+        var rows = await restarted.GetPendingAsync(keys, TestContext.Current.CancellationToken);
+        Assert.Equal(2, rows.Count);
+        var row = Assert.Single(rows, r => r.Request.RunId == claimed.RunId);
+        Assert.True(row.IsClaimed);
+        Assert.True(row.Request.ForceReview);
+        Assert.Equal("head", row.Request.HeadSha);
+        Assert.False(Assert.Single(rows, r => r.Request.RunId == pending.RunId).IsClaimed);
+        Assert.Null(restarted.TryGetQueued(claimed.RunId));
+        Assert.True(queue.RenewClaim(claimed.RunId));
+        Assert.False(restarted.RenewClaim(claimed.RunId));
+        Assert.Empty(await restarted.GetPendingAsync([], TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Dequeue_returns_enqueues_in_fifo_order_with_full_round_trip()
     {
         var queue = NewQueue(_DbPath);

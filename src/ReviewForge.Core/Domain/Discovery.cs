@@ -22,6 +22,10 @@ public sealed record DiscoveryRules(
     IReadOnlyCollection<string> Creators,
     int MaxEnqueues = 20);
 
+public enum BasicEligibilityStatus { Eligible, Ineligible, Unknown }
+
+public sealed record BasicEligibility(BasicEligibilityStatus Status, string Reason);
+
 /// <summary>Pure rules deciding whether a discovered PR should be enqueued for review.</summary>
 public static class DiscoveryFilter
 {
@@ -68,6 +72,42 @@ public static class DiscoveryFilter
         }
 
         return new DiscoveryDecision(true, string.Empty);
+    }
+
+    /// <summary>Read-only basic assessment. Unknown inputs never imply scheduling eligibility;
+    /// temporary blockers, backoff and sweep caps are deliberately outside this assessment.</summary>
+    public static BasicEligibility EvaluateBasic(PullRequestCandidate candidate, int? linkedWorkItemCount,
+        string? lastReviewedHeadSha, DiscoveryRules rules, bool? hasNewHumanCommentsSinceLastRun = null)
+    {
+        // Neutralize unavailable inputs only while checking for a reliably known exclusion.
+        // Missing metadata must not masquerade as a non-matching branch or creator.
+        var missingBranch = string.IsNullOrWhiteSpace(candidate.TargetBranch);
+        var missingCreatorId = string.IsNullOrWhiteSpace(candidate.CreatorId);
+        var missingCreatorName = string.IsNullOrWhiteSpace(candidate.CreatorName);
+        var knownInputs = candidate with
+        {
+            TargetBranch = missingBranch ? rules.TargetBranches.FirstOrDefault() ?? "" : candidate.TargetBranch,
+            CreatorId = missingCreatorId ? rules.Creators.FirstOrDefault() ?? "" : candidate.CreatorId,
+            CreatorName = missingCreatorName ? rules.Creators.FirstOrDefault() ?? "" : candidate.CreatorName,
+        };
+        var decision = Evaluate(knownInputs, linkedWorkItemCount ?? 1, null, rules);
+        if (!decision.Interesting)
+            return new(BasicEligibilityStatus.Ineligible, decision.Reason);
+        if (missingBranch)
+            return new(BasicEligibilityStatus.Unknown, "Target branch is unknown.");
+        if (rules.Creators.Count > 0 && (missingCreatorId || missingCreatorName))
+            return new(BasicEligibilityStatus.Unknown, "Creator metadata is incomplete.");
+        if (string.IsNullOrWhiteSpace(candidate.Pr.SourceCommitSha))
+            return new(BasicEligibilityStatus.Unknown, "Current head is unknown.");
+        if (linkedWorkItemCount is null)
+            return new(BasicEligibilityStatus.Unknown, "Linked work-item availability is unknown.");
+        if (candidate.Pr.SourceCommitSha == lastReviewedHeadSha && hasNewHumanCommentsSinceLastRun is null)
+            return new(BasicEligibilityStatus.Unknown, "Head already reviewed; new human-comment activity is unknown.");
+        decision = Evaluate(candidate, linkedWorkItemCount.Value, lastReviewedHeadSha, rules,
+            hasNewHumanCommentsSinceLastRun ?? false);
+        return decision.Interesting
+            ? new(BasicEligibilityStatus.Eligible, "Basic filters pass; scheduling is assessed separately.")
+            : new(BasicEligibilityStatus.Ineligible, decision.Reason);
     }
 
     private static string ShortName(string branch)

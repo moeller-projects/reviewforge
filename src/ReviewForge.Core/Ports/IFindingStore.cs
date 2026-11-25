@@ -26,6 +26,13 @@ public sealed record PushedFix(
 /// <summary>FP-keyed finding store: run history and posted findings per PR.</summary>
 public interface IFindingStore
 {
+    /// <summary>Batch current-head latest attempt/success, latest PR-level ordinary review, latest incomplete shell,
+    /// and explicitly selected detail IDs. All observed tracker IDs are excluded BEFORE ranking, including
+    /// terminal corrections, but only detail IDs are enriched with finding counts. Callers bound detail IDs
+    /// to selected per-PR attempts/success/blocker. Select in the database; never load finding payloads.</summary>
+    Task<IReadOnlyList<RunSummary>> GetRunSummariesAsync(IReadOnlyCollection<CurrentHeadQuery> heads,
+        IReadOnlyCollection<Guid> observedRunIds, IReadOnlyCollection<Guid> detailRunIds, CancellationToken ct);
+
     Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct);
 
     Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct);

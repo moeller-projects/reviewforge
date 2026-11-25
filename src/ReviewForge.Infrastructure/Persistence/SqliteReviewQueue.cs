@@ -150,6 +150,38 @@ public sealed class SqliteReviewQueue : IReviewQueue
         return reader.Read() ? ReadRequest(reader) : null;
     }
 
+    public async Task<IReadOnlyList<QueueRunSnapshot>> GetPendingAsync(IReadOnlyCollection<PrKey> prs, CancellationToken ct)
+    {
+        var result = new List<QueueRunSnapshot>();
+        foreach (var batch in prs.Distinct().Chunk(100))
+        {
+            ct.ThrowIfCancellationRequested();
+            using var connection = Open();
+            using var cmd = connection.CreateCommand();
+            var values = new List<string>();
+            for (var i = 0; i < batch.Length; i++)
+            {
+                var pr = batch[i];
+                values.Add($"($o{i},$p{i},$r{i},$n{i})");
+                cmd.Parameters.AddWithValue($"$o{i}", pr.Org);
+                cmd.Parameters.AddWithValue($"$p{i}", pr.Project);
+                cmd.Parameters.AddWithValue($"$r{i}", pr.RepositoryId);
+                cmd.Parameters.AddWithValue($"$n{i}", pr.PrId);
+            }
+            cmd.CommandText = $"""
+                WITH wanted(Org,Project,RepositoryId,PrId) AS (VALUES {string.Join(',', values)})
+                SELECT q.RunId,q.Org,q.Project,q.RepositoryId,q.PrId,q.EnqueuedAt,q.HeadSha,
+                    q.TraceParent,q.TraceState,q.Trigger,q.Kind,q.ForceReview,q.ClaimedBy IS NOT NULL
+                FROM QueuedRuns q JOIN wanted w ON q.Org=w.Org AND q.Project=w.Project
+                    AND q.RepositoryId=w.RepositoryId AND q.PrId=w.PrId
+                """;
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                result.Add(new(ReadRequest(reader), reader.GetBoolean(12)));
+        }
+        return result;
+    }
+
     private async Task<ReviewRequest?> TryClaimAsync(CancellationToken ct)
     {
         var now = _Clock.GetUtcNow();

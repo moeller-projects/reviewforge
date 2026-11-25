@@ -82,6 +82,16 @@ public class FakePullRequestSource : IPullRequestSource
         return Task.FromResult<IReadOnlyList<PullRequestCandidate>>(OpenPullRequests);
     }
 
+    public PullRequestInventory Inventory { get; set; } = new([], true, []);
+    public int InventoryFetches { get; private set; }
+
+    public virtual Task<PullRequestInventory> GetOpenPullRequestInventoryAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        InventoryFetches++;
+        return Task.FromResult(Inventory);
+    }
+
     public virtual async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
     {
         Interlocked.Increment(ref _WorkItemFetches);
@@ -278,6 +288,38 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
 public class FakeFindingStore : IFindingStore
 {
     public List<ReviewRun> Runs { get; } = [];
+    public int SummaryReads { get; private set; }
+    public IReadOnlyCollection<Guid> SummaryDetailIds { get; private set; } = [];
+    public IReadOnlyCollection<Guid> SummaryObservedIds { get; private set; } = [];
+    public int SummaryMaterialized { get; private set; }
+
+    public Task<IReadOnlyList<RunSummary>> GetRunSummariesAsync(IReadOnlyCollection<CurrentHeadQuery> heads,
+        IReadOnlyCollection<Guid> observedRunIds, IReadOnlyCollection<Guid> detailRunIds, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        SummaryReads++;
+        SummaryDetailIds = detailRunIds;
+        SummaryObservedIds = observedRunIds;
+        var selected = new HashSet<Guid>(detailRunIds);
+        foreach (var h in heads.Distinct())
+        {
+            var candidates = Runs.Where(r => r.Pr == h.Pr && !observedRunIds.Contains(r.Id))
+                .OrderByDescending(r => r.StartedAt).ThenByDescending(r => r.Id.ToString(), StringComparer.Ordinal).ToArray();
+            var reviews = candidates.Where(r => r.Pipeline == "Review").ToArray();
+            var current = reviews.Where(r => r.HeadSha == h.HeadSha).ToArray();
+            foreach (var r in new[] { reviews.FirstOrDefault(), current.FirstOrDefault(),
+                current.FirstOrDefault(r => r.Success && r.CompletedAt is not null),
+                candidates.FirstOrDefault(r => r.CompletedAt is null) })
+                if (r is not null) selected.Add(r.Id);
+        }
+        var prs = heads.Select(h => h.Pr).ToHashSet();
+        var summaries = Runs.Where(r => prs.Contains(r.Pr) && selected.Contains(r.Id))
+            .Select(r => new RunSummary(r.Id, r.Pr, r.HeadSha, r.Pipeline, r.StartedAt, r.CompletedAt,
+                r.Success, r.Findings.Count(f => !f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))))
+            .ToArray();
+        SummaryMaterialized = summaries.Length;
+        return Task.FromResult<IReadOnlyList<RunSummary>>(summaries);
+    }
     public PriorRun? LastRun { get; set; }
     private int _LastRunFetches;
     public int LastRunFetches => _LastRunFetches;

@@ -145,6 +145,87 @@ public sealed class SqliteFindingStore : IFindingStore
         }
     }
 
+    public async Task<IReadOnlyList<RunSummary>> GetRunSummariesAsync(IReadOnlyCollection<CurrentHeadQuery> heads,
+        IReadOnlyCollection<Guid> observedRunIds, IReadOnlyCollection<Guid> detailRunIds, CancellationToken ct)
+    {
+        var result = new List<RunSummary>();
+        await using var db = CreateContext();
+        foreach (var batch in heads.Distinct().Chunk(100))
+        {
+            await db.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+            await using var cmd = db.Database.GetDbConnection().CreateCommand();
+            var values = new List<string>();
+            for (var i = 0; i < batch.Length; i++)
+            {
+                var h = batch[i];
+                values.Add($"($o{i},$p{i},$r{i},$n{i},$h{i})");
+                foreach (var (name, value) in new (string, object)[] {
+                    ($"$o{i}", h.Pr.Org), ($"$p{i}", h.Pr.Project), ($"$r{i}", h.Pr.RepositoryId),
+                    ($"$n{i}", h.Pr.PrId), ($"$h{i}", h.HeadSha) })
+                {
+                    var parameter = cmd.CreateParameter();
+                    parameter.ParameterName = name;
+                    parameter.Value = value;
+                    cmd.Parameters.Add(parameter);
+                }
+            }
+            var live = cmd.CreateParameter();
+            live.ParameterName = "$live";
+            live.Value = System.Text.Json.JsonSerializer.Serialize(observedRunIds.Select(id => id.ToString().ToUpperInvariant()));
+            cmd.Parameters.Add(live);
+            var details = cmd.CreateParameter();
+            details.ParameterName = "$details";
+            details.Value = System.Text.Json.JsonSerializer.Serialize(detailRunIds.Select(id => id.ToString().ToUpperInvariant()));
+            cmd.Parameters.Add(details);
+            var prefix = cmd.CreateParameter();
+            prefix.ParameterName = "$prefix";
+            prefix.Value = AppliedFix.CommandKeyPrefix;
+            cmd.Parameters.Add(prefix);
+            // Indexed PR join, SQL ranking (no arbitrary history limit), scalar count only on selected runs.
+            // Excluding live IDs BEFORE ranking lets a tracker correction reveal the preceding success.
+            cmd.CommandText = $"""
+                WITH wanted(Org,Project,RepositoryId,PrId,HeadSha) AS (VALUES {string.Join(',', values)}),
+                candidates AS (
+                    SELECT r.*, w.HeadSha AS CurrentHead,
+                           r.Id IN (SELECT value FROM json_each($live)) AS IsLive
+                    FROM Runs r JOIN wanted w ON r.Org=w.Org AND r.Project=w.Project
+                        AND r.RepositoryId=w.RepositoryId AND r.PrId=w.PrId
+                ), ranked AS (
+                    SELECT Id,
+                        ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId
+                            ORDER BY julianday(StartedAt) DESC, Id DESC) AS AttemptRank,
+                        ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId,Success,CompletedAt IS NOT NULL
+                            ORDER BY julianday(StartedAt) DESC, Id DESC) AS OutcomeRank
+                    FROM candidates WHERE Pipeline='Review' AND HeadSha=CurrentHead AND NOT IsLive
+                ), pr_ranked AS (
+                    SELECT Id, ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId
+                        ORDER BY julianday(StartedAt) DESC, Id DESC) AS PrRank
+                    FROM candidates WHERE Pipeline='Review' AND NOT IsLive
+                ), incomplete_ranked AS (
+                    SELECT Id, ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId
+                        ORDER BY julianday(StartedAt) DESC, Id DESC) AS IncompleteRank
+                    FROM candidates WHERE CompletedAt IS NULL AND NOT IsLive
+                )
+                SELECT c.Id,c.Org,c.Project,c.RepositoryId,c.PrId,c.HeadSha,c.Pipeline,c.StartedAt,c.CompletedAt,c.Success,
+                    (SELECT COUNT(*) FROM Findings f WHERE f.RunId=c.Id
+                        AND substr(f.DedupeKey,1,length($prefix)) != $prefix)
+                FROM candidates c LEFT JOIN ranked k ON c.Id=k.Id
+                    LEFT JOIN pr_ranked p ON c.Id=p.Id LEFT JOIN incomplete_ranked i ON c.Id=i.Id
+                WHERE c.Id IN (SELECT value FROM json_each($details)) OR p.PrRank=1 OR i.IncompleteRank=1 OR k.AttemptRank=1
+                    OR (k.OutcomeRank=1 AND c.Success=1 AND c.CompletedAt IS NOT NULL)
+                """;
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                result.Add(new(Guid.Parse(reader.GetString(0)),
+                    new(reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4)),
+                    reader.GetString(5), reader.GetString(6),
+                    DateTimeOffset.Parse(reader.GetString(7), System.Globalization.CultureInfo.InvariantCulture),
+                    reader.IsDBNull(8) ? null : DateTimeOffset.Parse(reader.GetString(8), System.Globalization.CultureInfo.InvariantCulture),
+                    reader.GetBoolean(9), reader.GetInt32(10)));
+        }
+        return result;
+    }
+
     public async Task<PriorRun?> GetLastCompletedRunAsync(PrKey pr, CancellationToken ct)
     {
         await using var db = CreateContext();

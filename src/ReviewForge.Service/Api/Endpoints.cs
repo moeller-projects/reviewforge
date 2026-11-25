@@ -53,6 +53,11 @@ public static class Endpoints
             .WithTags("Reviews")
             .Produces<DiscoveryReport>();
 
+        reviews.MapGet("/dashboard", GetDashboard)
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
+            .WithName("GetDashboard")
+            .Produces<DashboardResponse>();
+
         reviews.MapGet("/{runId:guid}", GetRunStatus)
             .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
             .WithName("GetRunStatus")
@@ -100,6 +105,9 @@ public static class Endpoints
                 statusUrl, new SubmitReviewResponse(runId, statusUrl)),
             _ => throw new UnreachableException(),
         };
+
+    private static async Task<IResult> GetDashboard(DashboardQueryService query, CancellationToken ct)
+        => TypedResults.Ok(await query.GetAsync(ct));
 
     private static async Task<IResult> DiscoverPullRequests(DiscoveryService discovery, CancellationToken ct)
         => TypedResults.Ok(await discovery.RunSweepAsync(ct));

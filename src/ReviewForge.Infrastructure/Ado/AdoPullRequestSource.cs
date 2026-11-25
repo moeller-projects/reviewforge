@@ -38,6 +38,7 @@ public sealed class AdoPullRequestSource : IPullRequestSource
 
     private readonly VssConnection _Connection;
     private readonly string _Org;
+    private readonly Uri _OrganizationUrl;
     private readonly TransientRetryPolicy _Retry;
 
     public AdoPullRequestSource(
@@ -53,6 +54,7 @@ public sealed class AdoPullRequestSource : IPullRequestSource
         }
 
         _Org = OrgFromUrl(options.OrgUrl);
+        _OrganizationUrl = new Uri(options.OrgUrl);
         _Connection = new VssConnection(
             new Uri(options.OrgUrl),
             new VssBasicCredential(string.Empty, options.Pat));
@@ -163,6 +165,32 @@ public sealed class AdoPullRequestSource : IPullRequestSource
 
         return [.. bag.OrderBy(b => b.Index).SelectMany(b => b.Candidates)];
     }
+
+    public Task<PullRequestInventory> GetOpenPullRequestInventoryAsync(CancellationToken ct)
+        => new AdoInventoryReader(_Org, _OrganizationUrl,
+            async (continuation, top, token) => await _Retry.ExecuteAsync(async attemptCt =>
+            {
+                var client = await _Connection.GetClientAsync<ProjectHttpClient>(attemptCt).ConfigureAwait(false);
+                // GetProjects returns IPagedList with an opaque ContinuationToken. Its overload
+                // has no cancellationToken, so cancellation stops our wait (not the SDK transport).
+                var page = await client.GetProjects(top: top, continuationToken: continuation)
+                    .WaitAsync(attemptCt).ConfigureAwait(false);
+                return new AdoProjectPage(page.ToArray(), page.ContinuationToken);
+            }, "GetInventoryProjects", token).ConfigureAwait(false),
+            async (project, skip, top, token) => await _Retry.ExecuteAsync(async attemptCt =>
+            {
+                var git = await GitClientAsync(attemptCt).ConfigureAwait(false);
+                return await git.GetPullRequestsByProjectAsync(project,
+                    new GitPullRequestSearchCriteria { Status = PullRequestStatus.Active },
+                    skip: skip, top: top, cancellationToken: attemptCt).ConfigureAwait(false);
+            }, "GetInventoryPullRequests", token).ConfigureAwait(false),
+            async (key, token) => await _Retry.ExecuteAsync(async attemptCt =>
+            {
+                var git = await GitClientAsync(attemptCt).ConfigureAwait(false);
+                var refs = await git.GetPullRequestWorkItemRefsAsync(key.Project, key.RepositoryId, key.PrId,
+                    cancellationToken: attemptCt).ConfigureAwait(false);
+                return refs.Count;
+            }, "GetInventoryWorkItemRefs", token).ConfigureAwait(false)).ReadAsync(ct);
 
     public async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
     {

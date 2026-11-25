@@ -26,6 +26,9 @@ public sealed record ReviewRequest(
     RunKind Kind = RunKind.Review,
     bool ForceReview = false);
 
+/// <summary>Read-only pending/claimed row; claimed does not imply resumed pipeline progress.</summary>
+public sealed record QueueRunSnapshot(ReviewRequest Request, bool IsClaimed);
+
 public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 
 /// <summary>Bounded ingest queue shared by the review workers. The worker and endpoints only
@@ -33,6 +36,9 @@ public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 /// durable SQLite rows).</summary>
 public interface IReviewQueue
 {
+    /// <summary>Batch read of pending AND durable claimed rows for supplied PRs. Never claims or renews.</summary>
+    Task<IReadOnlyList<QueueRunSnapshot>> GetPendingAsync(IReadOnlyCollection<PrKey> prs, CancellationToken ct);
+
     int Capacity { get; }
 
     int ApproximateDepth { get; }

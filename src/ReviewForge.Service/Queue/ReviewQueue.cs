@@ -114,6 +114,14 @@ public sealed class ReviewQueue : IReviewQueue
     public ReviewRequest? TryGetQueued(Guid runId)
         => _Pending.TryGetValue(runId, out var request) ? request : null;
 
+    public Task<IReadOnlyList<QueueRunSnapshot>> GetPendingAsync(IReadOnlyCollection<PrKey> prs, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var keys = prs.ToHashSet();
+        return Task.FromResult<IReadOnlyList<QueueRunSnapshot>>(
+            _Pending.Values.Where(r => keys.Contains(r.Pr)).Select(r => new QueueRunSnapshot(r, false)).ToArray());
+    }
+
     public void Complete() => _Channel.Writer.Complete();
 }
 

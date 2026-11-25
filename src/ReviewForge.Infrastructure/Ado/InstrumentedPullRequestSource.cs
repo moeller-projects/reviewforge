@@ -19,6 +19,9 @@ public sealed class InstrumentedPullRequestSource(IPullRequestSource inner) : IP
     public Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct)
         => RecordAsync("get_open_pull_requests", () => inner.GetOpenPullRequestsAsync(ct));
 
+    public Task<PullRequestInventory> GetOpenPullRequestInventoryAsync(CancellationToken ct)
+        => RecordAsync("get_open_pull_request_inventory", () => inner.GetOpenPullRequestInventoryAsync(ct));
+
     public Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
         => RecordAsync("get_linked_work_items", () => inner.GetLinkedWorkItemsAsync(pr, ct));
 

@@ -41,6 +41,8 @@ public class StoreHealthCheckTests
         public Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
             => Task.FromResult<IReadOnlySet<long>>(new HashSet<long>());
 
+        public Task<IReadOnlyList<RunSummary>> GetRunSummariesAsync(IReadOnlyCollection<CurrentHeadQuery> heads, IReadOnlyCollection<Guid> observedRunIds, IReadOnlyCollection<Guid> detailRunIds, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<RunSummary>>([]);
         public Task<ReviewRun?> GetRunAsync(Guid runId, CancellationToken ct) => Task.FromResult<ReviewRun?>(null);
         public Task SaveRunAsync(ReviewRun run, CancellationToken ct) => Task.CompletedTask;
         public Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct) => Task.CompletedTask;
