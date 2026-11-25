@@ -36,7 +36,7 @@
         }
     }
     <RunPresentation Run="Row.LastSuccessfulReview" Heading="Last successful current-head review" ShowMetadata="true" Now="now" />
-    <RunPresentation Run="Row.LatestPrAttempt" Heading="Latest PR attempt" CurrentHead="Row.PullRequest.Candidate.Pr.SourceCommitSha" ShowMetadata="true" Now="now" />
+    <RunPresentation Run="Row.LatestPrAttempt" Heading="Latest PR attempt" CurrentHead="@Row.PullRequest.Candidate.Pr.SourceCommitSha" ShowMetadata="true" Now="now" />
     <RunPresentation Run="Row.LatestAttempt" Heading="Latest current-head attempt" ShowMetadata="true" Now="now" />
     <footer class="details-actions">
         <RerunReviewButton Row="Row" State="Reruns" OnAccepted="OnAccepted" />

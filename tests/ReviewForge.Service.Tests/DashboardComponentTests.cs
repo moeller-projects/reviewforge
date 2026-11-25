@@ -70,6 +70,28 @@ public class DashboardComponentTests
             .Single(p => p.Instance.Heading == "Latest PR attempt").Markup));
     }
 
+    [Theory]
+    [InlineData("head-sha", "Current head")]
+    [InlineData("other-head", "Different head; not current-head coverage.")]
+    [InlineData(null, "Head not captured; not current-head coverage.")]
+    public async Task Grid_and_details_bind_the_actual_current_head_for_attempt_attribution(string? runHead, string expected)
+    {
+        await using var c = Context();
+        var row = Row() with { LatestPrAttempt = new(Guid.NewGuid(), runHead, RunKind.Review, RunState.Completed) };
+        Reply(c, Data(row));
+        var page = c.Render<Dashboard>();
+        page.WaitForAssertion(() =>
+        {
+            var presentation = page.FindComponents<RunPresentation>().Single(p => p.Instance.Heading == "Latest PR attempt");
+            Assert.Equal(row.PullRequest.Candidate.Pr.SourceCommitSha, presentation.Instance.CurrentHead);
+            Assert.Contains(expected, presentation.Markup);
+        });
+        var dialog = c.Render<ReviewDetailsDialog>(p => p.Add(x => x.Row, row));
+        var detail = dialog.FindComponents<RunPresentation>().Single(p => p.Instance.Heading == "Latest PR attempt");
+        Assert.Equal(row.PullRequest.Candidate.Pr.SourceCommitSha, detail.Instance.CurrentHead);
+        Assert.Contains(expected, detail.Markup);
+    }
+
     [Fact]
     public async Task Page_loads_after_interactive_render_and_filters_scoped_inventory()
     {

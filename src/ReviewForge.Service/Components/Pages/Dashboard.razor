@@ -82,7 +82,7 @@
                         </Template>
                     </RadzenDataGridColumn>
                     <RadzenDataGridColumn TItem="DashboardRow" Title="Latest PR attempt">
-                        <Template Context="row"><RunPresentation Run="row.LatestPrAttempt" Heading="Latest PR attempt" CurrentHead="row.PullRequest.Candidate.Pr.SourceCommitSha" Now="data.GeneratedAt" /></Template>
+                        <Template Context="row"><RunPresentation Run="row.LatestPrAttempt" Heading="Latest PR attempt" CurrentHead="@row.PullRequest.Candidate.Pr.SourceCommitSha" Now="data.GeneratedAt" /></Template>
                     </RadzenDataGridColumn>
                     <RadzenDataGridColumn TItem="DashboardRow" Title="Actions">
                         <Template Context="row"><RerunReviewButton Row="row" State="_Reruns" OnAccepted="RefreshAfterAccepted" /></Template>
