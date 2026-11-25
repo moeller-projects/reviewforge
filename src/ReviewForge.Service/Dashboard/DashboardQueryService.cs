@@ -121,7 +121,10 @@ public sealed class DashboardQueryService(DashboardInventoryCache inventory, Run
         _ => null,
     };
 
-    private static bool IsReviewing(DashboardRow row) => row.ActiveBlocker?.Kind == RunKind.Review;
+    // A terminal run may retain its claim while persistence/cleanup finishes. That blocks
+    // reruns, but must not hide its outcome behind a Reviewing summary count.
+    private static bool IsReviewing(DashboardRow row) => row.ActiveBlocker is { Kind: RunKind.Review } blocker
+        && blocker.State is not (RunState.Completed or RunState.Skipped or RunState.Failed);
     private static bool NeedsAttention(DashboardRow row) => !IsReviewing(row) &&
         (row.LatestAttempt?.State == RunState.Failed || row.LatestPrAttempt is { HeadSha: null, State: RunState.Failed } ||
          (row.CurrentHeadReviewed != true && !row.PullRequest.Candidate.Pr.IsDraft &&

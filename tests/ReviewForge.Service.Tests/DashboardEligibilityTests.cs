@@ -41,6 +41,36 @@ public sealed class DashboardEligibilityTests
         Assert.Equal(0, source.WorkItemFetches);
     }
 
+    [Theory]
+    [InlineData(RunState.Queued, 1, 0)]
+    [InlineData(RunState.Running, 1, 0)]
+    [InlineData(RunState.Completed, 0, 0)]
+    [InlineData(RunState.Skipped, 0, 0)]
+    [InlineData(RunState.Failed, 0, 1)]
+    public async Task Held_claim_blocks_reruns_without_counting_terminal_reviews_as_reviewing(
+        RunState state, int reviewing, int attention)
+    {
+        var source = new FakePullRequestSource();
+        var key = new PrKey("org", "project", "repo", 1);
+        source.Inventory = new([new(new(key, source.Pr, "unwatched", "creator", "Creator"), "Repo", "https://example.com", 1)], true, []);
+        var tracker = new RunTracker();
+        var claims = new InFlightClaims();
+        var request = new ReviewRequest(Guid.NewGuid(), key, DateTimeOffset.UtcNow, HeadSha: source.Pr.SourceCommitSha);
+        Assert.True(claims.TryClaim(key, request.RunId, out _));
+        tracker.Register(request);
+        tracker.Set(request.RunId, key, state);
+        using var inventory = new DashboardInventoryCache(source, TimeProvider.System);
+        var service = new DashboardQueryService(inventory, tracker, new ReviewQueue(), claims, new FakeFindingStore(), TimeProvider.System);
+
+        var response = await service.GetAsync(TestContext.Current.CancellationToken);
+        var row = Assert.Single(response.Rows);
+        Assert.Equal(state, row.ActiveBlocker!.State);
+        Assert.False(row.CanRerun);
+        Assert.Equal(reviewing, response.Summary!.Reviewing);
+        Assert.Equal(attention, response.Summary.NeedsAttention);
+        Assert.Equal(state == RunState.Completed ? 1 : 0, response.Summary.Reviewed);
+    }
+
     [Fact]
     public async Task Missing_head_is_unknown_and_keeps_unreviewed_pr_in_attention()
     {
