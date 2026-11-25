@@ -221,7 +221,14 @@ public class ReviewWorkerTests
             await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
-        Assert.Equal(RunState.Failed, h.Tracker.Get(runId)?.State);
+        var status = h.Tracker.Get(runId)!;
+        Assert.Equal(RunState.Failed, status.State);
+        Assert.Equal(nameof(StageId.PrepareRepository), status.CurrentStage);
+        Assert.Equal(h.Source.Pr.SourceCommitSha, status.HeadSha);
+        Assert.Equal(2 * 100 / status.LoadedStages.Count, status.ProgressPercent);
+        Assert.NotNull(status.EnqueuedAt);
+        Assert.NotNull(status.StartedAt);
+        Assert.NotNull(status.CompletedAt);
         var failed = Assert.Single(h.Store.RecentRuns);
         Assert.False(failed.Success);
         Assert.Equal(runId, failed.Id);
@@ -256,6 +263,10 @@ public class ReviewWorkerTests
 
         var failed = Assert.Single(h.Store.RecentRuns);
         Assert.Equal("candidate-head", failed.HeadSha);
+        var status = h.Tracker.Get(runId)!;
+        Assert.Equal("candidate-head", status.HeadSha);
+        Assert.Equal(nameof(StageId.FetchPrContext), status.CurrentStage);
+        Assert.Equal(0, status.ProgressPercent);
 
         await cts.CancelAsync();
         try
@@ -305,6 +316,38 @@ public class ReviewWorkerTests
 
 
     [Fact]
+    public async Task Worker_reports_real_definition_and_successful_gate_skip_without_persistence()
+    {
+        var source = new FakePullRequestSource();
+        source.Pr = source.Pr with {IsDraft = true};
+        using var h = new Harness(source: source);
+        var request = new ReviewRequest(Guid.NewGuid(), Key, h.Clock.GetUtcNow());
+        Assert.True(h.Queue.TryEnqueue(request).Accepted);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await h.Worker.StartAsync(cts.Token);
+        try
+        {
+            for (var i = 0; i < 200 && h.Tracker.Get(request.RunId)?.State != RunState.Skipped; i++)
+                await Task.Delay(25, TestContext.Current.CancellationToken);
+            var status = h.Tracker.Get(request.RunId)!;
+            Assert.Equal(RunState.Skipped, status.State);
+            Assert.Equal(nameof(StageId.ReviewGate), status.CurrentStage);
+            Assert.Equal(source.Pr.SourceCommitSha, status.HeadSha);
+            Assert.Equal(Pipelines.Review(new ReviewOptions(), new AutoFixOptions(), new VerifyFindingsOptions(), true)
+                .Stages.Select(id => id.ToString()), status.LoadedStages);
+            Assert.Equal(2 * 100 / status.LoadedStages.Count, status.ProgressPercent);
+            Assert.Equal(request.EnqueuedAt, status.EnqueuedAt);
+            Assert.Equal(EnqueueTrigger.Manual, status.Trigger);
+            Assert.Empty(h.Store.RecentRuns);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await h.Worker.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Worker_runs_resolve_pipeline_through_shared_builder()
     {
         var source = new FakePullRequestSource();
@@ -328,6 +371,10 @@ public class ReviewWorkerTests
 
         Assert.Equal(RunState.Skipped, h.Tracker.Get(runId)?.State);
         Assert.False(h.Claims.IsHeldBy(Key, runId));
+        var status = h.Tracker.Get(runId)!;
+        Assert.Equal(nameof(StageId.ResolveGate), status.CurrentStage);
+        Assert.Equal(Pipelines.Resolve(new ResolveOptions {Enabled = true}).Stages.Select(id => id.ToString()), status.LoadedStages);
+        Assert.Equal(EnqueueTrigger.ResolveCommand, status.Trigger);
         Assert.Empty(h.Store.RecentRuns);
 
         await cts.CancelAsync();
@@ -458,6 +505,45 @@ public class ReviewWorkerTests
         }
     }
 
+    // Single-use deterministic persistence gate for this lifecycle regression, not a throwing-store duplicate.
+    private sealed class BlockingFailureStore : FakeFindingStore
+    {
+        public TaskCompletionSource FailureStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ContinueFailure { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async Task SaveRunAsync(ReviewRun run, CancellationToken ct)
+        {
+            if (!run.Success && run.CompletedAt is not null)
+            {
+                FailureStarted.TrySetResult();
+                await ContinueFailure.Task.WaitAsync(ct);
+            }
+            await base.SaveRunAsync(run, ct);
+        }
+    }
+
+    [Fact]
+    public async Task Failed_status_does_not_imply_cleanup_is_finished_but_stop_awaits_claim_release()
+    {
+        var store = new BlockingFailureStore();
+        using var h = new Harness(source: new HeadChangingSource(), store: store);
+        var runId = Guid.NewGuid();
+        Assert.True(h.Claims.TryClaim(Key, runId, out _));
+        Assert.True(h.Queue.TryEnqueue(new ReviewRequest(runId, Key, h.Clock.GetUtcNow())).Accepted);
+        await h.Worker.StartAsync(CancellationToken.None);
+        try
+        {
+            await store.FailureStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.Equal(RunState.Failed, h.Tracker.Get(runId)?.State);
+            Assert.True(h.Claims.IsHeldBy(Key, runId)); // failure persistence still owns the claim
+        }
+        finally
+        {
+            store.ContinueFailure.TrySetResult();
+            await h.Worker.StopAsync(CancellationToken.None);
+        }
+        Assert.False(h.Claims.IsHeldBy(Key, runId));
+    }
+
     [Fact]
     public async Task Worker_marks_superseded_run_failed_without_error_log()
     {
@@ -467,7 +553,7 @@ public class ReviewWorkerTests
         Assert.True(h.Queue.TryEnqueue(new ReviewRequest(runId, Key, h.Clock.GetUtcNow())).Accepted);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var workerTask = h.Worker.StartAsync(cts.Token);
+        await h.Worker.StartAsync(cts.Token);
 
         for (var i = 0; i < 200 && h.Tracker.Get(runId)?.State != RunState.Failed; i++)
         {
@@ -477,16 +563,11 @@ public class ReviewWorkerTests
         var status = h.Tracker.Get(runId);
         Assert.Equal(RunState.Failed, status?.State);
         Assert.Contains("head changed during review", status?.Detail);
+        // Failed is published before failure persistence/finally cleanup. StartAsync's returned
+        // task is startup, not run completion; StopAsync is the observable cleanup boundary.
+        await cts.CancelAsync();
+        await h.Worker.StopAsync(CancellationToken.None);
         Assert.False(h.Claims.IsHeldBy(Key, runId), "claim must be released after a superseded run");
         Assert.Empty(h.Source.PostedFindings); // nothing was published
-
-        await cts.CancelAsync();
-        try
-        {
-            await workerTask;
-        }
-        catch (OperationCanceledException)
-        {
-        }
     }
 }

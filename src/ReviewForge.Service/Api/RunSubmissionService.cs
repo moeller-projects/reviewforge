@@ -51,9 +51,10 @@ public sealed class RunSubmissionService(
             return new SubmitOutcome.Conflict(holder);
         }
 
-        tracker.Set(runId, pr, RunState.Queued, kind: kind);
-        var result = queue.TryEnqueue(new ReviewRequest(
-            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual, Kind: kind, ForceReview: request.ForceReview));
+        var queuedRequest = new ReviewRequest(
+            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual, Kind: kind, ForceReview: request.ForceReview);
+        tracker.Register(queuedRequest);
+        var result = queue.TryEnqueue(queuedRequest);
         if (!result.Accepted)
         {
             tracker.Remove(runId);
@@ -78,16 +79,22 @@ public sealed class RunSubmissionService(
 
         if (queue.TryGetQueued(runId) is { } queued)
         {
-            return new RunStatus(runId, queued.Pr, RunState.Queued, null, queued.EnqueuedAt, queued.Kind);
+            return new RunStatus(runId, queued.Pr, RunState.Queued, null, queued.EnqueuedAt, queued.Kind)
+            {
+                HeadSha = queued.HeadSha,
+                EnqueuedAt = queued.EnqueuedAt,
+                Trigger = queued.Trigger,
+            };
         }
 
         var run = await store.GetRunAsync(runId, ct);
-        return run switch
+        if (run is null) return null;
+        var state = run.CompletedAt is null ? RunState.Running : run.Success ? RunState.Completed : RunState.Failed;
+        return new RunStatus(runId, run.Pr, state, null, run.CompletedAt ?? run.StartedAt, ParseRunKind(run.Pipeline))
         {
-            null => null,
-            {CompletedAt: null} => new RunStatus(runId, run.Pr, RunState.Running, null, run.StartedAt, ParseRunKind(run.Pipeline)),
-            {Success: true} => new RunStatus(runId, run.Pr, RunState.Completed, null, run.CompletedAt.Value, ParseRunKind(run.Pipeline)),
-            _ => new RunStatus(runId, run.Pr, RunState.Failed, null, run.CompletedAt!.Value, ParseRunKind(run.Pipeline)),
+            HeadSha = string.IsNullOrEmpty(run.HeadSha) ? null : run.HeadSha,
+            StartedAt = run.StartedAt,
+            CompletedAt = run.CompletedAt,
         };
     }
 

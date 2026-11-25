@@ -46,6 +46,9 @@ public sealed class ReviewWorker(
                 ["Pr"] = request.Pr.ToString(),
             });
 
+            // Durable requests may outlive this process and have no tracker entry yet.
+            tracker.Register(request);
+
             // The claim was taken at enqueue with a finite TTL; if this request sat
             // queued past expiry, another run may own the PR now. Revalidate before
             // spending an LLM run: re-claim if free, skip if a different run holds it.
@@ -98,7 +101,8 @@ public sealed class ReviewWorker(
                     .RunUntilCancelled(heartbeatCts.Token);
                 try
                 {
-                    await pipelineBuilder.Build(request.Kind, request, ctx).RunAsync(ctx, stoppingToken);
+                    await pipelineBuilder.Build(request.Kind, request, ctx,
+                        new TrackedRunProgress(tracker, request.RunId)).RunAsync(ctx, stoppingToken);
                 }
                 finally
                 {

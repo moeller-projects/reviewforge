@@ -42,6 +42,7 @@ public sealed class ForcedReviewTests
             status = await client.GetFromJsonAsync<RunStatus>(accepted.StatusUrl, timeout.Token);
         } while (status!.State is RunState.Queued or RunState.Running);
         Assert.Equal(expected, status.State);
+        Assert.Equal(factory.Source.Pr.SourceCommitSha, status.HeadSha);
         Assert.Equal(expected == RunState.Completed ? 1 : 0, factory.Store.Runs.Count);
         Assert.Equal(expected == RunState.Completed, factory.Chat.Calls > 0);
         var claims = factory.Services.GetRequiredService<InFlightClaims>();

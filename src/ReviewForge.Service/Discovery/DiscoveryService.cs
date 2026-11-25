@@ -284,18 +284,19 @@ public sealed class DiscoveryService(
                 // Track-then-enqueue (P2-25): Queued is recorded before the channel write so a
                 // fast worker can never resurrect a finished run with a stale write.
                 var kind = resolveRun ? RunKind.Resolve : RunKind.Review;
-                tracker.Set(runId, candidate.Key, RunState.Queued, kind: kind);
+                var request = new ReviewRequest(
+                    runId,
+                    candidate.Key,
+                    _Clock.GetUtcNow(),
+                    Activity.Current?.Context,
+                    candidate.Pr.SourceCommitSha,
+                    Trigger: resolveCommand is null ? EnqueueTrigger.Discovery : EnqueueTrigger.ResolveCommand,
+                    Kind: kind);
+                tracker.Register(request);
                 EnqueueResult result;
                 try
                 {
-                    result = queue.TryEnqueue(new ReviewRequest(
-                        runId,
-                        candidate.Key,
-                        _Clock.GetUtcNow(),
-                        Activity.Current?.Context,
-                        candidate.Pr.SourceCommitSha,
-                        Trigger: resolveCommand is null ? EnqueueTrigger.Discovery : EnqueueTrigger.ResolveCommand,
-                        Kind: kind));
+                    result = queue.TryEnqueue(request);
                 }
                 catch (Exception ex)
                 {

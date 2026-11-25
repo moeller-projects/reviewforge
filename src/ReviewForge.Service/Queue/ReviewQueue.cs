@@ -17,7 +17,34 @@ public enum RunState
     Failed
 }
 
-public sealed record RunStatus(Guid RunId, PrKey Pr, RunState State, string? Detail, DateTimeOffset UpdatedAt, RunKind Kind = RunKind.Review);
+public sealed record RunStatus(Guid RunId, PrKey Pr, RunState State, string? Detail, DateTimeOffset UpdatedAt, RunKind Kind = RunKind.Review)
+{
+    private readonly IReadOnlyList<string> _LoadedStages = Array.Empty<string>();
+    public IReadOnlyList<string> LoadedStages
+    {
+        get => _LoadedStages;
+        init => _LoadedStages = Array.AsReadOnly(value.ToArray());
+    }
+    public string? CurrentStage { get; init; }
+    public string? HeadSha { get; init; }
+    public DateTimeOffset? EnqueuedAt { get; init; }
+    public DateTimeOffset? StartedAt { get; init; }
+    public DateTimeOffset? CompletedAt { get; init; }
+    public EnqueueTrigger? Trigger { get; init; }
+
+    public int ProgressPercent
+    {
+        get
+        {
+            if (State == RunState.Completed) return 100;
+            if (State == RunState.Queued || LoadedStages.Count == 0 || CurrentStage is null) return 0;
+            for (var i = 0; i < LoadedStages.Count; i++)
+                if (LoadedStages[i] == CurrentStage)
+                    return (i + (State == RunState.Skipped ? 1 : 0)) * 100 / LoadedStages.Count;
+            return 0;
+        }
+    }
+}
 
 /// <summary>How the ingest queue is backed. Memory (default, in-memory channel — queued runs
 /// are lost on restart) or Sqlite (durable rows on the store's database file).</summary>
@@ -121,8 +148,74 @@ public sealed class RunTracker(
             }
 
             var now = _Clock.GetUtcNow();
-            _Runs[runId] = new RunStatus(runId, pr, state, detail, now, kind);
+            if (existing?.State == RunState.Running && state == RunState.Queued) return;
+            _Runs[runId] = (existing ?? new RunStatus(runId, pr, state, detail, now, kind)) with
+            {
+                State = state,
+                Detail = detail,
+                UpdatedAt = now,
+                EnqueuedAt = existing?.EnqueuedAt ?? (state == RunState.Queued ? now : null),
+                StartedAt = existing?.StartedAt ?? (state == RunState.Running ? now : null),
+                CompletedAt = existing?.CompletedAt ?? (IsTerminal(state) ? now : null),
+            };
             Evict(now);
+        }
+    }
+
+    /// <summary>Registers queue metadata before publication; late registrations cannot overwrite live progress.</summary>
+    public void Register(ReviewRequest request)
+    {
+        lock (_Gate)
+        {
+            if (_Runs.ContainsKey(request.RunId)) return;
+            var now = _Clock.GetUtcNow();
+            _Runs[request.RunId] = new RunStatus(request.RunId, request.Pr, RunState.Queued, null, now, request.Kind)
+            {
+                HeadSha = request.HeadSha,
+                EnqueuedAt = request.EnqueuedAt,
+                Trigger = request.Trigger,
+            };
+            Evict(now);
+        }
+    }
+
+    public void DefinitionLoaded(Guid runId, IReadOnlyList<StageId> stages)
+    {
+        lock (_Gate)
+        {
+            if (!_Runs.TryGetValue(runId, out var status) || IsTerminal(status.State)
+                || status.LoadedStages.Count != 0) return;
+            var now = _Clock.GetUtcNow();
+            _Runs[runId] = status with
+            {
+                State = RunState.Running,
+                LoadedStages = stages.Select(id => id.ToString()).ToArray(),
+                StartedAt = status.StartedAt ?? now,
+                UpdatedAt = now,
+            };
+        }
+    }
+
+    public void StageStarting(Guid runId, StageId stage)
+    {
+        lock (_Gate)
+        {
+            if (!_Runs.TryGetValue(runId, out var status) || IsTerminal(status.State)) return;
+            var stages = status.LoadedStages.ToList();
+            var next = stages.IndexOf(stage.ToString());
+            var current = status.CurrentStage is null ? -1 : stages.IndexOf(status.CurrentStage);
+            if (next < 0 || next <= current) return;
+            _Runs[runId] = status with { CurrentStage = stage.ToString(), UpdatedAt = _Clock.GetUtcNow() };
+        }
+    }
+
+    /// <summary>Called only after successful context fetch, never inferred from PR inventory.</summary>
+    public void CaptureHead(Guid runId, string headSha)
+    {
+        lock (_Gate)
+        {
+            if (!_Runs.TryGetValue(runId, out var status) || IsTerminal(status.State)) return;
+            _Runs[runId] = status with { HeadSha = headSha, UpdatedAt = _Clock.GetUtcNow() };
         }
     }
 
