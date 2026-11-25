@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using ReviewForge.Core.Ports;
 using Xunit;
 
 namespace ReviewForge.Service.Tests;
@@ -32,6 +34,7 @@ public sealed class SubmitReviewContractTests
             .ToArray());
 
         var runId = body.GetProperty("runId").GetGuid();
+        Assert.False(factory.Services.GetRequiredService<IReviewQueue>().TryGetQueued(runId)!.ForceReview);
         var statusUrl = $"/reviews/{runId}";
         Assert.Equal(statusUrl, body.GetProperty("statusUrl").GetString());
         Assert.Equal(statusUrl, response.Headers.Location!.OriginalString);

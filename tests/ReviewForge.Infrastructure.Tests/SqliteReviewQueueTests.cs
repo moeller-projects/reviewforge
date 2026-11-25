@@ -49,6 +49,21 @@ public sealed class SqliteReviewQueueTests : IDisposable
         Assert.Equal(2, second.Pr.PrId);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Force_round_trips_through_status_claim_and_reclaim(bool force)
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var queue = NewQueue(_DbPath, clock: clock);
+        var request = Request(1) with { ForceReview = force };
+        Assert.True(queue.TryEnqueue(request).Accepted);
+        Assert.Equal(force, queue.TryGetQueued(request.RunId)!.ForceReview);
+        Assert.Equal(force, (await ClaimOneAsync(queue)).ForceReview);
+        clock.Advance(TimeSpan.FromMinutes(11));
+        Assert.Equal(force, (await ClaimOneAsync(NewQueue(_DbPath, clock: clock))).ForceReview);
+    }
+
     [Fact]
     public async Task Trigger_round_trips_in_durable_queue()
     {
@@ -95,6 +110,7 @@ public sealed class SqliteReviewQueueTests : IDisposable
 
             var legacy = await ClaimOneAsync(NewQueue(legacyPath));
             Assert.Equal(RunKind.Review, legacy.Kind);
+            Assert.False(legacy.ForceReview);
         }
         finally
         {
@@ -129,8 +145,10 @@ public sealed class SqliteReviewQueueTests : IDisposable
         }
 
         var queue = NewQueue(_DbPath);
+        Assert.False(queue.TryGetQueued(request.RunId)!.ForceReview);
         var dequeued = await ClaimOneAsync(queue);
 
+        Assert.False(dequeued.ForceReview);
         Assert.Equal(request.RunId, dequeued.RunId);
         Assert.Equal(EnqueueTrigger.Manual, dequeued.Trigger);
         using var verify = new SqliteConnection($"Data Source={_DbPath};Pooling=False");

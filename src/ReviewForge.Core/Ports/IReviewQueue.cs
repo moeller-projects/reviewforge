@@ -23,7 +23,8 @@ public sealed record ReviewRequest(
     ActivityContext? EnqueueContext = null,
     string? HeadSha = null,
     EnqueueTrigger Trigger = EnqueueTrigger.Manual,
-    RunKind Kind = RunKind.Review);
+    RunKind Kind = RunKind.Review,
+    bool ForceReview = false);
 
 public sealed record EnqueueResult(bool Accepted, int QueueDepth);
 

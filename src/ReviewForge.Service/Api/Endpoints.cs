@@ -9,7 +9,8 @@ public sealed record SubmitReviewRequest(
     [property: Required] string Org,
     [property: Required] string Project,
     [property: Required] string RepositoryId,
-    [property: Range(1, int.MaxValue)] int PrId);
+    [property: Range(1, int.MaxValue)] int PrId,
+    bool ForceReview = false);
 
 public sealed record SubmitReviewResponse(Guid RunId, string StatusUrl);
 
@@ -30,6 +31,7 @@ public static class Endpoints
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
+            .WithDescription("Optional forceReview is a JSON boolean: omitted or false preserves normal same-head suppression; true bypasses only that suppression for a manual ordinary review. Draft PRs still skip. The server fetches the authoritative head.")
             .Produces<SubmitReviewResponse>(202)
             .Produces<ConflictResponse>(409)
             .ProducesProblem(400)

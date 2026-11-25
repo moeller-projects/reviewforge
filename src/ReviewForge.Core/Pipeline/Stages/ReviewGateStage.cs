@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using ReviewForge.Core.Domain;
+using ReviewForge.Core.Ports;
 
 namespace ReviewForge.Core.Pipeline.Stages;
 
@@ -13,7 +14,8 @@ public sealed class ReviewGateStage(TimeProvider? clock = null, ILogger<ReviewGa
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        ctx.Gate = ReviewGate.Evaluate(ctx.RequirePullRequest(), ctx.Fetch.PriorRun, ctx.Fetch.Threads, _Clock.GetUtcNow());
+        ctx.Gate = ReviewGate.Evaluate(ctx.RequirePullRequest(), ctx.Fetch.PriorRun, ctx.Fetch.Threads, _Clock.GetUtcNow(),
+            forceReview: ctx.ForceReview && ctx.RunKind == RunKind.Review && ctx.Trigger == EnqueueTrigger.Manual);
         logger?.LogDebug("gate decision for {Pr}: shouldReview={ShouldReview}, reason={Reason}, hasPriorRun={HasPriorRun}, threadCount={ThreadCount}",
             ctx.Pr, ctx.Gate.ShouldReview, ctx.Gate.Reason, ctx.Fetch.PriorRun is not null, ctx.Fetch.Threads.Count);
         if (!ctx.Gate.ShouldReview)

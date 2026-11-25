@@ -33,6 +33,11 @@ public sealed class RunSubmissionService(
     public SubmitOutcome Submit(SubmitReviewRequest request, RunKind kind)
     {
         var errors = Validate(request);
+        if (request.ForceReview && kind != RunKind.Review)
+        {
+            errors.Add("forceReview is supported only for manual ordinary reviews.");
+        }
+
         if (errors.Count > 0)
         {
             return new SubmitOutcome.Invalid(errors);
@@ -48,7 +53,7 @@ public sealed class RunSubmissionService(
 
         tracker.Set(runId, pr, RunState.Queued, kind: kind);
         var result = queue.TryEnqueue(new ReviewRequest(
-            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual, Kind: kind));
+            runId, pr, clock.GetUtcNow(), Trigger: EnqueueTrigger.Manual, Kind: kind, ForceReview: request.ForceReview));
         if (!result.Accepted)
         {
             tracker.Remove(runId);

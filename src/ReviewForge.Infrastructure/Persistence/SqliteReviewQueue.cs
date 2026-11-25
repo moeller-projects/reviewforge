@@ -82,8 +82,8 @@ public sealed class SqliteReviewQueue : IReviewQueue
         using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText =
-            "INSERT INTO QueuedRuns (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind) " +
-            "VALUES ($runId, $org, $project, $repo, $prId, $enqueuedAt, $headSha, $traceParent, $traceState, $trigger, $kind);";
+            "INSERT INTO QueuedRuns (RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind, ForceReview) " +
+            "VALUES ($runId, $org, $project, $repo, $prId, $enqueuedAt, $headSha, $traceParent, $traceState, $trigger, $kind, $forceReview);";
         insert.Parameters.AddWithValue("$runId", request.RunId.ToString());
         insert.Parameters.AddWithValue("$org", request.Pr.Org);
         insert.Parameters.AddWithValue("$project", request.Pr.Project);
@@ -95,6 +95,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         insert.Parameters.AddWithValue("$traceState", (object?) request.EnqueueContext?.TraceState ?? DBNull.Value);
         insert.Parameters.AddWithValue("$trigger", request.Trigger.ToString());
         insert.Parameters.AddWithValue("$kind", request.Kind.ToString());
+        insert.Parameters.AddWithValue("$forceReview", request.ForceReview);
         insert.ExecuteNonQuery();
         transaction.Commit();
         return new EnqueueResult(true, ApproximateDepth);
@@ -142,7 +143,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         using var connection = Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText =
-            "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind " +
+            "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind, ForceReview " +
             "FROM QueuedRuns WHERE RunId = $runId AND ClaimedBy IS NULL";
         cmd.Parameters.AddWithValue("$runId", runId.ToString());
         using var reader = cmd.ExecuteReader();
@@ -160,7 +161,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
         {
             select.Transaction = transaction;
             select.CommandText =
-                "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind, " +
+                "SELECT RunId, Org, Project, RepositoryId, PrId, EnqueuedAt, HeadSha, TraceParent, TraceState, Trigger, Kind, ForceReview, " +
                 "ClaimedBy IS NOT NULL FROM QueuedRuns " +
                 "WHERE ClaimedBy IS NULL OR ClaimedAt < $reclaimBefore ORDER BY rowid LIMIT 1;";
             select.Parameters.AddWithValue("$reclaimBefore", Stamp(now - _ClaimTtl));
@@ -171,7 +172,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             }
 
             request = ReadRequest(reader);
-            reclaimed = reader.GetBoolean(11);
+            reclaimed = reader.GetBoolean(12);
         }
 
         using (var update = connection.CreateCommand())
@@ -206,7 +207,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             "RunId TEXT PRIMARY KEY, " +
             "Org TEXT NOT NULL, Project TEXT NOT NULL, RepositoryId TEXT NOT NULL, PrId INTEGER NOT NULL, " +
             "EnqueuedAt TEXT NOT NULL, HeadSha TEXT NULL, " +
-            "TraceParent TEXT NULL, TraceState TEXT NULL, Trigger TEXT NULL, Kind TEXT NULL, " +
+            "TraceParent TEXT NULL, TraceState TEXT NULL, Trigger TEXT NULL, Kind TEXT NULL, ForceReview INTEGER NOT NULL DEFAULT 0, " +
             "ClaimedBy TEXT NULL, ClaimedAt TEXT NULL);";
         cmd.ExecuteNonQuery();
 
@@ -225,6 +226,14 @@ public sealed class SqliteReviewQueue : IReviewQueue
         if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
         {
             cmd.CommandText = "ALTER TABLE QueuedRuns ADD COLUMN Kind TEXT NULL";
+            cmd.ExecuteNonQuery();
+        }
+
+        cmd.CommandText =
+            "SELECT COUNT(*) FROM pragma_table_info('QueuedRuns') WHERE name = 'ForceReview'";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+        {
+            cmd.CommandText = "ALTER TABLE QueuedRuns ADD COLUMN ForceReview INTEGER NOT NULL DEFAULT 0";
             cmd.ExecuteNonQuery();
         }
 
@@ -297,6 +306,7 @@ public sealed class SqliteReviewQueue : IReviewQueue
             context,
             reader.IsDBNull(6) ? null : reader.GetString(6),
             trigger,
-            kind);
+            kind,
+            reader.GetBoolean(11));
     }
 }

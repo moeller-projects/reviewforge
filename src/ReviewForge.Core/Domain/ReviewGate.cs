@@ -17,14 +17,15 @@ public static class ReviewGate
         PullRequest pr,
         PriorRun? priorRun,
         IReadOnlyList<ReviewThread> threads,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool forceReview = false)
     {
         if (pr.IsDraft)
         {
             return GateDecision.Skip("PR is a draft");
         }
 
-        if (priorRun is null || priorRun.HeadSha != pr.SourceCommitSha)
+        if (forceReview || priorRun is null || priorRun.HeadSha != pr.SourceCommitSha)
         {
             return GateDecision.Review();
         }

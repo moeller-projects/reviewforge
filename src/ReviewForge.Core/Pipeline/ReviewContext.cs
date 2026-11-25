@@ -20,6 +20,9 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     /// The loop guard suppresses discovery-triggered runs on bot-authored heads only.</summary>
     public EnqueueTrigger Trigger { get; set; } = EnqueueTrigger.Manual;
 
+    /// <summary>Explicit manual ordinary-review opt-in to bypass same-head suppression only.</summary>
+    public bool ForceReview { get; set; }
+
 
     public FetchOutcome Fetch { get; set; } = new();
 
