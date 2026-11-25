@@ -87,8 +87,10 @@ dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll submit \
 dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll status --run-id <guid> --api-key ...
 ```
 
-Endpoints (`/reviews*` and `/resolutions` require the `X-Api-Key` header; keys are configured via the
-`REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation):
+Endpoints (API clients use `X-Api-Key`; keys are configured via the
+`REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation).
+A dashboard session is accepted only for `GET /reviews/dashboard` and `POST /reviews`
+(the latter also requires antiforgery validation):
 `POST /reviews` → 202 `{runId, statusUrl}`, 400 on validation errors, 401 without a valid
 key, 409 when a review for the same PR is already in flight (the conflicting run id is in
 the body), 429 over the submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`,
@@ -101,8 +103,9 @@ restart) · `POST /resolutions` (opt-in autonomous comment resolution) · `POST 
 an endpoint filter, the limiter is middleware), so rejected requests still consume rate
 budget. The limiter always partitions by remote IP — never by the presented `X-Api-Key`,
 which is unauthenticated input and would give each key guess a fresh permit budget. Deploying
-behind a reverse proxy requires forwarded-headers support, otherwise every client shares
-the proxy's single partition.
+behind a reverse proxy without trusted forwarded-header processing makes every client share
+the proxy's single partition. This host does not configure forwarded-header trust; see the
+[dashboard HTTPS deployment limitations](docs/dashboard.md#https-and-deployment).
 
 The same submission/status logic is exposed as an MCP server (Streamable HTTP) at `/mcp` for
 agent-chat clients, with the same `X-Api-Key` auth and the status rate-limit policy (every
@@ -119,6 +122,24 @@ maxResults=100)` → open PRs in the org with title/author/draft/branch fields (
 the `X-Api-Key` header set — or, for clients that cannot set headers, pass the key as the
 `api_key` query parameter (`/mcp` only; the header is preferred because query strings appear
 in request logs).
+
+## PR review dashboard
+
+Open `/dashboard/login` over HTTPS and sign in with an environment-configured API key.
+The dashboard at `/dashboard` shows organization-wide open PRs, current-head review
+coverage, latest attempts, live stages, and confirmed forced reruns. It is separate from
+the Aspire telemetry dashboard. HTTP-only Compose cannot serve dashboard login.
+Sessions have a fixed eight-hour maximum and are invalidated on service restart; the
+dashboard currently supports a single service instance.
+
+See [dashboard operation, API, and deployment](docs/dashboard.md) for HTTPS setup,
+authentication/antiforgery boundaries, summary semantics, freshness, restart behavior,
+and outstanding release-validation requirements.
+
+`POST /reviews` additionally accepts optional `"forceReview": true` (default `false`).
+It bypasses only same-head suppression for an ordinary manual review; drafts still skip
+and all claim, authorization, and publication safeguards remain. Dashboard reruns set
+this flag; existing CLI/MCP/discovery defaults are unchanged.
 
 ## Autonomous comment resolution
 
@@ -242,7 +263,9 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
   after the claim TTL, `GET /reviews/{runId}` reads through the queue row (`Queued`) and the
   store row (`Completed`/`Failed`), and expired claims are counted by
   `reviewforge.queue.reclaimed_total`. In-flight PR claims remain in-memory for now — a
-  restarted run is re-acquired idempotently at dequeue.
+  restarted run is re-acquired idempotently at dequeue. Recovery re-executes the request
+  from the beginning; it does not resume a persisted stage. Live stage progress and skipped
+  attempts are transient. Stale persisted run shells can be reaped as failures.
 - `Review:Sharding` was removed (unused); large diffs use the `MaxDiffChars` truncation path.
 - `Reasoning:FollowUpModel` — optional cheaper/faster model for the Fast tier: follow-up
   reviews and `/fixit` passes route to it; full reviews keep `Reasoning:Model`. Must carry
@@ -402,7 +425,9 @@ short name), `Creators` (matches creator id or name; a **required allowlist** wh
 `AllowAllCreators=true` explicitly opts into reviewing PRs from any author, external
 contributors included), `MaxEnqueuesPerSweep` (default 20), `MaxDegreeOfParallelism`
 (default 4, validated 1–16), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables
-the background sweep worker), `FailureBackoffBase` (default 30 min) / `FailureBackoffMax`
+the background sweep worker; checked-in base config enables a 15-minute interval and
+Production config an hourly interval, both with `AllowAllCreators=false` — inspect the
+effective creator allowlist and environment overrides before deployment), `FailureBackoffBase` (default 30 min) / `FailureBackoffMax`
 (default 8 h) — a head whose recent runs keep failing is skipped until a doubling backoff
 elapses, and `WarmupEnabled` (default false) — when on, each accepted enqueue pre-fetches
 its head commits into the shared git mirror (`WarmupMaxPerSweep` = 5 per sweep,
