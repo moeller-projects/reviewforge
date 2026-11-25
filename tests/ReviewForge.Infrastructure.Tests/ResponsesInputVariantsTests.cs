@@ -94,8 +94,7 @@ public sealed class ResponsesInputVariantsTests
             new ChatMessage(ChatRole.User, Array.Empty<AIContent>()),
         };
 
-        var response = await CreateClient(handler).GetResponseAsync(messages,
-            new ChatOptions { ModelId = "gpt-test", Instructions = "be concise", MaxOutputTokens = 64, Temperature = 0.2f, TopP = 0.8f });
+        var response = await CreateClient(handler).GetResponseAsync(messages, new ChatOptions { ModelId = "gpt-test", Instructions = "be concise", MaxOutputTokens = 64, Temperature = 0.2f, TopP = 0.8f }, TestContext.Current.CancellationToken);
 
         Assert.Equal("accepted", response.Text);
         using var json = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
@@ -132,7 +131,7 @@ public sealed class ResponsesInputVariantsTests
             ResponseFormat = ChatResponseFormat.ForJsonSchema(schema, "answer", "Structured"),
             AllowBackgroundResponses = true,
             AdditionalProperties = new() { ["strict"] = true },
-        });
+        }, TestContext.Current.CancellationToken);
 
         using var json = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
         var root = json.RootElement;

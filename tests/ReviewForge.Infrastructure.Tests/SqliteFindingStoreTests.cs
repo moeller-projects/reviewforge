@@ -66,9 +66,9 @@ public class SqliteFindingStoreTests : IDisposable
         await _Store.SaveRunAsync(Run("h", DateTimeOffset.UtcNow), CancellationToken.None);
 
         await using var connection = new SqliteConnection(_ConnectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
         await using var command = new SqliteCommand("PRAGMA journal_mode", connection);
-        Assert.Equal("wal", Assert.IsType<string>(await command.ExecuteScalarAsync()));
+        Assert.Equal("wal", Assert.IsType<string>(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -80,10 +80,10 @@ public class SqliteFindingStoreTests : IDisposable
         // in the file, so a raw connection shows the SQLite default (FULL=2). The contract
         // is that connections going through the store's interceptor carry NORMAL(1).
         await using var connection = new SqliteConnection(_ConnectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
         new SqliteConnectionPragmasInterceptor(journalMode: StoreJournalMode.Wal).ApplyPragmas(connection);
         await using var command = new SqliteCommand("PRAGMA synchronous", connection);
-        Assert.Equal(1L, Assert.IsType<long>(await command.ExecuteScalarAsync()));
+        Assert.Equal(1L, Assert.IsType<long>(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -93,8 +93,8 @@ public class SqliteFindingStoreTests : IDisposable
 
         await using var writer = new SqliteConnection(_ConnectionString);
         await using var reader = new SqliteConnection(_ConnectionString);
-        await writer.OpenAsync();
-        await reader.OpenAsync();
+        await writer.OpenAsync(TestContext.Current.CancellationToken);
+        await reader.OpenAsync(TestContext.Current.CancellationToken);
         var pragmas = new SqliteConnectionPragmasInterceptor();
         pragmas.ApplyPragmas(writer);
         pragmas.ApplyPragmas(reader);
@@ -109,11 +109,11 @@ public class SqliteFindingStoreTests : IDisposable
             {
                 write.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
                 write.Parameters.AddWithValue("$started", DateTimeOffset.UtcNow.ToString("O"));
-                await write.ExecuteNonQueryAsync();
+                await write.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
             }
 
             await using var read = new SqliteCommand("SELECT COUNT(*) FROM Runs", reader);
-            var count = await read.ExecuteScalarAsync();
+            var count = await read.ExecuteScalarAsync(TestContext.Current.CancellationToken);
             Assert.NotNull(count); // completed without waiting for the writer
         }
     }
@@ -132,15 +132,15 @@ public class SqliteFindingStoreTests : IDisposable
 
             await using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
             {
-                await connection.OpenAsync();
+                await connection.OpenAsync(TestContext.Current.CancellationToken);
                 await using (var journal = new SqliteCommand("PRAGMA journal_mode", connection))
                 {
-                    Assert.Equal("delete", Assert.IsType<string>(await journal.ExecuteScalarAsync()));
+                    Assert.Equal("delete", Assert.IsType<string>(await journal.ExecuteScalarAsync(TestContext.Current.CancellationToken)));
                 }
 
                 await using (var synchronous = new SqliteCommand("PRAGMA synchronous", connection))
                 {
-                    Assert.Equal(2L, Assert.IsType<long>(await synchronous.ExecuteScalarAsync()));
+                    Assert.Equal(2L, Assert.IsType<long>(await synchronous.ExecuteScalarAsync(TestContext.Current.CancellationToken)));
                 }
 
                 await connection.CloseAsync();
@@ -162,12 +162,12 @@ public class SqliteFindingStoreTests : IDisposable
     public async Task Interceptor_sets_busy_timeout_on_connection()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
 
         new SqliteConnectionPragmasInterceptor().ApplyPragmas(connection);
 
         await using var command = new SqliteCommand("PRAGMA busy_timeout", connection);
-        Assert.Equal(5000L, Assert.IsType<long>(await command.ExecuteScalarAsync()));
+        Assert.Equal(5000L, Assert.IsType<long>(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -356,7 +356,7 @@ public class SqliteFindingStoreTests : IDisposable
                          new DbContextOptionsBuilder<FindingStoreDbContext>()
                              .UseSqlite(_ConnectionString).Options))
         {
-            var runs = await db.Runs.Include(r => r.Findings).ToListAsync();
+            var runs = await db.Runs.Include(r => r.Findings).ToListAsync(cancellationToken: TestContext.Current.CancellationToken);
             var run = Assert.Single(runs);
             Assert.True(run.Success);
             Assert.NotNull(run.CompletedAt);
@@ -386,7 +386,7 @@ public class SqliteFindingStoreTests : IDisposable
                          new DbContextOptionsBuilder<FindingStoreDbContext>()
                              .UseSqlite(_ConnectionString).Options))
         {
-            var run = Assert.Single(await db.Runs.Include(r => r.Findings).ToListAsync());
+            var run = Assert.Single(await db.Runs.Include(r => r.Findings).ToListAsync(cancellationToken: TestContext.Current.CancellationToken));
             Assert.Equal(2, run.Findings.Count);
             Assert.Contains(run.Findings, f => f.DedupeKey == "k1");
             Assert.Contains(run.Findings, f => f.DedupeKey == "k2");
@@ -678,7 +678,7 @@ public class SqliteFindingStoreTests : IDisposable
     {
         await using (var connection = new SqliteConnection(_ConnectionString))
         {
-            await connection.OpenAsync();
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
             await using var command = connection.CreateCommand();
             command.CommandText = """
                                   ALTER TABLE PushedFixes DROP COLUMN AiDrafted;
@@ -694,7 +694,7 @@ public class SqliteFindingStoreTests : IDisposable
             command.Parameters.AddWithValue("$repo", Key.RepositoryId);
             command.Parameters.AddWithValue("$prId", Key.PrId);
             command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
-            await command.ExecuteNonQueryAsync();
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
         }
 
         var migrated = new SqliteFindingStore(_ConnectionString);
@@ -853,7 +853,7 @@ public class SqliteFindingStoreTests : IDisposable
         {
             await using (var connection = new SqliteConnection(connectionString))
             {
-                await connection.OpenAsync();
+                await connection.OpenAsync(TestContext.Current.CancellationToken);
                 await using var cmd = connection.CreateCommand();
                 cmd.CommandText = """
                                   CREATE TABLE "Runs" (
@@ -881,7 +881,7 @@ public class SqliteFindingStoreTests : IDisposable
                                       "ThreadId" INTEGER NULL
                                   );
                                   """;
-                await cmd.ExecuteNonQueryAsync();
+                await cmd.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
             }
 
             // Opening the store must add the column; saving and reading back must work.
@@ -897,10 +897,10 @@ public class SqliteFindingStoreTests : IDisposable
 
             await using (var connection = new SqliteConnection(connectionString))
             {
-                await connection.OpenAsync();
+                await connection.OpenAsync(TestContext.Current.CancellationToken);
                 await using var cmd = connection.CreateCommand();
                 cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'AppliedFixJson'";
-                Assert.Equal(1L, await cmd.ExecuteScalarAsync());
+                Assert.Equal(1L, await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken));
             }
         }
         finally
@@ -978,10 +978,10 @@ public class SqliteFindingStoreTests : IDisposable
     {
         await using (var connection = new SqliteConnection(_ConnectionString))
         {
-            await connection.OpenAsync();
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
             await using var command = connection.CreateCommand();
             command.CommandText = "ALTER TABLE ResolveActions DROP COLUMN ReplyText";
-            await command.ExecuteNonQueryAsync();
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
         }
 
         var migrated = new SqliteFindingStore(_ConnectionString);

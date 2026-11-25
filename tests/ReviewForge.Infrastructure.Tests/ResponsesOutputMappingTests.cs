@@ -19,9 +19,7 @@ public sealed class ResponsesOutputMappingTests
         using var handler = new ResponsesOutputFixtureHandler(CompletedResponseJson);
         using var factory = CreateFactory(handler);
 
-        var response = await factory.Create(ChatTier.Full).GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "summarize")],
-            new ChatOptions { ModelId = "gpt-test" });
+        var response = await factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "summarize")], new ChatOptions { ModelId = "gpt-test" }, TestContext.Current.CancellationToken);
 
         Assert.Equal("A result", response.Text);
         Assert.Equal("resp-42", response.ResponseId);
@@ -43,8 +41,7 @@ public sealed class ResponsesOutputMappingTests
         using var handler = new ResponsesOutputFixtureHandler(FunctionCallResponseJson);
         using var factory = CreateFactory(handler);
 
-        var response = await factory.Create(ChatTier.Full).GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "use the tool")]);
+        var response = await factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "use the tool")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(response.Messages.SelectMany(message => message.Contents),
             content => content is ErrorContent error && error.Message.Contains("cannot", StringComparison.Ordinal));
@@ -63,8 +60,7 @@ public sealed class ResponsesOutputMappingTests
         using var factory = CreateFactory(handler);
         var updates = new List<ChatResponseUpdate>();
 
-        await foreach (var update in factory.Create(ChatTier.Full).GetStreamingResponseAsync(
-                           [new ChatMessage(ChatRole.User, "stream")]))
+        await foreach (var update in factory.Create(ChatTier.Full).GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "stream")], cancellationToken: TestContext.Current.CancellationToken))
         {
             updates.Add(update);
         }
@@ -89,7 +85,7 @@ public sealed class ResponsesOutputMappingTests
         using var factory = CreateFactory(handler);
 
         var exception = await Assert.ThrowsAsync<ClientResultException>(() =>
-            factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "fail")]));
+            factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "fail")], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal((int)HttpStatusCode.BadRequest, exception.Status);
     }

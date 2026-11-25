@@ -107,7 +107,7 @@ public class LlmGovernorTests
             .Select(_ => governed.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
             .ToArray();
 
-        await bothInside.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await bothInside.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal(2, inner.MaxObservedInflight); // third call cannot enter while both slots are held
 
         release.TrySetResult();
@@ -123,10 +123,10 @@ public class LlmGovernorTests
         var holder = new GateChatClient(() => governor.Inflight, release.Task);
         var governed = new GovernedChatClient(holder, governor, acquireTimeoutSeconds: 1);
 
-        var held = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "hold the slot")]);
+        var held = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "hold the slot")], cancellationToken: TestContext.Current.CancellationToken);
         while (governor.Inflight == 0)
         {
-            await Task.Delay(10);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
         long timeouts = 0;
@@ -144,7 +144,7 @@ public class LlmGovernorTests
         var baseline = Interlocked.Read(ref timeouts);
 
         var ex = await Assert.ThrowsAsync<LlmGovernorTimeoutException>(() =>
-            governed.GetResponseAsync([new ChatMessage(ChatRole.User, "queue behind the holder")]));
+            governed.GetResponseAsync([new ChatMessage(ChatRole.User, "queue behind the holder")], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("waiting for an LLM concurrency slot", ex.Message);
         // Delta, not absolute: parallel test classes also emit on this process-wide meter.
@@ -163,10 +163,10 @@ public class LlmGovernorTests
         var inner = new GateChatClient(() => governor.Inflight, release.Task);
         var governed = new GovernedChatClient(inner, governor, acquireTimeoutSeconds: 30);
 
-        var held = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "hold")]);
+        var held = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "hold")], cancellationToken: TestContext.Current.CancellationToken);
         while (governor.Inflight == 0)
         {
-            await Task.Delay(10);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
         var waits = 0;
@@ -182,8 +182,8 @@ public class LlmGovernorTests
         listener.Start();
         var baseline = waits;
 
-        var waited = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "wait behind the holder")]);
-        await Task.Delay(200); // let the queued request block in slot acquisition
+        var waited = governed.GetResponseAsync([new ChatMessage(ChatRole.User, "wait behind the holder")], cancellationToken: TestContext.Current.CancellationToken);
+        await Task.Delay(200, TestContext.Current.CancellationToken); // let the queued request block in slot acquisition
         release.TrySetResult();
         await held;
         await waited;
@@ -203,13 +203,12 @@ public class LlmGovernorTests
         var governed = new GovernedChatClient(inner, governor, acquireTimeoutSeconds: 30);
 
         var enumerator = governed
-            .GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "stream")])
-            .GetAsyncEnumerator();
+            .GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "stream")], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
 
         var move = enumerator.MoveNextAsync().AsTask();
         while (governor.Inflight == 0)
         {
-            await Task.Delay(10);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
         Assert.Equal(1, governor.Inflight); // slot held while the provider streams

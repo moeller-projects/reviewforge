@@ -18,8 +18,7 @@ public sealed class ResponsesOutputVariantsTests
         using var handler = new FixtureHandler(RichResponseJson);
         using var factory = CreateFactory(handler);
 
-        var response = await factory.Create(ChatTier.Full).GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "inspect the report")]);
+        var response = await factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "inspect the report")], cancellationToken: TestContext.Current.CancellationToken);
         var contents = response.Messages.SelectMany(message => message.Contents).ToArray();
 
         Assert.Contains(contents, content => content is TextContent text && text.Text == "Here is the report.");
@@ -78,8 +77,7 @@ public sealed class ResponsesOutputVariantsTests
         using var handler = new FixtureHandler(McpAndComputerResponseJson);
         using var factory = CreateFactory(handler);
 
-        var response = await factory.Create(ChatTier.Full).GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "run the approved action")]);
+        var response = await factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "run the approved action")], cancellationToken: TestContext.Current.CancellationToken);
         var contents = response.Messages.SelectMany(message => message.Contents).ToArray();
 
         Assert.Contains(contents.OfType<McpServerToolCallContent>(), call => call.CallId == "mcp-call-1" && call.Name == "search_docs");

@@ -76,7 +76,7 @@ public sealed class SqliteReviewQueueTests : IDisposable
         {
             using (var connection = new SqliteConnection($"Data Source={legacyPath};Pooling=False"))
             {
-                await connection.OpenAsync();
+                await connection.OpenAsync(TestContext.Current.CancellationToken);
                 await using var command = connection.CreateCommand();
                 command.CommandText = """
                     CREATE TABLE QueuedRuns (
@@ -90,7 +90,7 @@ public sealed class SqliteReviewQueueTests : IDisposable
                     """;
                 command.Parameters.AddWithValue("$runId", Guid.NewGuid().ToString());
                 command.Parameters.AddWithValue("$enqueuedAt", DateTimeOffset.UtcNow.ToString("O"));
-                await command.ExecuteNonQueryAsync();
+                await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
             }
 
             var legacy = await ClaimOneAsync(NewQueue(legacyPath));
@@ -111,7 +111,7 @@ public sealed class SqliteReviewQueueTests : IDisposable
         var request = Request(8);
         using (var connection = new SqliteConnection($"Data Source={_DbPath};Pooling=False"))
         {
-            await connection.OpenAsync();
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 CREATE TABLE QueuedRuns (
@@ -125,7 +125,7 @@ public sealed class SqliteReviewQueueTests : IDisposable
                 """;
             command.Parameters.AddWithValue("$runId", request.RunId.ToString());
             command.Parameters.AddWithValue("$enqueuedAt", request.EnqueuedAt.UtcDateTime.ToString("O"));
-            await command.ExecuteNonQueryAsync();
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
         }
 
         var queue = NewQueue(_DbPath);
@@ -134,10 +134,10 @@ public sealed class SqliteReviewQueueTests : IDisposable
         Assert.Equal(request.RunId, dequeued.RunId);
         Assert.Equal(EnqueueTrigger.Manual, dequeued.Trigger);
         using var verify = new SqliteConnection($"Data Source={_DbPath};Pooling=False");
-        await verify.OpenAsync();
+        await verify.OpenAsync(TestContext.Current.CancellationToken);
         await using var check = verify.CreateCommand();
         check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('QueuedRuns') WHERE name = 'Trigger'";
-        Assert.Equal(1L, Convert.ToInt64(await check.ExecuteScalarAsync()));
+        Assert.Equal(1L, Convert.ToInt64(await check.ExecuteScalarAsync(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public sealed class SqliteReviewQueueTests : IDisposable
 
         while (claimed.Count < total)
         {
-            await Task.Delay(10).WaitAsync(TimeSpan.FromSeconds(30));
+            await Task.Delay(10, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         }
 
         await cts.CancelAsync();
