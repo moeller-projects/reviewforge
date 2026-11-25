@@ -327,9 +327,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
         });
         listener.Start();
 
-        await foreach (var update in pipeline.GetStreamingResponseAsync(
-                           [new ChatMessage(ChatRole.User, "stream")],
-                           new ChatOptions {ModelId = model}))
+        await foreach (var update in pipeline.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "stream")], new ChatOptions {ModelId = model}, TestContext.Current.CancellationToken))
         {
             updates.Add(update);
         }

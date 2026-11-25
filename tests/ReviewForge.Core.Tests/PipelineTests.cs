@@ -194,7 +194,7 @@ public class StageTests : IDisposable
         var execution = new FetchPrContextStage(source, new FakeFindingStore())
             .ExecuteAsync(new ReviewContext(Key, DateTimeOffset.UtcNow), CancellationToken.None);
 
-        await source.SiblingStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await source.SiblingStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
         try
         {
             Assert.False(execution.IsCompleted);

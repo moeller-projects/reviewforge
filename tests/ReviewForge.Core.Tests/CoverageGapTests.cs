@@ -242,13 +242,13 @@ public class RepoReadToolsGapTests : IDisposable
     {
         var tools = new RepoReadTools(_Root);
         Assert.Contains("denied", tools.List(".git"));
-        Assert.Contains("denied", tools.Grep("x", path: ".git"));
+        Assert.Contains("denied", tools.Grep("x", path: ".git", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void Grep_stops_at_match_cap()
     {
-        var result = new RepoReadTools(_Root).Grep("match line");
+        var result = new RepoReadTools(_Root).Grep("match line", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("match cap reached", result);
     }
 
@@ -257,7 +257,7 @@ public class RepoReadToolsGapTests : IDisposable
     {
         var tools = new FailingIoTools(_Root);
         Assert.Contains("unreadable", tools.ReadFile("many.txt"));
-        Assert.Equal("no matches", tools.Grep("match")); // failing files are skipped
+        Assert.Equal("no matches", tools.Grep("match", cancellationToken: TestContext.Current.CancellationToken)); // failing files are skipped
     }
 
     private sealed class FailingIoTools(string root) : RepoReadTools(root)
