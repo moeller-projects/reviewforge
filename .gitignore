@@ -102,6 +102,7 @@ nupkg/
 # Test / coverage / benchmark output
 # ------------------------------------------------------------
 [Tt]est[Rr]esult*/
+CoverageResults/
 TestResult.xml
 nunit-*.xml
 *.VisualState.xml
