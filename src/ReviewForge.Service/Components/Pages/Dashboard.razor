@@ -1,11 +1,215 @@
 @page "/dashboard"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@using ReviewForge.Service.Components.Dashboard
+@using static ReviewForge.Service.Components.Dashboard.DashboardPresentation
+@inject DashboardBrowserClient Browser
+@inject DialogService Dialogs
+@inject TimeProvider Clock
+@implements IAsyncDisposable
 <PageTitle>ReviewForge dashboard</PageTitle>
-<main class="dashboard">
-    <h1>ReviewForge dashboard</h1>
-    <p role="status">Loading pull requests…</p>
-    <form method="post" action="/dashboard/logout">
-        <AntiforgeryToken />
-        <RadzenButton Text="Log out" ButtonType="ButtonType.Submit" />
-    </form>
+<main class="dashboard" aria-busy="@_Loading.ToString().ToLowerInvariant()">
+    <span class="sr-only" role="status" aria-live="polite">@_Announcement</span>
+    <header class="dashboard-header">
+        <div><p class="eyebrow">REVIEWFORGE</p><h1>ReviewForge dashboard</h1><p>Open pull requests · current-head review coverage</p></div>
+        <div class="dashboard-actions">
+            <RadzenButton Text="Refresh" Icon="refresh" Click="RequestRefreshAsync" Disabled="@(_Loading || _Reruns.AuthenticationExpired)" aria-label="Refresh dashboard" />
+            <form method="post" action="/dashboard/logout"><AntiforgeryToken /><RadzenButton Text="Log out" ButtonType="ButtonType.Submit" ButtonStyle="ButtonStyle.Light" /></form>
+        </div>
+    </header>
+    @if (_Error is not null)
+    {
+        <div class="notice error" role="alert">@_Error @if (_Data is not null) { <span>Showing previous snapshot; data may be stale. Last successful update @Time(_LastSuccess).</span> } <a href="/dashboard/login">Log in again</a></div>
+    }
+    @if (_Data is { } data)
+    {
+        <div class="snapshot-meta">
+            <span>Generated <time>@Time(data.GeneratedAt)</time></span><span>Inventory <time>@Time(data.InventoryFetchedAt)</time></span>
+            <span>Discovery @(data.DiscoveryEnabled ? "enabled" : "disabled")</span>
+        </div>
+        @if (data.InventoryStale)
+        {
+            <p class="notice" role="status">Source inventory is stale. @(data.InventoryRefreshing ? "Metadata refresh in progress." : "Metadata refresh unavailable.") Operational run state is updated on this read.</p>
+        }
+        @if (!data.IsComplete)
+        {
+            <p class="notice" role="status">Partial inventory — totals cover retrieved PRs only. Other open PRs may be missing.</p>
+        }
+        @foreach (var warning in data.SourceWarnings) { <p class="notice">@warning</p> }
+        @if (data.Summary is { } summary)
+        {
+            <section class="summary-grid" aria-label="Organization review totals">
+                <div><strong>@summary.OpenPullRequests</strong><span>Open PRs</span></div>
+                <div><strong>@summary.Reviewing</strong><span>Reviewing</span></div>
+                <div><strong>@summary.Reviewed</strong><span>Reviewed</span></div>
+                <div><strong>@summary.NeedsAttention</strong><span>Needs attention</span></div>
+            </section>
+            <p class="summary-help">@(summary.IsPartial ? "Partial totals. " : "")@summary.HelpText Totals are organization-wide, not filtered.</p>
+        }
+        <section class="filters" aria-label="Filter pull requests">
+            <label>Search<RadzenTextBox Value="@_Search" @oninput="SearchChanged" Placeholder="Title, ID, author or repository" aria-label="Search pull requests" /></label>
+            <label>Project<RadzenDropDown TValue="string" Name="Project" aria-label="Project" @bind-Value="_Project" @bind-Value:after="ResetPageAsync" Data="data.Rows.Select(r => r.PullRequest.Candidate.Key.Project).Distinct().Order()" AllowClear="true" Placeholder="All projects" /></label>
+            <label>Repository<RadzenDropDown TValue="string" Name="Repository" aria-label="Repository" @bind-Value="_Repository" @bind-Value:after="ResetPageAsync" Data="data.Rows.Select(r => r.PullRequest.RepositoryName).Distinct().Order()" AllowClear="true" Placeholder="All repositories" /></label>
+            <label>Status<RadzenDropDown TValue="string" Name="Status" aria-label="Status" @bind-Value="_Status" @bind-Value:after="ResetPageAsync" Data="Statuses" AllowClear="true" Placeholder="All statuses" /></label>
+        </section>
+        <p class="result-count" role="status">@Filtered.Count of @data.Rows.Count retrieved PRs</p>
+        @if (data.Rows.Count == 0)
+        {
+            <section class="empty"><h2>@(data.IsComplete ? "No open pull requests" : "No pull requests retrieved")</h2><p>@(data.IsComplete ? "The organization inventory is up to date." : "Inventory is incomplete. Refresh to try again.")</p></section>
+        }
+        else if (Filtered.Count == 0)
+        {
+            <section class="empty"><h2>No matching pull requests</h2><p>Try another search or filter.</p></section>
+        }
+        else
+        {
+            <RadzenDataGrid @ref="_Grid" Data="Filtered" TItem="DashboardRow" KeyProperty="PullRequest.Candidate.Key" AllowPaging="true" PageSize="15" PagerHorizontalAlign="HorizontalAlign.Left" ShowPagingSummary="true" AllowSorting="false" class="pr-grid">
+                <Columns>
+                    <RadzenDataGridColumn TItem="DashboardRow" Title="Pull request" Width="32%">
+                        <Template Context="row">
+                            <p class="pr-scope">@row.PullRequest.Candidate.Key.Project / @row.PullRequest.RepositoryName · #@row.PullRequest.Candidate.Key.PrId</p>
+                            <button class="details-button" @onclick="() => OpenDetails(row)">@row.PullRequest.Candidate.Pr.Title</button>
+                            <p>@row.PullRequest.Candidate.CreatorName · @row.PullRequest.Candidate.TargetBranch @(row.PullRequest.Candidate.Pr.IsDraft ? "· Draft" : "")</p>
+                            @if (ExternalUrl(row.PullRequest.BrowserUrl) is { } url) { <a href="@url" target="_blank" rel="noopener noreferrer">Open PR <span class="sr-only">(opens in a new tab)</span> ↗</a> }
+                            @foreach (var warning in row.PullRequest.MetadataWarnings) { <p class="notice">@warning</p> }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="DashboardRow" Title="Current-head coverage" Width="25%">
+                        <Template Context="row">
+                            <strong class="state">@Coverage(row.CurrentHeadReviewed)</strong>
+                            <p>Head <code title="@row.PullRequest.Candidate.Pr.SourceCommitSha">@Abbreviate(row.PullRequest.Candidate.Pr.SourceCommitSha)</code></p>
+                            <p>Basic filters: @(row.Eligibility?.Status.ToString() ?? "Unknown")</p><small>@(row.Eligibility?.Reason ?? "Metadata unavailable")</small>
+                            @if (row.ActiveBlocker is not null) { <p class="notice">@Blocker(row)</p> }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="DashboardRow" Title="Latest PR attempt">
+                        <Template Context="row"><RunPresentation Run="row.LatestPrAttempt" Heading="Latest PR attempt" CurrentHead="row.PullRequest.Candidate.Pr.SourceCommitSha" Now="data.GeneratedAt" /></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="DashboardRow" Title="Actions">
+                        <Template Context="row"><RerunReviewButton Row="row" State="_Reruns" OnAccepted="RefreshAfterAccepted" /></Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        }
+    }
+    else if (_Loading)
+    {
+        <p role="status" class="empty">Loading pull requests…</p>
+    }
 </main>
+
+@code {
+    private readonly DashboardRerunState _Reruns = new();
+    private DashboardResponse? _Data;
+    private static string Abbreviate(string sha) => sha[..Math.Min(8, sha.Length)];
+    private Task RefreshAfterAccepted() => RequestRefreshAsync();
+    private DashboardRefreshLoop? _Refresh;
+    private DateTimeOffset _LastSuccess;
+    private string _Announcement = "";
+    private Task RequestRefreshAsync() => _Refresh?.RequestAsync() ?? Task.CompletedTask;
+    private bool IsActive() => _Reruns.AwaitingAccepted || _Data?.Rows.Any(r => r.ActiveBlocker is not null || r.LatestAttempt?.State is RunState.Queued or RunState.Running) == true;
+    private bool _Loading = true;
+    private bool _Disposed;
+    private string? _Error;
+    private string _Search = "", _Project = "", _Repository = "", _Status = "";
+    private RadzenDataGrid<DashboardRow>? _Grid;
+    private static readonly string[] Statuses = ["Reviewed", "Unreviewed", "Coverage unknown", "Queued", "Running", "Completed", "Failed", "Skipped"];
+    private (DashboardResponse?, string, string, string, string) _FilterKey;
+    private IReadOnlyList<DashboardRow> _Filtered = [];
+    private int? _RestorePage;
+    private IReadOnlyList<DashboardRow> Filtered
+    {
+        get
+        {
+            var key = (_Data, _Search, _Project, _Repository, _Status);
+            if (_FilterKey != key)
+            {
+                _FilterKey = key;
+                _Filtered = _Data?.Rows.Where(r => Matches(r, _Search, _Project, _Repository, _Status)).ToArray() ?? [];
+            }
+            return _Filtered;
+        }
+    }
+
+    // OnAfterRender is intentionally absent during prerender: HTTP must originate in the authenticated browser.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_RestorePage is { } page && _Grid is not null)
+        {
+            _RestorePage = null;
+            await _Grid.GoToPage(Math.Min(page, Math.Max(0, (Filtered.Count - 1) / 15)));
+        }
+        if (firstRender)
+        {
+            _Refresh = new(Clock, IsActive, ct => InvokeAsync(() => LoadAsync(ct)));
+            _Reruns.Changed += RerunStateChanged;
+            _Refresh.Start();
+            await Task.CompletedTask;
+        }
+    }
+
+    private void RerunStateChanged()
+    {
+        if (!_Reruns.AuthenticationExpired || _Disposed) return;
+        _Refresh?.Stop();
+        _Error = "Session expired. Log in again to load reviews.";
+        _Announcement = _Error;
+        StateHasChanged();
+    }
+
+    private async Task LoadAsync(CancellationToken ct)
+    {
+        if (_Disposed) return;
+        _Loading = true;
+        StateHasChanged();
+        var result = await Browser.GetDashboardAsync(ct);
+        if (_Disposed) return;
+        _Loading = false;
+        if (result.Outcome == BrowserOutcome.Ok && result.Value is { } value)
+        {
+            if (_Data is null || _Error is not null) _Announcement = "Dashboard updated.";
+            _RestorePage = _Grid?.CurrentPage;
+            _Data = value;
+            _LastSuccess = Clock.GetUtcNow();
+            _Reruns.Reconcile(value);
+            _Error = null;
+        }
+        else
+        {
+            if (result.Outcome is BrowserOutcome.Unauthenticated or BrowserOutcome.Forbidden)
+            {
+                _Reruns.ExpireAuthentication();
+                _Refresh?.Stop();
+            }
+            _Error = result.Outcome switch
+            {
+                BrowserOutcome.Unauthenticated => "Session expired. Log in again to load reviews.",
+                BrowserOutcome.Forbidden => "Access denied. Log in again.",
+                BrowserOutcome.RateLimited => "Too many requests. Wait a moment, then refresh.",
+                BrowserOutcome.Unavailable => "Dashboard unavailable. Try refreshing shortly.",
+                _ => "Could not load reviews. Check your connection and refresh.",
+            };
+            _Announcement = _Error;
+        }
+        StateHasChanged();
+    }
+
+    private async Task SearchChanged(ChangeEventArgs args)
+    {
+        _Search = args.Value?.ToString() ?? "";
+        await ResetPageAsync();
+    }
+    private Task ResetPageAsync() => _Grid?.FirstPage() ?? Task.CompletedTask;
+    private Task OpenDetails(DashboardRow row) => Dialogs.OpenAsync<ReviewDetailsDialog>(
+        $"Review details · #{row.PullRequest.Candidate.Key.PrId}",
+        new Dictionary<string, object?> { [nameof(ReviewDetailsDialog.Row)] = row,
+            [nameof(ReviewDetailsDialog.Reruns)] = _Reruns,
+            [nameof(ReviewDetailsDialog.OnAccepted)] = EventCallback.Factory.Create(this, RefreshAfterAccepted),
+            [nameof(ReviewDetailsDialog.Close)] = EventCallback.Factory.Create(this, () => Dialogs.Close()) },
+        new DialogOptions { Width = "760px", Style = "max-width:95vw;max-height:90vh", CloseDialogOnEsc = true, AutoFocusFirstElement = true });
+    public async ValueTask DisposeAsync()
+    {
+        _Disposed = true;
+        _Reruns.Changed -= RerunStateChanged;
+        if (_Refresh is not null) await _Refresh.DisposeAsync();
+    }
+}
