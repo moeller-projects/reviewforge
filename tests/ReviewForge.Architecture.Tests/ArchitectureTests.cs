@@ -187,6 +187,41 @@ public sealed class ArchitectureTests
         }
     }
 
+    [Fact]
+    public void Cli_and_aspire_share_the_services_https_origin()
+    {
+        var cli = File.ReadAllText(Path.Combine(RepoRoot, "src", "ReviewForge.Cli", "Program.cs"));
+        Assert.Contains("DefaultValueFactory = _ => \"https://localhost:9090\"", cli);
+        var appHost = File.ReadAllText(Path.Combine(RepoRoot, "src", "ReviewForge.AppHost", "AppHost.cs"));
+        Assert.Contains(".WithHttpsEndpoint(", appHost);
+        Assert.Contains("port: 9090", appHost);
+        Assert.Contains("targetPort: 9090", appHost);
+        Assert.Contains("isProxied: false", appHost);
+        Assert.DoesNotContain(".WithHttpEndpoint(", appHost);
+    }
+
+    [Fact]
+    public void Container_exposes_only_https_and_checks_health_with_certificate_validation()
+    {
+        var dockerfile = File.ReadAllText(Path.Combine(RepoRoot, "Dockerfile"));
+        Assert.Contains("Urls=https://+:9090", dockerfile);
+        Assert.Contains("EXPOSE 9090", dockerfile);
+        Assert.Contains("--cacert /https/ca.pem", dockerfile);
+        Assert.Contains("https://localhost:9090/health", dockerfile);
+        Assert.DoesNotContain("--insecure", dockerfile);
+        Assert.DoesNotContain("--no-check-certificate", dockerfile);
+        Assert.DoesNotContain("8080", dockerfile);
+        var compose = File.ReadAllText(Path.Combine(RepoRoot, "docker-compose.yml"));
+        Assert.Contains("9090:9090", compose);
+        Assert.Contains("Kestrel__Certificates__Default__Password: ${REVIEWFORGE_TLS_CERT_PASSWORD:?", compose);
+        Assert.Contains("source: ${REVIEWFORGE_TLS_CERT_PATH:?", compose);
+        Assert.Contains("source: ${REVIEWFORGE_TLS_CA_PATH:?", compose);
+        Assert.Contains("target: /https/reviewforge.pfx", compose);
+        Assert.Contains("target: /https/ca.pem", compose);
+        Assert.Contains("create_host_path: false", compose);
+        Assert.Contains("read_only: true", compose);
+    }
+
     private static void AssertRule(NetArchTest.Rules.TestResult result)
     {
         Assert.True(result.IsSuccessful,

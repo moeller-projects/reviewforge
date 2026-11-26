@@ -218,6 +218,12 @@ MigrationBackup/
 .env
 .env*
 !.env.example
+# Runtime TLS material belongs outside the repository.
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
 # Playwright CLI output (may contain credentials)
 .playwright-cli/
 

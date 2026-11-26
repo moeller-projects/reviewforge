@@ -43,6 +43,18 @@ public class BrowserSessionTests
     [InlineData("Production")]
     [InlineData("Staging")]
     [InlineData("Development")]
+    public void Service_uses_one_https_origin_in_every_environment(string environment)
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var host = factory.WithWebHostBuilder(builder => builder.UseEnvironment(environment));
+        Assert.Equal("https://localhost:9090",
+            host.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["Urls"]);
+    }
+
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Staging")]
+    [InlineData("Development")]
     public async Task Build_output_serves_framework_and_radzen_assets_in_every_environment(string environment)
     {
         using var factory = new ReviewForgeFactory().WithoutWorkers();

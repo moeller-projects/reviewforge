@@ -53,8 +53,9 @@ static-asset development catch-all is disabled to preserve unknown API route sem
 
 - **HTTPS is required as observed by ASP.NET Core.** The secure cookie policy is not
   weakened in development or tests. Login over HTTP returns 400. Use HTTPS at Kestrel,
-  including a trusted TLS upstream hop if a proxy is present. The existing HTTP-only
-  compose binding cannot host browser login without HTTPS deployment work.
+  including a trusted TLS upstream hop if a proxy is present. Compose serves HTTPS on
+  port 9090 and requires read-only PFX/public-CA mounts plus an environment-supplied password;
+  see [certificate setup](../../../docs/dashboard.md#docker-certificates).
 - This host does **not** enable forwarded-header processing or trust arbitrary
   `X-Forwarded-Proto`/`X-Forwarded-For` values. TLS termination with plain HTTP to Kestrel
   therefore does not enable login. A future deployment change must explicitly configure

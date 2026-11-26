@@ -80,7 +80,8 @@ export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for review 
 #   account over a developer's personal ~/.codex.
 # provider openai:       export OPENAI_API_KEY=...
 
-dotnet run --project src/ReviewForge.Service          # serves http://localhost:5080
+dotnet dev-certs https --trust                       # local development certificate
+dotnet run --project src/ReviewForge.Service          # serves https://localhost:9090
 
 dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll submit \
   --org my-org --project my-project --repo my-repo --pr 1234 --api-key ...
@@ -118,17 +119,18 @@ JSON-RPC message is a POST, so the submit budget would strangle a session). Tool
 `get_review_status(runId)` → the run status or null, and `list_open_prs(project?, repositoryId?,
 maxResults=100)` → open PRs in the org with title/author/draft/branch fields (bounded — when
 `truncated` is true, narrow the filters), so an agent can call `enqueue_review` or
-`enqueue_review_draft` per pick. Point an MCP client at `http://localhost:5080/mcp` with
+`enqueue_review_draft` per pick. Point an MCP client at `https://localhost:9090/mcp` with
 the `X-Api-Key` header set — or, for clients that cannot set headers, pass the key as the
 `api_key` query parameter (`/mcp` only; the header is preferred because query strings appear
 in request logs).
 
 ## PR review dashboard
 
-Open `/dashboard/login` over HTTPS and sign in with an environment-configured API key.
+Open `https://localhost:9090/` and sign in with an environment-configured API key.
 The dashboard at `/dashboard` shows organization-wide open PRs, current-head review
 coverage, latest attempts, live stages, and confirmed forced reruns. It is separate from
-the Aspire telemetry dashboard. HTTP-only Compose cannot serve dashboard login.
+the Aspire telemetry dashboard. Service, CLI, MCP and browser share the HTTPS origin;
+Compose requires runtime-mounted TLS material as described in the setup guide below.
 Sessions have a fixed eight-hour maximum and are invalidated on service restart; the
 dashboard currently supports a single service instance.
 
@@ -217,12 +219,16 @@ dotnet user-secrets set "Parameters:openai-api-key" "<openai-key>"
 dotnet user-secrets set "Parameters:api-key" "<reviewforge-api-key>"
 ```
 
-The dashboard URL is printed on startup; `WorkDir` is the system temp dir
+The telemetry dashboard URL is printed on startup; the ReviewForge service uses
+`https://localhost:9090` directly (do not run another Service instance on that port).
+Trust the development certificate before starting Aspire. `WorkDir` is the system temp dir
 (`Path.GetTempPath()/reviewforge`). Aspire injects the
 `OTEL_EXPORTER_OTLP_*` variables automatically, so no OTLP endpoint is ever hardcoded.
 
-**Production — Docker Compose.** `docker compose up -d` runs exactly as before (no telemetry
-export). To add the standalone Aspire dashboard as an opt-in sink:
+**Production — Docker Compose.** Configure the runtime PFX, public CA PEM and certificate
+password first; see [TLS setup](docs/dashboard.md#https-and-deployment). Then
+`docker compose up -d` serves HTTPS on port 9090 with no telemetry export by default.
+To add the standalone Aspire dashboard as an opt-in sink:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://dashboard:18889 docker compose --profile observability up -d

@@ -11,14 +11,15 @@ services:
     container_name: reviewforge
     restart: unless-stopped
     ports:
-      # Loopback by default: the CLI talks to http://localhost:5080. Set REVIEWFORGE_BIND
-      # to expose beyond the host — only behind a TLS reverse proxy with network ACLs.
-      - "${REVIEWFORGE_BIND:-127.0.0.1}:5080:8080"
+      # One HTTPS origin for browser, REST and MCP. Keep loopback unless network ACLs
+      # and a certificate valid for the externally used hostname are configured.
+      - "${REVIEWFORGE_BIND:-127.0.0.1}:9090:9090"
     environment:
       # Secrets come from the host environment only — never commit values here.
       REVIEWFORGE_ADO_PAT: ${REVIEWFORGE_ADO_PAT:?set REVIEWFORGE_ADO_PAT (Azure DevOps PAT)}
       REVIEWFORGE_API_KEYS: ${REVIEWFORGE_API_KEYS:?set REVIEWFORGE_API_KEYS (comma-separated API keys for the /reviews endpoints)}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-} # only needed with Reasoning__Provider=openai
+      Kestrel__Certificates__Default__Password: ${REVIEWFORGE_TLS_CERT_PASSWORD:?set REVIEWFORGE_TLS_CERT_PASSWORD for the mounted PFX}
 
       # Configuration overrides (double underscore maps to ':' in .NET configuration).
       Ado__OrgUrl: ${ADO_ORG_URL:?set ADO_ORG_URL (e.g. https://dev.azure.com/your-org)}
@@ -34,6 +35,21 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
     volumes:
+      # Runtime TLS material: the PFX includes its private key and chain; ca.pem is
+      # the public trust anchor used by the validating HTTPS health check.
+      # Both must be readable by uid 1654. Missing host files fail rather than creating directories.
+      - type: bind
+        source: ${REVIEWFORGE_TLS_CERT_PATH:?set REVIEWFORGE_TLS_CERT_PATH to the absolute PFX path}
+        target: /https/reviewforge.pfx
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${REVIEWFORGE_TLS_CA_PATH:?set REVIEWFORGE_TLS_CA_PATH to the absolute public CA PEM path}
+        target: /https/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
       # Codex OAuth credentials. Mount the directory, not the file, and keep it
       # read-write: token rotation rewrites auth.json atomically (temp + move).
       # The directory must be writable by the container's app user (uid 1654),

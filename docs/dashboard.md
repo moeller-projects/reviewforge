@@ -6,32 +6,85 @@ through the existing API. Opening or refreshing it never enqueues automatic revi
 
 ## HTTPS and deployment
 
-Dashboard login requires HTTPS **as seen by Kestrel**. The checked-in Compose mapping
-`http://localhost:5080` → container HTTP port 8080 remains suitable for header-key API
-clients on a protected network, but **cannot support dashboard login**: HTTP login
-returns 400 and dashboard cookies are always Secure. There is no HTTP cookie fallback.
+Service, CLI, browser pages and MCP share **`https://localhost:9090`** by default:
+`/` redirects to `/dashboard`, unauthenticated dashboard navigation redirects to
+`/dashboard/login`, REST lives at `/reviews`, and MCP lives at `/mcp`. API and circuit
+auth failures remain 401, not HTML redirects. Aspire exposes the same HTTPS port directly,
+so do not run standalone and Aspire-hosted Service instances simultaneously.
 
-For local development, provision and trust a .NET development certificate (`dotnet
-dev-certs https --trust`), then run the Service with a direct HTTPS listener, for example:
+Dashboard login requires HTTPS **as seen by Kestrel**. HTTP login returns 400 and
+cookies are always Secure. There is no HTTP cookie fallback or automatic HTTP listener.
+
+For local development, configure credentials as described in the [README](../README.md#run-it),
+then provision and trust the development certificate and start the Service:
 
 ```bash
-dotnet run --project src/ReviewForge.Service -- --urls https://localhost:7080
+dotnet dev-certs https --trust
+dotnet run --project src/ReviewForge.Service
 ```
 
-Configure the required environment credentials first as described in the [README](../README.md#run-it),
-then visit `https://localhost:7080/dashboard/login`. These are setup instructions, not
-evidence that a real browser/certificate smoke test has passed.
+Visit `https://localhost:9090/`. Bindings remain configurable with `--urls` or the
+unprefixed `Urls` environment variable. The container uses `Urls=https://+:9090` to
+listen on all container interfaces; Compose publishes it on host loopback by default.
+Local `config.Production.toml` overrides must not reintroduce an old HTTP/second-port
+binding. The checked-in default is HTTPS in every environment.
 
-For deployment, use direct HTTPS to Kestrel with an operator-provisioned certificate,
-or TLS pass-through that preserves HTTPS to Kestrel. Kestrel endpoint/certificate settings
-can be supplied through environment variables such as
-`Kestrel__Endpoints__Https__Url` and
-`Kestrel__Endpoints__Https__Certificate__Path`; keep any certificate password in the
-environment only. Provision a readable certificate and appropriate network access for
-the non-root service account. A container-specific TLS listener, certificate mount,
-and port mapping require deployment-owner configuration and validation; the shipped
-Compose file does not provide them. Keep its read-only root filesystem and existing
-hardening intact. This feature does not require a writable Data Protection key mount.
+A browser trusting the development certificate does not necessarily make Node/Bun MCP
+clients trust it. Export **only its public certificate** and launch the client with
+`NODE_EXTRA_CA_CERTS` pointing to that PEM file; restart the whole client after setting
+the variable. For example, in PowerShell (with the existing `.omp` directory):
+
+```powershell
+$cert = "$env:USERPROFILE\.omp\reviewforge-dev-cert.pem"
+dotnet dev-certs https --export-path $cert --format PEM
+$env:NODE_EXTRA_CA_CERTS = $cert
+omp
+```
+
+Use `https://localhost:9090/mcp`. Do not disable TLS verification. If Kestrel uses a
+custom certificate, trust its actual issuing CA instead of exporting a development
+certificate. These setup commands are not evidence of a completed browser/MCP smoke test.
+
+### Docker certificates
+
+Compose maps host 9090 to container HTTPS port 9090. Before starting it, provision:
+
+- `REVIEWFORGE_TLS_CERT_PATH`: absolute host path to a password-protected PFX containing
+  the server private key, certificate and intermediate chain.
+- `REVIEWFORGE_TLS_CA_PATH`: absolute host path to the public CA PEM used to verify the
+  server certificate. For a self-signed development certificate this is its public PEM.
+- `REVIEWFORGE_TLS_CERT_PASSWORD`: the PFX password, supplied through the environment only.
+
+Keep TLS material outside the repository. Mounts are read-only at `/https/reviewforge.pfx`
+and `/https/ca.pem`; missing host files fail instead of becoming directories. On Linux,
+ensure the container's uid 1654 can read both files while restricting private-key access
+(for example owner 1654 and mode 600 for the PFX). The image uses curl for an HTTPS
+`/health` check with `--cacert /https/ca.pem`; it validates the chain and localhost hostname.
+The server certificate must therefore cover `localhost`, plus any other hostname used by
+clients. For a different deployment hostname/topology, explicitly adjust both the health
+check and certificate rather than bypass validation.
+
+For local Compose development only, the same .NET development certificate can be exported
+outside the repository (set a nonempty password securely in the environment first):
+
+```bash
+mkdir -p "$HOME/.reviewforge/tls"
+dotnet dev-certs https --export-path "$HOME/.reviewforge/tls/reviewforge.pfx" --password "$REVIEWFORGE_TLS_CERT_PASSWORD"
+dotnet dev-certs https --export-path "$HOME/.reviewforge/tls/ca.pem" --format PEM
+export REVIEWFORGE_TLS_CERT_PATH="$HOME/.reviewforge/tls/reviewforge.pfx"
+export REVIEWFORGE_TLS_CA_PATH="$HOME/.reviewforge/tls/ca.pem"
+# Apply restrictive permissions/read access for uid 1654 before starting Compose.
+docker compose up --build
+```
+
+For production, use operator-provisioned certificates and direct HTTPS to Kestrel or TLS
+pass-through. Kestrel settings can be supplied through environment variables such as
+`Kestrel__Endpoints__Https__Url` and `Kestrel__Endpoints__Https__Certificate__Path`;
+keep certificate passwords in the environment only. Preserve the read-only root filesystem,
+non-root user, loopback default and existing hardening. `.env*`, local `config.*.toml`
+and certificate/key files are excluded from the Docker build context. No writable Data
+Protection key mount is required. Docker/Aspire TLS startup, browser/WebSocket behavior
+and end-to-end MCP trust require deployment-owner validation.
 
 **TLS termination at a proxy followed by HTTP to this host is not a supported dashboard
 setup as shipped.** The host does not configure trusted forwarded-header processing.

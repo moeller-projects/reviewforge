@@ -11,7 +11,7 @@ internal static class Program
         var serviceUrl = new Option<string>("--service-url")
         {
             Description = "reviewforge service base URL",
-            DefaultValueFactory = _ => "http://localhost:5080"
+            DefaultValueFactory = _ => "https://localhost:9090"
         };
 
         var org = new Option<string>("--org", "Azure DevOps organization")
