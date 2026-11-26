@@ -7,6 +7,9 @@ using ReviewForge.Core.Workspaces;
 using ReviewForge.Service;
 
 var builder = WebApplication.CreateBuilder(args);
+// Unpublished runs need the build manifest for framework and Razor-library assets in
+// Production/Staging too. Published output serves its physical wwwroot as usual.
+builder.WebHost.UseStaticWebAssets();
 builder.Configuration.AddTomlFile("config.toml", optional: true, reloadOnChange: true);
 builder.Configuration.AddTomlFile(
     $"config.{builder.Environment.EnvironmentName}.toml",
@@ -62,7 +65,9 @@ app.Use(async (ctx, next) =>
 {
     // Defense-in-depth for a JSON API that browsers can be pointed at.
     ctx.Response.Headers.XContentTypeOptions = "nosniff";
-    ctx.Response.Headers.CacheControl = "no-store";
+    // Match antiforgery's required headers so token responses need no warning-producing override.
+    ctx.Response.Headers.CacheControl = "no-cache, no-store";
+    ctx.Response.Headers.Pragma = "no-cache";
     await next();
 });
 app.UseAuthentication();

@@ -39,6 +39,51 @@ public class BrowserSessionTests
             ["__RequestVerificationToken"] = token, ["apiKey"] = key,
         }), Ct);
 
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Staging")]
+    [InlineData("Development")]
+    public async Task Build_output_serves_framework_and_radzen_assets_in_every_environment(string environment)
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var host = factory.WithWebHostBuilder(builder => builder.UseEnvironment(environment));
+        using var client = Browser(host);
+        foreach (var asset in new[] { "/_content/Radzen.Blazor/css/material-base.css", "/_framework/blazor.web.js",
+            "/_content/Radzen.Blazor/Radzen.Blazor.js", "/_content/Radzen.Blazor/fonts/MaterialSymbolsOutlined.woff2" })
+        {
+            using var response = await client.GetAsync(asset, Ct);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.NotEmpty(await response.Content.ReadAsByteArrayAsync(Ct));
+        }
+    }
+
+    [Fact]
+    public async Task Antiforgery_pages_are_noncacheable_without_header_override_warnings()
+    {
+        var logs = new List<string>();
+        using var factory = new ReviewForgeFactory().WithoutWorkers().WithLogCollector(logs);
+        using var client = Browser(factory);
+        using var response = await client.GetAsync("/dashboard/login", Ct);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl!.NoStore);
+        Assert.True(response.Headers.CacheControl.NoCache);
+        Assert.Contains(response.Headers.Pragma, value => value.Name == "no-cache");
+        Assert.DoesNotContain(logs, line => line.Contains("headers have been overridden", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Dashboard_head_and_page_title_do_not_cross_render_mode_boundaries()
+    {
+        var logs = new List<string>();
+        using var factory = new ReviewForgeFactory().WithoutWorkers().WithLogCollector(logs);
+        using var client = Browser(factory);
+        using var login = await Login(client, await Token(client));
+        Assert.Equal(HttpStatusCode.Redirect, login.StatusCode);
+        var html = await client.GetStringAsync("/dashboard", Ct);
+        Assert.Contains("<title>ReviewForge dashboard</title>", html);
+        Assert.DoesNotContain(logs, line => line.Contains("Sections cannot connect across render mode boundaries", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Anonymous_shell_and_circuit_are_protected_and_login_requires_csrf()
     {
