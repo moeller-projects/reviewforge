@@ -29,7 +29,17 @@ public static class DashboardHosting
             options.Cookie.SameSite = SameSiteMode.Strict;
             options.ExpireTimeSpan = DashboardSessions.Lifetime;
             options.SlidingExpiration = false;
-            options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = 401; return Task.CompletedTask; };
+            options.Events.OnRedirectToLogin = context =>
+            {
+                // Redirect page navigation only; API and circuit clients must receive 401, not login HTML.
+                var request = context.Request;
+                if (HttpMethods.IsGet(request.Method) &&
+                    string.Equals(request.Path.Value?.TrimEnd('/'), "/dashboard", StringComparison.OrdinalIgnoreCase))
+                    context.Response.Redirect($"{request.PathBase}/dashboard/login");
+                else
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return Task.CompletedTask;
+            };
             options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = 403; return Task.CompletedTask; };
             options.Events.OnValidatePrincipal = context =>
             {
@@ -59,6 +69,7 @@ public static class DashboardHosting
 
     public static WebApplication MapDashboard(this WebApplication app)
     {
+        app.MapGet("/", (HttpContext context) => Results.Redirect($"{context.Request.PathBase}/dashboard"));
         app.MapGet("/dashboard/login", (HttpContext context, IAntiforgery csrf) =>
         {
             if (!context.Request.IsHttps) return Results.StatusCode(400);

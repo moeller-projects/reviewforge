@@ -2,8 +2,9 @@
 
 ## Login and session
 
-Open `https://<service>/dashboard/login`, submit an existing environment-configured API key,
-and continue to `/dashboard`. Anonymous shell/circuit requests return 401. The login form
+Open `https://<service>/`: it redirects to `/dashboard`. Without a valid session, dashboard
+page navigation redirects to `/dashboard/login`. Submit an existing environment-configured
+API key to continue to `/dashboard`. API and circuit auth failures remain 401. The login form
 is a regular server POST, not an interactive component: the key never enters component
 state, hydration, a URL, browser storage, or the HTTP adapter. Failed credentials produce
 a generic response. Login POSTs have a five-attempt/minute/IP fixed-window budget.

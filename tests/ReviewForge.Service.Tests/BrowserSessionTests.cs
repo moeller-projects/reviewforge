@@ -84,12 +84,50 @@ public class BrowserSessionTests
         Assert.DoesNotContain(logs, line => line.Contains("Sections cannot connect across render mode boundaries", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("/", "/dashboard")]
+    [InlineData("/dashboard", "/dashboard/login")]
+    [InlineData("/dashboard/", "/dashboard/login")]
+    public async Task Anonymous_page_navigation_redirects_to_dashboard_then_login(string path, string destination)
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = Browser(factory);
+        using var response = await client.GetAsync(path, Ct);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal(destination, response.Headers.Location?.OriginalString);
+    }
+
+    [Fact]
+    public async Task Invalid_cookie_redirects_page_but_not_api_or_connection_requests()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = Browser(factory);
+        client.DefaultRequestHeaders.Add("Cookie", "__Host-ReviewForge=invalid");
+        using var page = await client.GetAsync("/dashboard", Ct);
+        Assert.Equal(HttpStatusCode.Redirect, page.StatusCode);
+        Assert.Equal("/dashboard/login", page.Headers.Location?.OriginalString);
+        foreach (var path in new[] { "/reviews/dashboard", "/dashboard/session", "/_blazor?id=missing" })
+        {
+            using var response = await client.GetAsync(path, Ct);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+            Assert.Null(response.Headers.Location);
+        }
+        using var negotiate = await client.PostAsync("/_blazor/negotiate?negotiateVersion=1", null, Ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, negotiate.StatusCode);
+        Assert.Null(negotiate.Headers.Location);
+        using var post = await client.PostAsync("/dashboard", null, Ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, post.StatusCode);
+        Assert.Null(post.Headers.Location);
+    }
+
     [Fact]
     public async Task Anonymous_shell_and_circuit_are_protected_and_login_requires_csrf()
     {
         using var factory = new ReviewForgeFactory().WithoutWorkers();
         using var client = Browser(factory);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/dashboard", Ct)).StatusCode);
+        using var page = await client.GetAsync("/dashboard", Ct);
+        Assert.Equal(HttpStatusCode.Redirect, page.StatusCode);
+        Assert.Equal("/dashboard/login", page.Headers.Location?.OriginalString);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/_blazor/negotiate?negotiateVersion=1", null, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/_blazor?id=missing", Ct)).StatusCode);
         var hubEndpoints = factory.Services.GetRequiredService<EndpointDataSource>().Endpoints
@@ -131,6 +169,9 @@ public class BrowserSessionTests
             TimeSpan.FromHours(8) - TimeSpan.FromSeconds(1), TimeSpan.FromHours(8));
         Assert.Equal(2, ticket.Principal.Claims.Count());
         Assert.DoesNotContain(ticket.Principal.Claims, claim => claim.Value.Contains("test-key", StringComparison.Ordinal));
+        using var root = await client.GetAsync("/", Ct);
+        Assert.Equal(HttpStatusCode.Redirect, root.StatusCode);
+        Assert.Equal("/dashboard", root.Headers.Location?.OriginalString);
         var shell = await client.GetAsync("/dashboard", Ct);
         Assert.Equal(HttpStatusCode.OK, shell.StatusCode);
         var html = await shell.Content.ReadAsStringAsync(Ct);
@@ -174,7 +215,12 @@ public class BrowserSessionTests
         replay.DefaultRequestHeaders.Add("Cookie", replayCookie);
         Assert.Equal(HttpStatusCode.Unauthorized, (await replay.GetAsync("/reviews/dashboard", Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/reviews/dashboard", Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/dashboard", Ct)).StatusCode);
+        using var page = await client.GetAsync("/dashboard", Ct);
+        Assert.Equal(HttpStatusCode.Redirect, page.StatusCode);
+        Assert.Equal("/dashboard/login", page.Headers.Location?.OriginalString);
+        using var replayPage = await replay.GetAsync("/dashboard", Ct);
+        Assert.Equal(HttpStatusCode.Redirect, replayPage.StatusCode);
+        Assert.Equal("/dashboard/login", replayPage.Headers.Location?.OriginalString);
         client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "test-key-1");
         client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
         Assert.Equal(HttpStatusCode.Accepted, (await HttpClientJsonExtensions.PostAsJsonAsync(client, "/reviews", new { org = "o", project = "p", repositoryId = "r", prId = 92 }, Ct)).StatusCode);
@@ -189,7 +235,10 @@ public class BrowserSessionTests
         using var client = Browser(factory);
         await Login(client, await Token(client));
         clock.Advance(TimeSpan.FromHours(8));
-        foreach (var path in new[] { "/dashboard", "/reviews/dashboard", "/dashboard/session", "/_blazor?id=old" })
+        using var page = await client.GetAsync("/dashboard", Ct);
+        Assert.Equal(HttpStatusCode.Redirect, page.StatusCode);
+        Assert.Equal("/dashboard/login", page.Headers.Location?.OriginalString);
+        foreach (var path in new[] { "/reviews/dashboard", "/dashboard/session", "/_blazor?id=old" })
             Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/_blazor/negotiate?negotiateVersion=1", null, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, "/reviews", new { org = "o", project = "p", repositoryId = "r", prId = 1 }, Ct)).StatusCode);
