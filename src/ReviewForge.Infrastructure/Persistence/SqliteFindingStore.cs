@@ -14,7 +14,7 @@ namespace ReviewForge.Infrastructure.Persistence;
 /// multiple workers read and write the same database without SQLITE_BUSY failures.
 /// Use <see cref="StoreJournalMode.Delete"/> on filesystems without POSIX advisory locks.
 /// </summary>
-public sealed partial class SqliteFindingStore : IFindingStore
+public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecisionStore
 {
     private readonly DbContextOptions<FindingStoreDbContext> _Options;
     private static readonly JsonSerializerOptions ObservationJsonOptions = new(JsonSerializerDefaults.Web);
@@ -155,6 +155,16 @@ public sealed partial class SqliteFindingStore : IFindingStore
                 cmd.CommandText = "UPDATE PushedFixes SET AiDrafted = 1 WHERE DedupeKey LIKE 'thread-%'";
                 cmd.ExecuteNonQuery();
             }
+
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS FindingDecisions (
+                    RunId TEXT NOT NULL, FindingId TEXT NOT NULL, HeadSha TEXT NOT NULL,
+                    State TEXT NOT NULL, Reason TEXT NULL, Actor TEXT NOT NULL,
+                    DecidedAt TEXT NOT NULL, Version INTEGER NOT NULL CHECK (Version > 0));
+                CREATE UNIQUE INDEX IF NOT EXISTS IX_FindingDecisions_RunId_FindingId_Version
+                    ON FindingDecisions (RunId, FindingId, Version);
+                """;
+            cmd.ExecuteNonQuery();
 
             transaction.Commit();
         }
@@ -772,6 +782,14 @@ public sealed partial class SqliteFindingStore : IFindingStore
                 await deleteResolveActions.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             }
 
+
+            await using (var deleteDecisions = connection.CreateCommand())
+            {
+                deleteDecisions.Transaction = tx;
+                deleteDecisions.CommandText = PrunableRunsCte + "DELETE FROM FindingDecisions WHERE RunId IN (SELECT Id FROM Prunable)";
+                AddPruneParameters(deleteDecisions, olderThan, minRunsPerPr);
+                await deleteDecisions.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
 
             var pruned = 0;
             await using (var deleteRuns = connection.CreateCommand())

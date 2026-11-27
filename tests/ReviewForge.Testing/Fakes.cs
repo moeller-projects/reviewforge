@@ -295,7 +295,7 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
 }
 
 /// <summary>In-memory IFindingStore.</summary>
-public partial class FakeFindingStore : IFindingStore
+public partial class FakeFindingStore : IFindingStore, IFindingDecisionStore
 {
     public List<ReviewRun> Runs { get; } = [];
     public int SummaryReads { get; private set; }
@@ -358,8 +358,20 @@ public partial class FakeFindingStore : IFindingStore
 
     public virtual Task<int> PruneAsync(DateTimeOffset olderThan, int minRunsPerPr, CancellationToken ct)
     {
-        PruneCalls.Add((olderThan, minRunsPerPr));
-        return Task.FromResult(0);
+        ct.ThrowIfCancellationRequested();
+        lock (Runs)
+        {
+            PruneCalls.Add((olderThan, minRunsPerPr));
+            var retained = Runs.GroupBy(r => r.Pr).SelectMany(g =>
+                g.Reverse().Take(Math.Max(0, minRunsPerPr)).Select(r => r.Id)
+                    .Concat(g.Reverse().Where(r => r.CompletedAt is not null && r.Success).Take(1).Select(r => r.Id)))
+                .ToHashSet();
+            var removed = Runs.Where(r => r.StartedAt < olderThan && !retained.Contains(r.Id)).Select(r => r.Id).ToHashSet();
+            Runs.RemoveAll(r => removed.Contains(r.Id));
+            RecentRuns.RemoveAll(r => removed.Contains(r.Id));
+            _FindingDecisions.RemoveAll(d => removed.Contains(d.RunId));
+            return Task.FromResult(removed.Count);
+        }
     }
 
     public virtual Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct)
