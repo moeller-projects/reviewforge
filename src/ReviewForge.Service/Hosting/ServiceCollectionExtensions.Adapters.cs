@@ -55,6 +55,12 @@ public static partial class ServiceCollectionExtensions
             return new SqliteFindingStore(opts.StoreConnectionString,
                 ParseDefinedEnum<StoreJournalMode>(opts.JournalMode, "Persistence:JournalMode"));
         });
+        // Resolve through the effective finding-store registration, including test replacements.
+        // Never instantiate a second real database behind an independently swapped port.
+        services.AddSingleton<IFindingDecisionStore>(sp =>
+            sp.GetRequiredService<IFindingStore>() as IFindingDecisionStore
+            ?? throw new InvalidOperationException("The registered finding store must support human decisions."));
+        services.AddSingleton<FindingDecisionService>();
         return services;
     }
 }
