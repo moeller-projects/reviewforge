@@ -70,6 +70,9 @@ public sealed class ExecuteReasoningStage(
                     }
                     else
                     {
+                        finding.DedupeKey = key;
+                        if (!ctx.Reasoning.Collector.RegressedKeys.Contains(key))
+                            ctx.Reasoning.Collector.RecordSuppressedFinding(finding);
                         ctx.Reasoning.Collector.MarkRedetected(key);
                     }
                 }
@@ -111,6 +114,7 @@ public sealed class ExecuteReasoningStage(
         var rootFiles = Directory.Exists(repoDir) ? Directory.GetFiles(repoDir, "*", SearchOption.TopDirectoryOnly) : [];
 
         var ruleBook = agent.ComposeRuleBook(ctx.Fetch.ChangedFiles, rootFiles);
+        ctx.DiagnosticRuleBookVersion = ruleBook.VersionHash;
         var prompt = PromptBuilder.Build(new PromptInput(
             Pr: ctx.RequirePullRequest(), Kind: ctx.Classification.Kind, WorkItems: ctx.Fetch.WorkItems, ChangedFiles: ctx.Fetch.ChangedFiles,
             PendingReplies: ctx.Classification.PendingReplies, DiffText: ctx.Repository.DiffText, Enrichment: null, ContextNames: ctx.Reasoning.ContextStore.Names,

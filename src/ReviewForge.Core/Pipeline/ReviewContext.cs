@@ -24,6 +24,43 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public bool ForceReview { get; set; }
 
 
+    public IReadOnlyList<string> PlannedStages { get; set; } = [];
+    public List<StageExecutionDiagnostic> StageExecutions { get; } = [];
+    public string? DiagnosticTraceId { get; set; }
+    public string? DiagnosticRuleBookVersion { get; set; }
+    /// <summary>Host journal may flush only after an existing persistence stage succeeds.</summary>
+    public bool DiagnosticsShellExists { get; set; }
+
+    public RunDiagnostics SnapshotDiagnostics()
+    {
+        var result = Reasoning.Result;
+        var narrative = result?.Narrative ?? Reasoning.Collector.Narrative;
+        return new(RunId, DiagnosticTraceId, PlannedStages.ToArray(), StageExecutions.ToArray(), new(
+            SafeDiagnosticText(result?.RuleBookVersion ?? DiagnosticRuleBookVersion), SafeDiagnosticText(result?.ReviewDepth), "unavailable",
+            SafeDiagnosticText(Fetch.PullRequest?.SourceCommitSha), SafeDiagnosticText(Fetch.PullRequest?.TargetCommitSha),
+            Fetch.PullRequest is null ? null : Fetch.ChangedFiles.Count, SafeDiagnosticText(narrative?.ReviewSummary),
+            SafeDiagnosticText(narrative?.VerificationSummary), SafeDiagnosticText(narrative?.PrSummary),
+            (result?.Uncertainties ?? Reasoning.Collector.Uncertainties).Take(20).Select(u => new ReviewUncertainty(
+                SafeDiagnosticText(u.Topic)!, SafeDiagnosticText(u.Question)!, SafeDiagnosticText(u.Context))).ToArray(),
+            (narrative?.AcceptanceCriteria ?? []).Take(20).Select(a => a with {
+                Criterion = SafeDiagnosticText(a.Criterion)!, Evidence = SafeDiagnosticText(a.Evidence) }).ToArray(),
+            Repository.ReviewableFiles?.Count,
+            (result?.Uncertainties ?? Reasoning.Collector.Uncertainties).Count > 20 ||
+            (narrative?.AcceptanceCriteria?.Length ?? 0) > 20));
+    }
+
+    private static string? SafeDiagnosticText(string? value)
+    {
+        if (value is null) return null;
+        // Bound work before redaction. Narrative fields are untrusted prose, not a channel for credentials.
+        var truncated = value.Length > 2000;
+        if (truncated) value = value[..2000];
+        value = System.Text.RegularExpressions.Regex.Replace(value,
+            "(?i)(?:authorization[\\\"']?\\s*[:=]\\s*[^\\r\\n]+|(?:bearer|basic)\\s+\\S+|(?:api[_-]?key|token|password|secret|pat)[\\\"']?\\s*[:=]\\s*[^\\s,;]+|https?://[^\\s]+|sk-[a-zA-Z0-9_-]+|-----BEGIN[\\s\\S]*)",
+            "[redacted]", System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromSeconds(1));
+        return truncated ? value + " [truncated]" : value;
+    }
+
     public FetchOutcome Fetch { get; set; } = new();
 
     // Stage 2 — gate
@@ -41,6 +78,47 @@ public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runI
     public AutoFixOutcome AutoFix { get; set; } = new();
     public TriageOutcome Triage { get; set; } = new();
     public PublishOutcome Published { get; set; } = new();
+
+    private readonly List<FindingObservation> _FindingObservations = [];
+
+    /// <summary>Snapshots include collector candidates even if reasoning threw before returning a result.</summary>
+    public IReadOnlyList<FindingObservation> SnapshotFindingObservations()
+    {
+        if (Reasoning.Collector is { } collector)
+        {
+            foreach (var observation in collector.FindingObservations)
+                if (!_FindingObservations.Any(o => o.Id == observation.Id)) _FindingObservations.Add(observation);
+        }
+        // Also supports callers supplying a result directly (without collector entries).
+        foreach (var finding in (Reasoning.Result?.Findings ?? []).Concat(Validation.AcceptedFindings))
+            if (!_FindingObservations.Any(o => o.DedupeKey == finding.DedupeKey))
+                _FindingObservations.Add(FindingObservation.Create(finding));
+        return _FindingObservations.Select(o => Published.NewlyPostedThreadIds.ContainsKey(o.DedupeKey ?? string.Empty)
+            ? o with { NewlyPosted = true } : o).ToArray();
+    }
+
+    public void ObserveValidation(RichFinding finding, FindingValidationStatus status, string reason)
+        => UpdateObservation(finding, o => o with
+        {
+            Validation = status, ValidationReason = reason, ValidationProvenance = "anchor-diff-validation",
+            VerificationReason = status == FindingValidationStatus.Rejected && o.Verification == FindingVerificationStatus.Unverified
+                ? "validation-rejected" : o.VerificationReason,
+        });
+
+    public void ObserveVerification(RichFinding finding, FindingVerificationStatus status, string reason, string provenance)
+        => UpdateObservation(finding, o => o with
+        {
+            Verification = status, VerificationReason = reason.Length > 1000 ? reason[..1000] : reason,
+            VerificationProvenance = provenance,
+        });
+
+    private void UpdateObservation(RichFinding finding, Func<FindingObservation, FindingObservation> update)
+    {
+        SnapshotFindingObservations();
+        for (var i = 0; i < _FindingObservations.Count; i++)
+            if (!_FindingObservations[i].PreviouslyKnown && _FindingObservations[i].DedupeKey == finding.DedupeKey)
+                _FindingObservations[i] = update(_FindingObservations[i]);
+    }
 
     /// <summary>True once a stage ended the run early (always a successful outcome).</summary>
     public bool Terminated { get; private set; }

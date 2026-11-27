@@ -48,7 +48,9 @@ public sealed class PersistRunStage(
             Success: true,
             findings,
             LastObservedCommentAt: lastObservedComment,
-            Pipeline: ctx.RunKind.ToString());
+            Pipeline: ctx.RunKind.ToString(),
+            FindingObservations: ctx.SnapshotFindingObservations(),
+            Diagnostics: ctx.SnapshotDiagnostics());
 
         _Logger?.LogDebug(
             "persist-run: saving completed run with {FindingCount} finding rows, {PostedThreadCount} posted thread ids, observed human-comment watermark {LastObservedCommentAt}",

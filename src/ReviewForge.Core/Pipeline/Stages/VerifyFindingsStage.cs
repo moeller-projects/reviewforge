@@ -36,8 +36,43 @@ public sealed class VerifyFindingsStage(
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        ctx.SnapshotFindingObservations();
+        foreach (var finding in ctx.Validation.AcceptedFindings)
+            ctx.ObserveVerification(finding,
+                IsDeterministic(finding) ? FindingVerificationStatus.Deterministic : FindingVerificationStatus.Unverified,
+                IsDeterministic(finding) ? "deterministic-rule" : "not-run",
+                IsDeterministic(finding) ? "homoglyph-analyzer" : "none");
+        try
+        {
+            await VerifyAsync(ctx, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Includes host cancellation and prompt/file failures: preserve evidence before rethrow.
+            var unfinished = ctx.SnapshotFindingObservations()
+                .Where(o => o.Verification == FindingVerificationStatus.Unverified && o.VerificationReason == "not-run")
+                .Select(o => o.DedupeKey).ToHashSet(StringComparer.Ordinal);
+            foreach (var finding in ctx.Validation.AcceptedFindings.Where(f => unfinished.Contains(f.DedupeKey)))
+                ctx.ObserveVerification(finding, FindingVerificationStatus.Failed, "verification-interrupted", "lightweight-verifier/fast");
+            throw;
+        }
+    }
+
+    private static bool IsDeterministic(RichFinding finding) => finding.RuleId.StartsWith("homoglyph/", StringComparison.Ordinal);
+
+    private static void Observe(ReviewContext ctx, IEnumerable<RichFinding> findings, FindingVerificationStatus status,
+        string reason, string provenance = "verification-policy")
+    {
+        foreach (var finding in findings)
+            ctx.ObserveVerification(finding, status, reason, provenance);
+    }
+
+    private async Task VerifyAsync(ReviewContext ctx, CancellationToken ct)
+    {
+        var modelFindings = ctx.Validation.AcceptedFindings.Where(f => !IsDeterministic(f)).ToList();
         if (!options.Enabled || ctx.Validation.AcceptedFindings.Count == 0)
         {
+            Observe(ctx, modelFindings, FindingVerificationStatus.Unverified, "disabled");
             logger?.LogDebug("finding verification skipped for {Pr}: enabled={Enabled}, accepted={AcceptedCount}",
                 ctx.Pr, options.Enabled, ctx.Validation.AcceptedFindings.Count);
             return;
@@ -45,6 +80,7 @@ public sealed class VerifyFindingsStage(
 
         if (ctx.Reasoning.Result?.ReviewDepth == "trivial diff — no agent run")
         {
+            Observe(ctx, modelFindings, FindingVerificationStatus.Unverified, "trivial-diff");
             logger?.LogDebug("finding verification skipped for {Pr}: trivial diff", ctx.Pr);
             return;
         }
@@ -56,9 +92,13 @@ public sealed class VerifyFindingsStage(
             .ToList();
         var strictDraft = ctx.RunKind == RunKind.ReviewDraft;
         if (strictDraft && allCandidates.Count > options.MaxFindings)
+        {
+            Observe(ctx, allCandidates, FindingVerificationStatus.Unverified, "finding-cap");
             throw new InvalidOperationException(
                 $"review draft has {allCandidates.Count} findings to verify, exceeding VerifyFindings:MaxFindings ({options.MaxFindings})");
+        }
         var candidates = allCandidates.Take(options.MaxFindings).ToList();
+        Observe(ctx, allCandidates.Skip(options.MaxFindings), FindingVerificationStatus.Unverified, "finding-cap");
         if (candidates.Count == 0)
         {
             logger?.LogDebug("finding verification skipped for {Pr}: no model candidates, accepted={AcceptedCount}",
@@ -69,9 +109,16 @@ public sealed class VerifyFindingsStage(
         var repoDir = ctx.RequireRepoDir();
         var prompt = FindingsVerifierPrompt.Build(
             candidates, anchor => Slice(repoDir, anchor, options.ContextLines), options.MaxPromptChars);
-        if (strictDraft && candidates.Any(f => !prompt.Contains(
-                $"### {f.DedupeKey}{Environment.NewLine}", StringComparison.Ordinal)))
+        var omitted = candidates.Where(f => !prompt.Contains(
+            $"### {f.DedupeKey}{Environment.NewLine}", StringComparison.Ordinal)).ToList();
+        Observe(ctx, omitted, FindingVerificationStatus.Unverified, "prompt-budget");
+        if (strictDraft && omitted.Count > 0)
+        {
+            Observe(ctx, candidates.Except(omitted), FindingVerificationStatus.Unverified, "strict-prompt-budget-abort");
             throw new InvalidOperationException("review draft findings exceed the verifier prompt budget");
+        }
+        candidates = candidates.Except(omitted).ToList();
+        if (candidates.Count == 0) return;
         logger?.LogDebug("starting finding verification for {Pr}: candidates={CandidateCount}, maxPromptChars={MaxPromptChars}",
             ctx.Pr, candidates.Count, options.MaxPromptChars);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -93,6 +140,8 @@ public sealed class VerifyFindingsStage(
         {
             FindingsTelemetry.FindingsVerifierFailures.Add(
                 1, new TagList {{ReviewForgeTelemetry.TagReason, ex.GetType().Name}});
+            Observe(ctx, candidates, FindingVerificationStatus.Failed,
+                ex is FormatException ? "malformed-response" : "verifier-request-failed", "lightweight-verifier/fast");
             if (strictDraft)
             {
                 logger?.LogWarning(ex, "review draft finding verification failed");
@@ -107,10 +156,21 @@ public sealed class VerifyFindingsStage(
             FindingsTelemetry.FindingsVerifierDurationMilliseconds.Record(stopwatch.ElapsedMilliseconds);
         }
 
+        foreach (var finding in candidates)
+        {
+            if (finding.DedupeKey is { } key && verdicts.TryGetValue(key, out var verdict))
+                ctx.ObserveVerification(finding,
+                    verdict.Rejected ? FindingVerificationStatus.Rejected : FindingVerificationStatus.Confirmed,
+                    verdict.Reason, "lightweight-verifier/fast");
+            else
+                Observe(ctx, [finding], FindingVerificationStatus.Unverified, "missing-verdict", "lightweight-verifier/fast");
+        }
         if (strictDraft && candidates.Any(f => f.DedupeKey is null || !verdicts.ContainsKey(f.DedupeKey)))
             throw new InvalidOperationException("review draft verifier omitted one or more finding verdicts");
 
-        var rejected = ctx.Validation.AcceptedFindings
+        // Only submitted candidates may be subtracted. Ignore invented keys and verdicts
+        // for deterministic, capped or prompt-omitted findings.
+        var rejected = candidates
             .Where(f => f.DedupeKey is { } k
                         && verdicts.TryGetValue(k, out var v)
                         && v.Rejected)
@@ -140,10 +200,7 @@ public sealed class VerifyFindingsStage(
             return verdicts;
         }
 
-        FindingsTelemetry.FindingsVerifierFailures.Add(
-            1, new TagList {{ReviewForgeTelemetry.TagReason, "unparseable"}});
-        logger?.LogWarning("findings verifier returned malformed output twice — keeping all findings (fail-open)");
-        return new Dictionary<string, FindingsVerifierPrompt.Verdict>(StringComparer.Ordinal);
+        throw new FormatException("verifier returned malformed output twice");
     }
 
     /// <summary>Numbered file slice of ±<paramref name="contextLines"/> around the anchor,

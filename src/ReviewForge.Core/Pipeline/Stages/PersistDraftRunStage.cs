@@ -35,7 +35,9 @@ public sealed class PersistDraftRunStage(
             ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Classification.Kind,
             ctx.StartedAt, _Clock.GetUtcNow(), Success: true, findings,
             LastObservedCommentAt: lastObservedComment,
-            Pipeline: RunKind.ReviewDraft.ToString());
+            Pipeline: RunKind.ReviewDraft.ToString(),
+            FindingObservations: ctx.SnapshotFindingObservations(),
+            Diagnostics: ctx.SnapshotDiagnostics());
         logger?.LogDebug("persisted review draft {RunId} with {FindingCount} verified findings", ctx.RunId, findings.Length);
         return store.SaveRunAsync(run, ct);
     }

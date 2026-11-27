@@ -23,7 +23,8 @@ public sealed class BeginDraftRunStage(
             ctx.RunId, ctx.Pr, headSha, ReviewKind.Full,
             ctx.StartedAt, CompletedAt: null, Success: false, [],
             LastObservedCommentAt: observedComment,
-            Pipeline: RunKind.ReviewDraft.ToString());
+            Pipeline: RunKind.ReviewDraft.ToString(),
+            Diagnostics: ctx.SnapshotDiagnostics());
         logger?.LogDebug("persisted review draft shell {RunId} for {Pr}", ctx.RunId, ctx.Pr);
         return store.SaveRunAsync(shell, ct);
     }

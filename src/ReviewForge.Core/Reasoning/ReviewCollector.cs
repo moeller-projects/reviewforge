@@ -14,6 +14,22 @@ public sealed class ReviewCollector
     private static readonly JsonSerializerOptions JsonOptions = new() {WriteIndented = false};
 
     private readonly List<RichFinding> _Findings = [];
+    private readonly List<FindingObservation> _FindingObservations = [];
+
+    public IReadOnlyList<FindingObservation> FindingObservations
+    {
+        get { lock (_Gate) { return [.. _FindingObservations]; } }
+    }
+
+    /// <summary>A valid candidate suppressed by prior-run dedupe; not a new identity.</summary>
+    public void RecordSuppressedFinding(RichFinding finding)
+    {
+        lock (_Gate)
+        {
+            if (!_FindingObservations.Any(o => o.PreviouslyKnown && o.DedupeKey == finding.DedupeKey))
+                _FindingObservations.Add(FindingObservation.Create(finding, previouslyKnown: true));
+        }
+    }
     private readonly List<ReviewUncertainty> _Uncertainties = [];
     private readonly object _Gate = new();
     private readonly TextWriter? _Jsonl;
@@ -163,6 +179,7 @@ public sealed class ReviewCollector
     {
         lock (_Gate)
         {
+            _FindingObservations.Add(FindingObservation.Create(finding));
             _Findings.Add(finding);
             if (finding.DedupeKey is { Length: > 0 } dedupeKey)
             {

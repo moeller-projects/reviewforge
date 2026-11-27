@@ -23,6 +23,7 @@ public sealed class ValidateFindingsStage(
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        ctx.SnapshotFindingObservations();
         var repoDir = ctx.RequireRepoDir();
         var accepted = new List<RichFinding>();
         var changedFiles = ctx.Fetch.ChangedFiles
@@ -32,6 +33,7 @@ public sealed class ValidateFindingsStage(
         {
             if (finding.Anchor is null)
             {
+                ctx.ObserveValidation(finding, FindingValidationStatus.Rejected, "no-anchor");
                 logger?.LogDebug("finding {Key} rejected because it has no changed-line anchor", finding.DedupeKey);
                 FindingsTelemetry.FindingsRejected.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, "no-anchor"}});
                 continue;
@@ -40,6 +42,7 @@ public sealed class ValidateFindingsStage(
             var path = RepoPath.Normalize(finding.Anchor.FilePath);
             if (ctx.Repository.Diff?.NonReviewableFiles.TryGetValue(path, out var nonReviewableKind) == true)
             {
+                ctx.ObserveValidation(finding, FindingValidationStatus.Rejected, $"non-reviewable-{nonReviewableKind.ToString().ToLowerInvariant()}");
                 logger?.LogInformation(
                     "finding {Key} rejected because file {Path} is non-reviewable ({Kind})",
                     finding.DedupeKey, path, nonReviewableKind);
@@ -50,6 +53,7 @@ public sealed class ValidateFindingsStage(
 
             if (!TryReanchor(finding, repoDir))
             {
+                ctx.ObserveValidation(finding, FindingValidationStatus.Rejected, "anchor-unverified");
                 logger?.LogDebug("finding {Key} rejected because its anchor cannot be verified", finding.DedupeKey);
                 FindingsTelemetry.FindingsRejected.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, "anchor-unverified"}});
                 continue;
@@ -58,12 +62,15 @@ public sealed class ValidateFindingsStage(
             if (!changedFiles.Contains(path) ||
                 (ctx.Repository.Diff is not null && !ctx.Repository.Diff.Contains(path, finding.Anchor.StartLine)))
             {
+                ctx.ObserveValidation(finding, FindingValidationStatus.Rejected, "not-in-diff");
                 logger?.LogInformation("finding {Key} rejected because its anchor is outside the current PR diff", finding.DedupeKey);
                 FindingsTelemetry.FindingsRejected.Add(1, new TagList {{ReviewForgeTelemetry.TagReason, "not-in-diff"}});
                 continue;
             }
 
             FindingsTelemetry.FindingsAccepted.Add(1);
+            ctx.ObserveValidation(finding, FindingValidationStatus.Accepted,
+                finding.AnchorDowngraded ? "weak-snippet-general-only" : "anchor-in-diff");
             accepted.Add(finding);
         }
 
