@@ -171,6 +171,8 @@ public sealed class ReviewWorker(
     /// </summary>
     private async Task PersistFailureAsync(ReviewRequest request, ReviewContext? ctx, TimeSpan timeout)
     {
+        // A journal/notification failure after a gate skip must not turn the skip into a stored run.
+        if (ctx?.Terminated == true) return;
         try
         {
             using var timeoutCts = new CancellationTokenSource(timeout);
@@ -183,7 +185,9 @@ public sealed class ReviewWorker(
                 _Clock.GetUtcNow(),
                 Success: false,
                 Findings: [],
-                Pipeline: request.Kind.ToString()), timeoutCts.Token);
+                Pipeline: request.Kind.ToString(),
+                FindingObservations: ctx?.SnapshotFindingObservations(),
+                Diagnostics: ctx?.SnapshotDiagnostics()), timeoutCts.Token);
         }
         catch (Exception storeEx)
         {

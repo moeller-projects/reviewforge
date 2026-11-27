@@ -233,6 +233,10 @@ public class ReviewWorkerTests
         Assert.False(failed.Success);
         Assert.Equal(runId, failed.Id);
         Assert.Equal(Key, failed.Pr);
+        Assert.NotNull(failed.Diagnostics);
+        Assert.Equal("failed", failed.Diagnostics.Stages.Last().Outcome);
+        Assert.Equal("PrepareRepository", failed.Diagnostics.Stages.Last().Stage);
+        Assert.DoesNotContain("git exploded", System.Text.Json.JsonSerializer.Serialize(failed.Diagnostics));
 
         await cts.CancelAsync();
         try
@@ -447,6 +451,9 @@ public class ReviewWorkerTests
         var record = Assert.Single(h.Store.Runs, r => r.Id == runId);
         Assert.False(record.Success);
         Assert.NotNull(record.CompletedAt);
+        Assert.NotNull(record.Diagnostics);
+        Assert.Equal("cancelled", record.Diagnostics.Stages.Last().Outcome);
+        Assert.Equal("cancelled", record.Diagnostics.Stages.Last().FailureCode);
     }
 
     [Fact]

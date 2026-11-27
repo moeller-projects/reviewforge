@@ -20,7 +20,9 @@ public sealed class ReviewPipelineBuilder(
     AgentFactory agentFactory,
     StageCatalog stageCatalog,
     ResolveContextInitializer resolveContextInitializer,
-    ILoggerFactory loggerFactory) : IPipelineBuilder
+    ILoggerFactory loggerFactory,
+    IFindingStore store,
+    TimeProvider? clock = null) : IPipelineBuilder
 {
     public ReviewPipeline Build(RunKind kind, ReviewRequest request, ReviewContext context, IRunProgress? progress = null)
     {
@@ -40,6 +42,7 @@ public sealed class ReviewPipelineBuilder(
         };
 
         progress?.DefinitionLoaded(definition.Stages);
+        context.PlannedStages = definition.Stages.Select(id => id.ToString()).ToArray();
 
         if (kind == RunKind.Resolve)
             resolveContextInitializer.Initialize(request, context);
@@ -48,7 +51,7 @@ public sealed class ReviewPipelineBuilder(
         var stages = definition.Stages.Select(id =>
         {
             var stage = stageCatalog.Create(id, build);
-            return progress is null ? stage : new ProgressStage(id, stage, progress);
+            return new ProgressStage(id, stage, progress, store, clock);
         });
         return new ReviewPipeline(stages, loggerFactory.CreateLogger<ReviewPipeline>());
     }

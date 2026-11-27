@@ -60,7 +60,8 @@ internal static class PipelineBuilderTestFactory
             agentFactory,
             catalog,
             new ResolveContextInitializer(),
-            loggerFactory);
+            loggerFactory,
+            store);
     }
 
     private sealed class UnusedProcessRunner : IProcessRunner
