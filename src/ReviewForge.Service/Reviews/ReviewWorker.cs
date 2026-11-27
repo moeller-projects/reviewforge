@@ -64,22 +64,6 @@ public sealed class ReviewWorker(
             // Durable requests may outlive this process and have no tracker entry yet.
             tracker.Register(request);
 
-            // The claim was taken at enqueue with a finite TTL; if this request sat
-            // queued past expiry, another run may own the PR now. Revalidate before
-            // spending an LLM run: re-claim if free, skip if a different run holds it.
-            if (!claims.IsHeldBy(request.Pr, request.RunId)
-                && !claims.TryClaim(request.Pr, request.RunId, out var holder))
-            {
-                logger.LogInformation(
-                    "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
-                    request.RunId, request.Pr, holder);
-                tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued", request.Kind);
-                // The request was already dequeued (claimed) from the queue; without this
-                // ack a durable row would stay claimed and be reclaimed forever.
-                queue.Acknowledge(request.RunId);
-                continue; // finally-block of the run loop is not entered; nothing to release
-            }
-
             var repoTag = new TagList {{ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId}, {"kind", request.Kind.ToString().ToLowerInvariant()}};
             var runStart = Stopwatch.GetTimestamp();
             ReviewContext? ctx = null;
@@ -87,7 +71,8 @@ public sealed class ReviewWorker(
             {
                 // A crash after terminal profile commit but before queue ack must not run the
                 // same execution again. Finalized is independent of detail expiry, emptiness,
-                // truncation and capture completeness. Marker-only interruptions still resume.
+                // truncation and capture completeness. Check before execution claim validation:
+                // a newer run may already hold the PR claim. Marker-only interruptions still resume.
                 if (store is IModelProfileStore profiles &&
                     (await profiles.ReadModelProfileAsync(request.RunId, 0, 1, _Clock.GetUtcNow(), stoppingToken)).Finalized)
                 {
@@ -99,6 +84,22 @@ public sealed class ReviewWorker(
                     logger.LogInformation("run {RunId} already finalized; acknowledging reclaimed request", request.RunId);
                     queue.Acknowledge(request.RunId);
                     continue; // finally releases only this run's PR claim
+                }
+
+                // The claim was taken at enqueue with a finite TTL; if this request sat
+                // queued past expiry, another run may own the PR now. Only unfinished runs
+                // need an execution claim: re-claim if free, skip if a different run holds it.
+                if (!claims.IsHeldBy(request.Pr, request.RunId)
+                    && !claims.TryClaim(request.Pr, request.RunId, out var holder))
+                {
+                    logger.LogInformation(
+                        "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
+                        request.RunId, request.Pr, holder);
+                    tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued", request.Kind);
+                    // The request was already dequeued (claimed) from the queue; without this
+                    // ack a durable row would stay claimed and be reclaimed forever.
+                    queue.Acknowledge(request.RunId);
+                    continue; // finally cannot release the competing run's claim
                 }
 
                 ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId,

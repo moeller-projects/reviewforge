@@ -15,17 +15,21 @@ namespace ReviewForge.Service.Tests;
 public class FinalizedProfileReclaimTests
 {
     [Theory]
-    [InlineData(false, 0, true)]
-    [InlineData(true, 0, true)]
-    [InlineData(false, 1, true)]
-    [InlineData(true, 1, true)]
-    [InlineData(false, 2, true)]
-    [InlineData(true, 2, true)]
-    [InlineData(false, 0, false)]
-    [InlineData(true, 0, false)]
-    [InlineData(false, 3, false)]
-    [InlineData(true, 3, false)]
-    public async Task Crash_after_profile_finalization_before_ack_does_not_execute_again(bool sqlite, int detailState, bool success)
+    [InlineData(false, 0, true, false)]
+    [InlineData(true, 0, true, false)]
+    [InlineData(false, 1, true, false)]
+    [InlineData(true, 1, true, false)]
+    [InlineData(false, 2, true, false)]
+    [InlineData(true, 2, true, false)]
+    [InlineData(false, 0, false, false)]
+    [InlineData(true, 0, false, false)]
+    [InlineData(false, 3, false, false)]
+    [InlineData(true, 3, false, false)]
+    [InlineData(false, 0, true, true)]
+    [InlineData(true, 0, true, true)]
+    [InlineData(false, 0, false, true)]
+    [InlineData(true, 0, false, true)]
+    public async Task Crash_after_profile_finalization_before_ack_does_not_execute_again(bool sqlite, int detailState, bool success, bool competingClaim)
     {
         var path = Path.Combine(Path.GetTempPath(), $"profile-reclaim-{Guid.NewGuid():N}.db");
         var connection = $"Data Source={path};Pooling=False";
@@ -61,6 +65,8 @@ public class FinalizedProfileReclaimTests
             var queue = new SqliteReviewQueue(connection, clock: time);
             var tracker = new RunTracker();
             var claims = new InFlightClaims(time);
+            var holder = competingClaim ? Guid.NewGuid() : request.RunId;
+            Assert.True(claims.TryClaim(key, holder, out _));
             var builder = new CountingBuilder();
             using var worker = new ReviewWorker(queue, Options.Create(new HostOptions { WorkerCount = 1 }),
                 tracker, builder, claims, store, NullLogger<ReviewWorker>.Instance, time);
@@ -74,7 +80,13 @@ public class FinalizedProfileReclaimTests
             finally { await worker.StopAsync(ct); }
             Assert.Equal(0, builder.BuildCalls);
             Assert.Equal(success ? RunState.Completed : RunState.Failed, tracker.Get(request.RunId)!.State);
+            var statusService = new RunSubmissionService(queue, tracker, claims, store, time,
+                NullLogger<RunSubmissionService>.Instance);
+            Assert.Equal(success ? RunState.Completed : RunState.Failed,
+                (await statusService.GetStatusAsync(request.RunId, ct))!.State);
             Assert.False(claims.IsHeldBy(key, request.RunId));
+            Assert.Equal(competingClaim, claims.IsHeldBy(key, holder));
+            Assert.Equal(competingClaim ? 1 : 0, claims.ActiveCount);
             Assert.Equal(JsonSerializer.Serialize(run), JsonSerializer.Serialize(await store.GetRunAsync(request.RunId, ct)));
             Assert.Equal(before, JsonSerializer.Serialize(await profiles.ReadModelProfileAsync(request.RunId, 0, 100, time.GetUtcNow(), ct)));
         }
@@ -85,13 +97,19 @@ public class FinalizedProfileReclaimTests
     }
 
     [Theory]
-    [InlineData("profile-read", 1)]
-    [InlineData("run-read", 1)]
-    [InlineData("shutdown", 1)]
-    [InlineData("profile-read", 2)]
-    [InlineData("run-read", 2)]
-    [InlineData("shutdown", 2)]
-    public async Task Failed_reclaim_preflight_preserves_terminal_records_and_leaves_request_for_reclaim(string failure, int workerCount)
+    [InlineData("profile-read", 1, false)]
+    [InlineData("run-read", 1, false)]
+    [InlineData("shutdown", 1, false)]
+    [InlineData("profile-read", 2, false)]
+    [InlineData("run-read", 2, false)]
+    [InlineData("shutdown", 2, false)]
+    [InlineData("profile-read", 1, true)]
+    [InlineData("run-read", 1, true)]
+    [InlineData("shutdown", 1, true)]
+    [InlineData("profile-read", 2, true)]
+    [InlineData("run-read", 2, true)]
+    [InlineData("shutdown", 2, true)]
+    public async Task Failed_reclaim_preflight_preserves_terminal_records_and_leaves_request_for_reclaim(string failure, int workerCount, bool competingClaim)
     {
         var path = Path.Combine(Path.GetTempPath(), $"profile-preflight-{Guid.NewGuid():N}.db");
         var ct = TestContext.Current.CancellationToken;
@@ -117,9 +135,12 @@ public class FinalizedProfileReclaimTests
             if (failure == "run-read") store.BeforeGetRun = _ => throw new InvalidOperationException("terminal read failed");
             if (failure == "shutdown") store.BeforeModelProfileRead = _ => lifetime.Cancel();
             var claims = new InFlightClaims(time);
+            var holder = competingClaim ? Guid.NewGuid() : request.RunId;
+            Assert.True(claims.TryClaim(key, holder, out _));
+            var tracker = new RunTracker();
             var builder = new CountingBuilder();
             using var worker = new ReviewWorker(queue, Options.Create(new HostOptions { WorkerCount = workerCount }),
-                new RunTracker(), builder, claims, store, NullLogger<ReviewWorker>.Instance, time);
+                tracker, builder, claims, store, NullLogger<ReviewWorker>.Instance, time);
             await worker.StartAsync(lifetime.Token);
             try
             {
@@ -134,7 +155,10 @@ public class FinalizedProfileReclaimTests
             store.BeforeModelProfileRead = null;
             Assert.Equal(0, builder.BuildCalls);
             Assert.Single(await queue.GetPendingAsync([key], ct));
+            Assert.Equal(RunState.Queued, tracker.Get(request.RunId)!.State);
             Assert.False(claims.IsHeldBy(key, request.RunId));
+            Assert.Equal(competingClaim, claims.IsHeldBy(key, holder));
+            Assert.Equal(competingClaim ? 1 : 0, claims.ActiveCount);
             Assert.Equal(JsonSerializer.Serialize(run), JsonSerializer.Serialize(await store.GetRunAsync(request.RunId, ct)));
             Assert.Equal(profileBefore, JsonSerializer.Serialize(await store.ReadModelProfileAsync(request.RunId, 0, 100, time.GetUtcNow(), ct)));
         }
