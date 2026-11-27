@@ -16,6 +16,7 @@
     [Parameter, EditorRequired] public DashboardRow Row { get; set; } = default!;
     [Parameter] public DashboardRerunState State { get; set; } = new();
     [Parameter] public EventCallback OnAccepted { get; set; }
+    [Parameter] public EventCallback<SubmitReviewResponse> OnRunAccepted { get; set; }
     private DashboardRerunState? _Subscribed;
     private ElementReference _Target;
     private bool _Disposed;
@@ -47,6 +48,7 @@
             {
                 State.Accepted(key, accepted.RunId);
                 Notifications.Notify(NotificationSeverity.Success, "Review queued", $"Queued review {accepted.RunId}. Gates may still skip this run.");
+                await OnRunAccepted.InvokeAsync(accepted);
                 await OnAccepted.InvokeAsync();
                 return;
             }

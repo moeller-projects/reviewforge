@@ -1,0 +1,48 @@
+@using ReviewForge.Core.Domain
+@using static DashboardPresentation
+
+<section class="draft-pr-picker" aria-label="Start a read-only review draft">
+    <p>Nothing is posted automatically. Inspect findings first, then choose which approved findings to post.</p>
+    @if (!VerificationEnabled)
+    {
+        <p class="notice" role="status">Finding verification must be enabled before starting draft reviews.</p>
+    }
+    <label class="draft-pr-search">Find a pull request
+        <input type="search" aria-label="Search pull requests for draft review" placeholder="Title, ID, author or repository"
+            value="@_Search" @oninput="SearchChanged" />
+    </label>
+    <ul class="draft-pr-choices">
+        @foreach (var row in Rows.Where(r => Matches(r, _Search, null, null, null)))
+        {
+            <li @key="row.PullRequest.Candidate.Key">
+                <button type="button" class="draft-pr-choice" disabled="@(!VerificationEnabled || _Selecting || row.ActiveBlocker is not null)" @onclick="() => SelectAsync(row)">
+                    <span class="worklist-pr-scope">@row.PullRequest.Candidate.Key.Project / @row.PullRequest.RepositoryName · #@row.PullRequest.Candidate.Key.PrId</span>
+                    <strong>@row.PullRequest.Candidate.Pr.Title</strong>
+                    <span class="worklist-muted">@row.PullRequest.Candidate.CreatorName @(row.PullRequest.Candidate.Pr.IsDraft ? "· Draft PR" : "")</span>
+                </button>
+                @if (row.ActiveBlocker is not null) { <small>A run is already in flight.</small> }
+            </li>
+        }
+    </ul>
+    @if (!Rows.Any(r => Matches(r, _Search, null, null, null)))
+    {
+        <p role="status">@(Rows.Count == 0 ? "No pull requests retrieved. Refresh inventory and try again." : "No matching pull requests.")</p>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<DashboardRow> Rows { get; set; } = [];
+    [Parameter] public bool VerificationEnabled { get; set; }
+    [Parameter] public EventCallback<PrKey> OnSelected { get; set; }
+    private string _Search = "";
+    private bool _Selecting;
+    private void SearchChanged(ChangeEventArgs args) => _Search = args.Value?.ToString() ?? "";
+    private async Task SelectAsync(DashboardRow row)
+    {
+        // Ordinary rerun eligibility is deliberately irrelevant to a manual read-only draft.
+        if (!VerificationEnabled || _Selecting || row.ActiveBlocker is not null) return;
+        _Selecting = true;
+        try { await OnSelected.InvokeAsync(row.PullRequest.Candidate.Key); }
+        finally { _Selecting = false; }
+    }
+}

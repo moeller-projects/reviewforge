@@ -29,19 +29,25 @@ public class DashboardRerunTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Grid_and_details_share_pending_confirmation_cancel_then_submit_forced_ordinary_review_and_refresh(bool fromDetails)
+    public async Task Standalone_actions_share_pending_confirmation_cancel_then_submit_and_refresh(bool fromDetails)
     {
         await using var c = Context();
         var module = c.JSInterop.SetupModule("./dashboard-http.js");
         module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[1], "GET"))
             .SetResult(new(200, JsonSerializer.SerializeToElement(Data(Row()))));
         var post = module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[1], "POST"));
+        var row = Row();
+        var state = new DashboardRerunState();
+        async Task Refresh()
+        {
+            var result = await c.Services.GetRequiredService<DashboardBrowserClient>().GetDashboardAsync();
+            if (result.Value is { } value) state.Reconcile(value);
+        }
+        await Refresh();
         var dialogs = c.Render<RadzenDialog>();
-        var page = c.Render<Dashboard>();
-        page.WaitForAssertion(() => Assert.Single(page.FindAll("button[aria-label='Rerun review']")));
-        page.Find("button.details-button").Click();
-        dialogs.WaitForAssertion(() => Assert.Single(dialogs.FindAll("button[aria-label='Rerun review']")));
-        dialogs.Find("button[aria-label='Rerun review']").Click();
+        var page = c.Render<RerunReviewButton>(p => p.Add(x => x.Row, row).Add(x => x.State, state).Add(x => x.OnAccepted, Refresh));
+        var details = c.Render<ReviewDetailsDialog>(p => p.Add(x => x.Row, row).Add(x => x.Reruns, state).Add(x => x.OnAccepted, Refresh));
+        details.Find("button[aria-label='Rerun review']").Click();
         dialogs.WaitForAssertion(() => Assert.Contains("Drafts", dialogs.Markup));
         Assert.True(page.Find("button[aria-label='Rerun review']").HasAttribute("disabled"));
         await page.InvokeAsync(() => page.FindComponents<RadzenButton>().Single(b => b.Instance.Text == "Rerun review").Instance.Click.InvokeAsync(new()));
@@ -49,7 +55,7 @@ public class DashboardRerunTests
         await page.InvokeAsync(() => c.Services.GetRequiredService<DialogService>().Close(false));
         page.WaitForAssertion(() => Assert.False(page.Find("button[aria-label='Rerun review']").HasAttribute("disabled")));
         Assert.DoesNotContain(module.Invocations["send"], i => Equals(i.Arguments[1], "POST"));
-        if (fromDetails) dialogs.Find("button[aria-label='Rerun review']").Click();
+        if (fromDetails) details.Find("button[aria-label='Rerun review']").Click();
         else page.Find("button[aria-label='Rerun review']").Click();
         await page.InvokeAsync(() => c.Services.GetRequiredService<DialogService>().Close(true));
         page.WaitForAssertion(() => Assert.Single(module.Invocations["send"], i => Equals(i.Arguments[1], "POST")));
@@ -80,13 +86,15 @@ public class DashboardRerunTests
         module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[1], "POST"))
             .SetResult(new(status, JsonSerializer.SerializeToElement(new { error = "<secret>" })));
         var notifications = c.Services.GetRequiredService<NotificationService>();
-        var page = c.Render<Dashboard>();
-        page.WaitForAssertion(() => Assert.Single(page.FindAll("button[aria-label='Rerun review']")));
+        var row = Row();
+        var state = new DashboardRerunState();
+        state.Reconcile(Data(row));
+        var page = c.Render<RerunReviewButton>(p => p.Add(x => x.Row, row).Add(x => x.State, state));
         page.Find("button[aria-label='Rerun review']").Click();
         await page.InvokeAsync(() => c.Services.GetRequiredService<DialogService>().Close(true));
         page.WaitForAssertion(() => Assert.Contains(notifications.Messages, m => m.Detail?.Contains(expected, StringComparison.OrdinalIgnoreCase) == true));
         Assert.DoesNotContain(notifications.Messages, m => m.Detail?.Contains("secret", StringComparison.Ordinal) == true);
-        Assert.Single(page.FindAll("button.details-button"));
+        Assert.Equal(row, state.Current(row.PullRequest.Candidate.Key));
         Assert.Equal(status is 401 or 403, page.Find("button[aria-label='Rerun review']").HasAttribute("disabled"));
         if (status is 401 or 403)
             Assert.EndsWith("/dashboard/login", c.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>().Uri);
@@ -211,10 +219,11 @@ public class DashboardRerunTests
         var row = Row() with { ActiveBlocker = new(Guid.NewGuid(), head, kind, RunState.Queued) };
         c.JSInterop.SetupModule("./dashboard-http.js").Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true)
             .SetResult(new(200, JsonSerializer.SerializeToElement(Data(row))));
-        var dialogs = c.Render<RadzenDialog>();
-        var page = c.Render<Dashboard>();
-        page.WaitForAssertion(() => Assert.True(page.Find("button[aria-label='Rerun review']").HasAttribute("disabled")));
-        page.Find("button.details-button").Click();
-        dialogs.WaitForAssertion(() => Assert.True(dialogs.Find("button[aria-label='Rerun review']").HasAttribute("disabled")));
+        var state = new DashboardRerunState();
+        state.Reconcile(Data(row));
+        var button = c.Render<RerunReviewButton>(p => p.Add(x => x.Row, row).Add(x => x.State, state));
+        var details = c.Render<ReviewDetailsDialog>(p => p.Add(x => x.Row, row).Add(x => x.Reruns, state));
+        Assert.True(button.Find("button[aria-label='Rerun review']").HasAttribute("disabled"));
+        Assert.True(details.Find("button[aria-label='Rerun review']").HasAttribute("disabled"));
     }
 }

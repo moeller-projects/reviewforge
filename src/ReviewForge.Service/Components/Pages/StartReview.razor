@@ -1,0 +1,137 @@
+@page "/dashboard/start"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@using ReviewForge.Core.Domain
+@using ReviewForge.Service.Components.Dashboard
+@inject DashboardBrowserClient Browser
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>Start a draft review · ReviewForge</PageTitle>
+<main class="dashboard" aria-busy="@(_Loading || _Submitting).ToString().ToLowerInvariant()">
+    <header class="dashboard-header">
+        <div><a href="/dashboard">← Runs</a><h1>Start a draft review</h1></div>
+        <button type="button" class="compact-action" disabled="@(_Loading || _Submitting || _AuthenticationExpired)" @onclick="RefreshAsync">Refresh PRs</button>
+    </header>
+    @if (_Error is not null)
+    {
+        <p class="notice error" role="alert">@_Error @if (_AuthenticationExpired) { <a href="/dashboard/login">Log in again</a> }</p>
+    }
+    @if (_Loading && _Inventory is null) { <p role="status">Loading pull requests…</p> }
+    @if (_Inventory is { } inventory)
+    {
+        @if (!inventory.IsComplete || inventory.InventoryStale || inventory.SourceWarnings.Count > 0)
+        {
+            <details class="snapshot-meta"><summary>Inventory may be incomplete or stale</summary>
+                @foreach (var warning in inventory.SourceWarnings) { <p>@warning</p> }
+                <p>Selection is advisory. Submission checks the PR claim again.</p>
+            </details>
+        }
+        <DraftPrPicker Rows="inventory.Rows" VerificationEnabled="@(_Capability?.Available == true && !_AuthenticationExpired && !_Loading)" OnSelected="StartDraftAsync" />
+        <details class="advanced-review">
+            <summary>Automatic publication (advanced)</summary>
+            <p>This starts an ordinary review that can post findings and perform configured author-authorized fixes without this draft approval workflow.</p>
+            <label>Pull request
+                <select aria-label="Select PR for automatic publication" @onchange="SelectOrdinary">
+                    <option value="">Select a pull request</option>
+                    @for (var index = 0; index < inventory.Rows.Count; index++)
+                    {
+                        var row = inventory.Rows[index];
+                        <option value="@index">@row.PullRequest.RepositoryName #@row.PullRequest.Candidate.Key.PrId · @row.PullRequest.Candidate.Pr.Title</option>
+                    }
+                </select>
+            </label>
+            @if (OrdinaryRow is { } selected)
+            {
+                <RerunReviewButton Row="selected" State="_Reruns" OnRunAccepted="OrdinaryAccepted" />
+            }
+        </details>
+    }
+</main>
+
+@code {
+    private DashboardResponse? _Inventory;
+    private DraftCapabilityResponse? _Capability;
+    private readonly DashboardRerunState _Reruns = new();
+    private readonly CancellationTokenSource _Lifetime = new();
+    private bool _Loading = true, _Submitting, _AuthenticationExpired, _Disposed;
+    private string? _Error;
+    private int? _OrdinaryIndex;
+    private Task _Work = Task.CompletedTask;
+    private DashboardRow? OrdinaryRow => _Inventory is not null && _OrdinaryIndex is { } i && i >= 0 && i < _Inventory.Rows.Count ? _Inventory.Rows[i] : null;
+
+    protected override Task OnAfterRenderAsync(bool firstRender) => firstRender ? RefreshAsync() : Task.CompletedTask;
+    private Task RefreshAsync() => _Disposed ? Task.CompletedTask : !_Work.IsCompleted ? _Work : _Work = LoadAsync();
+    private async Task LoadAsync()
+    {
+        _Loading = true;
+        StateHasChanged();
+        try
+        {
+            var inventory = await Browser.GetDashboardAsync(_Lifetime.Token);
+            if (_Disposed) return;
+            if (inventory.Outcome != BrowserOutcome.Ok || inventory.Value is null)
+            {
+                Fail(inventory.Outcome, "Could not load pull requests. Refresh to try again.");
+                return;
+            }
+            var capability = await Browser.GetDraftCapabilityAsync(_Lifetime.Token);
+            if (_Disposed) return;
+            _Inventory = inventory.Value;
+            _Reruns.Reconcile(_Inventory);
+            _Capability = capability.Outcome == BrowserOutcome.Ok ? capability.Value : null;
+            if (capability.Outcome != BrowserOutcome.Ok) Fail(capability.Outcome, "Could not confirm draft availability. Refresh before starting a review.");
+            else _Error = null;
+        }
+        finally { if (!_Disposed) { _Loading = false; StateHasChanged(); } }
+    }
+
+    private async Task StartDraftAsync(PrKey key)
+    {
+        if (_Disposed || _Submitting || _AuthenticationExpired || _Capability?.Available != true) return;
+        _Submitting = true;
+        _Error = null;
+        try
+        {
+            var result = await Browser.SubmitDraftAsync(new(key.Org, key.Project, key.RepositoryId, key.PrId), _Lifetime.Token);
+            if (_Disposed || result.Outcome == BrowserOutcome.Cancelled) return;
+            if (result.Outcome == BrowserOutcome.Accepted && result.Value is { } accepted)
+            {
+                Navigation.NavigateTo($"/dashboard/runs/{accepted.RunId}");
+                return;
+            }
+            Fail(result.Outcome, result.Outcome switch
+            {
+                BrowserOutcome.Conflict => "A run is already in flight for this PR. Refresh before retrying.",
+                BrowserOutcome.Invalid => "The draft request was invalid. Refresh the PR list before retrying.",
+                BrowserOutcome.RateLimited => "Too many requests. Wait a moment before retrying.",
+                BrowserOutcome.Unavailable => "Draft reviews or the queue are unavailable. Refresh before retrying.",
+                _ => "Could not confirm submission. The request may have reached the server. Check the runs dashboard before retrying.",
+            });
+        }
+        finally { _Submitting = false; }
+    }
+
+    private void Fail(BrowserOutcome outcome, string message)
+    {
+        if (outcome is BrowserOutcome.Unauthenticated or BrowserOutcome.Forbidden)
+        {
+            _AuthenticationExpired = true;
+            _Reruns.ExpireAuthentication();
+            _Error = "Session expired or access denied. Log in again.";
+        }
+        else _Error = message;
+    }
+    private void SelectOrdinary(ChangeEventArgs args) => _OrdinaryIndex = int.TryParse(args.Value?.ToString(), out var index) ? index : null;
+    private Task OrdinaryAccepted(SubmitReviewResponse accepted)
+    {
+        Navigation.NavigateTo($"/dashboard/runs/{accepted.RunId}");
+        return Task.CompletedTask;
+    }
+    public async ValueTask DisposeAsync()
+    {
+        _Disposed = true;
+        _Lifetime.Cancel();
+        await _Work;
+        _Lifetime.Dispose();
+    }
+}
