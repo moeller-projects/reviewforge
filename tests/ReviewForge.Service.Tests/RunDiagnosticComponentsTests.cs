@@ -11,6 +11,7 @@ public sealed class RunDiagnosticComponentsTests
     public async Task Execution_shows_actual_outcomes_durations_failure_codes_and_trace_separately_from_plan()
     {
         await using var c = new BunitContext();
+        c.JSInterop.Mode = JSRuntimeMode.Loose;
         var at = DateTimeOffset.UtcNow;
         var status = new RunStatus(Guid.NewGuid(), new("o", "p", "r", 1), RunState.Failed, null, at);
         var diagnostics = new RunDiagnostics(status.RunId, "trace-correlation", ["FetchPrContext", "ExecuteReasoning"],
@@ -19,6 +20,7 @@ public sealed class RunDiagnosticComponentsTests
         var component = c.Render<RunExecutionView>(p => p.Add(x => x.Status, status).Add(x => x.Diagnostics, diagnostics));
         Assert.Equal(2, component.FindAll(".stage-diagnostic").Count);
         Assert.Contains("12.5 ms", component.Markup);
+        component.Find("[data-stage-index='1']").Click();
         Assert.Contains("stage-failed", component.Markup);
         Assert.Contains("trace-correlation", component.Markup);
         Assert.Contains("Planned stages", component.Markup);
@@ -29,6 +31,7 @@ public sealed class RunDiagnosticComponentsTests
     public async Task Legacy_execution_and_context_remain_explicitly_unavailable()
     {
         await using var c = new BunitContext();
+        c.JSInterop.Mode = JSRuntimeMode.Loose;
         var status = new RunStatus(Guid.NewGuid(), new("o", "p", "r", 1), RunState.Completed, null, DateTimeOffset.UtcNow)
             { LoadedStages = ["FetchPrContext"] };
         var execution = c.Render<RunExecutionView>(p => p.Add(x => x.Status, status));

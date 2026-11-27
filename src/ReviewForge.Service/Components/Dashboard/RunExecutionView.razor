@@ -1,34 +1,195 @@
 @using ReviewForge.Core.Domain
 @using System.Globalization
+@using Microsoft.JSInterop
 @using static DashboardPresentation
+@using static StageExecutionPresentation
+@implements IAsyncDisposable
+@inject IJSRuntime JS
 
-<section aria-label="Run execution diagnostics">
+<section class="execution-workspace" aria-label="Run execution diagnostics" @ref="_Root">
     <p>Queued: @Time(Status.EnqueuedAt) · Started: @Time(Status.StartedAt) · Completed: @Time(Status.CompletedAt)</p>
+    <p>Queue wait: @Milliseconds(QueueWait(Status.EnqueuedAt, Status.StartedAt)) · Current live stage: @(Status.CurrentStage is null ? "unavailable" : StageLabels.Label(Status.CurrentStage))</p>
+    <div class="execution-identifiers">
+        <span>Run ID: <code>@Status.RunId</code></span>
+        <button type="button" data-copy-kind="Run ID" data-copy-value="@Status.RunId">Copy run ID</button>
+        <span>Trace: <code>@(Diagnostics?.TraceId ?? "unavailable")</code></span>
+        @if (Diagnostics?.TraceId is { Length: > 0 } trace)
+        {
+            <button type="button" data-copy-kind="Trace ID" data-copy-value="@trace">Copy trace ID</button>
+        }
+    </div>
+    <p data-copy-feedback role="status" aria-live="polite"></p>
     @if (Diagnostics is { } diagnostics)
     {
-        <p>Run correlation: <code>@diagnostics.RunId</code> · Trace: <code>@(diagnostics.TraceId ?? "unavailable")</code></p>
-        <ol class="stage-list">
-            @foreach (var stage in diagnostics.Stages)
-            {
-                <li class="stage-diagnostic">
-                    <span>@StageLabels.Label(stage.Stage)</span> · <strong>@stage.Outcome</strong>
-                    <span>@(stage.DurationMilliseconds is { } ms ? ms.ToString("0.##", CultureInfo.InvariantCulture) + " ms" : "duration unavailable")</span>
-                    <small>@Time(stage.StartedAt) → @Time(stage.CompletedAt)</small>
-                    @if (stage.FailureCode is { } failureCode) { <code>@failureCode</code> }
-                </li>
-            }
-        </ol>
+        <div class="execution-toolbar">
+            <div role="group" aria-label="Execution view">
+                <button type="button" aria-label="Show stage timeline" aria-pressed="@((!_Table).ToString().ToLowerInvariant())" @onclick="() => _Table = false">Timeline</button>
+                <button type="button" aria-label="Show duration table" aria-pressed="@_Table.ToString().ToLowerInvariant()" @onclick="() => _Table = true">Duration table</button>
+            </div>
+            <label>Order <select aria-label="Stage order" @bind="_Order">
+                <option value="chronological">Chronological</option>
+                <option value="duration-desc">Duration: slowest first</option>
+                <option value="duration-asc">Duration: fastest first</option>
+            </select></label>
+            <button type="button" aria-label="Previous failed stage" disabled="@(!_Rows.Any(r => r.Stage.Outcome == "failed"))" @onclick="() => MoveFailed(-1)">Previous failed stage</button>
+            <button type="button" aria-label="Next failed stage" disabled="@(!_Rows.Any(r => r.Stage.Outcome == "failed"))" @onclick="() => MoveFailed(1)">Next failed stage</button>
+        </div>
+        <p id="@_HelpId" class="worklist-muted">Select a stage to inspect. On stage buttons, use Up/Down or Home/End to select. Failed-stage navigation wraps in chronological order. All times are milliseconds (ms).</p>
+        @if (_Rows.Count == 0)
+        {
+            <p>No recorded stage executions. Planned stages below do not prove execution.</p>
+        }
+        else
+        {
+            <div class="execution-layout">
+                <div class="execution-stages" aria-describedby="@_HelpId">
+                    @if (_Table)
+                    {
+                        <table class="execution-table">
+                            <caption>Recorded stage executions · offset from run start and observed duration in ms</caption>
+                            <thead><tr><th scope="col">Stage</th><th scope="col">Outcome</th><th scope="col">Start offset</th><th scope="col">Duration</th></tr></thead>
+                            <tbody>
+                                @foreach (var row in Sort(_Rows, _Order))
+                                {
+                                    <tr class="stage-diagnostic" @key="row.Index">
+                                        <th scope="row"><button type="button" data-stage-index="@row.Index" tabindex="@(row.Index == _Selected ? 0 : -1)" aria-pressed="@((row.Index == _Selected).ToString().ToLowerInvariant())" @onclick="() => Select(row.Index)">@StageLabels.Label(row.Stage.Stage)</button></th>
+                                        <td>@row.Outcome</td><td>@Milliseconds(row.OffsetMilliseconds)</td><td>@Milliseconds(row.DurationMilliseconds)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <ol class="execution-timeline" aria-label="Recorded stage timeline">
+                            @foreach (var row in Sort(_Rows, _Order))
+                            {
+                                <li class="stage-diagnostic" @key="row.Index">
+                                    <button type="button" data-stage-index="@row.Index" tabindex="@(row.Index == _Selected ? 0 : -1)" aria-pressed="@((row.Index == _Selected).ToString().ToLowerInvariant())" @onclick="() => Select(row.Index)">
+                                        <strong>@StageLabels.Label(row.Stage.Stage)</strong><span>@row.Outcome</span>
+                                        <span>Start offset: @Milliseconds(row.OffsetMilliseconds) · Duration: @Milliseconds(row.DurationMilliseconds)</span>
+                                        @if (row.HasBar)
+                                        {
+                                            <span class="execution-track" aria-hidden="true"><span class="execution-bar" style="@BarStyle(row)"></span></span>
+                                        }
+                                        else { <span class="worklist-muted">Timeline measurement unavailable</span> }
+                                    </button>
+                                </li>
+                            }
+                        </ol>
+                    }
+                </div>
+                @if (_Rows.FirstOrDefault(r => r.Index == _Selected) is { } selected)
+                {
+                    <section class="execution-inspector" aria-label="Stage inspector" aria-live="polite" aria-atomic="true">
+                        <h3>@StageLabels.Label(selected.Stage.Stage)</h3>
+                        <dl>
+                            <dt>Outcome</dt><dd>@selected.Outcome</dd>
+                            <dt>Start offset from run start</dt><dd>@Milliseconds(selected.OffsetMilliseconds)</dd>
+                            <dt>Observed duration</dt><dd>@Milliseconds(selected.DurationMilliseconds)</dd>
+                            <dt>Started (UTC)</dt><dd>@StageTime(selected.Stage.StartedAt)</dd>
+                            <dt>Ended (UTC)</dt><dd>@StageTime(selected.Stage.CompletedAt)</dd>
+                            <dt>Failure code</dt><dd><code>@SafeFailureCode(selected.Stage.FailureCode)</code></dd>
+                        </dl>
+                        @if (!selected.HasBar)
+                        {
+                            <p class="worklist-muted">Partial or invalid timing: a complete aligned interval is unavailable. Missing measurements are not zero.</p>
+                        }
+                    </section>
+                }
+            </div>
+        }
         <details><summary>Planned stages (not execution evidence)</summary><ol>@foreach (var stage in diagnostics.PlannedStages) { <li>@StageLabels.Label(stage)</li> }</ol></details>
     }
     else
     {
-        <p>Durable execution history unavailable for this run. Current live stage: @(Status.CurrentStage ?? "unavailable").</p>
+        <p>Durable execution history unavailable for this run. No stage execution is inferred from live status or the plan.</p>
         <details><summary>Planned stages (not execution evidence)</summary><ol>@foreach (var stage in Status.LoadedStages) { <li>@StageLabels.Label(stage)</li> }</ol></details>
     }
-    <p class="worklist-muted">Durations are observed stage times, not progress estimates. Use the run/trace correlation when inspecting service logs.</p>
+    <p class="worklist-muted">Durations are observed stage times, not progress estimates. Stage counts are not time progress. Detailed model/tool-call profiling is unavailable here. Use the run/trace correlation when inspecting service logs.</p>
 </section>
 
 @code {
     [Parameter, EditorRequired] public RunStatus Status { get; set; } = default!;
     [Parameter] public RunDiagnostics? Diagnostics { get; set; }
+    private readonly string _HelpId = "execution-help-" + Guid.NewGuid().ToString("N");
+    private ElementReference _Root;
+    private IJSObjectReference? _Module, _Controller;
+    private IReadOnlyList<StageExecutionRow> _Rows = [];
+    private Guid _RunId;
+    private int _Selected;
+    private bool _Table, _FocusSelected, _Disposed;
+    private string _Order = "chronological";
+
+    protected override void OnParametersSet()
+    {
+        if (_RunId != Status.RunId)
+        {
+            _RunId = Status.RunId;
+            _Selected = 0;
+            _Order = "chronological";
+            _Table = false;
+        }
+        _Rows = Project(Diagnostics?.Stages ?? [], Status.StartedAt, Status.State == RunState.Running);
+        if (!_Rows.Any(r => r.Index == _Selected)) _Selected = _Rows.FirstOrDefault()?.Index ?? 0;
+    }
+
+    private void Select(int index) => _Selected = index;
+    private void MoveFailed(int direction)
+    {
+        var failures = Sort(_Rows, "chronological").Where(r => r.Stage.Outcome == "failed").ToArray();
+        if (failures.Length == 0) return;
+        var chronological = Sort(_Rows, "chronological").ToArray();
+        var selectedPosition = Array.FindIndex(chronological, r => r.Index == _Selected);
+        var target = direction > 0
+            ? failures.FirstOrDefault(r => Array.IndexOf(chronological, r) > selectedPosition) ?? failures[0]
+            : failures.LastOrDefault(r => Array.IndexOf(chronological, r) < selectedPosition) ?? failures[^1];
+        _Selected = target.Index;
+        _FocusSelected = true;
+    }
+
+    private string BarStyle(StageExecutionRow row)
+    {
+        var scale = Math.Max(1, _Rows.Where(r => r.HasBar).Max(r => r.OffsetMilliseconds!.Value + r.DurationMilliseconds!.Value));
+        return FormattableString.Invariant($"margin-inline-start:{row.OffsetMilliseconds / scale * 100:0.####}%;width:{row.DurationMilliseconds / scale * 100:0.####}%");
+    }
+
+    private static string StageTime(DateTimeOffset? value) => value is null || value == default(DateTimeOffset) ? "unavailable" : Time(value);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (firstRender)
+            {
+                _Module = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-execution.js");
+                if (_Disposed) { await _Module.DisposeAsync(); return; }
+                _Controller = await _Module.InvokeAsync<IJSObjectReference>("attach", _Root);
+                if (_Disposed)
+                {
+                    await _Controller.InvokeVoidAsync("dispose");
+                    await _Controller.DisposeAsync();
+                    return;
+                }
+            }
+            if (_FocusSelected && _Controller is not null)
+            {
+                _FocusSelected = false;
+                await _Controller.InvokeVoidAsync("focusSelected");
+            }
+        }
+        catch (JSDisconnectedException) { /* A retired circuit cannot receive focus or copy actions. */ }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_Disposed) return;
+        _Disposed = true;
+        try
+        {
+            if (_Controller is not null) { await _Controller.InvokeVoidAsync("dispose"); await _Controller.DisposeAsync(); }
+            if (_Module is not null) await _Module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { /* The circuit has already retired its DOM. */ }
+    }
 }

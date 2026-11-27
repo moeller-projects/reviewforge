@@ -70,6 +70,19 @@ Framework, theme, dialog and adapter assets are public, manifest-listed, and con
 or personalized data. Personalized responses retain no-store and nosniff headers. The
 static-asset development catch-all is disabled to preserve unknown API route semantics.
 
+## Execution inspection
+
+The run's Execution section shows only recorded stage evidence, with timeline and duration-table
+views and a shared stage inspector. Order stages chronologically or by measured duration to
+find bottlenecks. Missing timings remain unavailable; queue wait is separate from execution.
+Planned stages and live current-stage status do not prove historical execution. Terminal
+interrupted records remain partial; detailed model/tool-call data is not inferred.
+
+Select a stage button with Up/Down or Home/End, or use the previous/next failed-stage controls
+(which wrap chronologically). The inspector exposes safe outcome/failure codes and timestamps.
+Explicit Copy run ID / Copy trace ID buttons announce success or offer manual copy if browser
+clipboard access fails. This surface never includes raw run errors or configuration.
+
 ## Deployment requirements
 
 - **HTTPS is required as observed by ASP.NET Core.** The secure cookie policy is not

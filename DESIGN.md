@@ -152,6 +152,14 @@ Search, manual expansions, bounded loaded pages, retained snapshots and window s
 
 Component and isolated JS tests verify navigation, circuit return, command guards and scroll wiring. No browser or app startup was authorized for T08; real focus return, browser history/scroll timing, theme contrast and desktop/tablet/phone reflow remain release-verification gaps. No visual approval is claimed.
 
+## Stage execution inspector (reference)
+
+Execution offers a timeline and a semantic duration table over the same recorded stages. Bars align to the measured run start; text exposes start offset and observed duration in milliseconds in either view. Queue wait is separate and available only with valid enqueue/start timestamps. Missing, nonfinite or negative durations remain unavailable; interrupted/active stages and invalid timing are labeled partial. Planned stages never stand in for execution evidence, including gate-skipped and legacy runs.
+
+A native order control offers chronological, slowest-first and fastest-first order, with stable ties and missing measurements last. Stage buttons use roving focus: Up/Down and Home/End select within the execution surface. Previous/next failed-stage buttons wrap chronologically and focus the selected stage. The shared inspector shows safe outcome, timestamps, measured timing and allowlisted failure code. Run/trace copy is explicit, with polite success or safe manual-copy feedback; listeners belong to the execution root and are disposed. No detailed call data is invented or collected by this surface.
+
+The inspector stacks below the stage view at narrower widths; both views retain text independent of bar color. Component and isolated JS tests cover timing, state, sorting, navigation and copy/disposal. App/browser startup was not authorized for T09: actual timeline geometry, keyboard focus/announcements, desktop/tablet/phone reflow and both-theme contrast still require release verification. No visual approval is claimed.
+
 ## Do's and Don'ts
 
 - Do keep focus, selection, validation, human decisions and publication distinguishable.
