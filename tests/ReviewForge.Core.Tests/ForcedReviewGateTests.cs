@@ -14,9 +14,9 @@ public sealed class ForcedReviewGateTests
     [InlineData(true, true, RunKind.Review, EnqueueTrigger.Manual, false)]
     [InlineData(true, false, RunKind.Review, EnqueueTrigger.Discovery, false)]
     [InlineData(true, false, RunKind.Review, EnqueueTrigger.ResolveCommand, false)]
-    [InlineData(true, false, RunKind.ReviewDraft, EnqueueTrigger.Manual, false)]
+    [InlineData(true, false, RunKind.ReviewDraft, EnqueueTrigger.Manual, true)]
     [InlineData(true, false, RunKind.Resolve, EnqueueTrigger.Manual, false)]
-    public async Task Only_manual_ordinary_reviews_can_force_the_same_head_gate(
+    public async Task Force_only_affects_manual_ordinary_reviews_while_manual_drafts_are_always_read_only_eligible(
         bool force, bool draft, RunKind kind, EnqueueTrigger trigger, bool shouldReview)
     {
         var key = new PrKey("o", "p", "r", 1);

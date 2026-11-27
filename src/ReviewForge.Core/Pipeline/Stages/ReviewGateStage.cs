@@ -14,8 +14,14 @@ public sealed class ReviewGateStage(TimeProvider? clock = null, ILogger<ReviewGa
 
     public Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
-        ctx.Gate = ReviewGate.Evaluate(ctx.RequirePullRequest(), ctx.Fetch.PriorRun, ctx.Fetch.Threads, _Clock.GetUtcNow(),
-            forceReview: ctx.ForceReview && ctx.RunKind == RunKind.Review && ctx.Trigger == EnqueueTrigger.Manual);
+        var pr = ctx.RequirePullRequest();
+        // An explicit read-only preview is useful even for draft PRs and already-reviewed
+        // heads. Ordinary/discovered reviews retain their gates; this grants no publish,
+        // fix, vote, or coverage privileges to the draft pipeline.
+        ctx.Gate = ctx.RunKind == RunKind.ReviewDraft && ctx.Trigger == EnqueueTrigger.Manual
+            ? GateDecision.Review()
+            : ReviewGate.Evaluate(pr, ctx.Fetch.PriorRun, ctx.Fetch.Threads, _Clock.GetUtcNow(),
+                forceReview: ctx.ForceReview && ctx.RunKind == RunKind.Review && ctx.Trigger == EnqueueTrigger.Manual);
         logger?.LogDebug("gate decision for {Pr}: shouldReview={ShouldReview}, reason={Reason}, hasPriorRun={HasPriorRun}, threadCount={ThreadCount}",
             ctx.Pr, ctx.Gate.ShouldReview, ctx.Gate.Reason, ctx.Fetch.PriorRun is not null, ctx.Fetch.Threads.Count);
         if (!ctx.Gate.ShouldReview)
