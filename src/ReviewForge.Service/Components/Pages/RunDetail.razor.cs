@@ -246,21 +246,48 @@ public partial class RunDetail
         if (Busy || _AuthenticationExpired || _Route is null || _Unknown.Count == 0) return;
         var generation = _Generation;
         var id = RunId;
+        var ct = _Route.Token;
+        // Freeze membership once: unresolved findings in an early chunk must not starve later IDs.
+        var ids = _Unknown.ToArray();
+        var outcomes = new List<PublishFindingOutcome>();
+        var accepted = true;
+        string? errorCode = null;
+        BrowserOutcome? failure = null;
+        var completedChunk = false;
         _Reconciling = true;
-        var result = await Browser.ReconcileDraftAsync(id, new(_Unknown.ToArray()), _Route.Token);
-        if (!Current(generation)) return;
-        _Reconciling = false;
-        if (result.Outcome == BrowserOutcome.Ok && result.Value is { } reconciliation)
+        foreach (var chunk in ids.Chunk(100))
         {
-            _Publication = reconciliation;
-            foreach (var item in reconciliation.Findings.Where(f => f.Status == PublishFindingStatus.AlreadyPosted)) _Unknown.Remove(item.FindingId);
+            if (!Current(generation)) return;
+            if (ct.IsCancellationRequested) { failure = BrowserOutcome.Cancelled; break; }
+            var result = await Browser.ReconcileDraftAsync(id, new(chunk), ct);
+            if (!Current(generation)) return;
+            if (result.Outcome != BrowserOutcome.Ok || result.Value is not { } reconciliation)
+            {
+                failure = result.Outcome;
+                break;
+            }
+            completedChunk = true;
+            var requested = chunk.ToHashSet(StringComparer.Ordinal);
+            var confirmedOutcomes = reconciliation.Findings.Where(f => requested.Contains(f.FindingId)).ToArray();
+            outcomes.AddRange(confirmedOutcomes);
+            foreach (var item in confirmedOutcomes.Where(f => f.Status == PublishFindingStatus.AlreadyPosted)) _Unknown.Remove(item.FindingId);
+            accepted &= reconciliation.Accepted;
+            errorCode ??= reconciliation.ErrorCode;
+            _Publication = new(accepted, errorCode, outcomes.ToArray());
+        }
+        _Reconciling = false;
+        if (completedChunk && !ct.IsCancellationRequested
+            && failure is not (BrowserOutcome.Unauthenticated or BrowserOutcome.Forbidden or BrowserOutcome.Cancelled))
+        {
             await RefreshAsync();
             if (!Current(generation)) return;
-            _Message = reconciliation.UnknownCount > 0
+        }
+        if (failure is { } outcome)
+            Fail(outcome, "Could not reconcile publication state. Outcomes remain unknown; no findings were reposted.");
+        else
+            _Message = _Unknown.Count > 0
                 ? "No matching external thread was observed for some findings. Their outcomes remain unknown. Check the PR, reconcile again, or start a new draft; nothing was reposted."
                 : "Publication state reconciled from existing threads. No findings were posted by reconciliation.";
-        }
-        else Fail(result.Outcome, "Could not reconcile publication state. Outcomes remain unknown; no findings were reposted.");
     }
 
     private async Task HistoryAsync(string findingId)

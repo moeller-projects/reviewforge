@@ -614,6 +614,135 @@ public sealed class RunDetailPageTests
         Assert.Single(c.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile"));
     }
 
+    [Theory]
+    [InlineData(101, false)]
+    [InlineData(201, false)]
+    [InlineData(201, true)]
+    public async Task One_reconciliation_action_chunks_a_snapshot_without_starving_later_unknown_ids(int count, bool leaveFirstUnknown)
+    {
+        var findings = Enumerable.Range(0, count).Select(i => Finding($"unknown-{i:D3}") with { Published = null, PublicationUnknown = true }).ToArray();
+        await using var c = new BunitContext();
+        c.Services.AddScoped<DashboardBrowserClient>();
+        c.Services.AddSingleton(TimeProvider.System);
+        c.JSInterop.Mode = JSRuntimeMode.Loose;
+        var http = c.JSInterop.SetupModule("./dashboard-http.js");
+        var get = http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/details"));
+        get.SetResult(new(200, JsonSerializer.SerializeToElement(Details(findings))));
+        foreach (var chunk in findings.Chunk(100))
+        {
+            var chunkIds = chunk.Select(f => f.FindingId).ToArray();
+            var outcomes = chunkIds.Select(id => new PublishFindingOutcome(id,
+                leaveFirstUnknown && id == findings[0].FindingId ? PublishFindingStatus.Unknown : PublishFindingStatus.AlreadyPosted, 12)).ToArray();
+            http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")
+                    && i.Arguments[3] is ReconcileDraftRequest request && request.FindingIds.SequenceEqual(chunkIds))
+                .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(!leaveFirstUnknown, null, outcomes))));
+        }
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("button.reconcile-publication")));
+        // Only the final refresh observes these durable outcomes; no intermediate refresh is needed.
+        get.SetResult(new(200, JsonSerializer.SerializeToElement(Details(findings.Select((f, i) =>
+            leaveFirstUnknown && i == 0 ? f : f with { Published = true, PublicationUnknown = false, ThreadId = 12 }).ToArray()))));
+        page.Find("button.reconcile-publication").Click();
+        page.WaitForAssertion(() => Assert.Equal(count, page.FindAll("section[aria-label='Publication outcomes'] li").Count));
+        var requests = http.Invocations.Where(i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile"))
+            .Select(i => Assert.IsType<ReconcileDraftRequest>(i.Arguments[3])).ToArray();
+        Assert.Equal((count + 99) / 100, requests.Length);
+        Assert.All(requests, request => Assert.InRange(request.FindingIds.Count, 1, 100));
+        Assert.Equal(findings.Select(f => f.FindingId), requests.SelectMany(r => r.FindingIds));
+        Assert.Equal(2, http.Invocations.Count(i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/details")));
+        Assert.DoesNotContain(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"));
+        Assert.Equal(leaveFirstUnknown ? 1 : 0, page.FindAll("button.reconcile-publication").Count);
+        if (leaveFirstUnknown)
+        {
+            http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")
+                    && i.Arguments[3] is ReconcileDraftRequest request && request.FindingIds.SequenceEqual(new[] { findings[0].FindingId }))
+                .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(false, null, [new(findings[0].FindingId, PublishFindingStatus.Unknown)]))));
+            page.Find("button.reconcile-publication").Click();
+            page.WaitForAssertion(() => Assert.Single(page.FindAll("section[aria-label='Publication outcomes'] li")));
+            var retry = Assert.IsType<ReconcileDraftRequest>(http.Invocations.Last(i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")).Arguments[3]);
+            Assert.Equal(findings[0].FindingId, Assert.Single(retry.FindingIds));
+        }
+    }
+
+    [Theory]
+    [InlineData(500)]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(0)]
+    public async Task Reconciliation_second_chunk_failure_keeps_completed_outcomes_and_unrequested_ids(int status)
+    {
+        var findings = Enumerable.Range(0, 201).Select(i => Finding($"unknown-{i:D3}") with { Published = null, PublicationUnknown = true }).ToArray();
+        await using var c = new BunitContext();
+        c.Services.AddScoped<DashboardBrowserClient>();
+        c.Services.AddSingleton(TimeProvider.System);
+        c.JSInterop.Mode = JSRuntimeMode.Loose;
+        var http = c.JSInterop.SetupModule("./dashboard-http.js");
+        var get = http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/details"));
+        get.SetResult(new(200, JsonSerializer.SerializeToElement(Details(findings))));
+        var firstIds = findings.Take(100).Select(f => f.FindingId).ToArray();
+        // An unsolicited confirmation for a later chunk must not remove that finding from the unknown set.
+        var firstOutcomes = firstIds.Select(id => new PublishFindingOutcome(id, PublishFindingStatus.AlreadyPosted, 12))
+            .Append(new(findings[200].FindingId, PublishFindingStatus.AlreadyPosted, 12)).ToArray();
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")
+                && i.Arguments[3] is ReconcileDraftRequest request && request.FindingIds.SequenceEqual(firstIds))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(true, null, firstOutcomes))));
+        var second = http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")
+            && i.Arguments[3] is ReconcileDraftRequest request && request.FindingIds.Contains(findings[100].FindingId));
+        if (status == 0) second.SetException(new OperationCanceledException());
+        else second.SetResult(new(status, null));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("button.reconcile-publication")));
+        get.SetResult(new(200, JsonSerializer.SerializeToElement(Details(findings.Select((f, i) =>
+            i < 100 ? f with { Published = true, PublicationUnknown = false, ThreadId = 12 } : f).ToArray()))));
+        page.Find("button.reconcile-publication").Click();
+        page.WaitForAssertion(() => Assert.Contains(status is 500 or 0 ? "Could not reconcile" : "Session expired", page.Markup));
+        Assert.Equal(100, page.FindAll("section[aria-label='Publication outcomes'] li").Count);
+        Assert.Equal(2, http.Invocations.Count(i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")));
+        Assert.Equal(status == 500 ? 2 : 1, http.Invocations.Count(i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/details")));
+        Assert.DoesNotContain(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"));
+        if (status is 401 or 403)
+        {
+            Assert.True(page.Find("button.reconcile-publication").HasAttribute("disabled"));
+            return;
+        }
+        if (status == 0) return;
+        second.SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(false, null,
+            findings.Skip(100).Take(100).Select(f => new PublishFindingOutcome(f.FindingId, PublishFindingStatus.Unknown)).ToArray()))));
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")
+                && i.Arguments[3] is ReconcileDraftRequest request && request.FindingIds.SequenceEqual(new[] { findings[200].FindingId }))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(false, null, [new(findings[200].FindingId, PublishFindingStatus.Unknown)]))));
+        page.Find("button.reconcile-publication").Click();
+        page.WaitForAssertion(() => Assert.Equal(101, page.FindAll("section[aria-label='Publication outcomes'] li").Count));
+        var retriedIds = http.Invocations.Where(i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")).Skip(2)
+            .SelectMany(i => Assert.IsType<ReconcileDraftRequest>(i.Arguments[3]).FindingIds);
+        Assert.Equal(findings.Skip(100).Select(f => f.FindingId), retriedIds);
+    }
+
+    [Fact]
+    public async Task Reconciliation_route_change_stops_later_chunks_and_ignores_the_old_response()
+    {
+        var findings = Enumerable.Range(0, 201).Select(i => Finding($"unknown-{i:D3}") with { Published = null, PublicationUnknown = true }).ToArray();
+        await using var c = Context(Details(findings));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        var pending = http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile"));
+        var next = Guid.NewGuid();
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{next:D}/details"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(Details(Finding("new-route")) with { Status = Details().Status with { RunId = next } })));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("button.reconcile-publication")));
+        page.Find("button.reconcile-publication").Click();
+        page.WaitForAssertion(() => Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile")));
+        page.Render(p => p.Add(x => x.RunId, next));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("article.finding-card")));
+        pending.SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(true, null,
+            findings.Take(100).Select(f => new PublishFindingOutcome(f.FindingId, PublishFindingStatus.AlreadyPosted, 12)).ToArray()))));
+        await page.InvokeAsync(() => Task.CompletedTask);
+        Assert.Empty(page.FindAll("section[aria-label='Publication outcomes']"));
+        Assert.Empty(page.FindAll("button.reconcile-publication"));
+        Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/reconcile"));
+        Assert.DoesNotContain(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"));
+    }
+
     [Fact]
     public async Task Reloaded_durable_unknown_stays_blocked_and_offers_explicit_reconciliation_without_posting()
     {
