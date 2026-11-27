@@ -250,17 +250,17 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
                 ), ranked AS (
                     SELECT Id,
                         ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId
-                            ORDER BY julianday(StartedAt) DESC, Id DESC) AS AttemptRank,
+                            ORDER BY StartedAtUtcTicks DESC, Id DESC) AS AttemptRank,
                         ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId,Success,CompletedAt IS NOT NULL
-                            ORDER BY julianday(StartedAt) DESC, Id DESC) AS OutcomeRank
+                            ORDER BY StartedAtUtcTicks DESC, Id DESC) AS OutcomeRank
                     FROM candidates WHERE Pipeline='Review' AND HeadSha=CurrentHead AND NOT IsLive
                 ), pr_ranked AS (
                     SELECT Id, ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId
-                        ORDER BY julianday(StartedAt) DESC, Id DESC) AS PrRank
+                        ORDER BY StartedAtUtcTicks DESC, Id DESC) AS PrRank
                     FROM candidates WHERE Pipeline='Review' AND NOT IsLive
                 ), incomplete_ranked AS (
                     SELECT Id, ROW_NUMBER() OVER (PARTITION BY Org,Project,RepositoryId,PrId
-                        ORDER BY julianday(StartedAt) DESC, Id DESC) AS IncompleteRank
+                        ORDER BY StartedAtUtcTicks DESC, Id DESC) AS IncompleteRank
                     FROM candidates WHERE CompletedAt IS NULL AND NOT IsLive
                 )
                 SELECT c.Id,c.Org,c.Project,c.RepositoryId,c.PrId,c.HeadSha,c.Pipeline,c.StartedAt,c.CompletedAt,c.Success,
