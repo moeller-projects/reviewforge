@@ -55,6 +55,9 @@ public class FakePullRequestSource : IPullRequestSource
 
     private int _PostCount;
 
+    /// <summary>Test hook before PR retrieval (head/claim/cancellation races).</summary>
+    public Action? BeforeGetPullRequest { get; set; }
+
     /// <summary>Optional exception for PR retrieval tests.</summary>
     public Exception? ThrowOnGetPullRequest { get; set; }
 
@@ -66,6 +69,7 @@ public class FakePullRequestSource : IPullRequestSource
 
     public virtual Task<PullRequest> GetPullRequestAsync(PrKey pr, CancellationToken ct)
     {
+        BeforeGetPullRequest?.Invoke();
         if (ThrowOnGetPullRequest is { } error)
         {
             return Task.FromException<PullRequest>(error);
@@ -468,6 +472,29 @@ public partial class FakeFindingStore : IFindingStore, IFindingDecisionStore, IR
             UpdateFinding(runId, dedupeKey, f => f with {Published = true, ThreadId = threadId ?? f.ThreadId});
         }
 
+        return Task.CompletedTask;
+    }
+
+    public Exception? ThrowOnPublicationIntent { get; set; }
+
+    public virtual Task SetFindingPublicationAttemptedAsync(Guid runId, string dedupeKey, bool attempted, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if ((ThrowOnPublicationIntent ?? ThrowOnSave) is { } error) return Task.FromException(error);
+        lock (Runs)
+        {
+            var run = Runs.SingleOrDefault(r => r.Id == runId);
+            if (run is null || !run.Findings.Any(f => f.DedupeKey == dedupeKey))
+                return Task.FromException(new InvalidOperationException("Publication finding is not stored in this run."));
+            UpdateFinding(runId, dedupeKey, f => f with { PublicationAttempted = attempted });
+            foreach (var records in new[] { Runs, RecentRuns })
+            {
+                var index = records.FindIndex(r => r.Id == runId);
+                if (index >= 0 && records[index].FindingObservations is { } observations)
+                    records[index] = records[index] with { FindingObservations = observations.Select(o => o.DedupeKey == dedupeKey
+                        ? o with { PublicationAttempted = attempted } : o).ToArray() };
+            }
+        }
         return Task.CompletedTask;
     }
 

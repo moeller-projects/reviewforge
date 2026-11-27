@@ -49,6 +49,7 @@ public sealed class FindingEntity
 
     public string? FindingJson { get; set; }
     public bool Published { get; set; }
+    public bool PublicationAttempted { get; set; }
 }
 
 /// <summary>Durable resolve action and its reply state.</summary>

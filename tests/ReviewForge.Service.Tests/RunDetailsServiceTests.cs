@@ -96,8 +96,10 @@ public sealed class RunDetailsServiceTests
         Assert.DoesNotContain("private", JsonSerializer.Serialize(response));
     }
 
-    [Fact]
-    public async Task Durable_publication_intent_is_unknown_until_thread_audit_is_confirmed()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Durable_publication_intent_is_unknown_until_thread_audit_is_confirmed(bool captured)
     {
         var store = new FakeFindingStore();
         var runs = new RunSubmissionService(new ReviewQueue(), new RunTracker(), new InFlightClaims(), store, TimeProvider.System, NullLogger<RunSubmissionService>.Instance);
@@ -107,11 +109,13 @@ public sealed class RunDetailsServiceTests
         var run = new ReviewRun(Guid.NewGuid(), new("o", "p", "r", 1), "head", ReviewKind.Full, DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow, true, [new("key", "r", "high", "title", null, null, null,
                 FindingJson: JsonSerializer.Serialize(finding, new JsonSerializerOptions(JsonSerializerDefaults.Web)))],
-            Pipeline: "ReviewDraft", FindingObservations: [observation]);
+            Pipeline: "ReviewDraft", FindingObservations: captured ? [observation] : null);
         store.Runs.Add(run);
+        if (!captured) await store.SetFindingPublicationAttemptedAsync(run.Id, "key", true, TestContext.Current.CancellationToken);
         var unknown = Assert.Single((await query.GetAsync(run.Id, TestContext.Current.CancellationToken))!.Findings);
         Assert.Null(unknown.Published);
         Assert.True(unknown.PublicationUnknown);
+        Assert.Equal(captured, (await query.GetAsync(run.Id, TestContext.Current.CancellationToken))!.ObservationsAvailable);
         await store.RecordFindingPublicationAsync(run.Id, "key", 42, false, TestContext.Current.CancellationToken);
         var posted = Assert.Single((await query.GetAsync(run.Id, TestContext.Current.CancellationToken))!.Findings);
         Assert.True(posted.Published);

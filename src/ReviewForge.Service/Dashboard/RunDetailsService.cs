@@ -50,7 +50,8 @@ public sealed class RunDetailsService(RunSubmissionService runs, IFindingStore s
             var row = f.AcceptedFinding;
             var decision = latest.FirstOrDefault(d => string.Equals(d.FindingId, f.Id, StringComparison.Ordinal));
             // Ordinary legacy Published=false is unknown, not proof of no external post.
-            var publicationUnknown = row is not null && !row.Published && row.ThreadId is null && o?.PublicationAttempted == true;
+            var publicationUnknown = row is not null && !row.Published && row.ThreadId is null &&
+                (row.PublicationAttempted || o?.PublicationAttempted == true);
             bool? published = row is null || publicationUnknown ? null : row.Published || row.ThreadId is not null ? true
                 : run.Pipeline == nameof(RunKind.ReviewDraft) || (run.Success && run.FindingObservations is not null) ? false : null;
             findings.Add(new(f.Id, Payload(o?.FindingJson), Payload(row?.FindingJson),

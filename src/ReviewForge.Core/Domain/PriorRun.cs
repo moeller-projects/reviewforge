@@ -53,4 +53,7 @@ public sealed record StoredFinding(
     // Commanded fixes ("thread-{id}" keys) are audit-only rows.
     string? AppliedFixJson = null,
     string? FindingJson = null,
-    bool Published = false);
+    bool Published = false,
+    // Durable host-write intent, independent of candidate-observation availability.
+    // An unconfirmed attempt is reconciled, never automatically reposted.
+    bool PublicationAttempted = false);

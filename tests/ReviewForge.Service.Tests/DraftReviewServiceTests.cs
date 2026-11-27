@@ -119,7 +119,7 @@ public sealed class DraftReviewServiceTests
     }
 
     [Fact]
-    public async Task Publish_retries_after_partial_failure_without_reposting_completed_finding()
+    public async Task Publish_reconciles_partial_failure_without_reposting_an_ambiguous_finding()
     {
         var run = Draft([Finding("key-1"), Finding("key-2")]);
         _Store.Runs.Add(run);
@@ -130,12 +130,17 @@ public sealed class DraftReviewServiceTests
         Assert.Single(_Source.PostedFindings);
 
         _Source.ThrowOnPostKey = null;
+        var unknown = await _Service.PublishAsync(run.Id, null, CancellationToken.None);
+        Assert.False(unknown.Accepted);
+        Assert.Equal(0, unknown.PublishedCount);
+        Assert.Single(_Source.PostedFindings);
+        _Source.Threads.Add(new(77, "key-2", ReviewThreadStatus.Active, []));
         var retry = await _Service.PublishAsync(run.Id, null, CancellationToken.None);
 
         Assert.True(retry.Accepted);
-        Assert.Equal(1, retry.PublishedCount);
-        Assert.Equal(1, retry.AlreadyPublishedCount);
-        Assert.Equal(2, _Source.PostedFindings.Count);
+        Assert.Equal(0, retry.PublishedCount);
+        Assert.Equal(2, retry.AlreadyPublishedCount);
+        Assert.Single(_Source.PostedFindings);
     }
 
     [Fact]
@@ -354,18 +359,23 @@ public sealed class DraftReviewServiceTests
         Assert.Single(_Source.PostedFindings);
     }
 
-    [Fact]
-    public async Task Ambiguous_host_write_has_durable_intent_and_explicit_reconciliation_never_reposts()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Ambiguous_host_write_has_durable_intent_and_explicit_reconciliation_never_reposts(bool captured)
     {
         var finding = Finding("ambiguous");
-        var run = Draft([finding]) with { FindingObservations = [FindingObservation.Create(finding) with { Validation = FindingValidationStatus.Accepted }] };
+        var run = Draft([finding]) with { FindingObservations = captured
+            ? [FindingObservation.Create(finding) with { Validation = FindingValidationStatus.Accepted }] : null };
         _Store.Runs.Add(run);
-        var id = run.FindingObservations![0].Id.ToString("N");
+        var id = captured ? run.FindingObservations![0].Id.ToString("N") : "ambiguous";
         await Approve(run, id);
         _Source.AfterPost = () => throw new InvalidOperationException("private transport failure");
         var outcome = await _Service.PublishSelectedAsync(run.Id, new("head-sha", [new(id, 1)]), CancellationToken.None);
         Assert.Equal(1, outcome.UnknownCount);
-        Assert.True(Assert.Single(_Store.Runs.Single().FindingObservations!).PublicationAttempted);
+        Assert.True(_Store.Runs.Single().Findings[0].PublicationAttempted);
+        if (captured) Assert.True(Assert.Single(_Store.Runs.Single().FindingObservations!).PublicationAttempted);
+        else Assert.Null(_Store.Runs.Single().FindingObservations);
         Assert.False(_Store.Runs.Single().Findings[0].Published);
         _Source.AfterPost = null;
         var repeated = await _Service.PublishSelectedAsync(run.Id, new("head-sha", [new(id, 1)]), CancellationToken.None);
@@ -384,6 +394,121 @@ public sealed class DraftReviewServiceTests
         Assert.True(_Store.Runs.Single().Findings[0].Published);
         Assert.Single(_Source.PostedFindings);
         Assert.Empty(_Source.GeneralComments);
+    }
+
+    [Theory]
+    [InlineData(false, "fetch-failed")]
+    [InlineData(true, "fetch-failed")]
+    [InlineData(false, "head-changed")]
+    [InlineData(true, "head-changed")]
+    [InlineData(false, "claim-lost")]
+    [InlineData(true, "claim-lost")]
+    [InlineData(false, "cancelled")]
+    [InlineData(true, "cancelled")]
+    public async Task Definitive_prewrite_exit_clears_intent_and_allows_an_explicit_retry(bool captured, string failure)
+    {
+        var finding = Finding("one");
+        var run = Draft([finding]) with { FindingObservations = captured
+            ? [FindingObservation.Create(finding) with { Validation = FindingValidationStatus.Accepted }] : null };
+        _Store.Runs.Add(run);
+        var id = captured ? run.FindingObservations![0].Id.ToString("N") : "one";
+        await Approve(run, id);
+        var request = new PublishSelectedDraftRequest("head-sha", [new(id, 1)]);
+        using var browser = new CancellationTokenSource();
+        var otherClaim = Guid.NewGuid();
+        var fetches = 0;
+        _Source.BeforeGetPullRequest = () =>
+        {
+            if (++fetches != 3) return; // The pin check after durable intent has been written.
+            Assert.True(_Store.Runs.Single().Findings[0].PublicationAttempted);
+            switch (failure)
+            {
+                case "fetch-failed": _Source.ThrowOnGetPullRequest = new InvalidOperationException("private failure"); break;
+                case "head-changed": _Source.Pr = _Source.Pr with { SourceCommitSha = "other-head" }; break;
+                case "claim-lost":
+                    _Claims.Release(Key, _Claims.Snapshot()[Key]);
+                    Assert.True(_Claims.TryClaim(Key, otherClaim, out _));
+                    break;
+                case "cancelled":
+                    browser.Cancel();
+                    _Source.ThrowOnGetPullRequest = new OperationCanceledException(browser.Token);
+                    break;
+            }
+        };
+        var failed = await _Service.PublishSelectedAsync(run.Id, request, browser.Token);
+        Assert.False(failed.Accepted);
+        Assert.Equal(failure switch { "head-changed" => "head-changed", "claim-lost" => "busy", _ => "publication-failed" }, failed.ErrorCode);
+        Assert.Empty(_Source.PostedFindings);
+        var saved = _Store.Runs.Single();
+        Assert.False(saved.Findings[0].PublicationAttempted);
+        if (captured) Assert.False(Assert.Single(saved.FindingObservations!).PublicationAttempted);
+        else Assert.Null(saved.FindingObservations);
+        if (failure == "claim-lost") Assert.True(_Claims.IsHeldBy(Key, otherClaim));
+        _Claims.Release(Key, otherClaim);
+        _Source.BeforeGetPullRequest = null;
+        _Source.ThrowOnGetPullRequest = null;
+        _Source.Pr = _Source.Pr with { SourceCommitSha = "head-sha" };
+        var retry = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.True(retry.Accepted);
+        Assert.Equal(1, retry.PostedCount);
+        Assert.Single(_Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Intent_storage_failure_prevents_host_write_and_is_retryable_after_recovery()
+    {
+        var run = Draft([Finding("one")]);
+        _Store.Runs.Add(run);
+        await Approve(run, "one");
+        var request = new PublishSelectedDraftRequest("head-sha", [new("one", 1)]);
+        _Store.ThrowOnPublicationIntent = new InvalidOperationException("private store failure");
+        var failed = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal("publication-unavailable", failed.ErrorCode);
+        Assert.Empty(_Source.PostedFindings);
+        Assert.False(_Store.Runs.Single().Findings[0].PublicationAttempted);
+        _Store.ThrowOnPublicationIntent = null;
+        Assert.Equal(1, (await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None)).PostedCount);
+        Assert.Single(_Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Failed_prewrite_cleanup_retains_conservative_intent_and_never_replays()
+    {
+        var run = Draft([Finding("one")]);
+        _Store.Runs.Add(run);
+        await Approve(run, "one");
+        var request = new PublishSelectedDraftRequest("head-sha", [new("one", 1)]);
+        var fetches = 0;
+        _Source.BeforeGetPullRequest = () =>
+        {
+            if (++fetches != 3) return;
+            _Store.ThrowOnPublicationIntent = new InvalidOperationException("cleanup unavailable");
+            _Source.ThrowOnGetPullRequest = new InvalidOperationException("prewrite failure");
+        };
+        var failed = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal("publication-unavailable", failed.ErrorCode);
+        Assert.True(_Store.Runs.Single().Findings[0].PublicationAttempted);
+        Assert.Empty(_Source.PostedFindings);
+        _Store.ThrowOnPublicationIntent = null;
+        _Source.BeforeGetPullRequest = null;
+        _Source.ThrowOnGetPullRequest = null;
+        var retry = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal(1, retry.UnknownCount);
+        Assert.Empty(_Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Malformed_payload_is_rejected_before_publication_or_intent()
+    {
+        var run = Draft([Finding("one")]);
+        run = run with { Findings = [run.Findings[0] with { FindingJson = "invalid-json" }] };
+        _Store.Runs.Add(run);
+        await Approve(run, "one");
+        var result = await _Service.PublishSelectedAsync(run.Id, new("head-sha", [new("one", 1)]), CancellationToken.None);
+        Assert.Equal("ineligible-finding", result.ErrorCode);
+        Assert.Equal(PublishFindingStatus.NotAttempted, Assert.Single(result.Findings).Status);
+        Assert.False(_Store.Runs.Single().Findings[0].PublicationAttempted);
+        Assert.Empty(_Source.PostedFindings);
     }
 
     private async Task Approve(ReviewRun run, string id) => Assert.True(await _Store.TryAppendFindingDecisionAsync(

@@ -102,6 +102,13 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
                 cmd.ExecuteNonQuery();
             }
 
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Findings') WHERE name = 'PublicationAttempted'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE Findings ADD COLUMN PublicationAttempted INTEGER NOT NULL DEFAULT 0";
+                cmd.ExecuteNonQuery();
+            }
+
             cmd.CommandText =
                 "CREATE TABLE IF NOT EXISTS \"ResolveActions\" (" +
                 "\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_ResolveActions\" PRIMARY KEY AUTOINCREMENT, " +
@@ -315,7 +322,7 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
             [
                 .. run.Findings.Select(f => new StoredFinding(
                     f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson,
-                    f.FindingJson, f.Published))
+                    f.FindingJson, f.Published, f.PublicationAttempted))
             ],
             run.LastObservedCommentAt);
     }
@@ -414,7 +421,7 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
             [
                 .. run.Findings.Select(f => new StoredFinding(
                     f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId, f.AppliedFixJson,
-                    f.FindingJson, f.Published))
+                    f.FindingJson, f.Published, f.PublicationAttempted))
             ],
             run.LastObservedCommentAt,
             run.Pipeline,
@@ -664,6 +671,7 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
         AppliedFixJson = f.AppliedFixJson,
         FindingJson = f.FindingJson,
         Published = f.Published,
+        PublicationAttempted = f.PublicationAttempted,
     };
 
     public async Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct)
@@ -680,6 +688,22 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
         await db.Findings.Where(f => f.RunId == runId && f.DedupeKey == dedupeKey)
             .ExecuteUpdateAsync(s => s.SetProperty(f => f.Published, true)
                 .SetProperty(f => f.ThreadId, f => threadId ?? f.ThreadId), ct).ConfigureAwait(false);
+    }
+
+    public async Task SetFindingPublicationAttemptedAsync(Guid runId, string dedupeKey, bool attempted, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var run = await db.Runs.Include(r => r.Findings).SingleOrDefaultAsync(r => r.Id == runId, ct).ConfigureAwait(false);
+        var findings = run?.Findings.Where(f => f.DedupeKey == dedupeKey).ToArray();
+        if (findings is null || findings.Length == 0)
+            throw new InvalidOperationException("Publication finding is not stored in this run.");
+        foreach (var finding in findings) finding.PublicationAttempted = attempted;
+        if (ReadObservations(run!.FindingObservationsJson) is { } observations)
+            run.FindingObservationsJson = JsonSerializer.Serialize(observations.Select(o => o.DedupeKey == dedupeKey
+                ? o with { PublicationAttempted = attempted } : o).ToArray(), ObservationJsonOptions);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
     }
 
     public async Task RecordFindingPublicationAsync(Guid runId, string dedupeKey, int threadId, bool newlyPosted, CancellationToken ct)
@@ -733,7 +757,7 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
                     [
                         .. r.Findings.Select(f => new StoredFinding(
                             f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId,
-                            f.AppliedFixJson, f.FindingJson, f.Published))
+                            f.AppliedFixJson, f.FindingJson, f.Published, f.PublicationAttempted))
                     ],
                     r.LastObservedCommentAt, r.Pipeline, ReadObservations(r.FindingObservationsJson)))
         ];

@@ -48,6 +48,7 @@ public class StoreHealthCheckTests
         public Task UpdateRunDiagnosticsAsync(Guid runId, RunDiagnostics diagnostics, CancellationToken ct) => Task.CompletedTask;
         public Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct) => Task.CompletedTask;
         public Task MarkFindingPublishedAsync(Guid runId, string dedupeKey, int? threadId, CancellationToken ct) => Task.CompletedTask;
+        public Task SetFindingPublicationAttemptedAsync(Guid runId, string dedupeKey, bool attempted, CancellationToken ct) => Task.CompletedTask;
         public Task RecordFindingPublicationAsync(Guid runId, string dedupeKey, int threadId, bool newlyPosted, CancellationToken ct) => Task.CompletedTask;
         public Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);
         public Task<IReadOnlyList<ReviewRun>> GetStaleShellsAsync(DateTimeOffset olderThan, CancellationToken ct) => Task.FromResult<IReadOnlyList<ReviewRun>>([]);

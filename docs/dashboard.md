@@ -286,6 +286,10 @@ unknown, or not-attempted result. Unknown means reconciliation is needed, not th
 write occurred. Use **Reconcile unknown findings** to inspect existing PR threads without
 reposting. If no matching thread is observed, the outcome stays unknown; check the PR manually,
 reconcile later, or start a new draft. The UI never automatically repeats a mutation.
+Publication intent is stored per finding, including legacy drafts; missing observation history
+stays unavailable. A known failure before the host call clears that intent, allowing an explicit
+retry. If the process stops or intent cleanup cannot be persisted, the intent remains conservative
+and requires reconciliation rather than another post.
 
 The collapsed **Automatic publication (advanced)** action on the start page is separate. It
 confirms an ordinary review that can publish and apply configured author-authorized fixes without

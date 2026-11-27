@@ -60,6 +60,12 @@ public interface IFindingStore
 
     Task MarkFindingPublishedAsync(Guid runId, string dedupeKey, int? threadId, CancellationToken ct);
 
+    /// <summary>Atomically sets the finding's durable host-write intent and, when available,
+    /// its observation flag. Does not reconstruct missing observation history. Set before the
+    /// host call; clear only when the caller knows no external write started. Missing finding
+    /// or run throws. Run finalization must preserve this store-owned flag.</summary>
+    Task SetFindingPublicationAttemptedAsync(Guid runId, string dedupeKey, bool attempted, CancellationToken ct);
+
     /// <summary>Atomically record a confirmed external thread and its new-post attribution.
     /// Reconciliation (newlyPosted=false) never erases prior attribution. Legacy runs without
     /// observation snapshots remain unavailable rather than having a history reconstructed.</summary>

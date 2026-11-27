@@ -241,6 +241,7 @@ public sealed class DraftReviewService(
         PublishSelectedDraftResult Result(string? code = null) => new(code is null, code, outcomes);
         var index = 0;
         var externalStarted = false;
+        string? intentKey = null;
         int? observedThreadId = null;
         try
         {
@@ -253,6 +254,7 @@ public sealed class DraftReviewService(
             for (; index < selected.Count; index++)
             {
                 externalStarted = false;
+                intentKey = null;
                 observedThreadId = null;
                 if (!claims.Renew(run.Pr, claimId)) return Result("busy");
                 var row = selected[index].Row;
@@ -272,7 +274,8 @@ public sealed class DraftReviewService(
                 }
                 // A prior durable intent with no confirmed thread is an unknown outcome,
                 // not permission to retry the host write while thread visibility may lag.
-                if (run.FindingObservations?.Any(o => o.DedupeKey == row.DedupeKey && o.PublicationAttempted) == true)
+                if (row.PublicationAttempted ||
+                    run.FindingObservations?.Any(o => o.DedupeKey == row.DedupeKey && o.PublicationAttempted) == true)
                 {
                     outcomes[index] = new(selected[index].Id, PublishFindingStatus.Unknown);
                     continue;
@@ -285,7 +288,8 @@ public sealed class DraftReviewService(
                 if (!claims.Renew(run.Pr, claimId)) return Result("busy");
                 var finding = JsonSerializer.Deserialize<RichFinding>(row.FindingJson!, JsonOptions)
                     ?? throw new InvalidOperationException("invalid stored finding");
-                await RecordPublicationIntentAsync(run.Id, row.DedupeKey).ConfigureAwait(false);
+                intentKey = row.DedupeKey;
+                await SetPublicationIntentAsync(run.Id, intentKey, attempted: true).ConfigureAwait(false);
                 if (!claims.Renew(run.Pr, claimId)) return Result("busy");
                 var pinned = await source.GetPullRequestAsync(run.Pr, ct).ConfigureAwait(false);
                 if (!string.Equals(pinned.SourceCommitSha, run.HeadSha, StringComparison.OrdinalIgnoreCase)) return Result("head-changed");
@@ -309,16 +313,20 @@ public sealed class DraftReviewService(
                 outcomes[index] = new(selected[index].Id, externalStarted ? PublishFindingStatus.Unknown : PublishFindingStatus.Failed, observedThreadId);
             return Result(externalStarted ? "publication-unknown" : "publication-failed");
         }
+        finally
+        {
+            // A failed pin check, lost claim or disconnect before the host call is not
+            // ambiguous. Use independent bounded audit IO, even if the browser cancelled.
+            // A cleanup failure propagates as unavailable; the durable intent remains safe.
+            if (intentKey is not null && !externalStarted)
+                await SetPublicationIntentAsync(run.Id, intentKey, attempted: false).ConfigureAwait(false);
+        }
     }
 
-    private async Task RecordPublicationIntentAsync(Guid runId, string key)
+    private async Task SetPublicationIntentAsync(Guid runId, string key, bool attempted)
     {
         using var audit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var latest = await store.GetRunAsync(runId, audit.Token).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("run disappeared while publishing");
-        if (latest.FindingObservations is null) return; // Legacy capture remains unavailable.
-        await store.SaveRunAsync(latest with { FindingObservations = latest.FindingObservations.Select(o => o.DedupeKey == key
-            ? o with { PublicationAttempted = true } : o).ToArray() }, audit.Token).ConfigureAwait(false);
+        await store.SetFindingPublicationAttemptedAsync(runId, key, attempted, audit.Token).ConfigureAwait(false);
     }
 
     private async Task PersistPublicationAsync(Guid runId, string key, int threadId, bool newlyPosted)
