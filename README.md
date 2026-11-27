@@ -90,8 +90,14 @@ dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll status --run-id <gu
 
 Endpoints (API clients use `X-Api-Key`; keys are configured via the
 `REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation).
-A dashboard session is accepted only for `GET /reviews/dashboard` and `POST /reviews`
-(the latter also requires antiforgery validation):
+A valid dashboard session is also accepted by the dashboard, history, run-status,
+run-details, decision-history, draft-capability, and model-call GET endpoints, and by
+review/draft submission, finding-decision (single/batch), publication, and reconciliation
+POST endpoints. Every session-authenticated POST requires antiforgery validation.
+Discovery, resolution submission, and MCP remain API-key-only. See
+[dashboard API and antiforgery reference](docs/dashboard.md#api-and-antiforgery-reference).
+
+Endpoints:
 `POST /reviews` → 202 `{runId, statusUrl}`, 400 on validation errors, 401 without a valid
 key, 409 when a review for the same PR is already in flight (the conflicting run id is in
 the body), 429 over the submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`,
