@@ -36,6 +36,43 @@ public class ModelCallTableTests
         Assert.Single(component.FindAll("tbody tr"));
     }
 
+    [Fact]
+    public async Task Correlated_activity_rows_and_retained_counts_are_separate_from_provider_calls()
+    {
+        await using var context = new BunitContext();
+        context.Services.AddScoped<DashboardBrowserClient>();
+        var id = Guid.NewGuid();
+        var collector = new ReviewForge.Core.Profiling.ModelProfileCollector(id);
+        using var scope = ReviewForge.Core.Profiling.ModelCallContext.Enter(collector, "ApplyFixes", ReviewForge.Core.Profiling.ModelCallProfile.Fix);
+        var logical = collector.BeginActivity("logical");
+        using var logicalScope = ReviewForge.Core.Profiling.ModelCallContext.EnterCall(logical.Id);
+        var attempt = collector.BeginActivity("attempt", attemptNumber: 1);
+        attempt.Wait(12);
+        attempt.Wait(4, true);
+        attempt.Complete("failed");
+        collector.BeginActivity("tool", "EditFile").Complete("cancelled");
+        logical.Complete("failed");
+        var snapshot = collector.Snapshot();
+        var page = new ReviewForge.Core.Ports.ModelProfilePage("available", id, snapshot.ProfileId, 0, false, false, [], null,
+            Aggregate: snapshot.Aggregate, Activities: snapshot.Activities);
+        var module = context.JSInterop.SetupModule("./dashboard-http.js");
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true)
+            .SetResult(new(200, System.Text.Json.JsonSerializer.SerializeToElement(page, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))));
+        var component = context.Render<ModelCallTable>(p => p.Add(x => x.Status,
+            new RunStatus(id, new("o", "p", "r", 1), RunState.Failed, null, DateTimeOffset.UtcNow)));
+        component.Find("button").Click();
+        Assert.Contains("Application attempts: 1", component.Markup);
+        Assert.Contains("Tools: 1", component.Markup);
+        Assert.Contains("Logical calls: 1", component.Markup);
+        Assert.Contains("Tool and application-retry metadata", component.Markup);
+        Assert.Contains("EditFile", component.Markup);
+        Assert.Contains(logical.Id.ToString(), component.Markup);
+        Assert.Contains("missing-parent", component.Markup);
+        Assert.Contains("Governor wait / backoff", component.Markup);
+        Assert.Contains("12 / 4", component.Markup);
+        Assert.Contains("SDK-internal", component.Markup);
+    }
+
     [Theory]
     [InlineData("legacy-unavailable", "legacy run")]
     [InlineData("expired", "expired")]

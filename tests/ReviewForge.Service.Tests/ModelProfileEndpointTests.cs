@@ -31,11 +31,19 @@ public class ModelProfileEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}/model-calls", TestContext.Current.CancellationToken)).StatusCode);
         var collector = new ModelProfileCollector(id);
         collector.Begin("Triage", ModelCallProfile.Triage, "openai", "gpt-5").Complete("completed", null);
+        using (ModelCallContext.Enter(collector, "TriageComments", ModelCallProfile.Triage))
+            collector.BeginActivity("tool", "ReadFile").Complete("completed");
         await factory.Services.GetRequiredService<IModelProfileStore>().FinalizeModelProfileAsync(collector.Snapshot(),
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(30), false, TestContext.Current.CancellationToken);
         tracker.Set(id, key, RunState.Completed, kind: kind);
         page = await client.GetFromJsonAsync<ModelProfilePage>(path, TestContext.Current.CancellationToken);
         Assert.Single(page!.Calls);
+        Assert.Equal(1, page.NextSequence);
+        var activityPage = await client.GetFromJsonAsync<ModelProfilePage>($"/reviews/{id}/model-calls?after=1&count=1", TestContext.Current.CancellationToken);
+        Assert.Equal("ReadFile", Assert.Single(activityPage!.Activities!).ToolName);
+        Assert.Empty(activityPage.Calls);
+        Assert.Null(activityPage.NextSequence);
+        Assert.Equal(1, activityPage.Aggregate!.Activities!["tool"].Observed);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync($"/reviews/{id}/model-calls?after=-1&count=101", TestContext.Current.CancellationToken)).StatusCode);
         Assert.Empty(factory.Source.PostedFindings);
         var skipped = Guid.NewGuid();

@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using ReviewForge.Core.Profiling;
 
 namespace ReviewForge.Core.Reasoning;
 
@@ -10,79 +12,109 @@ internal sealed class RetryingChatClient(IChatClient inner, Func<Exception, bool
     private const int MaxAttempts = 3;
     private static readonly TimeSpan BaseDelay = TimeSpan.FromMilliseconds(250);
 
-    public override Task<ChatResponse> GetResponseAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
-        => ExecuteAsync(token => base.GetResponseAsync(messages, options, token), cancellationToken);
-
-    public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public override async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null, CancellationToken cancellationToken = default)
     {
-        var materialized = messages as ChatMessage[] ?? messages.ToArray();
-        for (var attempt = 1;; attempt++)
+        var collector = ModelCallContext.Current?.Collector;
+        var logical = collector?.BeginActivity("logical");
+        using var logicalScope = logical is null ? null : ModelCallContext.EnterCall(logical.Id);
+        try
         {
-            var stream = base.GetStreamingResponseAsync(materialized, options, cancellationToken)
-                .GetAsyncEnumerator(cancellationToken);
-            var observedUpdate = false;
-            while (true)
+            for (var number = 1;; number++)
             {
-                ChatResponseUpdate update;
+                var attempt = collector?.BeginActivity("attempt", attemptNumber: number);
+                using var attemptScope = logical is null ? null : ModelCallContext.EnterCall(logical.Id, attempt!.Id, number, attempt);
                 try
                 {
-                    if (!await stream.MoveNextAsync().ConfigureAwait(false))
-                    {
-                        await stream.DisposeAsync().ConfigureAwait(false);
-                        yield break;
-                    }
-
-                    update = stream.Current;
+                    var response = await base.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
+                    attempt?.Complete("completed");
+                    logical?.Complete("completed");
+                    return response;
                 }
-                catch (Exception ex) when (!observedUpdate && ShouldRetry(ex, attempt, cancellationToken))
+                catch (Exception ex)
                 {
-                    await stream.DisposeAsync().ConfigureAwait(false);
-                    await DelayAsync(attempt, ex, cancellationToken).ConfigureAwait(false);
-                    break;
+                    attempt?.Complete(ex is OperationCanceledException ? "cancelled" : "failed");
+                    if (!ShouldRetry(ex, number, cancellationToken)) throw;
+                    await DelayAsync(number, ex, attempt, cancellationToken).ConfigureAwait(false);
                 }
-
-                observedUpdate = true;
-                yield return update;
             }
+        }
+        catch (Exception ex)
+        {
+            logical?.Complete(ex is OperationCanceledException ? "cancelled" : "failed");
+            throw;
         }
     }
 
-    private async Task<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken ct)
+    public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        for (var attempt = 1;; attempt++)
+        var materialized = messages as ChatMessage[] ?? messages.ToArray();
+        var collector = ModelCallContext.Current?.Collector;
+        var logical = collector?.BeginActivity("logical");
+        using var logicalScope = logical is null ? null : ModelCallContext.EnterCall(logical.Id);
+        var logicalOutcome = "interrupted";
+        try
         {
-            try
+            for (var number = 1;; number++)
             {
-                return await operation(ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ShouldRetry(ex, attempt, ct))
-            {
-                await DelayAsync(attempt, ex, ct).ConfigureAwait(false);
+                var attempt = collector?.BeginActivity("attempt", attemptNumber: number);
+                using var attemptScope = logical is null ? null : ModelCallContext.EnterCall(logical.Id, attempt!.Id, number, attempt);
+                IAsyncEnumerator<ChatResponseUpdate>? stream = null;
+                var observedUpdate = false;
+                Exception? failure = null;
+                var outcome = "interrupted";
+                try
+                {
+                    try { stream = base.GetStreamingResponseAsync(materialized, options, cancellationToken).GetAsyncEnumerator(cancellationToken); }
+                    catch (Exception ex) { failure = ex; outcome = logicalOutcome = ex is OperationCanceledException ? "cancelled" : "failed"; throw; }
+                    while (true)
+                    {
+                        bool next;
+                        try { next = await stream.MoveNextAsync().ConfigureAwait(false); }
+                        catch (Exception ex)
+                        {
+                            failure = ex;
+                            outcome = ex is OperationCanceledException ? "cancelled" : "failed";
+                            if (!observedUpdate && ShouldRetry(ex, number, cancellationToken)) break;
+                            logicalOutcome = outcome;
+                            throw;
+                        }
+                        if (!next) { outcome = logicalOutcome = "completed"; yield break; }
+                        observedUpdate = true;
+                        yield return stream.Current;
+                    }
+                }
+                finally
+                {
+                    try { if (stream is not null) await stream.DisposeAsync().ConfigureAwait(false); }
+                    catch when (failure is not null) { /* Preserve the original transport failure, not a secondary disposal error. */ }
+                    catch (Exception ex) { outcome = logicalOutcome = ex is OperationCanceledException ? "cancelled" : "failed"; throw; }
+                    finally { attempt?.Complete(outcome); }
+                }
+                // Attempt failure is visible before the cancellable backoff begins.
+                try { await DelayAsync(number, failure!, attempt, cancellationToken).ConfigureAwait(false); }
+                catch (Exception ex) { logicalOutcome = ex is OperationCanceledException ? "cancelled" : "failed"; throw; }
             }
         }
+        finally { logical?.Complete(logicalOutcome); }
     }
 
     private bool ShouldRetry(Exception exception, int attempt, CancellationToken ct)
     {
-        if (attempt >= MaxAttempts || ct.IsCancellationRequested || exception is OperationCanceledException)
-            return false;
-
+        if (attempt >= MaxAttempts || ct.IsCancellationRequested || exception is OperationCanceledException) return false;
         return isTransientFailure(exception);
     }
 
-    private async Task DelayAsync(int attempt, Exception exception, CancellationToken ct)
+    private async Task DelayAsync(int attempt, Exception exception, ModelProfileCollector.ExecutionActivityLease? activity, CancellationToken ct)
     {
         var delayMs = BaseDelay.TotalMilliseconds * (1 << (attempt - 1));
         var jittered = TimeSpan.FromMilliseconds(delayMs * (0.75 + Random.Shared.NextDouble() * 0.5));
         logger?.LogWarning(exception,
             "Chat request failed transiently (attempt {Attempt}/{MaxAttempts}); retrying in {DelayMs} ms",
             attempt, MaxAttempts, jittered.TotalMilliseconds);
-        await Task.Delay(jittered, ct).ConfigureAwait(false);
+        var started = Stopwatch.GetTimestamp();
+        try { await Task.Delay(jittered, ct).ConfigureAwait(false); }
+        finally { activity?.Wait(Stopwatch.GetElapsedTime(started).TotalMilliseconds, backoff: true); }
     }
 }

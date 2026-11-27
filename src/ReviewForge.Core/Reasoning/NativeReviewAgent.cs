@@ -86,6 +86,9 @@ public sealed class NativeReviewAgent(
     {
         editor = null;
         var tools = new List<AITool>();
+        // The agent SDK can dispatch streaming tools outside the client iterator's execution context.
+        // An immutable pass identity joins those dispatches without any shared current-run state.
+        var invocationId = Guid.NewGuid();
         var instructions = request.Profile switch
         {
             ToolProfile.Review => SystemPromptComposer.Compose(_Options.PromptOverridePath, request.RuleBook),
@@ -134,10 +137,11 @@ public sealed class NativeReviewAgent(
             }
         }
 
-        var tracked = CreatePipeline(request.Collector, usage, effectiveTier, maxIterations, request.Profile);
+        var tracked = CreatePipeline(request.Collector, usage, effectiveTier, maxIterations, request.Profile, invocationId);
         var chatOptions = chatClientFactory.CreateChatOptions(effectiveTier, _Options.Effort);
         chatOptions.Instructions = instructions;
-        chatOptions.Tools = tools;
+        chatOptions.Tools = tools.Select(t => t is AIFunction function
+            ? (AITool)new ReviewForge.Core.Profiling.ProfiledAIFunction(function, invocationId) : t).ToList();
         return tracked.AsAIAgent(new ChatClientAgentOptions
         {
             Name = request.Profile switch
@@ -156,18 +160,18 @@ public sealed class NativeReviewAgent(
         });
     }
 
-    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier, int maxIterations, ToolProfile profile)
+    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier, int maxIterations, ToolProfile profile, Guid? invocationId = null)
     {
-        IChatClient scoped = new ReviewForge.Core.Profiling.ModelProfileChatClient(chatClientFactory.Create(tier), profile switch {
-            ToolProfile.Review => ReviewForge.Core.Profiling.ModelCallProfile.Review,
-            ToolProfile.Triage => ReviewForge.Core.Profiling.ModelCallProfile.Triage,
-            _ => ReviewForge.Core.Profiling.ModelCallProfile.Fix });
-        IChatClient guarded = new TaskDoneGuardChatClient(collector, scoped);
+        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(tier));
         IChatClient retrying = new RetryingChatClient(guarded, chatClientFactory.IsTransientFailure, _Logger);
         IChatClient invoking = new ChatClientBuilder(retrying)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)
             .Build();
-        return new UsageTrackingChatClient(invoking, usage, _Logger, _Options.DebugLogging);
+        var profiled = new ReviewForge.Core.Profiling.ModelProfileChatClient(invoking, profile switch {
+            ToolProfile.Review => ReviewForge.Core.Profiling.ModelCallProfile.Review,
+            ToolProfile.Triage => ReviewForge.Core.Profiling.ModelCallProfile.Triage,
+            _ => ReviewForge.Core.Profiling.ModelCallProfile.Fix }, invocationId);
+        return new UsageTrackingChatClient(profiled, usage, _Logger, _Options.DebugLogging);
     }
 
     public async Task<ReviewResult> RunAsync(AgentRunRequest request, CancellationToken ct)

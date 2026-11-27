@@ -13,7 +13,8 @@ public sealed record ModelCallRecord(Guid RunId, Guid ProfileId, Guid CallId, lo
     int SchemaVersion = 1, string RetryCoverage = "sdk-internal-unavailable",
     long? CachedInputTokens = null, long? ReasoningTokens = null,
     Guid? ParentCallId = null, int? AttemptNumber = null,
-    string CollectionCoverage = "observed-provider-calls", string CostCoverage = "provider-not-reported");
+    string CollectionCoverage = "observed-provider-calls", string CostCoverage = "provider-not-reported",
+    Guid? LogicalCallId = null, Guid? AttemptId = null);
 
 /// <summary>Nullable sums with reporting coverage: a partial sum is never presented as a full total.</summary>
 public sealed record ModelTokenSummary(long? Tokens, long ReportedCalls, long ObservedCalls)
@@ -28,13 +29,14 @@ public sealed record ModelUsageSummary(ModelTokenSummary InputTokens, ModelToken
 public sealed record ModelProfileAggregate(long CompletedCalls, long FailedCalls, long CancelledCalls,
     long InterruptedCalls, double ObservedDurationMilliseconds, long? ProviderIncompleteCalls = null,
     ModelUsageSummary? Usage = null, IReadOnlyDictionary<string, ModelProfileAggregate>? Stages = null,
-    long? ObservedCalls = null);
+    long? ObservedCalls = null, IReadOnlyDictionary<string, ExecutionActivitySummary>? Activities = null);
 
 public sealed record ModelProfileSnapshot(Guid RunId, Guid ProfileId, long ObservedCalls, bool Truncated,
-    IReadOnlyList<ModelCallRecord> Calls, int SchemaVersion = 1, ModelProfileAggregate? Aggregate = null, bool Incomplete = false);
+    IReadOnlyList<ModelCallRecord> Calls, int SchemaVersion = 1, ModelProfileAggregate? Aggregate = null, bool Incomplete = false,
+    IReadOnlyList<ExecutionActivityRecord>? Activities = null);
 
 /// <summary>One bounded, thread-safe collector per run; counts continue after detail truncation.</summary>
-public sealed class ModelProfileCollector(Guid runId, int limit = 10_000, TimeProvider? clock = null)
+public sealed partial class ModelProfileCollector(Guid runId, int limit = 10_000, TimeProvider? clock = null)
 {
     private readonly object _Gate = new();
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
@@ -63,15 +65,19 @@ public sealed class ModelProfileCollector(Guid runId, int limit = 10_000, TimePr
     {
         lock (_Gate)
         {
-            var sequence = ++_Observed;
+            _Observed++;
+            var sequence = ++_Sequence;
+            var context = ModelCallContext.Current?.Collector == this ? ModelCallContext.Current : null;
             var record = new ModelCallRecord(runId, ProfileId, Guid.NewGuid(), sequence, SafeStage(stage), Enum.IsDefined(profile) ? profile : ModelCallProfile.Unspecified,
                 provider is "openai" or "openai-codex" ? provider : null, SafeModel(model),
-                _Clock.GetUtcNow(), null, null, "interrupted", null, null, null);
+                _Clock.GetUtcNow(), null, null, "interrupted", null, null, null,
+                SchemaVersion: 2, ParentCallId: context?.AttemptId, AttemptNumber: context?.AttemptNumber,
+                LogicalCallId: context?.LogicalCallId, AttemptId: context?.AttemptId);
             _Summary.Observed++;
             if (!_Stages.TryGetValue(record.Stage, out var stageSummary))
                 _Stages.Add(record.Stage, stageSummary = new());
             stageSummary.Observed++;
-            var index = _Calls.Count < _Limit ? _Calls.Count : -1;
+            var index = _Calls.Count + _Activities.Count < _Limit ? _Calls.Count : -1;
             if (index >= 0) _Calls.Add(record);
             return new(this, record, index, _Clock.GetTimestamp());
         }
@@ -92,8 +98,9 @@ public sealed class ModelProfileCollector(Guid runId, int limit = 10_000, TimePr
 
     public ModelProfileSnapshot Snapshot()
     {
-        lock (_Gate) return new(runId, ProfileId, _Observed, _Observed > _Calls.Count, _Calls.ToArray(), Aggregate:
-            _Summary.Snapshot(_Stages.ToDictionary(p => p.Key, p => p.Value.Snapshot())), Incomplete: _Incomplete);
+        lock (_Gate) return new(runId, ProfileId, _Observed, _Sequence > _Calls.Count + _Activities.Count, _Calls.ToArray(), SchemaVersion: 2, Aggregate:
+            _Summary.Snapshot(_Stages.ToDictionary(p => p.Key, p => p.Value.Snapshot(activities: ActivitySummaries(p.Key))), ActivitySummaries()),
+            Incomplete: _Incomplete, Activities: _Activities.Select(a => a with { ProfileId = _ProfileId }).ToArray());
     }
 
     // Cardinality is bounded by SafeStage, never by caller-controlled stage names or retained details.
@@ -127,14 +134,17 @@ public sealed class ModelProfileCollector(Guid runId, int limit = 10_000, TimePr
         }
 
         private ModelTokenSummary Token(int index) => new(_Reported[index] == 0 ? null : _Tokens[index], _Reported[index], Observed);
-        public ModelProfileAggregate Snapshot(IReadOnlyDictionary<string, ModelProfileAggregate>? stages = null) =>
+        public ModelProfileAggregate Snapshot(IReadOnlyDictionary<string, ModelProfileAggregate>? stages = null,
+            IReadOnlyDictionary<string, ExecutionActivitySummary>? activities = null) =>
             new(_Completed, _Failed, _Cancelled, Observed - _Completed - _Failed - _Cancelled - _ProviderIncomplete,
-                _Duration, _ProviderIncomplete, new(Token(0), Token(1), Token(2), Token(3), Token(4)), stages, Observed);
+                _Duration, _ProviderIncomplete, new(Token(0), Token(1), Token(2), Token(3), Token(4)), stages, Observed, activities);
     }
 
     public sealed class ModelCallLease(ModelProfileCollector owner, ModelCallRecord record, int index, long timestamp)
     {
         private bool _Finished;
+        public Guid CallId => record.CallId;
+        public void LinkTools(IEnumerable<AIContent> contents) => owner.LinkTools(record, contents);
         public void Complete(string outcome, UsageDetails? usage)
         {
             lock (owner._Gate)
@@ -161,13 +171,24 @@ public sealed class ModelProfileCollector(Guid runId, int limit = 10_000, TimePr
 /// Shared transports never own a mutable current-run field.</summary>
 public static class ModelCallContext
 {
-    public sealed record Correlation(ModelProfileCollector Collector, string Stage, ModelCallProfile Profile);
+    public sealed record Correlation(ModelProfileCollector Collector, string Stage, ModelCallProfile Profile,
+        Guid? LogicalCallId = null, Guid? AttemptId = null, int? AttemptNumber = null,
+        ModelProfileCollector.ExecutionActivityLease? Attempt = null, Guid? InvocationId = null);
     private static readonly AsyncLocal<Correlation?> Slot = new();
     public static Correlation? Current => Slot.Value;
-    public static IDisposable Enter(ModelProfileCollector collector, string stage, ModelCallProfile profile = ModelCallProfile.Unspecified)
+    public static IDisposable Enter(ModelProfileCollector collector, string stage, ModelCallProfile profile = ModelCallProfile.Unspecified,
+        bool newInvocation = false, Guid? invocationId = null)
     {
         var previous = Slot.Value;
-        Slot.Value = new(collector, stage, profile);
+        Slot.Value = previous?.Collector == collector ? previous with { Stage = stage, Profile = profile } : new(collector, stage, profile);
+        if (newInvocation) Slot.Value = Slot.Value with { InvocationId = invocationId ?? Guid.NewGuid() };
+        return new Scope(previous);
+    }
+    public static IDisposable EnterCall(Guid logicalId, Guid? attemptId = null, int? attemptNumber = null,
+        ModelProfileCollector.ExecutionActivityLease? attempt = null)
+    {
+        var previous = Slot.Value;
+        if (previous is not null) Slot.Value = previous with { LogicalCallId = logicalId, AttemptId = attemptId, AttemptNumber = attemptNumber, Attempt = attempt };
         return new Scope(previous);
     }
     private sealed class Scope(Correlation? previous) : IDisposable

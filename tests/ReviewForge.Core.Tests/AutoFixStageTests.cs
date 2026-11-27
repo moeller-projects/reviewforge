@@ -426,6 +426,7 @@ public sealed class AutoFixStageTests : IDisposable
     public async Task Command_happy_path_captures_fix_and_reverts()
     {
         var ctx = CommandCtx("echo $name");
+        using var profileScope = ReviewForge.Core.Profiling.ModelCallContext.Enter(ctx.ModelProfile, "AutoFixFindings");
         var abs = Path.Combine(_Root, "script.sh");
         var before = File.ReadAllBytes(abs);
 
@@ -441,6 +442,12 @@ public sealed class AutoFixStageTests : IDisposable
         Assert.Equal("quoted the variable.", fix.Proposal.Rationale);
         Assert.Empty(ctx.AutoFix.FixCommandReplies);
         Assert.Equal(before, File.ReadAllBytes(abs)); // reverted
+        var profile = ctx.ModelProfile.Snapshot();
+        Assert.Equal(2, profile.ObservedCalls);
+        Assert.All(profile.Calls, call => Assert.Equal(ReviewForge.Core.Profiling.ModelCallProfile.Fix, call.Profile));
+        var tools = profile.Activities!.Where(a => a.Kind == "tool").ToArray();
+        Assert.Equal(new[] { "EditFile", "TaskDone" }, tools.Select(t => t.ToolName));
+        Assert.All(tools, tool => Assert.Contains(profile.Calls, call => call.CallId == tool.ParentId && call.AttemptId == tool.AttemptId));
     }
 
     [Fact]

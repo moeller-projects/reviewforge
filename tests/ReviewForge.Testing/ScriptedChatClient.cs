@@ -20,6 +20,7 @@ public sealed class ScriptedChatClient : IChatClient
     public int Calls { get; private set; }
     public Exception? ThrowOnResponse { get; set; }
     public Exception? ThrowOnStream { get; set; }
+    public Exception? ThrowOnStreamDispose { get; set; }
     public IReadOnlyList<ChatResponseUpdate>? StreamingUpdates { get; set; }
 
     public List<IReadOnlyList<ChatMessage>> Received { get; } = [];
@@ -45,7 +46,8 @@ public sealed class ScriptedChatClient : IChatClient
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        => StreamingUpdates is null ? throw new NotSupportedException("streaming not scripted") : Stream(cancellationToken);
+        => StreamingUpdates is null ? throw new NotSupportedException("streaming not scripted")
+            : ThrowOnStreamDispose is { } error ? new DisposalFailureStream(Stream(cancellationToken), error) : Stream(cancellationToken);
 
     private async IAsyncEnumerable<ChatResponseUpdate> Stream(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
@@ -57,6 +59,18 @@ public sealed class ScriptedChatClient : IChatClient
             yield return update;
         }
         if (ThrowOnStream is { } failure) throw failure;
+    }
+
+    private sealed class DisposalFailureStream(IAsyncEnumerable<ChatResponseUpdate> inner, Exception error) : IAsyncEnumerable<ChatResponseUpdate>
+    {
+        public IAsyncEnumerator<ChatResponseUpdate> GetAsyncEnumerator(CancellationToken cancellationToken = default)
+            => new Enumerator(inner.GetAsyncEnumerator(cancellationToken), error);
+        private sealed class Enumerator(IAsyncEnumerator<ChatResponseUpdate> inner, Exception error) : IAsyncEnumerator<ChatResponseUpdate>
+        {
+            public ChatResponseUpdate Current => inner.Current;
+            public ValueTask<bool> MoveNextAsync() => inner.MoveNextAsync();
+            public async ValueTask DisposeAsync() { await inner.DisposeAsync(); throw error; }
+        }
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;

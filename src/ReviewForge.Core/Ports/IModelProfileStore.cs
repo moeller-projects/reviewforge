@@ -5,7 +5,7 @@ namespace ReviewForge.Core.Ports;
 public sealed record ModelProfilePage(string State, Guid RunId, Guid? ProfileId, long ObservedCalls,
     bool Truncated, bool Incomplete, IReadOnlyList<ModelCallRecord> Calls, long? NextSequence,
     int SchemaVersion = 1, string RetryCoverage = "sdk-internal-unavailable", ModelProfileAggregate? Aggregate = null,
-    bool Finalized = false);
+    bool Finalized = false, IReadOnlyList<ExecutionActivityRecord>? Activities = null);
 
 /// <summary>IO boundary for bounded metadata only. Detailed rows are separate from permanent summaries.</summary>
 public interface IModelProfileStore

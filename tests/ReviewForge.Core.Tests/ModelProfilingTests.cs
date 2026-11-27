@@ -56,6 +56,27 @@ public class ModelProfilingTests(ITestOutputHelper output)
         Assert.DoesNotContain("secret", json.GetRawText());
     }
 
+    [Theory]
+    [InlineData("transport")]
+    [InlineData("cancelled")]
+    [InlineData("disposal-only")]
+    public async Task Streaming_disposal_preserves_primary_failure_and_surfaces_standalone_disposal_error(string mode)
+    {
+        Exception? primary = mode == "transport" ? new InvalidOperationException("transport failed")
+            : mode == "cancelled" ? new OperationCanceledException("transport cancelled") : null;
+        var disposal = new IOException("dispose failed");
+        var raw = new ScriptedChatClient { StreamingUpdates = [], ThrowOnStream = primary, ThrowOnStreamDispose = disposal };
+        using var client = new ReviewForge.Core.Reasoning.RetryingChatClient(new ProfiledChatClient(raw, "openai", "gpt-5"), _ => false);
+        var collector = new ModelProfileCollector(Guid.NewGuid());
+        using var scope = ModelCallContext.Enter(collector, "ExecuteReasoning");
+        var thrown = await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            await foreach (var update in client.GetStreamingResponseAsync([], cancellationToken: TestContext.Current.CancellationToken)) { }
+        });
+        Assert.Same(primary ?? disposal, thrown);
+        Assert.Equal(mode == "cancelled" ? "cancelled" : "failed", Assert.Single(collector.Snapshot().Calls).Outcome);
+    }
+
     [Fact]
     public void Provider_incomplete_is_a_fully_observed_outcome_not_an_interrupted_capture()
     {
@@ -128,7 +149,16 @@ public class ModelProfilingTests(ITestOutputHelper output)
             WritablePaths: profile == ReviewForge.Core.Reasoning.ToolProfile.Fix ? new HashSet<string> { "allowed.cs" } : null),
             TestContext.Current.CancellationToken);
         Assert.Equal(1, raw.Calls);
+        Assert.Equal(2, collector.Snapshot().Aggregate!.Activities!["attempt"].Observed);
+        Assert.Equal(2, collector.Snapshot().Aggregate!.Activities!["logical"].Observed);
+        Assert.Equal(1, collector.Snapshot().ObservedCalls);
         Assert.Equal(expected, Assert.Single(collector.Snapshot().Calls).Profile);
+        var metadata = JsonSerializer.SerializeToElement(collector.Snapshot());
+        Assert.True(metadata.TryGetProperty("Activities", out var activities), "T11 must capture tool/logical/attempt metadata");
+        Assert.Contains(activities.EnumerateArray(), a => a.GetProperty("Kind").GetString() == "tool" && a.GetProperty("ToolName").GetString() == "TaskDone");
+        var tool = activities.EnumerateArray().Single(a => a.GetProperty("Kind").GetString() == "tool");
+        Assert.Equal(collector.Snapshot().Calls[0].CallId.ToString(), tool.GetProperty("ParentId").GetString());
+        Assert.Equal((int)expected, tool.GetProperty("Profile").GetInt32());
         Assert.DoesNotContain("secret", JsonSerializer.Serialize(collector.Snapshot()));
     }
 

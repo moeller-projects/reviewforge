@@ -78,7 +78,15 @@ public sealed class VerifyFindingsStageTests : IDisposable
         Assert.Equal(2, calls.Count);
         Assert.All(calls, call => Assert.Equal(ReviewForge.Core.Profiling.ModelCallProfile.Verifier, call.Profile));
         Assert.NotEqual(calls[0].CallId, calls[1].CallId);
-        Assert.DoesNotContain("private-", System.Text.Json.JsonSerializer.Serialize(calls));
+        Assert.NotNull(calls[0].LogicalCallId);
+        Assert.NotEqual(calls[0].LogicalCallId, calls[1].LogicalCallId);
+        Assert.All(calls, c => { Assert.NotNull(c.AttemptId); Assert.Equal(1, c.AttemptNumber); });
+        var activities = ctx.ModelProfile.Snapshot().Activities!;
+        Assert.Equal(2, activities.Count(a => a.Kind == "logical"));
+        Assert.Equal(2, activities.Count(a => a.Kind == "attempt"));
+        Assert.DoesNotContain(activities, a => a.Kind == "tool");
+        Assert.All(activities, a => Assert.Equal(ReviewForge.Core.Profiling.ModelCallProfile.Verifier, a.Profile));
+        Assert.DoesNotContain("private-", System.Text.Json.JsonSerializer.Serialize(ctx.ModelProfile.Snapshot()));
     }
 
     [Fact]

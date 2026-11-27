@@ -65,7 +65,9 @@ public sealed class GovernedChatClient(
             // timed-out and caller-cancelled ones, which are exactly the saturation
             // signal. (Immediate acquisition records ~0; Timeout.TotalMilliseconds is
             // never negative, so no zero-spam guard is needed.)
-            LlmTelemetry.LlmGovernorWait.Record(sw.Elapsed.TotalMilliseconds);
+            var elapsed = sw.Elapsed.TotalMilliseconds;
+            LlmTelemetry.LlmGovernorWait.Record(elapsed);
+            ReviewForge.Core.Profiling.ModelCallContext.Current?.Attempt?.Wait(elapsed);
         }
     }
 }

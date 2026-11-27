@@ -65,6 +65,113 @@ public class ModelProfileStoreTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task T10_schema_and_legacy_call_json_upgrade_without_backfilling_activity_counts()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"profile-t10-{Guid.NewGuid():N}.db");
+        var cs = $"Data Source={path};Pooling=False";
+        var ct = TestContext.Current.CancellationToken;
+        try
+        {
+            var collector = new ModelProfileCollector(Guid.NewGuid());
+            collector.Begin("ExecuteReasoning", ModelCallProfile.Review, "openai", "gpt-5").Complete("completed", null);
+            var snapshot = collector.Snapshot();
+            var now = DateTimeOffset.UtcNow;
+            await new SqliteFindingStore(cs).FinalizeModelProfileAsync(snapshot, now, now.AddDays(30), false, ct);
+            var legacy = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(snapshot.Calls[0]))!.AsObject();
+            legacy.Remove("LogicalCallId");
+            legacy.Remove("AttemptId");
+            legacy["SchemaVersion"] = 1;
+            await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(cs))
+            {
+                await connection.OpenAsync(ct);
+                await using var command = connection.CreateCommand();
+                command.CommandText = "DROP TABLE ExecutionActivities; UPDATE ModelCalls SET MetadataJson=$json; UPDATE ModelProfiles SET SchemaVersion=1, SummaryJson=$summary";
+                command.Parameters.AddWithValue("$json", legacy.ToJsonString());
+                command.Parameters.AddWithValue("$summary", "{\"CompletedCalls\":1,\"FailedCalls\":0,\"CancelledCalls\":0,\"InterruptedCalls\":0,\"ObservedDurationMilliseconds\":1}");
+                await command.ExecuteNonQueryAsync(ct);
+            }
+            var page = await new SqliteFindingStore(cs).ReadModelProfileAsync(snapshot.RunId, 0, 100, now, ct);
+            Assert.Equal(1, page.SchemaVersion);
+            Assert.Empty(page.Activities!);
+            Assert.Null(page.Aggregate!.Activities);
+            var call = Assert.Single(page.Calls);
+            Assert.Equal(1, call.SchemaVersion);
+            Assert.Null(call.LogicalCallId);
+            Assert.Null(call.AttemptId);
+            Assert.Null(call.AttemptNumber);
+            Assert.Equal("sdk-internal-unavailable", call.RetryCoverage);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task Interrupted_activity_beyond_cap_remains_incomplete_after_expiry()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"profile-interrupted-tool-{Guid.NewGuid():N}.db");
+        var ct = TestContext.Current.CancellationToken;
+        try
+        {
+            var collector = new ModelProfileCollector(Guid.NewGuid(), 0);
+            using var scope = ModelCallContext.Enter(collector, "ApplyFixes", ModelCallProfile.Fix);
+            collector.BeginActivity("tool", "EditFile");
+            var now = DateTimeOffset.UtcNow;
+            var store = new SqliteFindingStore($"Data Source={path};Pooling=False");
+            await store.FinalizeModelProfileAsync(collector.Snapshot(), now, now.AddDays(30), false, ct);
+            var page = await store.ReadModelProfileAsync(collector.Snapshot().RunId, 0, 100, now, ct);
+            Assert.True(page.Incomplete);
+            Assert.True(page.Truncated);
+            Assert.Equal(0, page.ObservedCalls);
+            Assert.Equal(1, page.Aggregate!.Activities!["tool"].Interrupted);
+            page = await store.ReadModelProfileAsync(page.RunId, 0, 100, now.AddDays(30), ct);
+            Assert.True(page.Incomplete);
+            Assert.Equal("expired", page.State);
+            Assert.Equal(1, page.Aggregate!.Stages!["ApplyFixes"].Activities!["tool"].Interrupted);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task Mixed_detail_rows_share_paging_retention_and_keep_separate_counts()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"profile-mixed-{Guid.NewGuid():N}.db");
+        var ct = TestContext.Current.CancellationToken;
+        try
+        {
+            var collector = new ModelProfileCollector(Guid.NewGuid(), 3);
+            using var scope = ModelCallContext.Enter(collector, "ApplyFixes", ModelCallProfile.Fix);
+            collector.BeginActivity("tool", "EditFile").Complete("completed");
+            collector.Begin("ApplyFixes", ModelCallProfile.Fix, "openai", "gpt-5").Complete("completed", new() { InputTokenCount = 3 });
+            collector.BeginActivity("attempt").Complete("failed");
+            collector.BeginActivity("tool", "secret-path").Complete("cancelled");
+            var now = DateTimeOffset.UtcNow;
+            var store = new SqliteFindingStore($"Data Source={path};Pooling=False");
+            await store.FinalizeModelProfileAsync(collector.Snapshot(), now, now.AddDays(30), false, ct);
+            var page = await store.ReadModelProfileAsync(collector.Snapshot().RunId, 0, 1, now, ct);
+            var json = System.Text.Json.JsonSerializer.SerializeToElement(page);
+            Assert.True(json.TryGetProperty("Activities", out var rows), "T11 mixed metadata must survive SQLite");
+            Assert.Equal(1, rows.GetArrayLength());
+            Assert.Empty(page.Calls);
+            Assert.Equal(1, page.NextSequence);
+            Assert.Equal(1, page.ObservedCalls);
+            Assert.Equal(2, page.Aggregate!.Activities!["tool"].Observed);
+            page = await store.ReadModelProfileAsync(page.RunId, 1, 1, now, ct);
+            Assert.Equal(3, Assert.Single(page.Calls).InputTokens);
+            Assert.Equal(2, page.NextSequence);
+            page = await store.ReadModelProfileAsync(page.RunId, 2, 1, now, ct);
+            Assert.Null(page.NextSequence);
+            Assert.Equal("failed", System.Text.Json.JsonSerializer.SerializeToElement(page).GetProperty("Activities")[0].GetProperty("Outcome").GetString());
+            Assert.Equal(1, await store.ExpireModelProfilesAsync(now.AddDays(30), 1, ct));
+            page = await new SqliteFindingStore($"Data Source={path};Pooling=False").ReadModelProfileAsync(page.RunId, 0, 10, now.AddDays(30), ct);
+            Assert.Equal("expired", page.State);
+            Assert.Empty(page.Calls);
+            Assert.Equal(0, System.Text.Json.JsonSerializer.SerializeToElement(page).GetProperty("Activities").GetArrayLength());
+            Assert.Equal(2, page.Aggregate!.Activities!["tool"].Observed);
+            Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(page));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public async Task Maximum_detail_fixture_has_bounded_pages_and_measured_persistence_overhead()
     {
         var path = Path.Combine(Path.GetTempPath(), $"profile-cap-{Guid.NewGuid():N}.db");
