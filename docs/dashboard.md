@@ -140,6 +140,7 @@ is an alternative **only** for these API endpoints:
 | `GET /reviews/{runId}` | Safe status read-through from tracker, queue, then durable run. |
 | `GET /reviews/{runId}/details` | Finding payloads, verification evidence, human decisions, and publication audit. |
 | `POST /reviews/{runId}/decisions` | Save a revision-scoped decision using its expected version. |
+| `POST /reviews/{runId}/decisions/batch` | Save 1–500 explicit unique findings with per-item versions and outcomes under one PR claim. |
 | `GET /reviews/{runId}/decisions/history?findingId=…` | Latest 100 immutable decisions for one run-local finding, loaded on demand. |
 | `POST /reviews/{runId}/publish` | Explicit nonempty selected approved findings and expected approval versions. |
 | `POST /reviews/{runId}/reconcile` | Explicitly inspect existing threads and repair publication audit; never posts findings. |
@@ -199,6 +200,30 @@ documents the browser cookie/antiforgery boundary.
 5. Select approved, technically eligible, unpublished findings and confirm **Post selected findings**.
    The server checks approval versions, the PR claim, and the current head again. If the head changed,
    start a new draft. Empty selection is never interpreted as publish all in the technician API.
+
+### Selected decisions
+
+Select findings with their checkboxes, a Shift range, or **Select all matching**. Selection
+includes loaded findings hidden by subsequent filters; the toolbar reports the hidden count.
+**Approve selected**, **Defer selected**, and **Reset selected to pending** save internal
+decisions for the entire selection, not just visible rows. Review unsaved individual drafts
+first. Bulk actions never advance the focused finding or post external comments.
+
+The batch request contains `headSha` and a nonempty `selections` array (maximum 500).
+Each selection contains `findingId`, `expectedVersion`, `state`, and `reason`. IDs must be
+unique and belong to the run. Only successful completed draft runs are editable. The API
+also accepts rejection when every rejected item supplies its own nonblank effective reason;
+a shared/override rejection composer is not part of this slice.
+
+Read `errorCode` and every entry in `items`, even with HTTP 200: operational failures can
+return a structured partial response. `Saved` confirms a new immutable version; `Conflict`
+means the version was stale; `Invalid` means the member/state/version/reason was invalid;
+`NotAttempted` means no append was started; `Unknown` means an append might have saved.
+Envelope, authentication, eligibility and reviewed-head failures write nothing. A stale item
+or invalid reason does not block valid peers. Claim loss, cancellation or storage failure
+stops further processing. No automatic retry occurs. The UI removes only confirmed saves
+from selection and retains unresolved items, including hidden ones. After an unconfirmed
+transport outcome, refresh authoritative data and inspect decisions before another save.
 
 A human approval cannot override failed anchor validation or a rejected verifier outcome.
 Deep repository investigation, objection-driven reinvestigation, and confidence assessment are

@@ -511,8 +511,13 @@ public partial class FakeFindingStore : IFindingStore, IFindingDecisionStore, IR
         => Task.FromResult<IReadOnlyList<ReviewRun>>(
             [.. RecentRuns.Where(r => r.Pr == pr).OrderByDescending(r => r.StartedAt).Take(count)]);
 
+    public Action<Guid>? BeforeGetRun { get; set; }
+
     public virtual Task<ReviewRun?> GetRunAsync(Guid runId, CancellationToken ct)
-        => Task.FromResult(Runs.FirstOrDefault(r => r.Id == runId));
+    {
+        BeforeGetRun?.Invoke(runId);
+        return Task.FromResult(Runs.FirstOrDefault(r => r.Id == runId));
+    }
 
     public virtual Task PingAsync(CancellationToken ct)
         => ThrowOnPing is { } error ? Task.FromException(error) : Task.CompletedTask;

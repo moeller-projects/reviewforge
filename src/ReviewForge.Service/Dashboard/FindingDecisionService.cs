@@ -20,7 +20,7 @@ public sealed record ResolvedDecisionFinding(string Id, FindingObservation? Obse
 /// <summary>Validates human decisions without any PR-host writes. Actor must come from
 /// authentication, e.g. dashboard-session/header-key; never accept an actor from request JSON
 /// or pass a raw key, cookie or session identifier as the actor.</summary>
-public sealed class FindingDecisionService(IFindingStore store, IFindingDecisionStore decisions, TimeProvider clock, InFlightClaims claims)
+public sealed partial class FindingDecisionService(IFindingStore store, IFindingDecisionStore decisions, TimeProvider clock, InFlightClaims claims)
 {
     /// <summary>Captured runs use observation IDs, including rejected candidates. Only legacy
     /// runs with no capture use full accepted-row dedupe keys. An empty capture is authoritative.</summary>

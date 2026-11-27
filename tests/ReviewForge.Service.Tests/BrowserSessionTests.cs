@@ -280,11 +280,13 @@ public class BrowserSessionTests
         await factory.Services.GetRequiredService<ReviewForge.Core.Ports.IFindingStore>().SaveRunAsync(new(id,
             new("o", "p", "r", 4), "head", ReviewForge.Core.Domain.ReviewKind.Full, DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow, true, [], Pipeline: "ReviewDraft", FindingObservations: [observation]), Ct);
-        foreach (var path in new[] { "/reviews/drafts", $"/reviews/{id}/decisions" })
+        foreach (var path in new[] { "/reviews/drafts", $"/reviews/{id}/decisions", $"/reviews/{id}/decisions/batch" })
         {
             object body = path.EndsWith("decisions", StringComparison.Ordinal)
                 ? new SetFindingDecisionRequest(observation.Id.ToString("N"), "head", ReviewForge.Core.Domain.FindingDecisionState.Approved, null, 0)
-                : new SubmitReviewRequest("o", "p", "r", 1);
+                : path.EndsWith("batch", StringComparison.Ordinal)
+                    ? new BatchFindingDecisionRequest("head", [new(observation.Id.ToString("N"), 1, ReviewForge.Core.Domain.FindingDecisionState.Deferred, null)])
+                    : new SubmitReviewRequest("o", "p", "r", 1);
             Assert.Equal(HttpStatusCode.BadRequest, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, body, Ct)).StatusCode);
             client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", await Token(client));
             Assert.NotEqual(HttpStatusCode.BadRequest, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, body, Ct)).StatusCode);
@@ -295,18 +297,22 @@ public class BrowserSessionTests
         }
         var latest = Assert.Single(await factory.Services.GetRequiredService<ReviewForge.Core.Ports.IFindingDecisionStore>().GetFindingDecisionsAsync(id, Ct));
         Assert.Equal("dashboard-session", latest.Actor);
+        Assert.Equal(2, latest.Version);
+        Assert.Equal(ReviewForge.Core.Domain.FindingDecisionState.Deferred, latest.State);
         Assert.Empty(factory.Source.PostedFindings);
     }
 
     [Theory]
     [InlineData("publish")]
     [InlineData("reconcile")]
+    [InlineData("decisions/batch")]
     public async Task Publication_requires_authentication_csrf_and_preserves_header_priority(string action)
     {
         using var factory = new ReviewForgeFactory().WithoutWorkers();
         using var client = Browser(factory);
         var path = $"/reviews/{Guid.NewGuid()}/{action}";
-        object request = action == "publish" ? new PublishSelectedDraftRequest("head", [new("id", 1)]) : new ReconcileDraftRequest(["id"]);
+        object request = action == "publish" ? new PublishSelectedDraftRequest("head", [new("id", 1)])
+            : action == "decisions/batch" ? new BatchFindingDecisionRequest("head", [new("id", 0, ReviewForge.Core.Domain.FindingDecisionState.Approved, null)]) : new ReconcileDraftRequest(["id"]);
         Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
         await Login(client, await Token(client));
         Assert.Equal(HttpStatusCode.BadRequest, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);

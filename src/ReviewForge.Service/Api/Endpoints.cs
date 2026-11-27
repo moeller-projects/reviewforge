@@ -100,6 +100,14 @@ public static class Endpoints
             .Produces<FindingDecisionResponse>(404)
             .Produces<FindingDecisionResponse>(409);
 
+        reviews.MapPost("/{runId:guid}/decisions/batch", SetBatchFindingDecisions)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
+            .Produces<BatchFindingDecisionResponse>()
+            .Produces<BatchFindingDecisionResponse>(400)
+            .Produces<BatchFindingDecisionResponse>(404)
+            .Produces<BatchFindingDecisionResponse>(409);
+
         reviews.MapPost("/{runId:guid}/reconcile", ReconcileSelectedDraft)
             .WithMetadata(new DashboardSessionAccess())
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
@@ -177,6 +185,24 @@ public static class Endpoints
             FindingDecisionStatus.Conflict => 409,
             FindingDecisionStatus.RunNotFound or FindingDecisionStatus.FindingNotFound => 404,
             _ => 400,
+        });
+    }
+
+    private static async Task<IResult> SetBatchFindingDecisions(Guid runId, BatchFindingDecisionRequest request,
+        HttpContext http, FindingDecisionService decisions, CancellationToken ct)
+    {
+        var actor = !http.Request.Headers.ContainsKey(ApiKeyOptions.HeaderName)
+            && http.RequestServices.GetRequiredService<DashboardSessions>().IsValid(http.User)
+            ? "dashboard-session" : "header-key";
+        var result = await decisions.DecideBatchAsync(runId, request, actor, ct);
+        // Operational failures still return the structured partial outcomes. ErrorCode is mandatory
+        // for these failures; 200 is transport success, not a claim that every item saved.
+        return TypedResults.Json(result, statusCode: result.ErrorCode switch
+        {
+            "invalid-selection" or "invalid-actor" or "run-not-editable" => 400,
+            "run-not-found" => 404,
+            "revision-mismatch" or "busy" => 409,
+            _ => 200,
         });
     }
 

@@ -53,6 +53,9 @@ public sealed class DashboardBrowserClient(IJSRuntime js) : IAsyncDisposable
     public Task<BrowserResult<FindingDecisionResponse>> SetFindingDecisionAsync(Guid runId, SetFindingDecisionRequest request, CancellationToken ct = default)
         => SendAsync<FindingDecisionResponse>("POST", $"/reviews/{runId:D}/decisions", request, ct, readDecisionError: true);
 
+    public Task<BrowserResult<BatchFindingDecisionResponse>> SetBatchFindingDecisionsAsync(Guid runId, BatchFindingDecisionRequest request, CancellationToken ct = default)
+        => SendAsync<BatchFindingDecisionResponse>("POST", $"/reviews/{runId:D}/decisions/batch", request, ct, readDecisionError: true);
+
     public Task<BrowserResult<PublishSelectedDraftResult>> PublishSelectedDraftAsync(Guid runId, PublishSelectedDraftRequest request, CancellationToken ct = default)
         => SendAsync<PublishSelectedDraftResult>("POST", $"/reviews/{runId:D}/publish", request, ct, readDecisionError: true);
 

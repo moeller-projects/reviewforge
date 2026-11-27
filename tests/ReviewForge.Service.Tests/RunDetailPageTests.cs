@@ -32,6 +32,60 @@ public sealed class RunDetailPageTests
         return c;
     }
     [Theory]
+    [InlineData(RunKind.Review, RunState.Completed)]
+    [InlineData(RunKind.Resolve, RunState.Completed)]
+    [InlineData(RunKind.ReviewDraft, RunState.Running)]
+    [InlineData(RunKind.ReviewDraft, RunState.Failed)]
+    public async Task Noneditable_runs_cannot_submit_bulk_even_through_a_stale_callback(RunKind kind, RunState runState)
+    {
+        var details = Details(Finding("a") with { CanDecide = false }); details = details with { Status = details.Status with { Kind = kind, State = runState } };
+        await using var c = Context(details); var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find(".finding-row input").Change(true); Assert.True(page.Find("[data-command='batch-approve']").HasAttribute("disabled"));
+        await page.InvokeAsync(() => page.FindComponent<ReviewForge.Service.Components.Dashboard.FindingQueue>().Instance.OnBatch.InvokeAsync(new BatchFindingDecisionRequest("head", [new("a", 3, FindingDecisionState.Approved, null)])));
+        Assert.DoesNotContain(c.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[1], "POST"));
+    }
+
+    [Fact]
+    public async Task Bulk_freezes_explicit_versions_including_hidden_selection_retains_unresolved_and_never_advances()
+    {
+        await using var c = Context(Details(Finding("a", FindingDecisionState.Pending), Finding("b", FindingDecisionState.Deferred), Finding("c", FindingDecisionState.Deferred)));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new BatchFindingDecisionResponse("storage-failure",
+                [new("a", BatchFindingDecisionStatus.Saved, 4), new("b", BatchFindingDecisionStatus.Conflict, 4), new("c", BatchFindingDecisionStatus.Unknown)]))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(3, page.FindAll(".finding-row").Count));
+        page.FindAll(".queue-selection button")[0].Click();
+        page.Find("select[aria-label='Decision filter']").Change("Pending");
+        page.Find("[data-command='batch-approve']").Click();
+        page.WaitForAssertion(() => Assert.Contains("2 selected · 2 hidden", page.Markup));
+        var request = Assert.IsType<BatchFindingDecisionRequest>(Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch")).Arguments[3]);
+        Assert.Equal(new[] { "a", "b", "c" }, request.Selections.Select(i => i.FindingId));
+        Assert.All(request.Selections, i => { Assert.Equal(3, i.ExpectedVersion); Assert.Equal(FindingDecisionState.Approved, i.State); });
+        Assert.Contains("Saved", page.Find("[aria-label='Batch decision outcomes']").TextContent);
+        Assert.Contains("Conflict", page.Markup); Assert.Contains("Unknown", page.Markup);
+        Assert.Equal("a", page.Find("[aria-current='true']").GetAttribute("data-finding-id"));
+        Assert.DoesNotContain(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"));
+    }
+
+    [Theory]
+    [InlineData("batch-defer", FindingDecisionState.Deferred)]
+    [InlineData("batch-reset", FindingDecisionState.Pending)]
+    public async Task Unconfirmed_bulk_retains_selection_reports_unknown_and_does_not_replay(string command, FindingDecisionState state)
+    {
+        await using var c = Context(Details(Finding("a")));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch")).SetResult(new(500, null));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id)); page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find(".finding-row input").Change(true); page.Find($"[data-command='{command}']").Click();
+        page.WaitForAssertion(() => Assert.Contains("Unknown", page.Markup)); Assert.Contains("1 selected", page.Markup);
+        var call = Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch"));
+        Assert.Equal(state, Assert.Single(Assert.IsType<BatchFindingDecisionRequest>(call.Arguments[3]).Selections).State);
+        Assert.True(page.Find($"[data-command='{command}']").HasAttribute("disabled"));
+    }
+
+    [Theory]
     [InlineData(200, FindingDecisionStatus.Saved, 4, true)]
     [InlineData(200, FindingDecisionStatus.Saved, 3, false)]
     [InlineData(200, FindingDecisionStatus.Conflict, 4, false)]

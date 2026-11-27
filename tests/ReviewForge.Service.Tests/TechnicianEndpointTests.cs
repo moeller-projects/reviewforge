@@ -17,6 +17,34 @@ public sealed class TechnicianEndpointTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
+    public async Task Batch_endpoint_returns_typed_partial_outcomes_without_host_writes()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers(); using var client = factory.CreateClient();
+        var runId = Guid.NewGuid(); var store = factory.Services.GetRequiredService<IFindingStore>();
+        await store.SaveRunAsync(new(runId, new("o", "p", "r", 2), "head", ReviewKind.Full, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, true,
+            [new StoredFinding("id", "r", "high", "title", null, null, null, FindingJson: "{}")], Pipeline: "ReviewDraft"), Ct);
+        var path = $"/reviews/{runId}/decisions/batch";
+        var request = new BatchFindingDecisionRequest("head", [new("id", 0, FindingDecisionState.Rejected, "reason"), new("foreign", 0, FindingDecisionState.Approved, null)]);
+        var response = await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<BatchFindingDecisionResponse>(Ct))!;
+        Assert.Equal(BatchFindingDecisionStatus.Saved, result.Items[0].Status); Assert.Equal("header-key", result.Items[0].Decision!.Actor);
+        Assert.Equal(BatchFindingDecisionStatus.Invalid, result.Items[1].Status);
+        Assert.Equal(HttpStatusCode.Conflict, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request with { HeadSha = "wrong" }, Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request with { Selections = [] }, Ct)).StatusCode);
+        Assert.Empty(factory.Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Batch_endpoint_uses_submit_rate_limit()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers().WithSubmitLimit(1, 600); using var client = factory.CreateClient();
+        var path = $"/reviews/{Guid.NewGuid()}/decisions/batch"; var request = new BatchFindingDecisionRequest("head", [new("id", 0, FindingDecisionState.Pending, null)]);
+        Assert.Equal(HttpStatusCode.NotFound, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Disabled_verifier_disables_capability_and_rejects_draft_without_enqueue()
     {
         using var factory = new ReviewForgeFactory().WithoutWorkers().WithFindingVerification(false);

@@ -38,7 +38,7 @@ function decisionHistoryPath(path, run) {
 
 export async function send(id, method, path, body) {
     const run = '/reviews/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-    const technicianMutation = typeof path === 'string' && new RegExp(`^${run}/(decisions|publish|reconcile)$`).test(path);
+    const technicianMutation = typeof path === 'string' && new RegExp(`^${run}/(decisions|decisions/batch|publish|reconcile)$`).test(path);
     if (typeof path !== 'string' || path !== path.trim() || !((method === 'GET' &&
           (path === '/reviews/dashboard' || path === '/reviews/drafts/capability' || historyPath(path) || decisionHistoryPath(path, run) ||
            new RegExp(`^${run}(/details)?$`).test(path))) ||

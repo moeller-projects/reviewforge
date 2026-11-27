@@ -42,6 +42,14 @@
     <span role="status">@State.Selected.Count selected · @State.Selected.Count(id => !Matching.Any(f => f.FindingId == id)) hidden</span>
     <span>Shift-click to select a range. Selection does not approve or publish.</span>
 </div>
+<div class="finding-toolbar" aria-label="Batch decisions">
+    @foreach (var command in Commands.Where(c => c.Id.StartsWith("batch-", StringComparison.Ordinal)))
+    {
+        <button type="button" data-command="@command.Id" disabled="@(Unavailable(command.Id) is not null)" title="@Unavailable(command.Id)" @onclick="() => ExecuteCommand(command.Id)">@command.Label</button>
+    }
+    <span>Save up to 500 selected findings, including hidden items. Approval does not publish.</span>
+    @if (BatchBlockReason is { } batchReason) { <small>@batchReason</small> }
+</div>
 <label class="pane-size">Queue width <input type="range" min="25" max="65" step="1" value="40" aria-label="Queue pane width" data-pane-size /></label>
 <div class="finding-workspace @(_Inspecting ? "inspecting" : "")">
     <section class="finding-queue" aria-label="Findings queue">
@@ -92,6 +100,7 @@
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public HashSet<string> Unknown { get; set; } = [];
     [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback<BatchFindingDecisionRequest> OnBatch { get; set; }
     [Parameter] public EventCallback<string> OnHistory { get; set; }
     [Parameter] public EventCallback OnChanged { get; set; }
     private IReadOnlyList<RunFindingDto> Matching => State.Matching(Findings.Select(f => Unknown.Contains(f.FindingId) ? f with { PublicationUnknown = true } : f).ToArray());
@@ -106,15 +115,18 @@
     private static readonly (string Id, string Label, string Shortcut)[] Commands =
     [ ("next", "Next finding", "↓ / J"), ("previous", "Previous finding", "↑ / K"), ("inspect", "Inspect finding", "Enter"),
       ("select", "Toggle selection", "Space"), ("approve", "Approve", "A (opt-in)"), ("reject", "Reject with reason", "R (opt-in)"),
-      ("defer", "Defer", "D (opt-in)"), ("search", "Search loaded findings", "/"), ("return", "Return to findings", "Escape") ];
+      ("defer", "Defer", "D (opt-in)"),
+      ("batch-approve", "Approve selected", ""), ("batch-defer", "Defer selected", ""), ("batch-reset", "Reset selected to pending", ""), ("search", "Search loaded findings", "/"), ("return", "Return to findings", "Escape") ];
     public sealed record CommandPreferences(bool SingleLetter = false, bool Advance = true);
     protected override void OnParametersSet()
     {
         if (_LastFocused is not null && _LastFocused != State.FocusedId && _Inspecting) _PendingFocus = "inspector";
         _LastFocused = State.FocusedId;
     }
+    private string? BatchBlockReason => State.BatchBlockReason(Findings, HeadSha, Disabled);
     private string? Unavailable(string command)
     {
+        if (command.StartsWith("batch-", StringComparison.Ordinal)) return BatchBlockReason;
         if (command is "search" or "return" or "escape") return null;
         if (Disabled) return "Actions are unavailable while busy, stale or signed out.";
         var finding = Findings.FirstOrDefault(f => f.FindingId == State.FocusedId);
@@ -139,6 +151,12 @@
         _CommandMessage = null;
         if (command == "commands") _CommandsOpen = true;
         else if (Unavailable(command) is { } reason) _CommandMessage = reason;
+        else if (command is "batch-approve" or "batch-defer" or "batch-reset")
+        {
+            var state = command == "batch-approve" ? FindingDecisionState.Approved : command == "batch-defer" ? FindingDecisionState.Deferred : FindingDecisionState.Pending;
+            var snapshot = State.SnapshotBatch(Findings, HeadSha, state, Disabled);
+            if (snapshot is not null) await OnBatch.InvokeAsync(snapshot);
+        }
         else if (command is "next" or "previous")
         {
             var rows = Matching;

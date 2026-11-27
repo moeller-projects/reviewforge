@@ -25,11 +25,14 @@ public partial class FakeFindingStore
                 .Where(d => d.RunId == runId && d.FindingId == findingId).OrderByDescending(d => d.Version).Take(count).ToArray());
     }
 
-    public Task<bool> TryAppendFindingDecisionAsync(FindingDecision decision, long expectedVersion, CancellationToken ct)
+    public Func<FindingDecision, CancellationToken, Task>? BeforeFindingDecisionAppend { get; set; }
+
+    public async Task<bool> TryAppendFindingDecisionAsync(FindingDecision decision, long expectedVersion, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(decision);
         if (expectedVersion < 0 || expectedVersion == long.MaxValue || decision.Version != expectedVersion + 1)
             throw new ArgumentException("Decision version must follow expectedVersion.", nameof(expectedVersion));
+        if (BeforeFindingDecisionAppend is not null) await BeforeFindingDecisionAppend(decision, ct);
         ct.ThrowIfCancellationRequested();
         lock (Runs)
         {
@@ -38,9 +41,9 @@ public partial class FakeFindingStore
                 throw new ArgumentException("Decision run or revision does not match a stored run.", nameof(decision));
             var current = _FindingDecisions.Where(d => d.RunId == decision.RunId && d.FindingId == decision.FindingId)
                 .Select(d => d.Version).DefaultIfEmpty(0).Max();
-            if (current != expectedVersion) return Task.FromResult(false);
+            if (current != expectedVersion) return false;
             _FindingDecisions.Add(decision);
-            return Task.FromResult(true);
+            return true;
         }
     }
 }

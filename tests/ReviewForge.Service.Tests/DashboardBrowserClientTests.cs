@@ -83,6 +83,20 @@ public class DashboardBrowserClientTests
     }
 
     [Fact]
+    public async Task Batch_method_keeps_versions_and_reasons_in_body_and_reads_partial_failure()
+    {
+        await using var context = new BunitContext(); var module = context.JSInterop.SetupModule("./dashboard-http.js");
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true)
+            .SetResult(new(409, JsonSerializer.SerializeToElement(new BatchFindingDecisionResponse("busy", [new("id", BatchFindingDecisionStatus.NotAttempted)]))));
+        await using var client = new DashboardBrowserClient(context.JSInterop.JSRuntime); var id = Guid.NewGuid();
+        var request = new BatchFindingDecisionRequest("head", [new("id", 9, ReviewForge.Core.Domain.FindingDecisionState.Rejected, "reason")]);
+        var result = await client.SetBatchFindingDecisionsAsync(id, request, TestContext.Current.CancellationToken);
+        Assert.Equal(BrowserOutcome.Conflict, result.Outcome); Assert.Equal("busy", result.Value!.ErrorCode);
+        var call = Assert.Single(module.Invocations["send"]); Assert.Equal("POST", call.Arguments[1]);
+        Assert.Equal($"/reviews/{id:D}/decisions/batch", call.Arguments[2]); Assert.Same(request, call.Arguments[3]);
+    }
+
+    [Fact]
     public async Task Publication_method_keeps_selection_in_body_and_reads_safe_partial_outcomes()
     {
         await using var context = new BunitContext();

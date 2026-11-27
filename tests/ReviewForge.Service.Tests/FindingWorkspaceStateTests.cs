@@ -8,6 +8,27 @@ public sealed class FindingWorkspaceStateTests
     private static RunFindingDto Row(string id, string severity, string file) => new(id,
         new("RULE", id, severity, "bug", "claim", null, null, new(file, 1, 2), false), null, null, false, null, 0, false, null, false, false);
     [Fact]
+    public void Batch_snapshot_is_bounded_read_only_filter_independent_and_preserves_drafts()
+    {
+        var state = new FindingWorkspaceState { Search = "hidden" };
+        var a = Row("a", "high", "a.cs") with { CanDecide = true, DecisionVersion = 7 };
+        Assert.Null(state.SnapshotBatch([a], "head", FindingDecisionState.Approved, false));
+        state.Selected.Add("a");
+        var snapshot = state.SnapshotBatch([a], "head", FindingDecisionState.Approved, false)!;
+        state.Selected.Clear(); Assert.Equal("a", Assert.Single(snapshot.Selections).FindingId); Assert.Equal(7, snapshot.Selections[0].ExpectedVersion);
+        state.Selected.Add("a");
+        Assert.Null(state.SnapshotBatch([a], "head", FindingDecisionState.Rejected, false));
+        Assert.Null(state.SnapshotBatch([a], "head", FindingDecisionState.Approved, true));
+        Assert.Null(state.SnapshotBatch([a], "", FindingDecisionState.Approved, false));
+        Assert.Null(state.SnapshotBatch([a with { CanDecide = false }], "head", FindingDecisionState.Approved, false));
+        Assert.Null(state.SnapshotBatch([], "head", FindingDecisionState.Approved, false));
+        state.Drafts["a"] = new(7, FindingDecisionState.Rejected, "unsaved") { Dirty = true };
+        Assert.Null(state.SnapshotBatch([a], "head", FindingDecisionState.Deferred, false)); Assert.Equal("unsaved", state.Drafts["a"].Reason);
+        state.Drafts.Clear(); foreach (var i in Enumerable.Range(0, 500)) state.Selected.Add($"extra{i}");
+        Assert.Null(state.SnapshotBatch([a], "head", FindingDecisionState.Pending, false));
+    }
+
+    [Fact]
     public void Confirmed_decision_advances_in_snapshot_order_only_to_current_matching_pending()
     {
         var a = Row("a", "high", "a.cs"); var b = Row("b", "high", "b.cs"); var c = Row("c", "high", "c.cs");

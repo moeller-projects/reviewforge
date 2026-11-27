@@ -29,6 +29,25 @@ public sealed class FindingWorkspaceState
         Complete = !matching.Any(f => (f.Decision?.State ?? FindingDecisionState.Pending) == FindingDecisionState.Pending);
         if (next is not null) FocusedId = next;
     }
+    public string? BatchBlockReason(IReadOnlyList<RunFindingDto> findings, string headSha, bool disabled)
+    {
+        if (disabled) return "Actions are unavailable while busy, stale or signed out.";
+        if (Selected.Count is < 1 or > FindingDecisionService.MaxBatchSize) return "Select between 1 and 500 findings.";
+        foreach (var id in Selected)
+        {
+            var finding = findings.FirstOrDefault(f => f.FindingId == id);
+            if (finding is null || DecisionBlockReason(finding, headSha, false) is not null) return "Selection contains an unavailable or changed finding. Review before saving.";
+            if (Drafts.GetValueOrDefault(id)?.Dirty == true) return "Save or review unsaved decision drafts before a batch action.";
+        }
+        return null;
+    }
+    public BatchFindingDecisionRequest? SnapshotBatch(IReadOnlyList<RunFindingDto> findings, string headSha, FindingDecisionState state, bool disabled)
+    {
+        if (state is not (FindingDecisionState.Approved or FindingDecisionState.Deferred or FindingDecisionState.Pending)
+            || BatchBlockReason(findings, headSha, disabled) is not null) return null;
+        return new(headSha, Array.AsReadOnly(findings.Where(f => Selected.Contains(f.FindingId))
+            .Select(f => new BatchFindingDecisionSelection(f.FindingId, f.DecisionVersion, state, null)).ToArray()));
+    }
     public HashSet<string> Selected { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, FindingEditorDraft> Drafts { get; } = new(StringComparer.Ordinal);
     public string Search { get; set; } = "";

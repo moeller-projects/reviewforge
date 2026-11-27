@@ -16,6 +16,7 @@ public partial class RunDetail
     private readonly HashSet<string> _Unknown = new(StringComparer.Ordinal);
     private PublishSelectedDraftRequest? _Confirmation;
     private PublishSelectedDraftResult? _Publication;
+    private BatchFindingDecisionResponse? _Batch;
     private FindingDecisionHistoryResponse? _History;
     private string? _HistoryId, _Message;
     private string _Section = "Findings";
@@ -46,6 +47,7 @@ public partial class RunDetail
         _Unknown.Clear();
         _Confirmation = null;
         _Publication = null;
+        _Batch = null;
         _History = null;
         _HistoryId = _Message = null;
         _Section = "Findings";
@@ -139,6 +141,52 @@ public partial class RunDetail
                     : "Decision saved. Approval does not publish findings." : "Decision was not confirmed. Review authoritative data before editing again.";
         }
         else Fail(result.Outcome, "Decision was not confirmed. Refresh before editing again.");
+    }
+    private async Task SaveBatchAsync(BatchFindingDecisionRequest request)
+    {
+        if (Busy || _Stale || _AuthenticationExpired || _Route is null || _Details is null
+            || _Details.Status.Kind != RunKind.ReviewDraft || _Details.Status.State != RunState.Completed
+            || request.HeadSha != _Details.ReviewedHeadSha || request.Selections.Count is < 1 or > FindingDecisionService.MaxBatchSize) return;
+        // Validate the frozen request, not the mutable selection or current filters.
+        if (request.Selections.Select(s => s.FindingId).Distinct(StringComparer.Ordinal).Count() != request.Selections.Count
+            || request.Selections.Any(s => !_Details.Findings.Any(f => f.FindingId == s.FindingId && f.DecisionVersion == s.ExpectedVersion
+                && _Workspace.DecisionBlockReason(f, request.HeadSha, false) is null) || _Workspace.Drafts.GetValueOrDefault(s.FindingId)?.Dirty == true)) return;
+        var generation = _Generation;
+        _Saving = true;
+        var result = await Browser.SetBatchFindingDecisionsAsync(RunId, request, _Route.Token);
+        if (!Current(generation)) return;
+        _Saving = false;
+        _History = null; _HistoryId = null;
+        var structured = result.Outcome is BrowserOutcome.Ok or BrowserOutcome.Conflict or BrowserOutcome.Invalid or BrowserOutcome.NotFound
+            && result.Value is { } value && value.Items.Count == request.Selections.Count
+            && request.Selections.All(s => value.Items.Count(i => i.FindingId == s.FindingId) == 1);
+        _Batch = structured ? result.Value : new("unconfirmed", request.Selections.Select(s => new BatchFindingDecisionItem(s.FindingId, BatchFindingDecisionStatus.Unknown)).ToArray());
+        foreach (var item in _Batch!.Items)
+        {
+            var submitted = request.Selections.First(s => s.FindingId == item.FindingId);
+            if (item.Status == BatchFindingDecisionStatus.Saved && item.CurrentVersion == submitted.ExpectedVersion + 1)
+            { _Selected.Remove(item.FindingId); _Workspace.Drafts.Remove(item.FindingId); }
+            else
+            {
+                // A malformed success is not confirmation of a write.
+                if (item.Status == BatchFindingDecisionStatus.Saved)
+                    _Batch = _Batch with { Items = _Batch.Items.Select(i => i.FindingId == item.FindingId ? i with { Status = BatchFindingDecisionStatus.Unknown } : i).ToArray() };
+                _Selected.Add(item.FindingId);
+            }
+        }
+        if (structured)
+        {
+            await RefreshAsync();
+            if (!Current(generation)) return;
+            _Message = _Batch.ErrorCode is null ? "Batch processed. Review per-finding outcomes; approval does not publish. Review did not advance."
+                : "Batch stopped or rejected. Review per-finding outcomes and refresh before deciding again. Nothing is retried automatically.";
+        }
+        else
+        {
+            Fail(result.Outcome, "Batch decisions could not be confirmed. Refresh authoritative data before editing again. Nothing is retried automatically.");
+            _Selected.UnionWith(request.Selections.Select(s => s.FindingId));
+            _Stale = true;
+        }
     }
     private async Task PostAsync()
     {

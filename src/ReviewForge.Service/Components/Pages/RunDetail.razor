@@ -53,9 +53,24 @@
                     @if (result.UnknownCount > 0) { <p>Unknown outcomes are not retried automatically. Refresh and allow server reconciliation before retrying; an external comment may already exist.</p> }
                 </section>
             }
+            @if (_Batch is { } batch)
+            {
+                <section class="decision-history" aria-label="Batch decision outcomes">
+                    <h2>Batch decision outcomes</h2>
+                    @if (batch.ErrorCode is not null) { <p class="notice">Batch not fully completed: @batch.ErrorCode. Confirmed saves are retained.</p> }
+                    <ul>
+                        @foreach (var item in batch.Items)
+                        {
+                            var title = details.Findings.FirstOrDefault(f => f.FindingId == item.FindingId) is { } f ? FindingWorkspaceState.Payload(f)?.Title : null;
+                            <li>@(title ?? item.FindingId) · <code>@item.FindingId</code>: <strong>@item.Status</strong> @if (item.CurrentVersion is { } version) { <span>· version @version</span> }</li>
+                        }
+                    </ul>
+                    <p>Saved items leave the selection. Conflict, invalid, not-attempted and unknown items remain selected, including hidden findings. Unknown means a write may have saved. Refresh and inspect before deciding again; nothing is retried automatically.</p>
+                </section>
+            }
             <FindingQueue @key="RunId" State="_Workspace" Findings="details.Findings" HeadSha="@(details.ReviewedHeadSha ?? "")"
                 Disabled="@(Busy || _Stale || _AuthenticationExpired)" Unknown="_Unknown" BrowserUrl="@(details.Source?.BrowserUrl)"
-                OnChanged="StateHasChanged" OnSave="SaveAsync" OnHistory="HistoryAsync" />
+                OnChanged="StateHasChanged" OnSave="SaveAsync" OnBatch="SaveBatchAsync" OnHistory="HistoryAsync" />
             @if (_HistoryId is not null)
             {
                 <section class="decision-history" aria-label="Decision history"><h2>Decision history · <code>@_HistoryId</code></h2>
