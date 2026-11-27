@@ -66,6 +66,13 @@ export async function send(id, method, path, body) {
             try { data = await response.json(); }
             catch { /* Antiforgery/model binding can return an empty error body. */ }
         }
+        // Interactive Server interop completions share SignalR's bounded message size.
+        // Keep large finding/history payloads off that message; Blazor streams them in chunks.
+        if (data !== null) {
+            const bytes = new TextEncoder().encode(JSON.stringify(data));
+            if (bytes.byteLength > 16 * 1024)
+                return { status: response.status, data: null, dataStream: DotNet.createJSStreamReference(bytes) };
+        }
         return { status: response.status, data };
     } catch {
         return { status: 0 };

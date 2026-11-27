@@ -10,6 +10,8 @@ public sealed record BrowserResult<T>(BrowserOutcome Outcome, T? Value = default
 public sealed class DashboardBrowserClient(IJSRuntime js) : IAsyncDisposable
 {
     private IJSObjectReference? _Module;
+    private const long MaxResponseStreamBytes = 8 * 1024 * 1024;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public Task<BrowserResult<DashboardResponse>> GetDashboardAsync(CancellationToken ct = default)
         => SendAsync<DashboardResponse>("GET", "/reviews/dashboard", null, ct);
@@ -70,9 +72,19 @@ public sealed class DashboardBrowserClient(IJSRuntime js) : IAsyncDisposable
                 401 => BrowserOutcome.Unauthenticated, 403 => BrowserOutcome.Forbidden, 404 => BrowserOutcome.NotFound, 409 => BrowserOutcome.Conflict,
                 429 => BrowserOutcome.RateLimited, 503 => BrowserOutcome.Unavailable, _ => BrowserOutcome.NetworkError,
             };
-            return new(outcome, response.Data is { } data && (outcome is BrowserOutcome.Ok or BrowserOutcome.Accepted ||
+            await using var reference = response.DataStream;
+            T? value = default;
+            if (outcome is BrowserOutcome.Ok or BrowserOutcome.Accepted ||
                 readDecisionError && outcome is BrowserOutcome.Invalid or BrowserOutcome.Conflict or BrowserOutcome.NotFound)
-                ? data.Deserialize<T>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) : default);
+            {
+                if (reference is not null)
+                {
+                    await using var stream = await reference.OpenReadStreamAsync(MaxResponseStreamBytes, ct);
+                    value = await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, ct);
+                }
+                else if (response.Data is { } data) value = data.Deserialize<T>(JsonOptions);
+            }
+            return new(outcome, value);
         }
         catch (OperationCanceledException)
         {
@@ -86,6 +98,7 @@ public sealed class DashboardBrowserClient(IJSRuntime js) : IAsyncDisposable
         }
         catch (Exception ex) when (ex is JSException or JSDisconnectedException) { return new(BrowserOutcome.NetworkError); }
         catch (JsonException) { return new(BrowserOutcome.NetworkError); }
+        catch (Exception ex) when (ex is IOException or ArgumentOutOfRangeException) { return new(BrowserOutcome.NetworkError); }
     }
 
     public async ValueTask DisposeAsync()
@@ -95,5 +108,8 @@ public sealed class DashboardBrowserClient(IJSRuntime js) : IAsyncDisposable
         catch (JSDisconnectedException) { /* Circuit ended; no browser resource remains reachable. */ }
     }
 
-    public sealed record BrowserHttpResponse(int Status, JsonElement? Data);
+    public sealed record BrowserHttpResponse(int Status, JsonElement? Data)
+    {
+        public IJSStreamReference? DataStream { get; init; }
+    }
 }

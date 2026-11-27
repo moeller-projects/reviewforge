@@ -43,3 +43,26 @@ test('same-origin allowlist, credentials, CSRF, typed status and cancellation', 
     abort('missing');
     assert.doesNotMatch(source, /localStorage|sessionStorage|apiKey|X-Api-Key/);
 });
+
+test('large run details cross interop as a stream, not an oversized SignalR completion', async () => {
+    const payload = { findings: [{ description: 'x'.repeat(64 * 1024), snippet: 'Unicode: 🛠️' }] };
+    const previousFetch = globalThis.fetch;
+    const previousDotNet = globalThis.DotNet;
+    let streamed;
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => payload });
+    globalThis.DotNet = { createJSStreamReference(bytes) {
+        streamed = bytes;
+        return { __jsStreamReferenceLength: bytes.byteLength, __jsObjectId: 1 };
+    } };
+    try {
+        const response = await send('large-run', 'GET', '/reviews/01234567-89ab-cdef-0123-456789abcdef/details');
+        assert.equal(response.status, 200);
+        assert.equal(response.data == null, true, 'large JSON must not be returned inline over SignalR');
+        assert.ok(response.dataStream);
+        assert.deepEqual(JSON.parse(new TextDecoder().decode(streamed)), payload);
+        assert.ok(new TextEncoder().encode(JSON.stringify(response)).byteLength < 32 * 1024);
+    } finally {
+        globalThis.fetch = previousFetch;
+        globalThis.DotNet = previousDotNet;
+    }
+});
