@@ -21,7 +21,7 @@ public sealed class DraftReviewServiceTests
     {
         var runs = new RunSubmissionService(_Queue, _Tracker, _Claims, _Store,
             TimeProvider.System, NullLogger<RunSubmissionService>.Instance);
-        _Service = new DraftReviewService(_Store, _Source, _Claims, runs);
+        _Service = new DraftReviewService(_Store, _Source, _Claims, runs, _Store);
     }
 
     [Fact]
@@ -154,10 +154,240 @@ public sealed class DraftReviewServiceTests
         Assert.Equal("general-key", Assert.Single(_Source.GeneralCommentDedupeKeys));
         Assert.Equal(1, result.PublishedCount);
         Assert.Equal(1, result.AlreadyPublishedCount);
+        Assert.True(_Store.Runs.Single().Findings[0].Published);
+        Assert.NotNull(_Store.Runs.Single().Findings[0].ThreadId);
         var persisted = Assert.Single(_Store.Runs.Single().Findings, f => f.DedupeKey == "existing-key");
         Assert.True(persisted.Published);
         Assert.Equal(77, persisted.ThreadId);
     }
+
+    [Fact]
+    public async Task Technician_requires_explicit_unique_known_approved_current_selection()
+    {
+        var run = Draft([Finding("one"), Finding("two")]);
+        _Store.Runs.Add(run);
+        async Task<PublishSelectedDraftResult> Publish(PublishSelectedDraftRequest request) =>
+            await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal("selection-required", (await Publish(new("head-sha", null))).ErrorCode);
+        Assert.Equal("selection-required", (await Publish(new("head-sha", []))).ErrorCode);
+        Assert.Equal("invalid-selection", (await Publish(new("head-sha", [new("one", 1), new("one", 1)]))).ErrorCode);
+        Assert.Equal("invalid-selection", (await Publish(new("head-sha", [new("other-run", 1)]))).ErrorCode);
+        Assert.Equal("approval-conflict", (await Publish(new("head-sha", [new("one", 1)]))).ErrorCode);
+        await Approve(run, "one");
+        Assert.Equal("approval-conflict", (await Publish(new("head-sha", [new("one", 2)]))).ErrorCode);
+        Assert.Equal("approval-conflict", (await Publish(new("head-sha", [new("one", 1), new("two", 1)]))).ErrorCode);
+        Assert.Empty(_Source.PostedFindings);
+        Assert.Equal("head-changed", (await Publish(new("old", [new("one", 1)]))).ErrorCode);
+        _Source.Pr = _Source.Pr with { SourceCommitSha = "new-head" };
+        Assert.Equal("head-changed", (await Publish(new("head-sha", [new("one", 1)]))).ErrorCode);
+        Assert.Empty(_Source.PostedFindings);
+        _Source.Pr = _Source.Pr with { SourceCommitSha = "head-sha" };
+        var posted = await Publish(new("head-sha", [new("one", 1)]));
+        Assert.True(posted.Accepted);
+        Assert.Equal(1, posted.PostedCount);
+        Assert.Equal(PublishFindingStatus.Posted, Assert.Single(posted.Findings).Status);
+        Assert.Equal("one", Assert.Single(_Source.PostedFindings).Finding.DedupeKey);
+        Assert.Equal(1, (await Publish(new("head-sha", [new("one", 1)]))).AlreadyPostedCount);
+    }
+
+    [Fact]
+    public async Task Technician_observation_mapping_cannot_override_technical_rejection()
+    {
+        var f = Finding("one");
+        var observation = FindingObservation.Create(f) with { Validation = FindingValidationStatus.Rejected };
+        var run = Draft([f]) with { FindingObservations = [observation] };
+        _Store.Runs.Add(run);
+        var id = observation.Id.ToString("N");
+        await Approve(run, id);
+        var result = await _Service.PublishSelectedAsync(run.Id, new("head-sha", [new(id, 1)]), CancellationToken.None);
+        Assert.Equal("ineligible-finding", result.ErrorCode);
+        Assert.Equal(PublishFindingStatus.NotAttempted, Assert.Single(result.Findings).Status);
+        Assert.Empty(_Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Technician_partial_failure_returns_unknown_and_retry_reconciles_without_new_post_count()
+    {
+        var fs = new[] { Finding("one"), Finding("two"), Finding("three") };
+        var os = fs.Select(f => FindingObservation.Create(f) with { Validation = FindingValidationStatus.Accepted }).ToArray();
+        var run = Draft(fs) with { FindingObservations = os };
+        _Store.Runs.Add(run);
+        foreach (var o in os) await Approve(run, o.Id.ToString("N"));
+        var request = new PublishSelectedDraftRequest("head-sha", os.Select(o => new PublishFindingSelection(o.Id.ToString("N"), 1)).ToArray());
+        _Source.ThrowOnPostKey = "two";
+        var result = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.False(result.Accepted);
+        Assert.Equal(new[] { PublishFindingStatus.Posted, PublishFindingStatus.Unknown, PublishFindingStatus.NotAttempted }, result.Findings.Select(f => f.Status));
+        Assert.Equal("publication-unknown", result.ErrorCode);
+        Assert.True(_Store.Runs.Single().FindingObservations![0].NewlyPosted);
+        _Source.ThrowOnPostKey = null;
+        _Source.Threads.Add(new(77, "two", ReviewThreadStatus.Active, []));
+        var retry = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal(1, retry.PostedCount);
+        Assert.Equal(2, retry.AlreadyPostedCount);
+        var latest = _Store.Runs.Single();
+        Assert.False(latest.FindingObservations![1].NewlyPosted);
+        Assert.Equal(2, FindingObservationCounts.From(latest.FindingObservations!).NewlyPosted);
+        Assert.Equal(77, latest.Findings[1].ThreadId);
+    }
+
+    [Fact]
+    public async Task Publication_and_decisions_share_claim_and_audit_survives_browser_cancellation()
+    {
+        var f = Finding("one") with { AnchorDowngraded = true };
+        var run = Draft([f]) with { FindingObservations = [FindingObservation.Create(f) with { Validation = FindingValidationStatus.Accepted }] };
+        _Store.Runs.Add(run);
+        var id = run.FindingObservations![0].Id.ToString("N");
+        await Approve(run, id);
+        var claim = Guid.NewGuid();
+        Assert.True(_Claims.TryClaim(Key, claim, out _));
+        var request = new PublishSelectedDraftRequest("head-sha", [new(id, 1)]);
+        Assert.Equal("busy", (await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None)).ErrorCode);
+        _Claims.Release(Key, claim);
+        using var browser = new CancellationTokenSource();
+        _Source.AfterPost = () =>
+        {
+            var mutation = new FindingDecisionService(_Store, _Store, TimeProvider.System, _Claims)
+                .DecideAsync(run.Id, id, run.HeadSha, FindingDecisionState.Rejected, "no", "dashboard-session", 1, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Equal(FindingDecisionStatus.Conflict, mutation.Status);
+            browser.Cancel();
+        };
+        var result = await _Service.PublishSelectedAsync(run.Id, request, browser.Token);
+        Assert.Equal(1, result.PostedCount);
+        var latest = _Store.Runs.Single();
+        Assert.True(latest.Findings[0].Published);
+        Assert.NotNull(latest.Findings[0].ThreadId);
+        Assert.True(latest.FindingObservations![0].NewlyPosted);
+        Assert.Empty(_Source.Votes);
+        Assert.Empty(_Source.Replies);
+        Assert.Empty(_Source.StatusChanges);
+    }
+
+    [Fact]
+    public async Task Technician_rejects_invalid_run_states_and_changed_approval_without_posts()
+    {
+        Assert.Equal("run-not-found", (await _Service.PublishSelectedAsync(Guid.NewGuid(), new("head-sha", [new("one", 1)]), CancellationToken.None)).ErrorCode);
+        var queued = Guid.NewGuid();
+        _Tracker.Set(queued, Key, RunState.Queued, kind: RunKind.ReviewDraft);
+        Assert.Equal("run-not-publishable", (await _Service.PublishSelectedAsync(queued, new("head-sha", [new("one", 1)]), CancellationToken.None)).ErrorCode);
+        foreach (var run in new[] { Draft([Finding("one")]) with { Pipeline = "Review" }, Draft([Finding("one")]) with { CompletedAt = null }, Draft([Finding("one")]) with { Success = false } })
+        {
+            _Store.Runs.Add(run);
+            Assert.Equal("run-not-publishable", (await _Service.PublishSelectedAsync(run.Id, new("head-sha", [new("one", 1)]), CancellationToken.None)).ErrorCode);
+        }
+        var failedStatus = Draft([Finding("one")]);
+        _Store.Runs.Add(failedStatus);
+        _Tracker.Set(failedStatus.Id, Key, RunState.Failed, kind: RunKind.ReviewDraft);
+        Assert.Equal("run-not-publishable", (await _Service.PublishSelectedAsync(failedStatus.Id, new("head-sha", [new("one", 1)]), CancellationToken.None)).ErrorCode);
+        var rejected = Draft([Finding("one")]);
+        _Store.Runs.Add(rejected);
+        await Approve(rejected, "one");
+        await _Store.TryAppendFindingDecisionAsync(FindingDecision.Record(rejected.Id, "one", rejected.HeadSha,
+            FindingDecisionState.Rejected, "not useful", "dashboard-session", DateTimeOffset.UtcNow, 2), 1, CancellationToken.None);
+        Assert.Equal("approval-conflict", (await _Service.PublishSelectedAsync(rejected.Id, new("head-sha", [new("one", 2)]), CancellationToken.None)).ErrorCode);
+        Assert.Empty(_Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Technician_rechecks_head_before_each_write_and_reports_prewrite_failure_safely()
+    {
+        var run = Draft([Finding("one"), Finding("two")]);
+        _Store.Runs.Add(run);
+        await Approve(run, "one");
+        await Approve(run, "two");
+        var request = new PublishSelectedDraftRequest("head-sha", [new("one", 1), new("two", 1)]);
+        _Source.ThrowOnGetPullRequest = new InvalidOperationException("SECRET");
+        var failed = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal("publication-failed", failed.ErrorCode);
+        Assert.Equal(1, failed.FailedCount);
+        Assert.Equal(1, failed.NotAttemptedCount);
+        _Source.ThrowOnGetPullRequest = null;
+        _Source.AfterPost = () => _Source.Pr = _Source.Pr with { SourceCommitSha = "changed" };
+        var partial = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal("head-changed", partial.ErrorCode);
+        Assert.Equal(1, partial.PostedCount);
+        Assert.Equal(1, partial.NotAttemptedCount);
+        Assert.Single(_Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Technician_lost_claim_leaves_remaining_findings_unattempted()
+    {
+        var run = Draft([Finding("one"), Finding("two")]);
+        _Store.Runs.Add(run);
+        await Approve(run, "one");
+        await Approve(run, "two");
+        var otherClaim = Guid.NewGuid();
+        _Source.AfterPost = () =>
+        {
+            _Claims.Release(Key, _Claims.Snapshot()[Key]);
+            Assert.True(_Claims.TryClaim(Key, otherClaim, out _));
+        };
+        var result = await _Service.PublishSelectedAsync(run.Id,
+            new("head-sha", [new("one", 1), new("two", 1)]), CancellationToken.None);
+        Assert.Equal("busy", result.ErrorCode);
+        Assert.Equal(1, result.PostedCount);
+        Assert.Equal(1, result.NotAttemptedCount);
+        Assert.Single(_Source.PostedFindings);
+        Assert.True(_Claims.IsHeldBy(Key, otherClaim));
+    }
+
+    [Fact]
+    public async Task Publication_and_new_post_attribution_are_atomic_even_when_separate_snapshot_save_would_fail()
+    {
+        var f = Finding("one");
+        var run = Draft([f]) with { FindingObservations = [FindingObservation.Create(f) with { Validation = FindingValidationStatus.Accepted }] };
+        _Store.Runs.Add(run);
+        var id = run.FindingObservations![0].Id.ToString("N");
+        await Approve(run, id);
+        _Source.AfterPost = () => _Store.ThrowOnSave = new InvalidOperationException("SECRET");
+        var request = new PublishSelectedDraftRequest("head-sha", [new(id, 1)]);
+        var result = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.True(result.Accepted);
+        Assert.Equal(1, result.PostedCount);
+        Assert.NotNull(Assert.Single(result.Findings).ThreadId);
+        Assert.True(_Store.Runs.Single().Findings[0].Published);
+        Assert.True(Assert.Single(_Store.Runs.Single().FindingObservations!).NewlyPosted);
+        _Store.ThrowOnSave = null;
+        Assert.Equal(1, (await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None)).AlreadyPostedCount);
+        Assert.True(Assert.Single(_Store.Runs.Single().FindingObservations!).NewlyPosted);
+        Assert.Single(_Source.PostedFindings);
+    }
+
+    [Fact]
+    public async Task Ambiguous_host_write_has_durable_intent_and_explicit_reconciliation_never_reposts()
+    {
+        var finding = Finding("ambiguous");
+        var run = Draft([finding]) with { FindingObservations = [FindingObservation.Create(finding) with { Validation = FindingValidationStatus.Accepted }] };
+        _Store.Runs.Add(run);
+        var id = run.FindingObservations![0].Id.ToString("N");
+        await Approve(run, id);
+        _Source.AfterPost = () => throw new InvalidOperationException("private transport failure");
+        var outcome = await _Service.PublishSelectedAsync(run.Id, new("head-sha", [new(id, 1)]), CancellationToken.None);
+        Assert.Equal(1, outcome.UnknownCount);
+        Assert.True(Assert.Single(_Store.Runs.Single().FindingObservations!).PublicationAttempted);
+        Assert.False(_Store.Runs.Single().Findings[0].Published);
+        _Source.AfterPost = null;
+        var repeated = await _Service.PublishSelectedAsync(run.Id, new("head-sha", [new(id, 1)]), CancellationToken.None);
+        Assert.False(repeated.Accepted);
+        Assert.Equal(1, repeated.UnknownCount);
+        Assert.Single(_Source.PostedFindings);
+        var notObserved = await _Service.ReconcileSelectedAsync(run.Id, new([id]), CancellationToken.None);
+        Assert.Equal(1, notObserved.UnknownCount);
+        Assert.Single(_Source.PostedFindings);
+        var posted = _Source.PostedFindings[0];
+        _Source.Threads.Add(new(posted.ThreadId, "ambiguous", ReviewThreadStatus.Active, []));
+        _Source.Pr = _Source.Pr with { SourceCommitSha = "later-head" };
+        var reconciled = await _Service.ReconcileSelectedAsync(run.Id, new([id]), CancellationToken.None);
+        Assert.True(reconciled.Accepted);
+        Assert.Equal(1, reconciled.AlreadyPostedCount);
+        Assert.True(_Store.Runs.Single().Findings[0].Published);
+        Assert.Single(_Source.PostedFindings);
+        Assert.Empty(_Source.GeneralComments);
+    }
+
+    private async Task Approve(ReviewRun run, string id) => Assert.True(await _Store.TryAppendFindingDecisionAsync(
+        FindingDecision.Record(run.Id, id, run.HeadSha, FindingDecisionState.Approved, null, "dashboard-session", DateTimeOffset.UtcNow, 1), 0, CancellationToken.None));
 
     private static ReviewRun Draft(IReadOnlyList<RichFinding> findings)
     {
