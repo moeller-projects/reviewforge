@@ -192,6 +192,8 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
                 CREATE INDEX IF NOT EXISTS IX_Runs_PrHistoryTicks ON Runs (Org,Project,RepositoryId,PrId,StartedAtUtcTicks DESC,Id DESC);
                 """;
             cmd.ExecuteNonQuery();
+            cmd.CommandText = ModelProfileSchema;
+            cmd.ExecuteNonQuery();
             transaction.Commit();
         }
         finally

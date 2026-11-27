@@ -1,0 +1,139 @@
+@using ReviewForge.Core.Domain
+@using ReviewForge.Core.Ports
+@using ReviewForge.Core.Profiling
+@using System.Globalization
+@implements IDisposable
+@inject DashboardBrowserClient Browser
+
+<section aria-label="Model-call profiling" class="model-call-section">
+    <h3>Model calls</h3>
+    @if (Status.State is RunState.Queued or RunState.Running)
+    {
+        <p>Detailed model calls are available after execution ends. Live stage progress remains above.</p>
+    }
+    else if (Status.State == RunState.Skipped)
+    {
+        <p>Skipped runs do not retain model-call profiles.</p>
+    }
+    else
+    {
+        <p class="worklist-muted">Observed provider-facing calls only. SDK-internal retries and provider cost are unavailable. Missing usage is not zero. No prompts, responses or tool content are retained.</p>
+        <button type="button" disabled="@_Loading" @onclick="() => LoadAsync(0)">@(_Loading ? "Loading model calls…" : _Page is null ? "Load model calls" : "Reload first page")</button>
+        @if (_Message is not null) { <p role="status">@_Message</p> }
+        @if (_Page is { } page)
+        {
+            <p role="status">@StateLabel(page.State)</p>
+            @if (page.ProfileId is { } profile)
+            {
+                <p>Profile ID: <code>@profile</code> · Observed calls: @(page.ObservedCalls.ToString(CultureInfo.InvariantCulture))</p>
+            }
+            @if (page.Truncated) { <p>Detail cap reached. Observed count includes calls omitted from the table.</p> }
+            @if (page.Incomplete) { <p>Capture is incomplete or interrupted. Missing calls cannot be reconstructed.</p> }
+            @if (page.Aggregate?.Stages is { Count: > 0 } stages)
+            {
+                <div class="model-call-scroll" role="region" aria-label="Retained stage summaries" tabindex="0">
+                    <table class="model-call-table">
+                        <caption>Retained stage summaries · includes calls omitted from details; durations may overlap</caption>
+                        <thead><tr><th scope="col">Stage</th><th scope="col">Calls / outcomes</th><th scope="col">Observed duration (ms)</th><th scope="col">Usage sums and reporting coverage</th></tr></thead>
+                        <tbody>
+                        @foreach (var (stage, summary) in stages.OrderBy(s => s.Key, StringComparer.Ordinal))
+                        {
+                            <tr @key="stage">
+                                <th scope="row">@StageLabels.Label(stage)</th>
+                                <td>@summary.ObservedCalls calls<br />Completed: @summary.CompletedCalls · Failed: @summary.FailedCalls<br />Cancelled: @summary.CancelledCalls · Interrupted: @summary.InterruptedCalls<br />Provider-incomplete: @summary.ProviderIncompleteCalls</td>
+                                <td>@summary.ObservedDurationMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)</td>
+                                <td>Input: @Usage(summary.Usage?.InputTokens)<br />Output: @Usage(summary.Usage?.OutputTokens)<br />Total: @Usage(summary.Usage?.TotalTokens)<br />Cached input: @Usage(summary.Usage?.CachedInputTokens)<br />Reasoning: @Usage(summary.Usage?.ReasoningTokens)</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+                <p class="worklist-muted">Provider-incomplete is an observed provider outcome, not missing capture. Partial usage sums include only reporting calls.</p>
+            }
+            @if (page.Calls.Count > 0)
+            {
+                <div class="model-call-scroll" role="region" aria-label="Model-call metadata table" tabindex="0">
+                    <table class="model-call-table">
+                        <caption>Observed model-call metadata · UTC timestamps and duration in milliseconds</caption>
+                        <thead><tr><th scope="col">Call / stage / profile</th><th scope="col">Provider / model</th><th scope="col">Timing (UTC)</th><th scope="col">Outcome</th><th scope="col">Tokens: input / output / total</th><th scope="col">Provider cost</th></tr></thead>
+                        <tbody>
+                        @foreach (var call in page.Calls)
+                        {
+                            <tr @key="call.CallId">
+                                <th scope="row"><code>@call.CallId</code><br />@StageLabels.Label(call.Stage)<br />@call.Profile</th>
+                                <td>@(call.Provider ?? "unavailable")<br />@(call.Model ?? "unavailable")</td>
+                                <td>@call.StartedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)<br />@(call.CompletedAt?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? "unavailable")<br />@(call.DurationMilliseconds?.ToString("0.###", CultureInfo.InvariantCulture) ?? "unavailable") ms</td>
+                                <td>@call.Outcome</td>
+                                <td>@Number(call.InputTokens) / @Number(call.OutputTokens) / @Number(call.TotalTokens)</td>
+                                <td>@(call.Cost is null ? "unavailable" : $"{call.Cost} {call.Currency}")</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            @if (page.NextSequence is { } next)
+            {
+                <button type="button" disabled="@_Loading" @onclick="() => LoadAsync(next)">Next model calls</button>
+            }
+        }
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public RunStatus Status { get; set; } = default!;
+    private Guid _RunId;
+    private long _Generation;
+    private CancellationTokenSource _Cancellation = new();
+    private ModelProfilePage? _Page;
+    private string? _Message;
+    private bool _Loading, _Disposed;
+    protected override void OnParametersSet()
+    {
+        if (_RunId == Status.RunId) return;
+        _Cancellation.Cancel();
+        _Cancellation.Dispose();
+        _Cancellation = new();
+        _RunId = Status.RunId;
+        _Generation++;
+        _Page = null;
+        _Message = null;
+        _Loading = false;
+    }
+    private async Task LoadAsync(long after)
+    {
+        if (_Loading || _Disposed || Status.State is RunState.Queued or RunState.Running or RunState.Skipped) return;
+        _Loading = true;
+        _Message = null;
+        var id = _RunId;
+        var generation = _Generation;
+        var result = await Browser.GetModelCallsAsync(id, after, ct: _Cancellation.Token);
+        if (_Disposed || generation != _Generation) return;
+        _Loading = false;
+        if (result.Outcome == BrowserOutcome.Ok) _Page = result.Value;
+        else if (result.Outcome != BrowserOutcome.Cancelled)
+        {
+            _Page = null;
+            _Message = result.Outcome == BrowserOutcome.Unauthenticated ? "Session expired. Sign in to read model calls."
+                : "Could not read model calls. Use Load model calls to retry.";
+        }
+    }
+    private static string Usage(ModelTokenSummary? value) => value?.Tokens is null ? "unavailable" :
+        $"{Number(value.Tokens)} ({value.Coverage}; {Number(value.ReportedCalls)}/{Number(value.ObservedCalls)} calls reported)";
+    private static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
+    private static string StateLabel(string state) => state switch {
+        "empty" => "No model calls were observed in this run.",
+        "legacy-unavailable" => "Detailed profiling is unavailable for this legacy run.",
+        "expired" => "Detailed model calls expired. Available aggregate summaries are retained.",
+        "incomplete" => "Incomplete model-call capture.",
+        "truncated" => "Truncated model-call capture.",
+        "not-yet-available" => "Detailed model calls are not yet available.",
+        "skipped-not-recorded" => "Skipped runs do not retain model-call profiles.",
+        _ => "Recorded model calls." };
+    public void Dispose()
+    {
+        _Disposed = true;
+        _Cancellation.Cancel();
+        _Cancellation.Dispose();
+    }
+}

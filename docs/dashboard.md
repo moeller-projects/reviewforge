@@ -139,6 +139,7 @@ is an alternative **only** for these API endpoints:
 | `POST /reviews/drafts` | Submit an explicitly requested read-only draft. |
 | `GET /reviews/{runId}` | Safe status read-through from tracker, queue, then durable run. |
 | `GET /reviews/{runId}/details` | Finding payloads, verification evidence, human decisions, and publication audit. |
+| `GET /reviews/{runId}/model-calls?after=0&count=50` | Terminal-only metadata pages; active, legacy, expired, truncated, incomplete and observed-empty states are explicit. |
 | `POST /reviews/{runId}/decisions` | Save a revision-scoped decision using its expected version. |
 | `POST /reviews/{runId}/decisions/batch` | Save 1–500 explicit unique findings with per-item versions and outcomes under one PR claim. |
 | `GET /reviews/{runId}/decisions/history?findingId=…` | Latest 100 immutable decisions for one run-local finding, loaded on demand. |
@@ -337,6 +338,8 @@ Execution is separate from the loaded stage plan. Captured context includes rule
 provenance and bounded summaries, uncertainties, and acceptance-criteria evidence where available;
 missing model provenance stays unavailable. Raw prompts, tool transcripts, configuration objects,
 and exception messages are not diagnostic payloads.
+
+Execution also offers **Load model calls** after termination for new Review, ReviewDraft and Resolve runs, including verifier and fix passes. Model metadata is retained separately for 30 days by default, with a hard 10,000-detail cap per run. Safe aggregate counts and stage summaries survive detail expiry. Prompts, responses, tool content, source, unrestricted errors and estimated costs are excluded. See [model-call profiling](model-profiling.md) for options, storage, coverage and provider omissions. No live per-call stream or tool trace is exposed.
 
 A crash before the first durable shell can leave no journal. Legacy stage history is unavailable
 rather than reconstructed. Skipped attempts remain tracker-only: skipped ReviewRun rows are never

@@ -26,6 +26,7 @@ public sealed class ProgressStage(StageId id, IReviewStage inner, IRunProgress? 
 
     public async Task ExecuteAsync(ReviewContext ctx, CancellationToken ct)
     {
+        using var modelScope = ReviewForge.Core.Profiling.ModelCallContext.Enter(ctx.ModelProfile, id.ToString());
         var time = clock ?? TimeProvider.System;
         ctx.DiagnosticTraceId ??= System.Diagnostics.Activity.Current?.TraceId.ToString();
         progress?.StageStarting(id);
@@ -60,6 +61,9 @@ public sealed class ProgressStage(StageId id, IReviewStage inner, IRunProgress? 
             ctx.DiagnosticsShellExists = true;
         try
         {
+            if (id is StageId.ReviewGate or StageId.ResolveGate or StageId.BeginRun or StageId.BeginDraftRun
+                && store is IModelProfileStore profiles && !ctx.Terminated)
+                ctx.ModelProfile.Resume(await profiles.BeginModelProfileAsync(ctx.ModelProfile.Snapshot(), ct).ConfigureAwait(false));
             if (store is not null && ctx.DiagnosticsShellExists && !ctx.Terminated)
                 await store.UpdateRunDiagnosticsAsync(ctx.RunId, ctx.SnapshotDiagnostics(), ct).ConfigureAwait(false);
         }

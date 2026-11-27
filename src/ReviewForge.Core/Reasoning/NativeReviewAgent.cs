@@ -134,7 +134,7 @@ public sealed class NativeReviewAgent(
             }
         }
 
-        var tracked = CreatePipeline(request.Collector, usage, effectiveTier, maxIterations);
+        var tracked = CreatePipeline(request.Collector, usage, effectiveTier, maxIterations, request.Profile);
         var chatOptions = chatClientFactory.CreateChatOptions(effectiveTier, _Options.Effort);
         chatOptions.Instructions = instructions;
         chatOptions.Tools = tools;
@@ -156,9 +156,13 @@ public sealed class NativeReviewAgent(
         });
     }
 
-    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier, int maxIterations)
+    private IChatClient CreatePipeline(ReviewCollector collector, TokenUsage usage, ChatTier tier, int maxIterations, ToolProfile profile)
     {
-        IChatClient guarded = new TaskDoneGuardChatClient(collector, chatClientFactory.Create(tier));
+        IChatClient scoped = new ReviewForge.Core.Profiling.ModelProfileChatClient(chatClientFactory.Create(tier), profile switch {
+            ToolProfile.Review => ReviewForge.Core.Profiling.ModelCallProfile.Review,
+            ToolProfile.Triage => ReviewForge.Core.Profiling.ModelCallProfile.Triage,
+            _ => ReviewForge.Core.Profiling.ModelCallProfile.Fix });
+        IChatClient guarded = new TaskDoneGuardChatClient(collector, scoped);
         IChatClient retrying = new RetryingChatClient(guarded, chatClientFactory.IsTransientFailure, _Logger);
         IChatClient invoking = new ChatClientBuilder(retrying)
             .UseFunctionInvocation(configure: c => c.MaximumIterationsPerRequest = maxIterations)

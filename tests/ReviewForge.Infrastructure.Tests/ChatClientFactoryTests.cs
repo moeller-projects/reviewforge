@@ -365,6 +365,39 @@ public class ChatClientFactoryTests
     }
 
     [Fact]
+    public async Task Codex_nonstreaming_entry_records_exactly_one_underlying_provider_stream()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "reviewforge-profile-codex-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var credentialPath = Path.Combine(directory, "auth.json");
+            File.WriteAllText(credentialPath, JsonSerializer.Serialize(new { tokens = new {
+                access_token = CodexCredentialTests.Jwt(DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds()),
+                refresh_token = "private-refresh", account_id = "private-account" } }));
+            var handler = new StreamingResponseHandler("""
+                event: response.completed
+                data: {"type":"response.completed","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":1760000000,"status":"completed","model":"gpt-5","output":[],"usage":{"input_tokens":8,"output_tokens":4,"total_tokens":12}}}
+
+                """);
+            using var factory = new ChatClientFactory(new ChatProviderOptions {
+                Provider = ChatProviderKind.OpenAiCodex, Model = "gpt-5", CredentialPath = credentialPath }, handler);
+            var profile = new ReviewForge.Core.Profiling.ModelProfileCollector(Guid.NewGuid());
+            using var scope = ReviewForge.Core.Profiling.ModelCallContext.Enter(profile, "ApplyFixes");
+            await factory.Create(ChatTier.Full).GetResponseAsync([new ChatMessage(ChatRole.User, "private-source")],
+                new ChatOptions { ModelId = "gpt-5" }, TestContext.Current.CancellationToken);
+            var call = Assert.Single(profile.Snapshot().Calls);
+            Assert.Equal("openai-codex", call.Provider);
+            Assert.Equal("completed", call.Outcome);
+            Assert.Equal(8, call.InputTokens);
+            Assert.Equal(4, call.OutputTokens);
+            Assert.Null(call.Cost);
+            Assert.DoesNotContain("private-", JsonSerializer.Serialize(call));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
     public async Task Codex_request_disables_storage_and_enables_streaming()
     {
         var directory = Path.Combine(Path.GetTempPath(), "reviewforge-chat-" + Guid.NewGuid().ToString("N"));
@@ -403,9 +436,44 @@ public class ChatClientFactoryTests
         }
     }
 
+    [Theory]
+    [InlineData(false, "failed")]
+    [InlineData(true, "failed")]
+    [InlineData(false, "incomplete")]
+    [InlineData(true, "incomplete")]
+    public async Task Typed_provider_failure_status_is_safe_profile_metadata(bool streaming, string status)
+    {
+        var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
+        try
+        {
+            var response = JsonSerializer.Serialize(new { id = "resp_1", @object = "response", created_at = 1760000000,
+                status, model = "gpt-5", output = Array.Empty<object>(),
+                error = status == "failed" ? new { code = "server_error", message = "private-provider-error" } : null,
+                incomplete_details = status == "incomplete" ? new { reason = "max_output_tokens" } : null });
+            var eventBody = "event: response." + status + "\ndata: {\"type\":\"response." + status + "\",\"sequence_number\":0,\"response\":" + response + "}";
+            using HttpMessageHandler handler = streaming ? new StreamingResponseHandler(eventBody) : new JsonResponseHandler(response);
+            using var factory = new ChatClientFactory(new ChatProviderOptions { Provider = ChatProviderKind.OpenAi, Model = "gpt-5" }, handler);
+            var profile = new ReviewForge.Core.Profiling.ModelProfileCollector(Guid.NewGuid());
+            using var scope = ReviewForge.Core.Profiling.ModelCallContext.Enter(profile, "ExecuteReasoning");
+            var client = factory.Create(ChatTier.Full);
+            if (streaming)
+            {
+                await foreach (var _ in client.GetStreamingResponseAsync([], cancellationToken: TestContext.Current.CancellationToken)) { }
+            }
+            else await client.GetResponseAsync([], cancellationToken: TestContext.Current.CancellationToken);
+            var call = Assert.Single(profile.Snapshot().Calls);
+            Assert.Equal(status, call.Outcome);
+            Assert.DoesNotContain("private-provider-error", JsonSerializer.Serialize(call));
+        }
+        finally { Environment.SetEnvironmentVariable("OPENAI_API_KEY", previous); }
+    }
+
     [Fact]
     public async Task Responses_request_preserves_multimodal_user_content()
     {
+        var profile = new ReviewForge.Core.Profiling.ModelProfileCollector(Guid.NewGuid());
+        using var scope = ReviewForge.Core.Profiling.ModelCallContext.Enter(profile, "ExecuteReasoning");
         var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
         try
@@ -429,6 +497,14 @@ public class ChatClientFactoryTests
             Assert.Equal("input_text", content[0].GetProperty("type").GetString());
             Assert.Equal("input_image", content[1].GetProperty("type").GetString());
             Assert.Equal("https://example.test/image.png", content[1].GetProperty("image_url").GetString());
+            var metadata = Assert.Single(profile.Snapshot().Calls);
+            Assert.Equal("openai", metadata.Provider);
+            Assert.Equal("gpt-5", metadata.Model);
+            Assert.Equal(1, metadata.InputTokens);
+            Assert.Equal(1, metadata.OutputTokens);
+            Assert.Null(metadata.Cost);
+            Assert.DoesNotContain("example.test", JsonSerializer.Serialize(metadata));
+            Assert.DoesNotContain("describe this image", JsonSerializer.Serialize(metadata));
         }
         finally
         {
@@ -497,6 +573,8 @@ public class ChatClientFactoryTests
     [Fact]
     public async Task Responses_streaming_maps_text_and_completed_function_calls()
     {
+        var profile = new ReviewForge.Core.Profiling.ModelProfileCollector(Guid.NewGuid());
+        using var scope = ReviewForge.Core.Profiling.ModelCallContext.Enter(profile, "ExecuteReasoning");
         var previous = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         Environment.SetEnvironmentVariable("OPENAI_API_KEY", "test-key");
         try
@@ -548,6 +626,13 @@ public class ChatClientFactoryTests
             var call = Assert.Single(updates.SelectMany(update => update.Contents).OfType<FunctionCallContent>());
             Assert.Equal("echo", call.Name);
             Assert.Equal("call_1", call.CallId);
+            Assert.Equal(2, Assert.Single(updates.SelectMany(u => u.Contents).OfType<UsageContent>()).Details.InputTokenCount);
+            var metadata = Assert.Single(profile.Snapshot().Calls);
+            Assert.Equal(2, metadata.InputTokens);
+            Assert.Equal(3, metadata.OutputTokens);
+            Assert.Equal(5, metadata.TotalTokens);
+            Assert.DoesNotContain("hello", JsonSerializer.Serialize(metadata));
+            Assert.DoesNotContain("echo", JsonSerializer.Serialize(metadata));
             using var body = JsonDocument.Parse(handler.RequestBody!);
             Assert.Equal("echo", body.RootElement.GetProperty("tools")[0].GetProperty("name").GetString());
         }
@@ -570,7 +655,8 @@ public class ChatClientFactoryTests
             RequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(responseBody, null, "text/event-stream"),
+                // SSE dispatch requires a blank line, including after the terminal event.
+                Content = new StringContent(responseBody + "\n\n", null, "text/event-stream"),
             };
         }
     }

@@ -67,6 +67,7 @@ public static partial class ServiceCollectionExtensions
         services.AddHostedService<CheckoutEvictionWorker>();
         services.AddHostedService<TelemetryGaugeRegistration>();
         services.AddHostedService<ShellReaperService>();
+        services.AddHostedService<ModelProfileCleanupService>();
         return services;
     }
 }

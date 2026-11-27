@@ -205,6 +205,14 @@ kbd { font: inherit; color: var(--rf-muted); border: 1px solid var(--rf-line); b
 .execution-workspace [aria-pressed="true"] { background: var(--rf-selected); border-color: var(--rf-accent); }
 .execution-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 20px; margin: 20px 0; align-items: start; }
 .execution-stages { min-width: 0; }
+.model-call-section { margin-block-start: 24px; min-width: 0; }
+.model-call-section code { overflow-wrap: anywhere; }
+.model-call-scroll { overflow-x: auto; margin-block: 12px; }
+.model-call-table { width: 100%; min-width: 700px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.model-call-table caption { text-align: start; color: var(--rf-muted); margin-bottom: 8px; }
+.model-call-table th, .model-call-table td { text-align: start; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--rf-line); overflow-wrap: anywhere; }
+.model-call-table th:first-child { max-width: 220px; }
+.model-call-table td { max-width: 240px; }
 .execution-timeline { list-style: none; margin: 0; padding: 0; }
 .execution-timeline li { margin: 0 0 8px; }
 .execution-timeline button { display: grid; gap: 4px; width: 100%; min-width: 0; text-align: start; padding: 8px 12px; overflow-wrap: anywhere; }

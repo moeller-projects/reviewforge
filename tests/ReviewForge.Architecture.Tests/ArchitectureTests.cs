@@ -73,6 +73,18 @@ public sealed class ArchitectureTests
                 .GetResult());
 
     [Fact]
+    public void Model_profiling_contracts_have_no_vendor_or_persistence_dependencies()
+    {
+        AssertRule(Types.InAssembly(Core).That().ResideInNamespaceStartingWith("ReviewForge.Core.Profiling")
+            .ShouldNot().HaveDependencyOnAny("ReviewForge.Infrastructure", "Microsoft.EntityFrameworkCore",
+                "Microsoft.Data.Sqlite", "OpenAI", "System.Net.Http", "System.IO").GetResult());
+        Assert.All(Enum.GetNames<ReviewForge.Service.StageId>(), stage =>
+            Assert.Equal(stage, ReviewForge.Core.Profiling.ModelProfileCollector.SafeStage(stage)));
+        Assert.True(typeof(ReviewForge.Core.Ports.IModelProfileStore).IsAssignableFrom(typeof(SqliteFindingStore)));
+        Assert.True(typeof(ReviewForge.Core.Ports.IModelProfileStore).IsAssignableFrom(typeof(FakeFindingStore)));
+    }
+
+    [Fact]
     public void Core_has_no_direct_system_net_http_reference()
         => Assert.DoesNotContain(Core.GetReferencedAssemblies(), reference => reference.Name == "System.Net.Http");
 
@@ -111,7 +123,7 @@ public sealed class ArchitectureTests
             "ChatTier", "DiffBudget", "EnqueueTrigger",
             "PushedFix", "ReviewRequest", "QueueRunSnapshot", "EnqueueResult", "TipCommitInfo", "ProcessRunResult",
             // Bounded scalar projections returned by the global history port (no adapter entities).
-            "RunHistoryItem", "RunHistoryPage",
+            "RunHistoryItem", "RunHistoryPage", "ModelProfilePage",
         };
 
         var unexpected = types

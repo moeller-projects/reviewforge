@@ -268,7 +268,7 @@ public class BrowserSessionTests
         using var client = Browser(factory);
         await Login(client, await Token(client));
         var id = Guid.NewGuid();
-        foreach (var path in new[] { $"/reviews/{id}", $"/reviews/{id}/details", "/reviews/drafts/capability", "/reviews/history?offset=0&count=50&attentionOnly=false" })
+        foreach (var path in new[] { $"/reviews/{id}", $"/reviews/{id}/details", $"/reviews/{id}/model-calls?after=0&count=50", "/reviews/drafts/capability", "/reviews/history?offset=0&count=50&attentionOnly=false" })
         {
             Assert.NotEqual(HttpStatusCode.Unauthorized, (await client.GetAsync(path, Ct)).StatusCode);
             client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "wrong");

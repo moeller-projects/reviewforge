@@ -41,6 +41,15 @@ public sealed class DashboardBrowserClient(IJSRuntime js) : IAsyncDisposable
     public Task<BrowserResult<RunStatus>> GetRunStatusAsync(Guid runId, CancellationToken ct = default)
         => SendAsync<RunStatus>("GET", $"/reviews/{runId:D}", null, ct);
 
+    public Task<BrowserResult<ReviewForge.Core.Ports.ModelProfilePage>> GetModelCallsAsync(Guid runId,
+        long after = 0, int count = 50, CancellationToken ct = default)
+    {
+        if (after < 0) throw new ArgumentOutOfRangeException(nameof(after));
+        if (count is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(count));
+        return SendAsync<ReviewForge.Core.Ports.ModelProfilePage>("GET",
+            FormattableString.Invariant($"/reviews/{runId:D}/model-calls?after={after}&count={count}"), null, ct);
+    }
+
     public Task<BrowserResult<RunDetailsResponse>> GetRunDetailsAsync(Guid runId, CancellationToken ct = default)
         => SendAsync<RunDetailsResponse>("GET", $"/reviews/{runId:D}/details", null, ct);
 

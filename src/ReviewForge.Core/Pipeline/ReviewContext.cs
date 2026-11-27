@@ -10,11 +10,14 @@ namespace ReviewForge.Core.Pipeline;
 /// attach their own output. <see cref="Terminate"/> ends the run gracefully (success,
 /// no further stages) — used by the gate when no review is required.
 /// </summary>
-public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runId = null) : IDisposable
+public sealed class ReviewContext(PrKey pr, DateTimeOffset startedAt, Guid? runId = null, int modelCallLimit = 10_000, TimeProvider? modelCallClock = null) : IDisposable
 {
     public PrKey Pr { get; } = pr;
     public Guid RunId { get; } = runId ?? Guid.NewGuid();
     public DateTimeOffset StartedAt { get; } = startedAt;
+    private Profiling.ModelProfileCollector? _ModelProfile;
+    public Profiling.ModelProfileCollector ModelProfile => LazyInitializer.EnsureInitialized(ref _ModelProfile,
+        () => new Profiling.ModelProfileCollector(RunId, modelCallLimit, modelCallClock));
 
     /// <summary>How the run entered the queue (from the dequeued <see cref="ReviewRequest"/>).
     /// The loop guard suppresses discovery-triggered runs on bot-authored heads only.</summary>

@@ -128,7 +128,9 @@ public sealed class VerifyFindingsStage(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var client = new RetryingChatClient(chatClientFactory.Create(ChatTier.Fast), chatClientFactory.IsTransientFailure, logger);
+            var client = new RetryingChatClient(new ReviewForge.Core.Profiling.ModelProfileChatClient(
+                chatClientFactory.Create(ChatTier.Fast), ReviewForge.Core.Profiling.ModelCallProfile.Verifier),
+                chatClientFactory.IsTransientFailure, logger);
             var chatOptions = chatClientFactory.CreateChatOptions(ChatTier.Fast);
             var response = await client.GetResponseAsync(
                 FindingsVerifierPrompt.Messages(prompt),

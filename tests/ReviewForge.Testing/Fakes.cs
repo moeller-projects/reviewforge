@@ -809,8 +809,8 @@ public class FakeChatClientFactory(IChatClient client, string model = "test-mode
 
     public IChatClient Create(ChatTier tier)
     {
-        RequestedTiers.Add(tier);
-        return client;
+        lock (RequestedTiers) RequestedTiers.Add(tier);
+        return new ReviewForge.Core.Profiling.ProfiledChatClient(client, null, ModelName(tier));
     }
 
     public bool IsTransientFailure(Exception exception)

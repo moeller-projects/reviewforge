@@ -36,11 +36,16 @@ function decisionHistoryPath(path, run) {
     } catch { return false; }
 }
 
+function modelCallsPath(path, run) {
+    const match = new RegExp(`^${run}/model-calls\\?after=(0|[1-9][0-9]*)&count=([1-9][0-9]*)$`).exec(path);
+    return !!match && BigInt(match[1]) <= 9223372036854775807n && Number(match[2]) <= 100;
+}
+
 export async function send(id, method, path, body) {
     const run = '/reviews/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
     const technicianMutation = typeof path === 'string' && new RegExp(`^${run}/(decisions|decisions/batch|publish|reconcile)$`).test(path);
     if (typeof path !== 'string' || path !== path.trim() || !((method === 'GET' &&
-          (path === '/reviews/dashboard' || path === '/reviews/drafts/capability' || historyPath(path) || decisionHistoryPath(path, run) ||
+          (path === '/reviews/dashboard' || path === '/reviews/drafts/capability' || historyPath(path) || decisionHistoryPath(path, run) || modelCallsPath(path, run) ||
            new RegExp(`^${run}(/details)?$`).test(path))) ||
           (method === 'POST' && (path === '/reviews' || path === '/reviews/drafts' || technicianMutation)))) {
         return { status: 400 };

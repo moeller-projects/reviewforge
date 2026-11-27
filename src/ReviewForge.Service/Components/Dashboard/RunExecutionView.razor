@@ -106,7 +106,7 @@
         <p>Durable execution history unavailable for this run. No stage execution is inferred from live status or the plan.</p>
         <details><summary>Planned stages (not execution evidence)</summary><ol>@foreach (var stage in Status.LoadedStages) { <li>@StageLabels.Label(stage)</li> }</ol></details>
     }
-    <p class="worklist-muted">Durations are observed stage times, not progress estimates. Stage counts are not time progress. Detailed model/tool-call profiling is unavailable here. Use the run/trace correlation when inspecting service logs.</p>
+    <p class="worklist-muted">Durations are observed stage times, not progress estimates. Stage counts are not time progress. Model-call metadata can be loaded below after execution ends. Tool-call details are not collected here. Use run/trace correlation when inspecting service logs.</p>
 </section>
 
 @code {

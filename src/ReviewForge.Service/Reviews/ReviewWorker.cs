@@ -19,7 +19,8 @@ public sealed class ReviewWorker(
     InFlightClaims claims,
     IFindingStore store,
     ILogger<ReviewWorker> logger,
-    TimeProvider? clock = null) : BackgroundService
+    TimeProvider? clock = null,
+    IOptions<ModelProfilingOptions>? profilingOptions = null) : BackgroundService
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
@@ -65,15 +66,29 @@ public sealed class ReviewWorker(
                 continue; // finally-block of the run loop is not entered; nothing to release
             }
 
-            tracker.Set(request.RunId, request.Pr, RunState.Running, kind: request.Kind);
-            logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
             var repoTag = new TagList {{ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId}, {"kind", request.Kind.ToString().ToLowerInvariant()}};
-            ReviewTelemetry.ReviewsStarted.Add(1, repoTag);
             var runStart = Stopwatch.GetTimestamp();
             ReviewContext? ctx = null;
             try
             {
-                ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId)
+                // A crash after terminal profile commit but before queue ack must not run the
+                // same execution again. Finalized is independent of detail expiry, emptiness,
+                // truncation and capture completeness. Marker-only interruptions still resume.
+                if (store is IModelProfileStore profiles &&
+                    (await profiles.ReadModelProfileAsync(request.RunId, 0, 1, _Clock.GetUtcNow(), stoppingToken)).Finalized)
+                {
+                    var terminal = await store.GetRunAsync(request.RunId, stoppingToken);
+                    if (terminal?.CompletedAt is null)
+                        throw new InvalidOperationException("Finalized profile has no terminal run.");
+                    tracker.Set(request.RunId, request.Pr, terminal.Success ? RunState.Completed : RunState.Failed,
+                        kind: request.Kind);
+                    logger.LogInformation("run {RunId} already finalized; acknowledging reclaimed request", request.RunId);
+                    queue.Acknowledge(request.RunId);
+                    continue; // finally releases only this run's PR claim
+                }
+
+                ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId,
+                    profilingOptions?.Value.DetailLimit ?? 10_000, _Clock)
                 {
                     RunKind = request.Kind,
                     PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
@@ -81,6 +96,10 @@ public sealed class ReviewWorker(
                     Trigger = request.Trigger,
                     ForceReview = request.ForceReview,
                 };
+
+                tracker.Set(request.RunId, request.Pr, RunState.Running, kind: request.Kind);
+                logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
+                ReviewTelemetry.ReviewsStarted.Add(1, repoTag);
 
                 // Keep the reservation alive for the whole run so a review that outlives the
                 // claim TTL does not admit a duplicate; the publish guard still fails the run
@@ -110,6 +129,8 @@ public sealed class ReviewWorker(
                     await heartbeat.ConfigureAwait(false);
                 }
 
+                if (!ctx.Terminated)
+                    await FinalizeProfileAsync(ctx, false, TimeSpan.FromSeconds(5));
                 var state = ctx.Terminated == true ? RunState.Skipped : RunState.Completed;
                 tracker.Set(request.RunId, request.Pr, state, ctx.TerminationReason, request.Kind);
                 logger.LogInformation("run {RunId} {State}: {Reason}",
@@ -119,6 +140,13 @@ public sealed class ReviewWorker(
                 ReviewTelemetry.ReviewsCompleted.Add(1, tags);
                 ReviewTelemetry.ReviewDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
+            }
+            catch (Exception ex) when (ctx is null)
+            {
+                // Preflight is not execution: never replace an existing terminal result or
+                // acknowledge a request whose durable status could not be established.
+                logger.LogError(ex, "preflight failed for run {RunId}; durable records preserved and request left for reclamation", request.RunId);
+                throw;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -157,12 +185,24 @@ public sealed class ReviewWorker(
             }
             finally
             {
-                // Durable queues keep the claimed row until ack; the channel queue is a no-op.
-                queue.Acknowledge(request.RunId);
+                // Only executions we actually started are acked here. Successful preflight
+                // of a finalized request acknowledges explicitly; failed preflight remains reclaimable.
+                if (ctx is not null) queue.Acknowledge(request.RunId);
                 ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
             }
         }
+    }
+
+    private async Task FinalizeProfileAsync(ReviewContext ctx, bool incomplete, TimeSpan timeout)
+    {
+        if (store is not IModelProfileStore profiles)
+            throw new InvalidOperationException("The finding store must support model profiling.");
+        using var token = new CancellationTokenSource(timeout);
+        var completed = _Clock.GetUtcNow();
+        ctx.ModelProfile.Resume(await profiles.BeginModelProfileAsync(ctx.ModelProfile.Snapshot(), token.Token));
+        await profiles.FinalizeModelProfileAsync(ctx.ModelProfile.Snapshot(), completed,
+            completed.AddDays(profilingOptions?.Value.RetentionDays ?? 30), incomplete, token.Token);
     }
 
     /// <summary>
@@ -188,6 +228,7 @@ public sealed class ReviewWorker(
                 Pipeline: request.Kind.ToString(),
                 FindingObservations: ctx?.SnapshotFindingObservations(),
                 Diagnostics: ctx?.SnapshotDiagnostics()), timeoutCts.Token);
+            if (ctx is not null) await FinalizeProfileAsync(ctx, false, timeout);
         }
         catch (Exception storeEx)
         {

@@ -107,6 +107,45 @@ public class ReviewWorkerTests
     }
 
     [Fact]
+    public async Task Terminal_profile_storage_failure_turns_success_into_visible_failed_run_without_background_write()
+    {
+        using var h = new Harness(store: new FakeFindingStore { ThrowOnModelProfileFinalize = true });
+        var id = Guid.NewGuid();
+        h.Queue.TryEnqueue(new ReviewRequest(id, Key, h.Clock.GetUtcNow()));
+        await h.Worker.StartAsync(TestContext.Current.CancellationToken);
+        for (var i = 0; i < 200 && h.Tracker.Get(id)?.State != RunState.Failed; i++)
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        await h.Worker.StopAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(RunState.Failed, h.Tracker.Get(id)!.State);
+        Assert.False(Assert.Single(h.Store.Runs).Success);
+        Assert.Equal("incomplete", (await h.Store.ReadModelProfileAsync(id, 0, 10, h.Clock.GetUtcNow(), TestContext.Current.CancellationToken)).State);
+        Assert.False(h.Claims.IsHeldBy(Key, id));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Profiling_storage_failure_is_visible_and_does_not_replace_original_failure(bool fetchFails)
+    {
+        var source = new FakePullRequestSource { ThrowOnGetPullRequest = fetchFails ? new InvalidOperationException("primary private-error") : null };
+        using var h = new Harness(source: source, store: new FakeFindingStore { ThrowOnModelProfileWrite = true });
+        var id = Guid.NewGuid();
+        h.Queue.TryEnqueue(new ReviewRequest(id, Key, h.Clock.GetUtcNow()));
+        await h.Worker.StartAsync(TestContext.Current.CancellationToken);
+        for (var i = 0; i < 200 && h.Store.Runs.Count == 0; i++)
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        await h.Worker.StopAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(RunState.Failed, h.Tracker.Get(id)!.State);
+        var run = Assert.Single(h.Store.Runs);
+        Assert.False(run.Success);
+        var stage = run.Diagnostics!.Stages.Last();
+        Assert.Equal(fetchFails ? "FetchPrContext" : "ReviewGate", stage.Stage);
+        Assert.Equal(fetchFails ? "stage-failed" : "journal-write-failed", stage.FailureCode);
+        Assert.False(h.Store.LastModelProfileWriteToken.IsCancellationRequested);
+        Assert.False(h.Claims.IsHeldBy(Key, id));
+    }
+
+    [Fact]
     public async Task Worker_skips_run_whose_claim_was_lost_while_queued()
     {
         using var h = new Harness();
@@ -454,6 +493,9 @@ public class ReviewWorkerTests
         Assert.NotNull(record.Diagnostics);
         Assert.Equal("cancelled", record.Diagnostics.Stages.Last().Outcome);
         Assert.Equal("cancelled", record.Diagnostics.Stages.Last().FailureCode);
+        Assert.False(h.Store.LastModelProfileWriteToken.IsCancellationRequested);
+        var profile = await h.Store.ReadModelProfileAsync(runId, 0, 100, h.Clock.GetUtcNow(), TestContext.Current.CancellationToken);
+        Assert.Equal("empty", profile.State);
     }
 
     [Fact]

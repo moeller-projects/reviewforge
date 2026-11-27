@@ -144,6 +144,10 @@ internal sealed class ResponsesChatClientAdapter : IChatClient
             Usage = ToUsageDetails(responseResult),
         };
 
+        if (responseResult.Status is ResponseStatus.Failed or ResponseStatus.Incomplete)
+            (response.AdditionalProperties ??= [])[ReviewForge.Core.Profiling.ProfiledChatClient.ProviderOutcomeKey] =
+                responseResult.Status == ResponseStatus.Failed ? "failed" : "incomplete";
+
         if (!string.IsNullOrEmpty(responseResult.EndUserId))
         {
             (response.AdditionalProperties ??= [])[nameof(responseResult.EndUserId)] = responseResult.EndUserId;
@@ -403,6 +407,9 @@ internal sealed class ResponsesChatClientAdapter : IChatClient
                     ModelId = modelId,
                     RawRepresentation = streamingUpdate,
                     ResponseId = responseId,
+                    AdditionalProperties = latestResponseStatus is ResponseStatus.Failed or ResponseStatus.Incomplete
+                        ? new() { [ReviewForge.Core.Profiling.ProfiledChatClient.ProviderOutcomeKey] =
+                            latestResponseStatus == ResponseStatus.Failed ? "failed" : "incomplete" } : null,
                 };
 
             switch (streamingUpdate)

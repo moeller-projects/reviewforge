@@ -79,6 +79,13 @@ public static class Endpoints
             .WithMetadata(new DashboardSessionAccess())
             .RequireRateLimiting(ApiKeyOptions.StatusPolicy);
 
+        reviews.MapGet("/{runId:guid}/model-calls", GetModelCalls)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
+            .Produces<ReviewForge.Core.Ports.ModelProfilePage>()
+            .Produces<TechnicianErrorResponse>(400)
+            .Produces<TechnicianErrorResponse>(404);
+
         reviews.MapGet("/{runId:guid}/details", GetRunDetails)
             .WithMetadata(new DashboardSessionAccess())
             .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
@@ -154,6 +161,21 @@ public static class Endpoints
         IOptions<ReviewForge.Core.Pipeline.VerifyFindingsOptions> options)
         => options.Value.Enabled ? Submit(request, RunKind.ReviewDraft, runs)
             : TypedResults.Json(new TechnicianErrorResponse("verification-disabled"), statusCode: 503);
+
+    private static async Task<IResult> GetModelCalls(Guid runId, RunSubmissionService runs,
+        ReviewForge.Core.Ports.IModelProfileStore profiles, TimeProvider clock, CancellationToken ct,
+        long after = 0, int count = 50)
+    {
+        if (after < 0 || count is < 1 or > 100)
+            return TypedResults.BadRequest(new TechnicianErrorResponse("invalid-profile-page"));
+        var status = await runs.GetStatusAsync(runId, ct).ConfigureAwait(false);
+        if (status is null) return TypedResults.NotFound(new TechnicianErrorResponse("run-not-found"));
+        if (status.State is RunState.Queued or RunState.Running or RunState.Skipped)
+            return TypedResults.Ok(new ReviewForge.Core.Ports.ModelProfilePage(
+                status.State == RunState.Skipped ? "skipped-not-recorded" : "not-yet-available",
+                runId, null, 0, false, false, [], null));
+        return TypedResults.Ok(await profiles.ReadModelProfileAsync(runId, after, count, clock.GetUtcNow(), ct).ConfigureAwait(false));
+    }
 
     private static async Task<IResult> GetRunDetails(Guid runId, RunDetailsService details, CancellationToken ct)
         => await details.GetAsync(runId, ct) is { } result ? TypedResults.Ok(result)
