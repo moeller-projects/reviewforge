@@ -1,3 +1,10 @@
+<a class="skip-link" href="#workspace">Skip to workspace</a>
+<header class="workbench-header">
+    <a class="workbench-brand" href="/dashboard">ReviewForge</a>
+    <nav aria-label="Main navigation"><NavLink href="/dashboard" Match="NavLinkMatch.All">Runs</NavLink><NavLink href="/dashboard/start">Start review</NavLink></nav>
+    <ThemePicker />
+</header>
+<div id="workspace" tabindex="-1">
 <Router AppAssembly="typeof(App).Assembly">
     <Found Context="routeData">
         <AuthorizeRouteView RouteData="routeData">
@@ -5,4 +12,5 @@
         </AuthorizeRouteView>
     </Found>
 </Router>
-<RadzenComponents />
+</div>
+<ConfirmationHost />

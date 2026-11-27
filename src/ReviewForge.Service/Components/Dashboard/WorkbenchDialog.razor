@@ -1,0 +1,37 @@
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+<dialog @ref="_Dialog" class="workbench-dialog" aria-label="@Label" tabindex="-1">
+    @ChildContent
+</dialog>
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "Confirmation";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string? ReturnFocusId { get; set; }
+    private ElementReference _Dialog;
+    private IJSObjectReference? _Module;
+    private bool _Disposed;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            _Module = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-dialog.js");
+            if (_Disposed)
+            {
+                await _Module.DisposeAsync();
+                _Module = null;
+                return;
+            }
+            await _Module.InvokeVoidAsync("open", _Dialog, ReturnFocusId);
+        }
+        catch (JSDisconnectedException) { /* Circuit ended before focus could enter. */ }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        _Disposed = true;
+        if (_Module is null) return;
+        try { await _Module.InvokeVoidAsync("close", _Dialog); await _Module.DisposeAsync(); }
+        catch (JSDisconnectedException) { /* Circuit ended; the document owns cleanup. */ }
+    }
+}

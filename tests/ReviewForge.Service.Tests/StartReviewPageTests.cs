@@ -2,7 +2,6 @@ using System.Text.Json;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
-using Radzen;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Components.Pages;
 using ReviewForge.Testing;
@@ -23,7 +22,7 @@ public sealed class StartReviewPageTests
     private static BunitContext Context(bool capability = true, int inventoryStatus = 200, DashboardResponse? inventory = null)
     {
         var context = new BunitContext();
-        context.Services.AddRadzenComponents();
+        context.Services.AddScoped<DashboardConfirmation>();
         context.Services.AddScoped<DashboardBrowserClient>();
         context.JSInterop.Mode = JSRuntimeMode.Loose;
         var module = context.JSInterop.SetupModule("./dashboard-http.js");
@@ -77,14 +76,21 @@ public sealed class StartReviewPageTests
         var second = first with { PullRequest = first.PullRequest with { Candidate = first.PullRequest.Candidate with
             { Key = first.PullRequest.Candidate.Key with { PrId = 43 } } } };
         await using var context = Context(inventory: inventory with { Rows = [first, second] });
+        var submitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var post = context.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!
-            .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], "/reviews"));
+            .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i =>
+            {
+                if (!Equals(i.Arguments[2], "/reviews")) return false;
+                submitted.TrySetResult();
+                return true;
+            });
         var page = context.Render<StartReview>();
         page.WaitForAssertion(() => Assert.Single(page.FindAll("select[aria-label='Select PR for automatic publication']")));
         page.Find("select").Change("0");
         page.Find("button[aria-label='Rerun review']").Click();
-        await page.InvokeAsync(() => context.Services.GetRequiredService<DialogService>().Close(true));
-        page.WaitForAssertion(() => Assert.Single(context.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], "/reviews")));
+        await page.InvokeAsync(() => context.Services.GetRequiredService<DashboardConfirmation>().Complete(true));
+        await submitted.Task.WaitAsync(TimeSpan.FromSeconds(5), Xunit.TestContext.Current.CancellationToken);
+        Assert.Single(context.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], "/reviews"));
         page.Find("select").Change("1");
         var accepted = Guid.NewGuid();
         post.SetResult(new(202, JsonSerializer.SerializeToElement(new SubmitReviewResponse(accepted, $"/reviews/{accepted}"))));

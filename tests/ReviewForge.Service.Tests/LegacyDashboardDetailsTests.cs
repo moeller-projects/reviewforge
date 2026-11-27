@@ -1,7 +1,6 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
-using Radzen;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Components.Dashboard;
 using ReviewForge.Testing;
@@ -18,7 +17,7 @@ public sealed class LegacyDashboardDetailsTests
     private static BunitContext Context()
     {
         var c = new BunitContext();
-        c.Services.AddRadzenComponents();
+        c.Services.AddScoped<DashboardConfirmation>();
         c.Services.AddScoped<DashboardBrowserClient>();
         c.Services.AddSingleton<TimeProvider>(new FakeTimeProvider(DateTimeOffset.UtcNow));
         c.JSInterop.Mode = JSRuntimeMode.Loose;

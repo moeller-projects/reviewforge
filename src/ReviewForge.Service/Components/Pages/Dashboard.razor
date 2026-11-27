@@ -9,11 +9,11 @@
 <main class="dashboard technician-dashboard" aria-busy="@_Loading.ToString().ToLowerInvariant()">
     <span class="sr-only" role="status" aria-live="polite">@_Announcement</span>
     <header class="dashboard-header">
-        <div><p class="eyebrow">REVIEWFORGE</p><h1>Runs needing attention</h1></div>
+        <div><h1>Runs needing attention</h1></div>
         <div class="dashboard-actions">
             <a class="dashboard-start" href="/dashboard/start">Start draft review</a>
-            <RadzenButton Text="Refresh" Icon="refresh" Click="RequestRefreshAsync" Disabled="@(_Loading || _AuthExpired)" aria-label="Refresh dashboard" />
-            <form method="post" action="/dashboard/logout"><AntiforgeryToken /><RadzenButton Text="Log out" ButtonType="ButtonType.Submit" ButtonStyle="ButtonStyle.Light" /></form>
+            <button type="button" @onclick="RequestRefreshAsync" disabled="@(_Loading || _AuthExpired)" aria-label="Refresh dashboard">Refresh</button>
+            <form method="post" action="/dashboard/logout"><AntiforgeryToken /><button type="submit">Log out</button></form>
         </div>
     </header>
     <section class="worklist-toolbar" aria-label="Filter runs">

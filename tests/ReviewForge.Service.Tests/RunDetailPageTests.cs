@@ -59,7 +59,7 @@ public sealed class RunDetailPageTests
         page.Find("input[type=checkbox]").Change(true);
         page.Find("button.post-selected").Click();
         Assert.DoesNotContain(c.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[1], "POST"));
-        Assert.Contains("head", page.Find("[role=dialog]").TextContent);
+        Assert.Contains("head", page.Find("dialog[aria-label='Confirm publication']").TextContent);
         page.Find("button.confirm-publication").Click();
         page.WaitForAssertion(() => Assert.Contains("Unknown", page.Markup));
         Assert.Contains("reconciliation", page.Markup);
@@ -68,6 +68,39 @@ public sealed class RunDetailPageTests
         Assert.Equal("head", request.HeadSha);
         Assert.Equal(new PublishFindingSelection("finding", 3), Assert.Single(request.Selections!));
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Publication_dialog_preserves_focus_return_target_when_trigger_is_disabled(bool confirm)
+    {
+        await using var c = Context(Details(Finding()));
+        var dialog = c.JSInterop.SetupModule("./dashboard-dialog.js");
+        dialog.SetupVoid("open", _ => true).SetVoidResult();
+        dialog.SetupVoid("close", _ => true).SetVoidResult();
+        c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!
+            .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(true, null,
+                [new("finding", PublishFindingStatus.Posted)]))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("input[type=checkbox]")));
+        page.Find("input[type=checkbox]").Change(true);
+        var target = page.Find(".publication-action");
+        var returnId = target.Id;
+        Assert.False(string.IsNullOrWhiteSpace(returnId));
+        Assert.Equal("-1", target.GetAttribute("tabindex"));
+        page.Find("button.post-selected").Click();
+        page.WaitForAssertion(() => Assert.Single(dialog.Invocations["open"]));
+        Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
+        Assert.Equal(returnId, Assert.Single(dialog.Invocations["open"]).Arguments[1]);
+        page.Find(confirm ? "button.confirm-publication" : "[data-dialog-cancel]").Click();
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll("dialog")));
+        page.WaitForAssertion(() => Assert.Single(dialog.Invocations["close"]));
+        target = page.Find(".publication-action");
+        Assert.Equal(returnId, target.Id);
+        Assert.False(target.HasAttribute("disabled"));
+        Assert.Equal("-1", target.GetAttribute("tabindex"));
+    }
+
     [Fact]
     public async Task Unknown_publication_is_labeled_honestly_and_explicit_reconciliation_only_reads_external_state()
     {

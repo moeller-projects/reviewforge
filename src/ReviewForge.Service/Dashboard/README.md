@@ -66,7 +66,7 @@ failures remain JSON/status errors, never HTML login redirects.
 `/dashboard/runs/{runId}`. Human decisions, lightweight verification and publication state
 are separate concepts. See [technician workflow](../../../docs/dashboard.md#start-inspect-and-decide).
 
-Framework, Radzen and adapter assets are public, manifest-listed, and contain no secrets
+Framework, theme, dialog and adapter assets are public, manifest-listed, and contain no secrets
 or personalized data. Personalized responses retain no-store and nosniff headers. The
 static-asset development catch-all is disabled to preserve unknown API route semantics.
 
@@ -92,8 +92,19 @@ static-asset development catch-all is disabled to preserve unknown API route sem
   echoes, query-key login, insecure-cookie fallbacks, browser storage, or a direct DI
   shortcut around the HTTP API boundary.
 
+The shell uses native controls and purpose-built Blazor components, with no UI framework
+package or remote font dependency. Theme defaults to the OS and follows OS changes;
+choosing Light or Dark applies immediately and stores only `reviewforge.theme` in local
+storage. Choosing System removes that override. If storage is denied or invalid, the
+page uses the system preference. Login shares these controls and visual tokens without
+changing its POST/CSRF flow. Confirmations use native modal dialogs: cancellation never
+submits, and dialog interop restores focus when its trigger still exists.
+
 Verification: .NET service tests exercise real HTTPS host requests and bUnit exercises
-Radzen shell/interop outcomes. `bun test ./tests/ReviewForge.Service.Tests/dashboard-http.test.mjs`
-checks the actual fetch module's allowlist, credentials, CSRF and abort behavior without
-credentials or a browser. Real proxy/browser/WebSocket deployment smoke testing remains
+native shell/interop outcomes. `bun test ./tests/ReviewForge.Service.Tests/dashboard-*.test.mjs`
+checks the fetch module's allowlist, credentials, CSRF and abort behavior, theme preference
+resolution, and dialog listener/focus lifecycle without credentials or a browser.
+Automated DOM tests do not establish real-browser focus trapping, background inertness,
+first-paint flash, contrast, or responsive layout; those checks remain release gates.
+See `PRODUCT.md`, `DESIGN.md` and `.impeccable/surfaces/dashboard.md` at the repository root. Real proxy/browser/WebSocket deployment smoke testing remains
 a deployment-owner responsibility; no external credential is needed for the fake-host tests.

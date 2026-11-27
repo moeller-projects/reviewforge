@@ -40,7 +40,7 @@
     <RunPresentation Run="Row.LatestAttempt" Heading="Latest current-head attempt" ShowMetadata="true" Now="now" />
     <footer class="details-actions">
         <RerunReviewButton Row="Row" State="Reruns" OnAccepted="OnAccepted" />
-        <RadzenButton Text="Close" Click="Close" aria-label="Close details" />
+        <button type="button" @onclick="Close" aria-label="Close details">Close</button>
     </footer>
 </div>
 

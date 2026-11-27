@@ -38,14 +38,16 @@
                     <option value="pipeline-rejected">Pipeline-rejected</option><option value="human-rejected">Human-rejected</option>
                     <option value="posted">Posted</option><option value="history">History / previously known</option>
                 </select></label>
-                <button type="button" class="compact-action post-selected" disabled="@(Busy || _Selected.Count == 0 || HeadChanged || _Stale || _AuthenticationExpired)" @onclick="PreparePublication">Post selected findings</button>
+                <span id="publication-action" class="publication-action" tabindex="-1" aria-label="Publication actions">
+                    <button type="button" class="compact-action post-selected" disabled="@(Busy || _Selected.Count == 0 || HeadChanged || _Stale || _AuthenticationExpired)" @onclick="PreparePublication">Post selected findings</button>
+                </span>
                 @if (_Unknown.Count > 0)
                 {
                     <button type="button" class="compact-action reconcile-publication" disabled="@(Busy || _AuthenticationExpired)" @onclick="ReconcileAsync">Reconcile unknown findings</button>
                 }
             </div>
             @if (_Confirmation is { } confirmation)
-            { <RunPublicationConfirmation Request="confirmation" Disabled="_Posting" OnConfirm="PostAsync" OnCancel="CancelPublication" /> }
+            { <RunPublicationConfirmation Request="confirmation" Disabled="_Posting" ReturnFocusId="publication-action" OnConfirm="PostAsync" OnCancel="CancelPublication" /> }
             @if (_Publication is { } result)
             {
                 <section aria-label="Publication outcomes" role="status">

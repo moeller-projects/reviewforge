@@ -1,8 +1,6 @@
 using System.Text.Json;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
-using Radzen;
-using Radzen.Blazor;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Components.Dashboard;
 using ReviewForge.Service.Components.Pages;
@@ -19,7 +17,7 @@ public class DashboardRerunTests
     private static BunitContext Context()
     {
         var c = new BunitContext();
-        c.Services.AddRadzenComponents();
+        c.Services.AddScoped<DashboardConfirmation>();
         c.Services.AddScoped<DashboardBrowserClient>();
         c.Services.AddSingleton<TimeProvider>(new Microsoft.Extensions.Time.Testing.FakeTimeProvider());
         c.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -35,7 +33,13 @@ public class DashboardRerunTests
         var module = c.JSInterop.SetupModule("./dashboard-http.js");
         module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[1], "GET"))
             .SetResult(new(200, JsonSerializer.SerializeToElement(Data(Row()))));
-        var post = module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[1], "POST"));
+        var submitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var post = module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i =>
+        {
+            if (!Equals(i.Arguments[1], "POST")) return false;
+            submitted.TrySetResult();
+            return true;
+        });
         var row = Row();
         var state = new DashboardRerunState();
         async Task Refresh()
@@ -44,21 +48,22 @@ public class DashboardRerunTests
             if (result.Value is { } value) state.Reconcile(value);
         }
         await Refresh();
-        var dialogs = c.Render<RadzenDialog>();
+        var dialogs = c.Render<ConfirmationHost>();
         var page = c.Render<RerunReviewButton>(p => p.Add(x => x.Row, row).Add(x => x.State, state).Add(x => x.OnAccepted, Refresh));
         var details = c.Render<ReviewDetailsDialog>(p => p.Add(x => x.Row, row).Add(x => x.Reruns, state).Add(x => x.OnAccepted, Refresh));
         details.Find("button[aria-label='Rerun review']").Click();
         dialogs.WaitForAssertion(() => Assert.Contains("Drafts", dialogs.Markup));
+        Assert.Equal(details.Find("span[tabindex='0']").Id, dialogs.FindComponent<WorkbenchDialog>().Instance.ReturnFocusId);
         Assert.True(page.Find("button[aria-label='Rerun review']").HasAttribute("disabled"));
-        await page.InvokeAsync(() => page.FindComponents<RadzenButton>().Single(b => b.Instance.Text == "Rerun review").Instance.Click.InvokeAsync(new()));
-        Assert.Single(dialogs.FindAll(".rz-dialog-confirm-message"));
-        await page.InvokeAsync(() => c.Services.GetRequiredService<DialogService>().Close(false));
+        Assert.Single(dialogs.FindAll("dialog"));
+        dialogs.Find("[data-dialog-cancel]").Click();
         page.WaitForAssertion(() => Assert.False(page.Find("button[aria-label='Rerun review']").HasAttribute("disabled")));
         Assert.DoesNotContain(module.Invocations["send"], i => Equals(i.Arguments[1], "POST"));
         if (fromDetails) details.Find("button[aria-label='Rerun review']").Click();
         else page.Find("button[aria-label='Rerun review']").Click();
-        await page.InvokeAsync(() => c.Services.GetRequiredService<DialogService>().Close(true));
-        page.WaitForAssertion(() => Assert.Single(module.Invocations["send"], i => Equals(i.Arguments[1], "POST")));
+        dialogs.Find("button.primary-action").Click();
+        await submitted.Task.WaitAsync(TimeSpan.FromSeconds(5), Xunit.TestContext.Current.CancellationToken);
+        Assert.Single(module.Invocations["send"], i => Equals(i.Arguments[1], "POST"));
         var request = Assert.IsType<SubmitReviewRequest>(module.Invocations["send"].Last().Arguments[3]);
         Assert.Equal(new("org", "Project", "repo", 1, true), request);
         var runId = Guid.NewGuid();
@@ -85,15 +90,15 @@ public class DashboardRerunTests
             .SetResult(new(200, JsonSerializer.SerializeToElement(Data(Row()))));
         module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[1], "POST"))
             .SetResult(new(status, JsonSerializer.SerializeToElement(new { error = "<secret>" })));
-        var notifications = c.Services.GetRequiredService<NotificationService>();
+        var confirmation = c.Services.GetRequiredService<DashboardConfirmation>();
         var row = Row();
         var state = new DashboardRerunState();
         state.Reconcile(Data(row));
         var page = c.Render<RerunReviewButton>(p => p.Add(x => x.Row, row).Add(x => x.State, state));
         page.Find("button[aria-label='Rerun review']").Click();
-        await page.InvokeAsync(() => c.Services.GetRequiredService<DialogService>().Close(true));
-        page.WaitForAssertion(() => Assert.Contains(notifications.Messages, m => m.Detail?.Contains(expected, StringComparison.OrdinalIgnoreCase) == true));
-        Assert.DoesNotContain(notifications.Messages, m => m.Detail?.Contains("secret", StringComparison.Ordinal) == true);
+        await page.InvokeAsync(() => confirmation.Complete(true));
+        page.WaitForAssertion(() => Assert.Contains(expected, confirmation.Message, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("secret", confirmation.Message);
         Assert.Equal(row, state.Current(row.PullRequest.Candidate.Key));
         Assert.Equal(status is 401 or 403, page.Find("button[aria-label='Rerun review']").HasAttribute("disabled"));
         if (status is 401 or 403)
@@ -101,7 +106,7 @@ public class DashboardRerunTests
     }
 
     [Fact]
-    public async Task Accepted_feedback_is_immediate_even_while_refresh_is_pending_and_tooltip_is_used()
+    public async Task Accepted_feedback_is_immediate_even_while_refresh_is_pending_and_context_is_accessible()
     {
         await using var c = Context();
         var row = Row();
@@ -110,15 +115,11 @@ public class DashboardRerunTests
         var refresh = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         c.JSInterop.SetupModule("./dashboard-http.js").Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true)
             .SetResult(new(202, JsonSerializer.SerializeToElement(new SubmitReviewResponse(runId, "/reviews/" + runId))));
-        var tooltip = "";
-        c.Services.GetRequiredService<TooltipService>().OnOpen += (_, _, options) => tooltip = options.Text;
         var button = c.Render<RerunReviewButton>(p => p.Add(x => x.Row, row).Add(x => x.State, state)
             .Add(x => x.OnAccepted, () => refresh.Task));
-        button.Find("span[tabindex='0']").Focus();
-        Assert.Contains("safeguards", tooltip);
-        button.Find("span[tabindex='0']").Blur();
+        Assert.Contains("safeguards", button.Find("span[tabindex='0']").GetAttribute("aria-label"));
         button.Find("button").Click();
-        await button.InvokeAsync(() => c.Services.GetRequiredService<DialogService>().Close(true));
+        await button.InvokeAsync(() => c.Services.GetRequiredService<DashboardConfirmation>().Complete(true));
         button.WaitForAssertion(() => Assert.Contains(runId.ToString(), button.Markup));
         Assert.False(refresh.Task.IsCompleted);
         Assert.True(button.Find("button").HasAttribute("disabled"));
@@ -138,7 +139,7 @@ public class DashboardRerunTests
         var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         state.Changed += () => { if (state.CanBegin(row)) released.TrySetResult(); };
         await c.DisposeComponentsAsync();
-        c.Services.GetRequiredService<DialogService>().Close(true);
+        c.Services.GetRequiredService<DashboardConfirmation>().Complete(true);
         await released.Task.WaitAsync(TimeSpan.FromSeconds(5), Xunit.TestContext.Current.CancellationToken);
         Assert.True(state.CanBegin(row));
         Assert.DoesNotContain(c.JSInterop.Invocations, i => i.Identifier == "send");

@@ -2,7 +2,7 @@
     <h3>@Heading</h3>
     @if (Run is { } run)
     {
-        <RadzenBadge Text="@DashboardPresentation.Outcome(run)" BadgeStyle="BadgeStyle.Secondary" class="@($"state state-{run.State}")" />
+        <span class="@($"state state-{run.State}")">@DashboardPresentation.Outcome(run)</span>
         <span>@DashboardPresentation.Stage(run)</span>
         @if (CurrentHead is not null)
         {
@@ -10,11 +10,11 @@
         }
         @if (DashboardPresentation.Progress(run) is { } percent)
         {
-            <RadzenProgressBar Value="percent" ShowValue="false" aria-label="Run progress" /><span>@percent%</span>
+            <progress value="@percent" max="100" aria-label="Run progress"></progress><span>@percent%</span>
         }
         else if (run.State is RunState.Queued or RunState.Running || run.IsClaimed || run.IsPending)
         {
-            <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" ShowValue="false" aria-label="Run progress indeterminate" /><span>Progress unknown</span>
+            <progress aria-label="Run progress indeterminate"></progress><span>Progress unknown</span>
         }
         <p>@DashboardPresentation.Detail(run)</p>
         <p>Review findings: @(run.ReviewFindings?.ToString() ?? "Unknown")</p>

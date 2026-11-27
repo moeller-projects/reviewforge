@@ -2,8 +2,6 @@ using System.Text.Json;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
-using Radzen;
-using Radzen.Blazor;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Components.Dashboard;
 using ReviewForge.Service.Components.Pages;
@@ -22,7 +20,7 @@ public class DashboardComponentTests
     private static BunitContext Context()
     {
         var c = new BunitContext();
-        c.Services.AddRadzenComponents();
+        c.Services.AddScoped<DashboardConfirmation>();
         c.Services.AddScoped<DashboardBrowserClient>();
         c.Services.AddSingleton<TimeProvider>(new FakeTimeProvider());
         c.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -230,7 +228,8 @@ public class DashboardComponentTests
         Assert.Contains(run.RunId.ToString(), dialog.Markup);
         Assert.Contains("Waiting for worker", dialog.Markup);
         Assert.Contains("Progress unknown", dialog.Markup);
-        Assert.All(dialog.FindComponents<RadzenProgressBar>(), p => Assert.Equal(ProgressBarMode.Indeterminate, p.Instance.Mode));
+        Assert.NotEmpty(dialog.FindAll("progress"));
+        Assert.All(dialog.FindAll("progress"), p => Assert.False(p.HasAttribute("value")));
         await dialog.InvokeAsync(() => { clock.Advance(TimeSpan.FromMinutes(5)); state.Reconcile(Snapshot()); });
         dialog.WaitForAssertion(() => Assert.Contains("8m ago", dialog.Markup));
     }

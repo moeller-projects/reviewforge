@@ -55,13 +55,12 @@ public class BrowserSessionTests
     [InlineData("Production")]
     [InlineData("Staging")]
     [InlineData("Development")]
-    public async Task Build_output_serves_framework_and_radzen_assets_in_every_environment(string environment)
+    public async Task Build_output_serves_framework_and_workbench_assets_in_every_environment(string environment)
     {
         using var factory = new ReviewForgeFactory().WithoutWorkers();
         using var host = factory.WithWebHostBuilder(builder => builder.UseEnvironment(environment));
         using var client = Browser(host);
-        foreach (var asset in new[] { "/_content/Radzen.Blazor/css/material-base.css", "/_framework/blazor.web.js",
-            "/_content/Radzen.Blazor/Radzen.Blazor.js", "/_content/Radzen.Blazor/fonts/MaterialSymbolsOutlined.woff2" })
+        foreach (var asset in new[] { "/dashboard.css", "/_framework/blazor.web.js", "/dashboard-theme.js", "/dashboard-dialog.js" })
         {
             using var response = await client.GetAsync(asset, Ct);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -151,7 +150,7 @@ public class BrowserSessionTests
         Assert.Equal(HttpStatusCode.Unauthorized, (await Login(client, await Token(client), "")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/reviews/dashboard?api_key=test-key-1", Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/dashboard/session", Ct)).StatusCode);
-        foreach (var asset in new[] { "/dashboard-http.js", "/dashboard.css", "/_content/Radzen.Blazor/Radzen.Blazor.js", "/_framework/blazor.web.js" })
+        foreach (var asset in new[] { "/dashboard-http.js", "/dashboard.css", "/dashboard-theme.js", "/_framework/blazor.web.js" })
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(asset, Ct)).StatusCode);
         using var insecure = factory.CreateClient();
         Assert.Equal(HttpStatusCode.BadRequest, (await insecure.GetAsync("/dashboard/login", Ct)).StatusCode);
@@ -190,7 +189,9 @@ public class BrowserSessionTests
         Assert.Contains("ReviewForge dashboard", html);
         Assert.Contains("Loading runs", html);
         Assert.Contains("dashboard.css", html);
-        Assert.Contains("Radzen.Blazor", html);
+        Assert.Contains("dashboard-theme.js", html);
+        Assert.DoesNotContain("Radzen", html);
+        Assert.True(html.IndexOf("dashboard-theme.js", StringComparison.Ordinal) < html.IndexOf("dashboard.css", StringComparison.Ordinal));
         Assert.Contains("__RequestVerificationToken", html);
         Assert.DoesNotContain("test-key", html);
         Assert.True(shell.Headers.CacheControl!.NoStore);

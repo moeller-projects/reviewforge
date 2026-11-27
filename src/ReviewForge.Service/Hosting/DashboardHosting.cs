@@ -8,7 +8,6 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Radzen;
 using ReviewForge.Service.Components;
 
 namespace ReviewForge.Service;
@@ -67,7 +66,7 @@ public static class DashboardHosting
         services.AddCascadingAuthenticationState();
         services.AddScoped<AuthenticationStateProvider, DashboardAuthenticationStateProvider>();
         services.AddScoped<DashboardBrowserClient>();
-        services.AddRadzenComponents();
+        services.AddScoped<DashboardConfirmation>();
         return services;
     }
 
@@ -79,11 +78,14 @@ public static class DashboardHosting
             if (!context.Request.IsHttps) return Results.StatusCode(400);
             var token = HtmlEncoder.Default.Encode(csrf.GetAndStoreTokens(context).RequestToken!);
             return Results.Content($"""
-                <!doctype html><html lang="en"><head><meta charset="utf-8"><title>ReviewForge login</title></head>
-                <body><h1>ReviewForge login</h1><form method="post" action="/dashboard/login">
+                <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReviewForge login</title>
+                <script src="/dashboard-theme.js"></script><link rel="stylesheet" href="/dashboard.css"></head>
+                <body><main class="login-surface"><h1>ReviewForge login</h1><p>Use your shared API key to open the review workbench.</p><form method="post" action="/dashboard/login">
                 <input type="hidden" name="__RequestVerificationToken" value="{token}">
                 <label>API key <input type="password" name="apiKey" autocomplete="off" required></label>
-                <button type="submit">Log in</button></form></body></html>
+                <button type="submit" class="primary-action">Log in</button></form>
+                <label class="theme-picker">Theme <select data-theme-picker aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+                </main></body></html>
                 """, "text/html");
         });
         app.MapPost("/dashboard/login", LoginAsync).RequireRateLimiting("dashboard-login");

@@ -3,7 +3,6 @@ using Bunit;
 using Microsoft.JSInterop;
 using Microsoft.Extensions.DependencyInjection;
 using ReviewForge.Service.Components.Pages;
-using Radzen;
 using Xunit;
 using TestContext = Xunit.TestContext;
 
@@ -140,10 +139,10 @@ public class DashboardBrowserClientTests
     }
 
     [Fact]
-    public async Task Shell_renders_radzen_and_logout_without_data_or_submission_services()
+    public async Task Shell_renders_native_controls_and_logout_without_data_or_submission_services()
     {
         await using var context = new BunitContext();
-        context.Services.AddRadzenComponents();
+        context.Services.AddScoped<DashboardConfirmation>();
         context.Services.AddScoped<DashboardBrowserClient>();
         context.Services.AddSingleton<TimeProvider>(new Microsoft.Extensions.Time.Testing.FakeTimeProvider());
         context.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -152,7 +151,9 @@ public class DashboardBrowserClientTests
         var shell = context.Render<Dashboard>();
         Assert.Contains("Runs needing attention", shell.Markup);
         Assert.Equal("/dashboard/start", shell.Find("a.dashboard-start").GetAttribute("href"));
-        Assert.Contains("rz-button", shell.Markup);
+        Assert.Equal("Refresh", shell.Find("button[aria-label='Refresh dashboard']").TextContent.Trim());
+        Assert.Equal("submit", shell.Find("form button").GetAttribute("type"));
+        Assert.DoesNotContain("rz-", shell.Markup);
         Assert.Equal("/dashboard/logout", shell.Find("form").GetAttribute("action"));
         Assert.Equal("post", shell.Find("form").GetAttribute("method"));
         Assert.DoesNotContain("apiKey", shell.Markup);

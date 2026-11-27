@@ -966,7 +966,6 @@
           "OpenTelemetry.Instrumentation.AspNetCore": "[1.21.0, )",
           "OpenTelemetry.Instrumentation.Http": "[1.21.0, )",
           "OpenTelemetry.Instrumentation.Runtime": "[1.21.0, )",
-          "Radzen.Blazor": "[13.3.0, )",
           "ReviewForge.Core": "[1.0.0, )",
           "ReviewForge.Infrastructure": "[1.0.0, )",
           "Scalar.AspNetCore": "[3.2.0, )"
@@ -1122,17 +1121,6 @@
         "contentHash": "CpkfBbVIHR6Jn8QrGwt7RtOEDyKOHL2rs9HL+5ckzvlsvQiJ5lHD/qvB7NqJuFZIvXnACSYB7AD0ycXITPQFPg==",
         "dependencies": {
           "OpenTelemetry.Api": "[1.21.0, 2.0.0)"
-        }
-      },
-      "Radzen.Blazor": {
-        "type": "CentralTransitive",
-        "requested": "[13.3.0, )",
-        "resolved": "13.3.0",
-        "contentHash": "NmdxsSx9eU3qkrhbDjVOTH/UfIpHI0AJomSTe0iSLvkvoT/Be+s05rVkbhMhEP6D10p9k747sQMhaSx5zcK3ZA==",
-        "dependencies": {
-          "Microsoft.AspNetCore.Components": "11.0.0",
-          "Microsoft.AspNetCore.Components.Web": "11.0.0",
-          "Microsoft.Extensions.AI": "10.11.1"
         }
       },
       "Scalar.AspNetCore": {
