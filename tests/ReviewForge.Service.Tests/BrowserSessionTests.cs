@@ -188,7 +188,7 @@ public class BrowserSessionTests
         Assert.Equal(HttpStatusCode.OK, shell.StatusCode);
         var html = await shell.Content.ReadAsStringAsync(Ct);
         Assert.Contains("ReviewForge dashboard", html);
-        Assert.Contains("Loading pull requests", html);
+        Assert.Contains("Loading runs", html);
         Assert.Contains("dashboard.css", html);
         Assert.Contains("Radzen.Blazor", html);
         Assert.Contains("__RequestVerificationToken", html);

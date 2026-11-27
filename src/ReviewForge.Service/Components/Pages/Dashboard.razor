@@ -3,213 +3,180 @@
 @using ReviewForge.Service.Components.Dashboard
 @using static ReviewForge.Service.Components.Dashboard.DashboardPresentation
 @inject DashboardBrowserClient Browser
-@inject DialogService Dialogs
 @inject TimeProvider Clock
 @implements IAsyncDisposable
 <PageTitle>ReviewForge dashboard</PageTitle>
-<main class="dashboard" aria-busy="@_Loading.ToString().ToLowerInvariant()">
+<main class="dashboard technician-dashboard" aria-busy="@_Loading.ToString().ToLowerInvariant()">
     <span class="sr-only" role="status" aria-live="polite">@_Announcement</span>
     <header class="dashboard-header">
-        <div><p class="eyebrow">REVIEWFORGE</p><h1>ReviewForge dashboard</h1><p>Open pull requests · current-head review coverage</p></div>
+        <div><p class="eyebrow">REVIEWFORGE</p><h1>Runs needing attention</h1></div>
         <div class="dashboard-actions">
-            <RadzenButton Text="Refresh" Icon="refresh" Click="RequestRefreshAsync" Disabled="@(_Loading || _Reruns.AuthenticationExpired)" aria-label="Refresh dashboard" />
+            <a class="dashboard-start" href="/dashboard/start">Start draft review</a>
+            <RadzenButton Text="Refresh" Icon="refresh" Click="RequestRefreshAsync" Disabled="@(_Loading || _AuthExpired)" aria-label="Refresh dashboard" />
             <form method="post" action="/dashboard/logout"><AntiforgeryToken /><RadzenButton Text="Log out" ButtonType="ButtonType.Submit" ButtonStyle="ButtonStyle.Light" /></form>
         </div>
     </header>
+    <section class="worklist-toolbar" aria-label="Filter runs">
+        <label>Search<input type="search" value="@_Search" @oninput="SearchChanged" placeholder="Title, PR ID, repository or project" aria-label="Search runs" /></label>
+        <div class="worklist-view" aria-label="Run view">
+            <button type="button" aria-pressed="@_AttentionOnly.ToString().ToLowerInvariant()" aria-label="Show runs needing attention" @onclick="() => SetViewAsync(true)">Needs attention</button>
+            <button type="button" aria-pressed="@((!_AttentionOnly).ToString().ToLowerInvariant())" aria-label="Show all recent runs" @onclick="() => SetViewAsync(false)">All recent</button>
+        </div>
+    </section>
     @if (_Error is not null)
     {
-        <div class="notice error" role="alert">@_Error @if (_Data is not null) { <span>Showing previous snapshot; data may be stale. Last successful update @Time(_LastSuccess).</span> } <a href="/dashboard/login">Log in again</a></div>
+        <div class="notice error" role="alert">@_Error
+            @if (_Data is not null) { <span>Showing previous snapshot; data may be stale. Last successful update @Time(_LastSuccess).</span> }
+            @if (_AuthExpired) { <a href="/dashboard/login">Log in again</a> }
+        </div>
     }
     @if (_Data is { } data)
     {
-        <div class="snapshot-meta">
-            <span>Generated <time>@Time(data.GeneratedAt)</time></span><span>Inventory <time>@Time(data.InventoryFetchedAt)</time></span>
-            <span>Discovery @(data.DiscoveryEnabled ? "enabled" : "disabled")</span>
+        <div class="worklist-status">
+            <span>@_Items.Count loaded runs · @_Items.Count(i => i.NeedsAttention) need attention</span>
+            <span>Updated @Time(_LastSuccess)</span>
         </div>
-        @if (data.InventoryStale)
+        @if (_RetainedHistory)
         {
-            <p class="notice" role="status">Source inventory is stale. @(data.InventoryRefreshing ? "Metadata refresh in progress." : "Metadata refresh unavailable.") Operational run state is updated on this read.</p>
+            <p class="notice retained-history-warning" role="status">Some loaded runs were outside the refreshed window; their last observed snapshot is retained and may be stale.</p>
         }
-        @if (!data.IsComplete)
+        <RunWorklist Items="Filtered" AttentionOnly="_AttentionOnly" Now="data.GeneratedAt" />
+        @if (Filtered.Count == 0 && _Items.Count > 0 && !string.IsNullOrWhiteSpace(_Search))
         {
-            <p class="notice" role="status">Partial inventory — totals cover retrieved PRs only. Other open PRs may be missing.</p>
+            <p role="status">No matching runs in loaded history. Try another search or load more.</p>
         }
-        @foreach (var warning in data.SourceWarnings) { <p class="notice">@warning</p> }
-        @if (data.Summary is { } summary)
-        {
-            <section class="summary-grid" aria-label="Organization review totals">
-                <div><strong>@summary.OpenPullRequests</strong><span>Open PRs</span></div>
-                <div><strong>@summary.Reviewing</strong><span>Reviewing</span></div>
-                <div><strong>@summary.Reviewed</strong><span>Reviewed</span></div>
-                <div><strong>@summary.NeedsAttention</strong><span>Needs attention</span></div>
-            </section>
-            <p class="summary-help">@(summary.IsPartial ? "Partial totals. " : "")@summary.HelpText Totals are organization-wide, not filtered.</p>
-        }
-        <section class="filters" aria-label="Filter pull requests">
-            <label>Search<RadzenTextBox Value="@_Search" @oninput="SearchChanged" Placeholder="Title, ID, author or repository" aria-label="Search pull requests" /></label>
-            <label>Project<RadzenDropDown TValue="string" Name="Project" aria-label="Project" @bind-Value="_Project" @bind-Value:after="ResetPageAsync" Data="data.Rows.Select(r => r.PullRequest.Candidate.Key.Project).Distinct().Order()" AllowClear="true" Placeholder="All projects" /></label>
-            <label>Repository<RadzenDropDown TValue="string" Name="Repository" aria-label="Repository" @bind-Value="_Repository" @bind-Value:after="ResetPageAsync" Data="data.Rows.Select(r => r.PullRequest.RepositoryName).Distinct().Order()" AllowClear="true" Placeholder="All repositories" /></label>
-            <label>Status<RadzenDropDown TValue="string" Name="Status" aria-label="Status" @bind-Value="_Status" @bind-Value:after="ResetPageAsync" Data="Statuses" AllowClear="true" Placeholder="All statuses" /></label>
-        </section>
-        <p class="result-count" role="status">@Filtered.Count of @data.Rows.Count retrieved PRs</p>
-        @if (data.Rows.Count == 0)
-        {
-            <section class="empty"><h2>@(data.IsComplete ? "No open pull requests" : "No pull requests retrieved")</h2><p>@(data.IsComplete ? "The organization inventory is up to date." : "Inventory is incomplete. Refresh to try again.")</p></section>
-        }
-        else if (Filtered.Count == 0)
-        {
-            <section class="empty"><h2>No matching pull requests</h2><p>Try another search or filter.</p></section>
-        }
-        else
-        {
-            <RadzenDataGrid @ref="_Grid" Data="Filtered" TItem="DashboardRow" KeyProperty="PullRequest.Candidate.Key" AllowPaging="true" PageSize="15" PagerHorizontalAlign="HorizontalAlign.Left" ShowPagingSummary="true" AllowSorting="false" class="pr-grid">
-                <Columns>
-                    <RadzenDataGridColumn TItem="DashboardRow" Title="Pull request" Width="32%">
-                        <Template Context="row">
-                            <p class="pr-scope">@row.PullRequest.Candidate.Key.Project / @row.PullRequest.RepositoryName · #@row.PullRequest.Candidate.Key.PrId</p>
-                            <button class="details-button" @onclick="() => OpenDetails(row)">@row.PullRequest.Candidate.Pr.Title</button>
-                            <p>@row.PullRequest.Candidate.CreatorName · @row.PullRequest.Candidate.TargetBranch @(row.PullRequest.Candidate.Pr.IsDraft ? "· Draft" : "")</p>
-                            @if (ExternalUrl(row.PullRequest.BrowserUrl) is { } url) { <a href="@url" target="_blank" rel="noopener noreferrer">Open PR <span class="sr-only">(opens in a new tab)</span> ↗</a> }
-                            @foreach (var warning in row.PullRequest.MetadataWarnings) { <p class="notice">@warning</p> }
-                        </Template>
-                    </RadzenDataGridColumn>
-                    <RadzenDataGridColumn TItem="DashboardRow" Title="Current-head coverage" Width="25%">
-                        <Template Context="row">
-                            <strong class="state">@Coverage(row.CurrentHeadReviewed)</strong>
-                            <p>Head <code title="@row.PullRequest.Candidate.Pr.SourceCommitSha">@Abbreviate(row.PullRequest.Candidate.Pr.SourceCommitSha)</code></p>
-                            <p>Basic filters: @(row.Eligibility?.Status.ToString() ?? "Unknown")</p><small>@(row.Eligibility?.Reason ?? "Metadata unavailable")</small>
-                            @if (row.ActiveBlocker is not null) { <p class="notice">@Blocker(row)</p> }
-                        </Template>
-                    </RadzenDataGridColumn>
-                    <RadzenDataGridColumn TItem="DashboardRow" Title="Latest PR attempt">
-                        <Template Context="row"><RunPresentation Run="row.LatestPrAttempt" Heading="Latest PR attempt" CurrentHead="@row.PullRequest.Candidate.Pr.SourceCommitSha" Now="data.GeneratedAt" /></Template>
-                    </RadzenDataGridColumn>
-                    <RadzenDataGridColumn TItem="DashboardRow" Title="Actions">
-                        <Template Context="row"><RerunReviewButton Row="row" State="_Reruns" OnAccepted="RefreshAfterAccepted" /></Template>
-                    </RadzenDataGridColumn>
-                </Columns>
-            </RadzenDataGrid>
-        }
+        <div class="worklist-paging">
+            @if (_HasMore && _PageCount < MaxPages && _Items.Count < MaxItems)
+            {
+                <button type="button" aria-label="Load more runs" @onclick="LoadMoreAsync" disabled="@(_Loading || _AuthExpired)">Load more runs</button>
+            }
+            <span>Search applies to loaded history. Changing view starts a new bounded window. Up to @MaxItems runs per view.</span>
+        </div>
+        <details class="worklist-metadata">
+            <summary>Snapshot and source information@((data.InventoryStale || !data.InventoryComplete || data.SourceWarnings.Count > 0) ? " · warnings" : "")</summary>
+            <p>Revisions are ordered by newest observed run, not provider revision numbers. Older revisions stay collapsed unless they need attention.</p>
+            <p>History is a bounded snapshot, not a full archive. Refresh re-reads loaded pages; previously loaded rows displaced by newer runs are retained until this page is reopened. Counts above describe loaded runs only. Closed or unavailable PRs remain accessible by identity.</p>
+            @if (_Items.Count >= MaxItems || _PageCount >= MaxPages) { <p>History limit reached. Reopen this page for the newest window; use run links for older details.</p> }
+            <p>Source inventory @Time(data.InventoryFetchedAt). Unknown finding and decision counts are not treated as zero. Legacy and gate-skipped history may be unavailable after restart.</p>
+            @if (data.InventoryStale) { <p>Source inventory is stale; current-head metadata may be outdated.</p> }
+            @if (!data.InventoryComplete) { <p>Partial inventory — metadata is missing for some PRs; run history is independent of open-PR inventory.</p> }
+            @foreach (var warning in data.SourceWarnings) { <p>@warning</p> }
+        </details>
     }
-    else if (_Loading)
-    {
-        <p role="status" class="empty">Loading pull requests…</p>
-    }
+    else if (_Loading) { <p role="status" class="empty">Loading runs…</p> }
 </main>
 
 @code {
-    private readonly DashboardRerunState _Reruns = new();
-    private DashboardResponse? _Data;
-    private static string Abbreviate(string sha) => sha[..Math.Min(8, sha.Length)];
-    private Task RefreshAfterAccepted() => RequestRefreshAsync();
+    private const int PageSize = 50, MaxPages = 10, MaxItems = PageSize * MaxPages;
+    private RunWorklistResponse? _Data;
+    private IReadOnlyList<RunWorklistItem> _Items = [];
     private DashboardRefreshLoop? _Refresh;
-    private DateTimeOffset _LastSuccess;
-    private string _Announcement = "";
-    private Task RequestRefreshAsync() => _Refresh?.RequestAsync() ?? Task.CompletedTask;
-    private bool IsActive() => _Reruns.AwaitingAccepted || _Data?.Rows.Any(r => r.ActiveBlocker is not null || r.LatestAttempt?.State is RunState.Queued or RunState.Running) == true;
-    private bool _Loading = true;
-    private bool _Disposed;
+    private bool _Loading = true, _Disposed, _AuthExpired, _AttentionOnly = true, _HasMore, _RetainedHistory;
+    private int _PageCount = 1, _RequestedPages = 1, _ViewGeneration;
+    private bool _ReplaceHistoryOnLoad;
+    private string _Search = "", _Announcement = "";
     private string? _Error;
-    private string _Search = "", _Project = "", _Repository = "", _Status = "";
-    private RadzenDataGrid<DashboardRow>? _Grid;
-    private static readonly string[] Statuses = ["Reviewed", "Unreviewed", "Coverage unknown", "Queued", "Running", "Completed", "Failed", "Skipped"];
-    private (DashboardResponse?, string, string, string, string) _FilterKey;
-    private IReadOnlyList<DashboardRow> _Filtered = [];
-    private int? _RestorePage;
-    private IReadOnlyList<DashboardRow> Filtered
+    private DateTimeOffset _LastSuccess;
+    private IReadOnlyList<RunWorklistItem> Filtered => string.IsNullOrWhiteSpace(_Search) ? _Items : _Items.Where(i =>
+        Contains(i.Title) || Contains(i.Pr.PrId.ToString(System.Globalization.CultureInfo.InvariantCulture)) ||
+        Contains(i.RepositoryName) || Contains(i.Pr.RepositoryId) || Contains(i.Pr.Project) || Contains(i.Pr.Org)).ToArray();
+    private bool Contains(string? value) => value?.Contains(_Search.Trim(), StringComparison.OrdinalIgnoreCase) == true;
+    private void SearchChanged(ChangeEventArgs args) => _Search = args.Value?.ToString() ?? "";
+    private bool IsActive() => _Items.Any(i => i.Run.State is RunState.Queued or RunState.Running || i.Run.IsPending || i.Run.IsClaimed);
+    private Task RequestRefreshAsync() => _Refresh?.RequestAsync() ?? Task.CompletedTask;
+    private Task SetViewAsync(bool attentionOnly)
     {
-        get
-        {
-            var key = (_Data, _Search, _Project, _Repository, _Status);
-            if (_FilterKey != key)
-            {
-                _FilterKey = key;
-                _Filtered = _Data?.Rows.Where(r => Matches(r, _Search, _Project, _Repository, _Status)).ToArray() ?? [];
-            }
-            return _Filtered;
-        }
+        if (_AttentionOnly == attentionOnly || _AuthExpired) return Task.CompletedTask;
+        _AttentionOnly = attentionOnly;
+        _ViewGeneration++;
+        _PageCount = _RequestedPages = 1;
+        _ReplaceHistoryOnLoad = true;
+        _HasMore = false;
+        return RequestRefreshAsync();
+    }
+    private Task LoadMoreAsync()
+    {
+        if (_Loading || _AuthExpired || !_HasMore || _PageCount >= MaxPages || _Items.Count >= MaxItems) return Task.CompletedTask;
+        _RequestedPages = _PageCount + 1;
+        return RequestRefreshAsync();
     }
 
-    // OnAfterRender is intentionally absent during prerender: HTTP must originate in the authenticated browser.
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    // No prerender HTTP: only the interactive authenticated browser may make requests.
+    protected override Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_RestorePage is { } page && _Grid is not null)
-        {
-            _RestorePage = null;
-            await _Grid.GoToPage(Math.Min(page, Math.Max(0, (Filtered.Count - 1) / 15)));
-        }
-        if (firstRender)
+        if (firstRender && !_Disposed)
         {
             _Refresh = new(Clock, IsActive, ct => InvokeAsync(() => LoadAsync(ct)));
-            _Reruns.Changed += RerunStateChanged;
             _Refresh.Start();
-            await Task.CompletedTask;
         }
-    }
-
-    private void RerunStateChanged()
-    {
-        if (!_Reruns.AuthenticationExpired || _Disposed) return;
-        _Refresh?.Stop();
-        _Error = "Session expired. Log in again to load reviews.";
-        _Announcement = _Error;
-        StateHasChanged();
+        return Task.CompletedTask;
     }
 
     private async Task LoadAsync(CancellationToken ct)
     {
-        if (_Disposed) return;
+        if (_Disposed || _AuthExpired) return;
         _Loading = true;
         StateHasChanged();
-        var result = await Browser.GetDashboardAsync(ct);
-        if (_Disposed) return;
-        _Loading = false;
-        if (result.Outcome == BrowserOutcome.Ok && result.Value is { } value)
+        var viewGeneration = _ViewGeneration;
+        var attentionOnly = _AttentionOnly;
+        var fresh = new Dictionary<Guid, RunWorklistItem>();
+        RunWorklistResponse? latest = null;
+        var warnings = new HashSet<string>(StringComparer.Ordinal);
+        var requested = Math.Min(MaxPages, _RequestedPages);
+        var pages = 0;
+        for (var page = 0; page < requested; page++)
         {
-            if (_Data is null || _Error is not null) _Announcement = "Dashboard updated.";
-            _RestorePage = _Grid?.CurrentPage;
-            _Data = value;
-            _LastSuccess = Clock.GetUtcNow();
-            _Reruns.Reconcile(value);
-            _Error = null;
-        }
-        else
-        {
-            if (result.Outcome is BrowserOutcome.Unauthenticated or BrowserOutcome.Forbidden)
+            var result = await Browser.GetRunWorklistAsync(page * PageSize, PageSize, attentionOnly: attentionOnly, ct: ct);
+            if (_Disposed || ct.IsCancellationRequested || viewGeneration != _ViewGeneration) return;
+            if (result.Outcome != BrowserOutcome.Ok || result.Value is not { } value)
             {
-                _Reruns.ExpireAuthentication();
-                _Refresh?.Stop();
+                _RequestedPages = _PageCount;
+                _Loading = false;
+                _AuthExpired = result.Outcome is BrowserOutcome.Unauthenticated or BrowserOutcome.Forbidden;
+                if (_AuthExpired) _Refresh?.Stop();
+                _Error = result.Outcome switch
+                {
+                    BrowserOutcome.Unauthenticated => "Session expired. Log in again to load runs.",
+                    BrowserOutcome.Forbidden => "Access denied. Log in again.",
+                    BrowserOutcome.RateLimited => "Too many requests. Wait a moment, then refresh.",
+                    BrowserOutcome.Unavailable => "Dashboard unavailable. Try refreshing shortly.",
+                    _ => "Could not load runs. Check your connection and refresh.",
+                };
+                _Announcement = _Error;
+                StateHasChanged();
+                return; // Atomic snapshot: a later-page failure must not discard loaded history.
             }
-            _Error = result.Outcome switch
-            {
-                BrowserOutcome.Unauthenticated => "Session expired. Log in again to load reviews.",
-                BrowserOutcome.Forbidden => "Access denied. Log in again.",
-                BrowserOutcome.RateLimited => "Too many requests. Wait a moment, then refresh.",
-                BrowserOutcome.Unavailable => "Dashboard unavailable. Try refreshing shortly.",
-                _ => "Could not load reviews. Check your connection and refresh.",
-            };
-            _Announcement = _Error;
+            latest = value;
+            foreach (var item in value.Items) fresh[item.Run.RunId] = item;
+            foreach (var warning in value.SourceWarnings) warnings.Add(warning);
+            pages++;
+            if (!value.HasMore) break;
         }
+        if (latest is not null)
+        {
+            // Retain every loaded identity, updating it when present. Bound new identities without
+            // silently deleting loaded history when offsets shift underneath a timer refresh.
+            var merged = _ReplaceHistoryOnLoad ? new Dictionary<Guid, RunWorklistItem>() : _Items.ToDictionary(i => i.Run.RunId);
+            _RetainedHistory = merged.Keys.Any(id => !fresh.ContainsKey(id));
+            _ReplaceHistoryOnLoad = false;
+            foreach (var item in fresh.Values)
+                if (merged.ContainsKey(item.Run.RunId) || merged.Count < MaxItems) merged[item.Run.RunId] = item;
+            _Items = merged.Values.ToArray();
+            _Data = latest with { SourceWarnings = warnings.ToArray() };
+            _PageCount = Math.Max(_PageCount, pages);
+            _RequestedPages = _PageCount;
+            _HasMore = latest.HasMore;
+            _LastSuccess = Clock.GetUtcNow();
+            _Error = null;
+            _Announcement = $"Runs updated. {_Items.Count} loaded.";
+        }
+        _Loading = false;
         StateHasChanged();
     }
 
-    private async Task SearchChanged(ChangeEventArgs args)
-    {
-        _Search = args.Value?.ToString() ?? "";
-        await ResetPageAsync();
-    }
-    private Task ResetPageAsync() => _Grid?.FirstPage() ?? Task.CompletedTask;
-    private Task OpenDetails(DashboardRow row) => Dialogs.OpenAsync<ReviewDetailsDialog>(
-        $"Review details · #{row.PullRequest.Candidate.Key.PrId}",
-        new Dictionary<string, object?> { [nameof(ReviewDetailsDialog.Row)] = row,
-            [nameof(ReviewDetailsDialog.Reruns)] = _Reruns,
-            [nameof(ReviewDetailsDialog.OnAccepted)] = EventCallback.Factory.Create(this, RefreshAfterAccepted),
-            [nameof(ReviewDetailsDialog.Close)] = EventCallback.Factory.Create(this, () => Dialogs.Close()) },
-        new DialogOptions { Width = "760px", Style = "max-width:95vw;max-height:90vh", CloseDialogOnEsc = true, AutoFocusFirstElement = true });
     public async ValueTask DisposeAsync()
     {
         _Disposed = true;
-        _Reruns.Changed -= RerunStateChanged;
         if (_Refresh is not null) await _Refresh.DisposeAsync();
     }
 }

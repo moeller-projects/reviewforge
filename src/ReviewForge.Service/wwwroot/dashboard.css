@@ -70,11 +70,85 @@ body { margin: 0; background: #f5f8fa; color: var(--rf-ink); font-family: system
 .stage-list li { padding: 7px 0; }
 .stage-list strong { font-size: .75rem; color: var(--rf-muted); margin-left: 8px; }
 .details-actions { justify-content: flex-end; border-top: 1px solid var(--rf-line); padding-top: 20px; margin-top: 24px; }
+.technician-dashboard { max-width: 1200px; padding-top: 20px; }
+.technician-dashboard .dashboard-header { margin-bottom: 14px; gap: 12px; }
+.technician-dashboard h1 { font-size: 1.5rem; margin-bottom: 0; }
+.technician-dashboard .dashboard-actions { gap: 8px; }
+.dashboard a.dashboard-start { display: inline-flex; align-items: center; min-height: 40px; box-sizing: border-box; padding: 8px 14px; background: var(--rf-accent); color: white; border-radius: 5px; font-weight: 650; text-decoration: none; }
+.worklist-toolbar, .worklist-status, .worklist-paging { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.worklist-toolbar { margin-bottom: 10px; }
+.worklist-toolbar label { flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 4px; font-size: .85rem; }
+.worklist-toolbar input { width: 100%; box-sizing: border-box; padding: 9px 10px; min-height: 42px; border: 1px solid #96aab7; border-radius: 5px; background: white; font: inherit; }
+.worklist-view { display: flex; gap: 4px; align-self: end; }
+.worklist-view button, .worklist-paging button { min-height: 42px; padding: 8px 12px; border: 1px solid #96aab7; border-radius: 5px; color: var(--rf-ink); background: white; font: inherit; cursor: pointer; }
+.worklist-view button[aria-pressed=true] { background: var(--rf-accent); border-color: var(--rf-accent); color: white; }
+.worklist-status, .worklist-paging, .worklist-metadata { font-size: .85rem; color: var(--rf-muted); margin: 10px 0; }
+.worklist-status { justify-content: space-between; }
+.worklist-metadata { max-width: 100ch; }
+.worklist-metadata summary { cursor: pointer; min-height: 36px; display: list-item; padding-top: 6px; }
+.worklist-pr strong, .worklist-pr-scope { overflow-wrap: anywhere; min-width: 0; }
+.technician-dashboard .worklist-pr-toggle, .technician-dashboard .worklist-revision-toggle, .technician-dashboard .worklist-run-link { min-height: 42px; box-sizing: border-box; font-size: .875rem; }
+.technician-dashboard .worklist-pr-scope, .technician-dashboard .worklist-muted { font-size: .825rem; }
+@media (max-width: 600px) {
+    .worklist-toolbar label { flex-basis: 100%; }
+    .worklist-view { width: 100%; }
+    .worklist-view button { flex: 1; }
+    .technician-dashboard .worklist-revision { margin-left: 8px; }
+    .technician-dashboard .worklist-runs { padding-left: 8px; }
+    .technician-dashboard .worklist-run-link { gap: 6px 10px; }
+}
+.run-worklist { border: 1px solid var(--rf-line); border-radius: 6px; background: white; }
+.worklist-pr + .worklist-pr { border-top: 1px solid var(--rf-line); }
+.worklist-pr-toggle, .worklist-revision-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px;
+    border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.worklist-pr-toggle { flex-wrap: wrap; font-size: .85rem; }
+.worklist-pr-toggle:hover, .worklist-revision-toggle:hover, .worklist-run-link:hover { background: #f0f5f8; }
+.worklist-pr-scope, .worklist-muted { color: var(--rf-muted); font-size: .75rem; }
+.worklist-revision { margin: 0 8px 0 20px; border-top: 1px solid #edf1f4; }
+.worklist-revision-toggle { font-size: .78rem; padding: 6px 8px; flex-wrap: wrap; }
+.worklist-runs { list-style: none; padding: 0 0 4px 20px; margin: 0; }
+.worklist-run-link {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 8px;
+    color: var(--rf-ink) !important; text-decoration: none; font-size: .8rem;
+}
+.worklist-empty { padding: 16px; color: var(--rf-muted); }
+.draft-pr-search { display: flex; flex-direction: column; gap: 6px; font-size: .8rem; }
+.draft-pr-search input { padding: 8px; border: 1px solid var(--rf-line); border-radius: 4px; font: inherit; }
+.draft-pr-choices { list-style: none; padding: 0; margin: 12px 0; max-height: 55vh; overflow: auto; }
+.draft-pr-choices li + li { border-top: 1px solid var(--rf-line); }
+.draft-pr-choice { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 10px 8px; border: 0; background: white; color: inherit; text-align: left; cursor: pointer; }
+.draft-pr-choice:hover:not(:disabled) { background: #f0f5f8; }
+.draft-pr-choice:disabled { opacity: .65; cursor: not-allowed; }
+.run-detail { max-width: 1200px; margin: auto; }
+.run-detail code, .decision-history { overflow-wrap: anywhere; }
+.run-summary { border-bottom: 1px solid var(--rf-line); padding-bottom: 8px; }
+.run-sections, .finding-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.run-sections [aria-pressed="true"] { background: #e7f3fa; font-weight: 600; }
+.finding-toolbar select { padding: 7px; font: inherit; }
+.finding-card { border: 1px solid var(--rf-line); border-radius: 6px; padding: 16px; margin: 12px 0; min-width: 0; }
+.finding-card > header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.finding-card pre { overflow: auto; max-height: 24rem; padding: 12px; background: #f3f6f8; }
+.finding-prose { white-space: pre-wrap; overflow-wrap: anywhere; }
+.finding-card .finding-history { margin-top: 10px; }
+.publication-confirmation { border: 2px solid var(--rf-accent); padding: 16px; }
+.publication-confirmation ul { max-height: 12rem; overflow: auto; }
+.run-context-metadata { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 4px 12px; font-size: .85rem; }
+.run-context-metadata dt { color: var(--rf-muted); }
+.run-context-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.finding-decision-editor { display: grid; grid-template-columns: minmax(120px, .4fr) 1fr auto; gap: 8px; align-items: end; }
+.finding-decision-editor label { display: flex; flex-direction: column; gap: 4px; font-size: .8rem; }
+.finding-decision-editor select, .finding-decision-editor textarea { border: 1px solid var(--rf-line); border-radius: 4px; padding: 6px; font: inherit; }
+.finding-decision-editor small { grid-column: 1 / -1; }
+.compact-action { border: 1px solid var(--rf-line); border-radius: 4px; padding: 7px 10px; background: white; color: var(--rf-accent); font: inherit; cursor: pointer; }
+.compact-action:disabled { opacity: .6; cursor: not-allowed; }
+@media (max-width: 760px) { .finding-decision-editor { grid-template-columns: 1fr; } }
 .sr-only {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
-:is(button, a, input, select):focus-visible { outline: 3px solid #1276a0 !important; outline-offset: 3px; }
+:is(button, a, input, select, summary, textarea):focus-visible { outline: 3px solid #1276a0 !important; outline-offset: 3px; }
 @media (max-width: 760px) {
     .dashboard { padding: 16px; }
     .summary-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
