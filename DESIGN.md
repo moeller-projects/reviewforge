@@ -138,6 +138,12 @@ Reject selected with reasons opens one native dialog containing the pinned findi
 
 Reasons live only in the run-local circuit state, across refreshes, filters and run-section changes. Cancel asks before discarding text; leaving the run also warns. Confirmed outcomes remain visible, saved entries leave the composer, and unresolved entries retain their original versions and reasons without retry. To act again, explicitly discard the unresolved draft and compose a new batch after reviewing current decisions. bUnit verifies these state transitions; real-browser focus, assistive-technology announcements and phone reflow remain unverified.
 
+## Continuity and selected publication (reference)
+
+The run-local findings queue stays mounted while Execution or Context is visible, preserving the editor and scroll containers. Reads and saves retain general selection (including hidden findings) and unrelated drafts. Dirty individual decisions and batch rejection reasons both activate navigation warnings; external navigation uses the browser's warning where permitted. Scoped DOM focus/selection and scroll references are retired on disposal and never stored in browser persistence. After a read/save, focus restoration does not override a dialog or a different active control.
+
+Post eligible approved findings prepares a frozen confirmation from the explicitly selected identities. It shows readable titles/locations, reviewed head, exact approval versions and per-finding exclusions. Approval is still not publication. Publication and session expiry do not discard general selection or drafts. Unknown outcomes stay blocked and require the explicit reconciliation action; refresh and reconnect never replay a POST. Native publication-dialog focus returns to the stable `publication-action` wrapper. Automated component/module tests cover these contracts; real-browser focus, scroll, navigation warnings and reconnect behavior remain a release gate.
+
 ## Do's and Don'ts
 
 - Do keep focus, selection, validation, human decisions and publication distinguishable.

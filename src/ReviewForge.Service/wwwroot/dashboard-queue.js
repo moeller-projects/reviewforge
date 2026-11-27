@@ -10,9 +10,38 @@ export function attach(root) {
     input.value = String(width); apply();
     const resize = () => { apply(); try { localStorage.setItem(preferenceKey, String(width)); } catch { /* No finding data is stored. */ } };
     input.addEventListener('input', resize);
-    panes.set(root, { input, resize });
+    const scope = { input, resize, scroll: new Map() };
+    scope.remember = event => {
+        const target = event.target;
+        scope.focus = { target, start: target.selectionStart, end: target.selectionEnd };
+    };
+    scope.scrolled = event => scope.scroll.set(event.target, [event.target.scrollTop, event.target.scrollLeft]);
+    for (const name of ['focusin', 'input', 'select', 'keyup']) root.addEventListener?.(name, scope.remember);
+    root.addEventListener?.('scroll', scope.scrolled, true);
+    panes.set(root, scope);
 }
-export function detach(root) { const pane = panes.get(root); if (pane) { pane.input.removeEventListener('input', pane.resize); panes.delete(root); } }
+export function detach(root) {
+    const pane = panes.get(root);
+    if (pane) {
+        pane.input.removeEventListener('input', pane.resize);
+        for (const name of ['focusin', 'input', 'select', 'keyup']) root.removeEventListener?.(name, pane.remember);
+        root.removeEventListener?.('scroll', pane.scrolled, true);
+        panes.delete(root);
+    }
+}
+// Run-local DOM references only. Reads/saves may temporarily disable an editor; never steal focus from a dialog or another control.
+export function restoreContinuity(root) {
+    const scope = panes.get(root), saved = scope?.focus;
+    if (!saved || !saved.target.isConnected || saved.target.disabled || !root.contains(saved.target)) return;
+    const doc = root.ownerDocument;
+    if (doc.querySelector?.('dialog[open]') || (doc.activeElement !== doc.body && doc.activeElement !== saved.target)) return;
+    saved.target.focus({ preventScroll: true });
+    if (typeof saved.start === 'number' && typeof saved.end === 'number') saved.target.setSelectionRange?.(saved.start, saved.end);
+    for (const [target, [top, left]] of scope.scroll) {
+        if (target.isConnected) { target.scrollTop = top; target.scrollLeft = left; }
+        else scope.scroll.delete(target);
+    }
+}
 function focusAfterLayout(root, resolveTarget) {
     // Called from OnAfterRenderAsync; wait for layout and retire superseded or detached transitions.
     const scope = panes.get(root);

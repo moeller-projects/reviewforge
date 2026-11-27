@@ -17,7 +17,7 @@
         @if (Finding.PreviouslyKnown) { <span> · Previously known</span> }
     </p>
     @if (!Finding.CanDecide || string.IsNullOrWhiteSpace(HeadSha)) { <p>Read-only: decisions require a successful completed draft run and an available reviewed revision.</p> }
-    <FindingDecisionEditor Finding="Finding" HeadSha="@HeadSha" Disabled="Disabled" Drafts="Drafts" OnSave="OnSave" />
+    <FindingDecisionEditor Finding="Finding" HeadSha="@HeadSha" Disabled="Disabled" Drafts="Drafts" OnSave="OnSave" OnChanged="OnChanged" />
     <button type="button" class="compact-action finding-history" disabled="@Disabled" @onclick="() => OnHistory.InvokeAsync(Finding.FindingId)">Decision history</button>
 </article>
 
@@ -29,6 +29,7 @@
     [Parameter] public bool PublicationUnknown { get; set; }
     [Parameter] public string? BrowserUrl { get; set; }
     [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
     [Parameter] public EventCallback<string> OnHistory { get; set; }
     private string? ThreadUrl
     {

@@ -296,6 +296,129 @@ public sealed class RunDetailPageTests
         Assert.Equal("all", page.Find("select[aria-label='Decision filter']").GetAttribute("value"));
     }
     [Fact]
+    public async Task Individual_drafts_warn_on_navigation_and_queue_survives_section_changes()
+    {
+        await using var c = Context(Details(Finding("a"), Finding("b")));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        page.Find("textarea").Input("retained individual reason");
+        var navigation = page.FindComponent<Microsoft.AspNetCore.Components.Routing.NavigationLock>();
+        Assert.True(navigation.Instance.ConfirmExternalNavigation);
+        var queue = page.FindComponent<ReviewForge.Service.Components.Dashboard.FindingQueue>().Instance;
+        Assert.DoesNotContain("Latest observed head:", page.Markup);
+        page.FindAll(".run-sections button")[1].Click();
+        Assert.Same(queue, page.FindComponent<ReviewForge.Service.Components.Dashboard.FindingQueue>().Instance);
+        page.FindAll(".run-sections button")[0].Click();
+        Assert.Equal("retained individual reason", page.Find("textarea").GetAttribute("value"));
+        c.JSInterop.Setup<bool>("confirm", _ => true).SetResult(false);
+        var nav = c.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+        var previous = nav.Uri;
+        await page.InvokeAsync(() => nav.NavigateTo("/dashboard"));
+        Assert.Equal(previous, nav.Uri);
+    }
+
+    [Fact]
+    public async Task Publication_preview_names_locations_versions_and_exclusions_and_retains_hidden_general_selection()
+    {
+        await using var c = Context(Details(Finding("approved"), Finding("pending", FindingDecisionState.Pending), Finding("unknown") with { PublicationUnknown = true }));
+        c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!
+            .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(true, null, [new("approved", PublishFindingStatus.Posted)]))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(3, page.FindAll(".finding-row").Count));
+        page.FindAll(".queue-selection button")[0].Click();
+        page.Find("input[type=search]").Input("no match");
+        page.Find("button.post-selected").Click();
+        var preview = page.Find("dialog[aria-label='Confirm publication']");
+        Assert.Contains("<script>title</script>", preview.TextContent);
+        Assert.Contains("file.cs:1", preview.TextContent);
+        Assert.Contains("approval version 3", preview.TextContent);
+        Assert.Contains("Not approved", preview.TextContent);
+        Assert.Contains("Unknown publication outcome", preview.TextContent);
+        page.Find("button.confirm-publication").Click();
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll("dialog")));
+        Assert.Contains("3 selected · 3 hidden", page.Markup);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Late_mutation_result_cannot_write_into_another_run(bool publication)
+    {
+        await using var c = Context(Details(Finding()));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        var response = http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/{(publication ? "publish" : "decisions")}"));
+        var next = Guid.NewGuid();
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{next:D}/details"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(Details(Finding("new-run")))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        if (publication)
+        { page.Find(".finding-row input").Change(true); page.Find("button.post-selected").Click(); page.Find("button.confirm-publication").Click(); }
+        else page.Find(".finding-decision-editor button").Click();
+        page.Render(p => p.Add(x => x.RunId, next));
+        page.WaitForAssertion(() => Assert.Contains("new-run", page.Find("article.finding-card").TextContent));
+        response.SetResult(new(200, JsonSerializer.SerializeToElement(publication ? (object)new PublishSelectedDraftResult(true, null, [new("finding", PublishFindingStatus.Unknown)])
+            : new FindingDecisionResponse(FindingDecisionStatus.Saved, 4, null))));
+        Assert.DoesNotContain("Publication outcomes", page.Markup);
+        Assert.DoesNotContain("Decision saved", page.Markup);
+        Assert.Contains("0 selected · 0 hidden", page.Markup);
+        Assert.Contains(http.Invocations, i => i.Identifier == "abort");
+    }
+
+    [Theory]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(429)]
+    [InlineData(500)]
+    public async Task Unconfirmed_publication_preserves_work_and_requires_explicit_reconciliation_without_replay(int status)
+    {
+        await using var c = Context(Details(Finding()));
+        c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!
+            .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"))
+            .SetResult(new(status, null));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find("textarea").Input("keep my reason");
+        page.Find(".finding-row input").Change(true);
+        page.Find("button.post-selected").Click(); page.Find("button.confirm-publication").Click();
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll("dialog")));
+        Assert.Contains("1 selected · 0 hidden", page.Markup);
+        Assert.Equal("keep my reason", page.Find("textarea").GetAttribute("value"));
+        Assert.Single(page.FindAll("button.reconcile-publication"));
+        Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
+        if (status >= 429)
+        {
+            page.Find("header button").Click();
+            page.WaitForAssertion(() => Assert.False(page.Find("header button").HasAttribute("disabled")));
+            Assert.Contains("Unknown", page.Find("article.finding-card").TextContent);
+        }
+        Assert.Single(c.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[1], "POST"));
+    }
+
+    [Fact]
+    public async Task Saving_one_finding_retains_other_drafts_hidden_selection_and_stable_editor()
+    {
+        await using var c = Context(Details(Finding("a"), Finding("b")));
+        c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!
+            .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new FindingDecisionResponse(FindingDecisionStatus.Saved, 4, null))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        page.Find("textarea").Input("a unsaved");
+        page.Find(".finding-row input").Change(true);
+        page.FindAll(".finding-row button")[1].Click();
+        page.Find("input[type=search]").Input("no match");
+        var editor = page.FindComponent<ReviewForge.Service.Components.Dashboard.FindingDecisionEditor>().Instance;
+        page.Find(".finding-decision-editor button").Click();
+        page.WaitForAssertion(() => Assert.Contains("Decision saved", page.Markup));
+        Assert.Same(editor, page.FindComponent<ReviewForge.Service.Components.Dashboard.FindingDecisionEditor>().Instance);
+        Assert.Contains("1 selected · 1 hidden", page.Markup);
+        page.Find("input[type=search]").Input(""); page.FindAll(".finding-row button")[0].Click();
+        Assert.Equal("a unsaved", page.Find("textarea").GetAttribute("value"));
+    }
+
+    [Fact]
     public async Task Queue_mounts_only_focused_evidence_and_keeps_general_selection_across_filters()
     {
         await using var c = Context(Details(Finding("a", FindingDecisionState.Pending), Finding("b", FindingDecisionState.Deferred)));
@@ -493,7 +616,9 @@ public sealed class RunDetailPageTests
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
         page.WaitForAssertion(() => Assert.Contains("new draft", page.Markup));
         Assert.False(page.Find("input[type=checkbox]").HasAttribute("disabled"));
+        page.Find("input[type=checkbox]").Change(true);
         Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
+        Assert.Contains("Reviewed head changed", page.Find(".publication-exclusions").TextContent);
         Assert.DoesNotContain("javascript:", page.Markup);
         await using var legacy = Context(Details() with { ReviewedHeadSha = null, ObservationsAvailable = false, Source = null });
         var old = legacy.Render<RunDetail>(p => p.Add(x => x.RunId, Id));

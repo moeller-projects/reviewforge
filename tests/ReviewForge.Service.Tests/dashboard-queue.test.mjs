@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../../src/ReviewForge.Service/wwwroot/dashboard-queue.js', import.meta.url), 'utf8');
 globalThis.requestAnimationFrame = callback => callback();
-const { attach, detach, returnToRow, enterInspector } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { attach, detach, returnToRow, enterInspector, restoreContinuity } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('pane preference is bounded, scoped, restored and detached; return targets identity', () => {
   let listener, removed, width, focused = false, scrolled = false;
   const input = { value: '40', addEventListener: (n, f) => listener = f, removeEventListener: (n, f) => removed = f };
@@ -37,6 +37,25 @@ test('filtered return falls back to search and inspector entry targets visible h
   assert.equal(typeof enterInspector, 'function');
   enterInspector(root); callback(); assert.equal(focused, 'inspector'); assert.equal(scrolled, 'inspector');
   detach(root);
+});
+test('reads restore a connected editor and its selection without stealing another control focus', () => {
+  assert.equal(typeof restoreContinuity, 'function');
+  let restored = 0, selection;
+  const listeners = {};
+  const input = { value: '40', addEventListener() {}, removeEventListener() {} };
+  const body = {}, doc = { body, activeElement: body };
+  const editor = { isConnected: true, disabled: false, selectionStart: 2, selectionEnd: 4,
+    focus: options => { assert.equal(options.preventScroll, true); restored++; }, setSelectionRange: (...args) => selection = args };
+  const root = { ownerDocument: doc, querySelector: () => input, contains: target => target === editor,
+    style: { setProperty() {} }, addEventListener: (name, fn) => listeners[name] = fn, removeEventListener: name => delete listeners[name] };
+  const scroller = { isConnected: true, scrollTop: 120, scrollLeft: 8 };
+  attach(root); listeners.focusin({ target: editor }); listeners.scroll({ target: scroller });
+  scroller.scrollTop = 0; scroller.scrollLeft = 0;
+  restoreContinuity(root); assert.equal(restored, 1); assert.deepEqual(selection, [2, 4]);
+  assert.equal(scroller.scrollTop, 120); assert.equal(scroller.scrollLeft, 8);
+  doc.activeElement = {}; restoreContinuity(root); assert.equal(restored, 1);
+  doc.activeElement = body; editor.isConnected = false; restoreContinuity(root); assert.equal(restored, 1);
+  detach(root); assert.deepEqual(listeners, {}); restoreContinuity(root);
 });
 test('storage denial and invalid preferences do not block resizing', () => {
   let width;

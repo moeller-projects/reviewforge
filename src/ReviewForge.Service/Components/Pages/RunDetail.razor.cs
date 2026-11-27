@@ -17,6 +17,8 @@ public partial class RunDetail
     private HashSet<string> _Selected => _Workspace.Selected;
     private readonly HashSet<string> _Unknown = new(StringComparer.Ordinal);
     private PublishSelectedDraftRequest? _Confirmation;
+    private IReadOnlyList<PublicationPreviewItem> _PublicationPreview = [];
+    private bool HasUnsaved => _Workspace.Rejection?.HasUnsaved == true || _Workspace.Drafts.Values.Any(d => d.Dirty);
     private PublishSelectedDraftResult? _Publication;
     private BatchFindingDecisionResponse? _Batch;
     private FindingDecisionHistoryResponse? _History;
@@ -30,9 +32,11 @@ public partial class RunDetail
         && !string.IsNullOrWhiteSpace(_Details?.Source?.CurrentHeadSha)
         && !string.Equals(_Details.ReviewedHeadSha, _Details.Source.CurrentHeadSha, StringComparison.OrdinalIgnoreCase);
     private int EligibleSelected => _Details?.Findings.Count(f => _Selected.Contains(f.FindingId) && CanSelect(f)) ?? 0;
-    private bool CanSelect(RunFindingDto f) => !HeadChanged && !string.IsNullOrWhiteSpace(_Details?.ReviewedHeadSha)
-        && _Details?.Status.Kind == RunKind.ReviewDraft && _Details.Status.State == RunState.Completed
-        && f.PublicationEligible && f.Published == false && !f.PublicationUnknown && f.Decision?.State == FindingDecisionState.Approved && !_Unknown.Contains(f.FindingId);
+    private bool CanSelect(RunFindingDto f) => PublicationExclusion(f) is null;
+    private string? PublicationExclusion(RunFindingDto f) => HeadChanged ? "Reviewed head changed"
+        : string.IsNullOrWhiteSpace(_Details?.ReviewedHeadSha) ? "Reviewed head unavailable"
+        : _Details.Status.Kind != RunKind.ReviewDraft || _Details.Status.State != RunState.Completed ? "Read-only run"
+        : PublicationPreviewItem.Exclusion(f, _Unknown.Contains(f.FindingId));
 
     protected override void OnParametersSet()
     {
@@ -48,6 +52,7 @@ public partial class RunDetail
         _Selected.Clear();
         _Unknown.Clear();
         _Confirmation = null;
+        _PublicationPreview = [];
         _Publication = null;
         _Batch = null;
         _History = null;
@@ -109,6 +114,8 @@ public partial class RunDetail
         var selection = _Details.Findings.Where(f => _Selected.Contains(f.FindingId) && CanSelect(f))
             .Select(f => new PublishFindingSelection(f.FindingId, f.DecisionVersion)).ToArray();
         if (selection.Length == 0 || string.IsNullOrWhiteSpace(_Details.ReviewedHeadSha)) return;
+        _PublicationPreview = _Details.Findings.Where(f => _Selected.Contains(f.FindingId))
+            .Select(f => PublicationPreviewItem.From(f, PublicationExclusion(f))).ToArray();
         _Confirmation = new(_Details.ReviewedHeadSha, Array.AsReadOnly(selection));
     }
     private void CancelPublication() { if (!_Posting) _Confirmation = null; }
@@ -147,10 +154,10 @@ public partial class RunDetail
     private async Task BeforeRejectionNavigation(LocationChangingContext context)
     {
         if (_Saving) { context.PreventNavigation(); return; }
-        if (_Workspace.Rejection?.HasUnsaved != true) return;
+        if (!HasUnsaved) return;
         try
         {
-            if (!await JS.InvokeAsync<bool>("confirm", "Discard unsaved rejection reasons and leave this run? Saved decisions will not be undone.")) context.PreventNavigation();
+            if (!await JS.InvokeAsync<bool>("confirm", "Discard unsaved decision and rejection reasons and leave this run? Saved decisions will not be undone.")) context.PreventNavigation();
         }
         catch (JSDisconnectedException) { context.PreventNavigation(); }
     }
@@ -211,7 +218,6 @@ public partial class RunDetail
         if (!Current(generation)) return;
         _Posting = false;
         _Confirmation = null;
-        _Selected.Clear();
         _Publication = result.Value;
         if (result.Value is { } publication)
             foreach (var item in publication.Findings.Where(f => f.Status == PublishFindingStatus.Unknown)) _Unknown.Add(item.FindingId);
@@ -270,7 +276,6 @@ public partial class RunDetail
         if (outcome is BrowserOutcome.Unauthenticated or BrowserOutcome.Forbidden)
         {
             _AuthenticationExpired = true;
-            _Selected.Clear();
             _Confirmation = null;
             _Refresh?.Stop();
             _Message = "Session expired or access denied. Log in again.";

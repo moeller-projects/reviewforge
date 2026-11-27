@@ -27,6 +27,7 @@
     [Parameter, EditorRequired] public string HeadSha { get; set; } = "";
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
     [Parameter] public Dictionary<string, FindingEditorDraft>? Drafts { get; set; }
     private readonly Dictionary<string, FindingEditorDraft> _Local = new(StringComparer.Ordinal);
     private FindingEditorDraft _Draft = new(0, FindingDecisionState.Pending, "");
@@ -44,11 +45,13 @@
         _Draft = draft;
     }
 
-    private void ChangeState(ChangeEventArgs args)
+    private async Task ChangeState(ChangeEventArgs args)
     {
-        if (Enum.TryParse<FindingDecisionState>(args.Value?.ToString(), out var state) && Enum.IsDefined(state)) _State = state;
+        if (Enum.TryParse<FindingDecisionState>(args.Value?.ToString(), out var state) && Enum.IsDefined(state))
+        { _State = state; await OnChanged.InvokeAsync(); }
     }
-    private void ChangeReason(ChangeEventArgs args) => _Reason = args.Value?.ToString() ?? "";
+    private async Task ChangeReason(ChangeEventArgs args)
+    { _Reason = args.Value?.ToString() ?? ""; await OnChanged.InvokeAsync(); }
     private async Task SaveAsync()
     {
         if (CannotEdit || (_State == FindingDecisionState.Rejected && string.IsNullOrWhiteSpace(_Reason))) return;
