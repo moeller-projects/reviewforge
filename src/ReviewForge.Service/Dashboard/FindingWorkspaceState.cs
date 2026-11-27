@@ -9,6 +9,7 @@ public sealed class FindingWorkspaceState
     public string? RangeAnchor { get; private set; }
     public bool Advance { get; set; } = true;
     public bool Complete { get; set; }
+    public RejectionComposerState? Rejection { get; set; }
     public string? DecisionBlockReason(RunFindingDto finding, string headSha, bool disabled) =>
         DecisionBlockReason(finding, headSha, disabled, Drafts.GetValueOrDefault(finding.FindingId));
     public static string? DecisionBlockReason(RunFindingDto finding, string headSha, bool disabled, FindingEditorDraft? draft)

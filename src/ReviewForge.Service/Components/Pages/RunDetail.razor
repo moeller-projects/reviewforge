@@ -5,7 +5,12 @@
 @implements IAsyncDisposable
 @inject DashboardBrowserClient Browser
 @inject TimeProvider Clock
+@inject Microsoft.JSInterop.IJSRuntime JS
 
+@if (_Workspace.Rejection is { } rejection)
+{
+    <Microsoft.AspNetCore.Components.Routing.NavigationLock ConfirmExternalNavigation="@(rejection.HasUnsaved || _Saving)" OnBeforeInternalNavigation="BeforeRejectionNavigation" />
+}
 <PageTitle>Run details · ReviewForge</PageTitle>
 <main class="dashboard run-detail" aria-busy="@(Busy.ToString().ToLowerInvariant())">
     <header class="dashboard-header"><div><a href="/dashboard">← Runs</a><h1>Run details</h1><code>@RunId</code></div>
@@ -69,7 +74,7 @@
                 </section>
             }
             <FindingQueue @key="RunId" State="_Workspace" Findings="details.Findings" HeadSha="@(details.ReviewedHeadSha ?? "")"
-                Disabled="@(Busy || _Stale || _AuthenticationExpired)" Unknown="_Unknown" BrowserUrl="@(details.Source?.BrowserUrl)"
+                Disabled="@(Busy || _Stale || _AuthenticationExpired)" Submitting="_Saving" Unknown="_Unknown" BrowserUrl="@(details.Source?.BrowserUrl)"
                 OnChanged="StateHasChanged" OnSave="SaveAsync" OnBatch="SaveBatchAsync" OnHistory="HistoryAsync" />
             @if (_HistoryId is not null)
             {

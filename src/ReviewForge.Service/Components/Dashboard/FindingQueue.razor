@@ -28,6 +28,10 @@
         <button type="button" data-dialog-cancel autofocus @onclick="() => _CommandsOpen = false">Close commands</button>
     </WorkbenchDialog>
 }
+@if (State.Rejection is { } rejection)
+{
+    <RejectionComposer Composer="rejection" Findings="Findings" HeadSha="@HeadSha" Disabled="Disabled" Submitting="Submitting" OnChanged="OnChanged" OnSave="OnBatch" OnDismiss="DismissRejection" />
+}
 <div class="queue-filters">
     <label>Search loaded findings <input type="search" data-queue-search aria-label="Search loaded findings" @bind="State.Search" @bind:event="oninput" @bind:after="FiltersChanged" /></label>
     <label>Pipeline <select aria-label="Pipeline filter" @bind="State.Pipeline" @bind:after="FiltersChanged"><option value="all">All pipeline states</option><option>Pipeline-accepted</option><option>Pipeline-rejected</option><option>Unavailable</option></select></label>
@@ -98,6 +102,7 @@
     [Parameter] public string HeadSha { get; set; } = "";
     [Parameter] public string? BrowserUrl { get; set; }
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Submitting { get; set; }
     [Parameter] public HashSet<string> Unknown { get; set; } = [];
     [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
     [Parameter] public EventCallback<BatchFindingDecisionRequest> OnBatch { get; set; }
@@ -116,7 +121,7 @@
     [ ("next", "Next finding", "↓ / J"), ("previous", "Previous finding", "↑ / K"), ("inspect", "Inspect finding", "Enter"),
       ("select", "Toggle selection", "Space"), ("approve", "Approve", "A (opt-in)"), ("reject", "Reject with reason", "R (opt-in)"),
       ("defer", "Defer", "D (opt-in)"),
-      ("batch-approve", "Approve selected", ""), ("batch-defer", "Defer selected", ""), ("batch-reset", "Reset selected to pending", ""), ("search", "Search loaded findings", "/"), ("return", "Return to findings", "Escape") ];
+      ("batch-approve", "Approve selected", ""), ("batch-reject", "Reject selected with reasons", ""), ("batch-defer", "Defer selected", ""), ("batch-reset", "Reset selected to pending", ""), ("search", "Search loaded findings", "/"), ("return", "Return to findings", "Escape") ];
     public sealed record CommandPreferences(bool SingleLetter = false, bool Advance = true);
     protected override void OnParametersSet()
     {
@@ -147,10 +152,15 @@
     [JSInvokable]
     public async Task ExecuteCommand(string command, bool range = false)
     {
-        if (_Disposed || _CommandsOpen) return;
+        if (_Disposed || _CommandsOpen || State.Rejection is not null) return;
         _CommandMessage = null;
         if (command == "commands") _CommandsOpen = true;
         else if (Unavailable(command) is { } reason) _CommandMessage = reason;
+        else if (command == "batch-reject")
+        {
+            State.Rejection = new(HeadSha, Findings.Where(f => State.Selected.Contains(f.FindingId)).ToArray());
+            await OnChanged.InvokeAsync();
+        }
         else if (command is "batch-approve" or "batch-defer" or "batch-reset")
         {
             var state = command == "batch-approve" ? FindingDecisionState.Approved : command == "batch-defer" ? FindingDecisionState.Deferred : FindingDecisionState.Pending;
@@ -224,6 +234,12 @@
             else await _Module.InvokeVoidAsync("returnToRow", _Root, State.FocusedId);
         }
         catch (JSDisconnectedException) { }
+    }
+    private async Task DismissRejection()
+    {
+        if (Submitting) return;
+        State.Rejection = null;
+        await OnChanged.InvokeAsync();
     }
     private Task InspectRow(string id) { State.FocusedId = id; return ExecuteCommand("inspect"); }
     private void Focus(string id) { State.FocusedId = _LastFocused = id; State.Complete = false; _Inspecting = true; _PendingFocus = "inspector"; }

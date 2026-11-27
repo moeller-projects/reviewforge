@@ -32,6 +32,170 @@ public sealed class RunDetailPageTests
         return c;
     }
     [Theory]
+    [InlineData(" shared ", "", true, "shared")]
+    [InlineData("", " override ", true, "override")]
+    [InlineData("  ", "  ", false, "")]
+    [InlineData("shared", "   ", true, "shared")]
+    [InlineData("long", "", false, "")]
+    [InlineData("", "long", false, "")]
+    [InlineData("boundary", "", true, "boundary")]
+    public async Task Rejection_validates_trimmed_effective_reasons(string shared, string individual, bool valid, string expected)
+    {
+        await using var c = Context(Details(Finding("a")));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new BatchFindingDecisionResponse(null, [new("a", BatchFindingDecisionStatus.Saved, 4)]))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find(".finding-row input").Change(true); page.Find("[data-command='batch-reject']").Click();
+        page.Find("[aria-label='Shared rejection reason']").Input(shared == "long" ? new string('x', 2001) : shared == "boundary" ? " " + new string('x', 2000) + " " : shared);
+        page.Find("[aria-label='Override reason for a']").Input(individual == "long" ? new string('x', 2001) : individual);
+        Assert.Equal(!valid, page.Find("[data-rejection-save]").HasAttribute("disabled"));
+        if (!valid) return;
+        page.Find("[data-rejection-save]").Click();
+        page.WaitForAssertion(() => Assert.Contains("Saved", page.Markup));
+        var request = Assert.IsType<BatchFindingDecisionRequest>(Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch")).Arguments[3]);
+        Assert.Equal(expected == "boundary" ? new string('x', 2000) : expected, Assert.Single(request.Selections).Reason);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Rejection_navigation_warning_remains_active_in_other_run_sections(bool discard)
+    {
+        await using var c = Context(Details(Finding("a")));
+        c.JSInterop.Setup<bool>("confirm", _ => true).SetResult(discard);
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find(".finding-row input").Change(true); page.Find("[data-command='batch-reject']").Click();
+        page.Find("[aria-label='Shared rejection reason']").Input("keep this");
+        page.FindAll(".run-sections button")[1].Click();
+        var nav = c.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+        var previous = nav.Uri;
+        await page.InvokeAsync(() => nav.NavigateTo("/dashboard"));
+        page.WaitForAssertion(() => Assert.Single(c.JSInterop.Invocations, i => i.Identifier == "confirm"));
+        Assert.Equal(discard ? "http://localhost/dashboard" : previous, nav.Uri);
+        page.FindAll(".run-sections button")[0].Click();
+        Assert.Contains("keep this", page.Find("[data-rejection-entry]").TextContent);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Rejection_registers_direct_navigation_warning_as_soon_as_reasons_change(bool useOverride)
+    {
+        await using var c = Context(Details(Finding("a")));
+        c.JSInterop.Setup<bool>("confirm", _ => true).SetResult(false);
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find(".finding-row input").Change(true);
+        page.Find("[data-command='batch-reject']").Click();
+        page.WaitForAssertion(() => Assert.Single(page.FindComponents<Microsoft.AspNetCore.Components.Routing.NavigationLock>()));
+        Assert.False(page.FindComponent<Microsoft.AspNetCore.Components.Routing.NavigationLock>().Instance.ConfirmExternalNavigation);
+        page.Find(useOverride ? "[aria-label='Override reason for a']" : "[aria-label='Shared rejection reason']").Input("retain this reason");
+        page.WaitForAssertion(() => Assert.True(page.FindComponent<Microsoft.AspNetCore.Components.Routing.NavigationLock>().Instance.ConfirmExternalNavigation));
+        var nav = c.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+        var previous = nav.Uri;
+        await page.InvokeAsync(() => nav.NavigateTo("/dashboard"));
+        page.WaitForAssertion(() => Assert.Single(c.JSInterop.Invocations, i => i.Identifier == "confirm"));
+        Assert.Equal(previous, nav.Uri);
+    }
+
+    [Theory]
+    [InlineData(500)]
+    [InlineData(401)]
+    [InlineData(403)]
+    public async Task Rejection_failure_allows_warned_dismissal_but_submission_does_not(int status)
+    {
+        await using var c = Context(Details(Finding("a")));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        var response = http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch"));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find(".finding-row input").Change(true);
+        page.Find("[data-command='batch-reject']").Click();
+        page.Find("[aria-label='Shared rejection reason']").Input("retain this reason");
+        page.Find("[data-rejection-save]").Click();
+        page.WaitForAssertion(() => Assert.True(page.Find("[data-rejection-dismiss]").HasAttribute("disabled")));
+        response.SetResult(new(status, null));
+        page.WaitForAssertion(() => Assert.Contains("Unknown", page.Find("[aria-label='Rejection outcomes']").TextContent));
+        Assert.True(page.Find("[data-rejection-save]").HasAttribute("disabled"));
+        Assert.False(page.Find("[data-rejection-dismiss]").HasAttribute("disabled"));
+        page.Find("[data-rejection-dismiss]").Click();
+        page.WaitForAssertion(() => Assert.Contains("Discard unsaved rejection reasons?", page.Markup));
+        page.Find("[data-rejection-discard]").Click();
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll("dialog")));
+        Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch"));
+    }
+
+    [Fact]
+    public async Task Rejection_freezes_membership_preserves_drafts_on_reads_and_warns_before_discard()
+    {
+        await using var c = Context(Details(Finding("a"), Finding("b")));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        page.Find(".finding-row input").Change(true); page.Find("[data-command='batch-reject']").Click();
+        page.Find("[aria-label='Shared rejection reason']").Input("keep this");
+        page.FindAll(".finding-row input")[1].Change(true);
+        page.Find("input[aria-label='Search loaded findings']").Input("unmatched");
+        page.Find(".dashboard-header button").Click();
+        page.WaitForAssertion(() => Assert.False(page.Find(".dashboard-header button").HasAttribute("disabled")));
+        page.Find("[data-rejection-dismiss]").Click();
+        Assert.Contains("Discard unsaved rejection reasons?", page.Markup);
+        page.Find("[data-rejection-keep]").Click();
+        Assert.Single(page.FindAll("[data-rejection-entry]"));
+        Assert.Contains("keep this", page.Find("[data-rejection-entry]").TextContent);
+        page.Find("[data-rejection-dismiss]").Click(); page.Find("[data-rejection-discard]").Click();
+        Assert.Empty(page.FindAll("[data-rejection-entry]"));
+    }
+
+    [Fact]
+    public async Task Rejection_unknown_outcome_retains_reasons_without_replay()
+    {
+        await using var c = Context(Details(Finding("a")));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch")).SetResult(new(500, null));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row")));
+        page.Find(".finding-row input").Change(true); page.Find("[data-command='batch-reject']").Click();
+        page.Find("[aria-label='Shared rejection reason']").Input("do not lose");
+        page.Find("[data-rejection-save]").Click();
+        page.WaitForAssertion(() => Assert.Contains("Unknown", page.Find("[aria-label='Rejection outcomes']").TextContent));
+        Assert.Contains("do not lose", page.Find("[data-rejection-entry]").TextContent);
+        Assert.True(page.Find("[data-rejection-save]").HasAttribute("disabled"));
+        Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch"));
+    }
+
+    [Fact]
+    public async Task Batch_rejection_previews_effective_reasons_and_preserves_only_unresolved_entries()
+    {
+        await using var c = Context(Details(Finding("a"), Finding("b")));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new BatchFindingDecisionResponse(null,
+                [new("a", BatchFindingDecisionStatus.Saved, 4), new("b", BatchFindingDecisionStatus.Conflict, 4)]))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        page.FindAll(".queue-selection button")[0].Click();
+        page.Find("[data-command='batch-reject']").Click();
+        Assert.True(page.Find("[data-rejection-save]").HasAttribute("disabled"));
+        page.Find("[aria-label='Shared rejection reason']").Input(" shared reason ");
+        page.Find("[aria-label='Override reason for b']").Input(" individual reason ");
+        Assert.Contains("shared reason", page.Find("[data-rejection-entry='a']").TextContent);
+        Assert.Contains("individual reason", page.Find("[data-rejection-entry='b']").TextContent);
+        page.Find("[data-rejection-save]").Click();
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("[data-rejection-entry]")));
+        Assert.Equal("b", page.Find("[data-rejection-entry]").GetAttribute("data-rejection-entry"));
+        Assert.Equal(" individual reason ", page.Find("[aria-label='Override reason for b']").GetAttribute("value") ?? page.Find("[aria-label='Override reason for b']").TextContent);
+        Assert.Contains("Saved", page.Find("[aria-label='Rejection outcomes']").TextContent);
+        Assert.True(page.Find("[data-rejection-save]").HasAttribute("disabled"));
+        var request = Assert.IsType<BatchFindingDecisionRequest>(Assert.Single(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions/batch")).Arguments[3]);
+        Assert.Equal(new[] { "shared reason", "individual reason" }, request.Selections.Select(s => s.Reason));
+        Assert.All(request.Selections, s => { Assert.Equal(3, s.ExpectedVersion); Assert.Equal(FindingDecisionState.Rejected, s.State); });
+        Assert.DoesNotContain(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"));
+    }
+
+    [Theory]
     [InlineData(RunKind.Review, RunState.Completed)]
     [InlineData(RunKind.Resolve, RunState.Completed)]
     [InlineData(RunKind.ReviewDraft, RunState.Running)]

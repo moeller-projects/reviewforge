@@ -1,0 +1,80 @@
+@using ReviewForge.Core.Domain
+<WorkbenchDialog Label="Reject selected findings">
+    <div class="rejection-composer">
+        <h2>Reject selected findings</h2>
+        <p>Internal decisions only. No comments are published, retracted or closed. This batch keeps its original findings and versions.</p>
+        <label>Shared rejection reason
+            <textarea aria-label="Shared rejection reason" rows="3" disabled="@Composer.Attempted" @bind="Composer.SharedReason" @bind:event="oninput" @bind:after="NotifyChanged"></textarea>
+        </label>
+        <small>Each effective reason must contain 1–@FindingDecision.MaxReasonLength characters after trimming. A blank override inherits the shared reason.</small>
+        <div aria-live="polite" class="rejection-validation">
+            @if (BlockReason is { } blocked) { <p class="notice">@blocked</p> }
+        </div>
+        @foreach (var entry in Composer.Entries)
+        {
+            var id = entry.FindingId;
+            var payload = FindingWorkspaceState.Payload(entry);
+            var error = Composer.Validation(id);
+            <section class="rejection-entry" data-rejection-entry="@id" @key="id">
+                <h3>@(payload?.Title ?? id)</h3>
+                <p>@(payload?.Anchor?.FilePath ?? "Location unavailable"):@payload?.Anchor?.StartLine · Original decision version @entry.DecisionVersion</p>
+                <label>Optional override
+                    <textarea aria-label="@($"Override reason for {id}")" aria-invalid="@(error is not null ? "true" : null)" rows="2" disabled="@Composer.Attempted"
+                        value="@Composer.Overrides.GetValueOrDefault(id, "")" @oninput="e => OverrideChanged(id, e)"></textarea>
+                </label>
+                <p class="effective-reason"><strong>Effective reason:</strong> @Composer.EffectiveReason(id)</p>
+                @if (error is not null) { <p class="notice">@error</p> }
+            </section>
+        }
+        @if (Composer.Outcomes.Count > 0)
+        {
+            <section aria-label="Rejection outcomes" role="status">
+                <h3>Submission outcomes</h3>
+                @foreach (var outcome in Composer.Outcomes) { <p>@outcome.FindingId: @outcome.Status · @(outcome.CurrentVersion?.ToString() ?? "version unavailable")</p> }
+                <p>Confirmed saves are retained. Only unresolved entries remain above; no automatic retry or version replacement.</p>
+            </section>
+        }
+        @if (_DiscardWarning)
+        {
+            <p role="alert">Discard unsaved rejection reasons? Saved decisions will not be undone.</p>
+            <div class="finding-toolbar">
+                <button type="button" data-rejection-keep disabled="@Submitting" @onclick="() => _DiscardWarning = false">Keep editing</button>
+                <button type="button" data-rejection-discard disabled="@Submitting" @onclick="Dismiss">Discard unsaved reasons</button>
+            </div>
+        }
+        <div class="finding-toolbar">
+            <button type="button" data-dialog-cancel data-rejection-dismiss autofocus disabled="@Submitting" @onclick="RequestDismiss">@(Composer.Entries.Count == 0 ? "Close" : "Cancel")</button>
+            <button type="button" data-rejection-save disabled="@(BlockReason is not null || Composer.Entries.Count == 0)" @onclick="Confirm">Confirm rejection (@Composer.Entries.Count)</button>
+        </div>
+    </div>
+</WorkbenchDialog>
+
+@code {
+    [Parameter, EditorRequired] public RejectionComposerState Composer { get; set; } = default!;
+    [Parameter] public IReadOnlyList<RunFindingDto> Findings { get; set; } = [];
+    [Parameter] public string HeadSha { get; set; } = "";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Submitting { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public EventCallback<BatchFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback OnDismiss { get; set; }
+    private bool _DiscardWarning;
+    private string? BlockReason => Composer.BlockReason(Findings, HeadSha, Disabled);
+    private Task NotifyChanged() => OnChanged.InvokeAsync();
+    private async Task OverrideChanged(string id, ChangeEventArgs e)
+    {
+        Composer.Overrides[id] = e.Value?.ToString() ?? "";
+        await NotifyChanged();
+    }
+    private async Task RequestDismiss()
+    {
+        if (Submitting) return;
+        if (Composer.HasUnsaved) _DiscardWarning = true;
+        else await Dismiss();
+    }
+    private Task Dismiss() => Submitting ? Task.CompletedTask : OnDismiss.InvokeAsync();
+    private async Task Confirm()
+    {
+        if (Composer.Confirm(Findings, HeadSha, Disabled) is { } snapshot) await OnSave.InvokeAsync(snapshot);
+    }
+}

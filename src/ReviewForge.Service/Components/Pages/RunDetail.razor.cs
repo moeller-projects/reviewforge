@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Routing;
+using Microsoft.JSInterop;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Components.Dashboard;
 
@@ -142,6 +144,16 @@ public partial class RunDetail
         }
         else Fail(result.Outcome, "Decision was not confirmed. Refresh before editing again.");
     }
+    private async Task BeforeRejectionNavigation(LocationChangingContext context)
+    {
+        if (_Saving) { context.PreventNavigation(); return; }
+        if (_Workspace.Rejection?.HasUnsaved != true) return;
+        try
+        {
+            if (!await JS.InvokeAsync<bool>("confirm", "Discard unsaved rejection reasons and leave this run? Saved decisions will not be undone.")) context.PreventNavigation();
+        }
+        catch (JSDisconnectedException) { context.PreventNavigation(); }
+    }
     private async Task SaveBatchAsync(BatchFindingDecisionRequest request)
     {
         if (Busy || _Stale || _AuthenticationExpired || _Route is null || _Details is null
@@ -174,6 +186,7 @@ public partial class RunDetail
                 _Selected.Add(item.FindingId);
             }
         }
+        if (request.Selections.All(s => s.State == FindingDecisionState.Rejected)) _Workspace.Rejection?.Apply(_Batch!);
         if (structured)
         {
             await RefreshAsync();

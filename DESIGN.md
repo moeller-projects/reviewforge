@@ -132,6 +132,12 @@ Single-letter J/K, A/R/D and ? are off by default. The dialog offers that prefer
 
 bUnit and isolated JavaScript tests cover routing and state, not real-browser focus, reflow or assistive-technology behavior. Those checks remain a release gate.
 
+## Batch rejection (reference)
+
+Reject selected with reasons opens one native dialog containing the pinned finding titles, locations and original decision versions. Shared text is inherited by blank overrides; every effective reason must contain 1–2,000 characters after trimming. Confirmation copies reasons and versions into the existing batch endpoint. Approval and publication remain separate.
+
+Reasons live only in the run-local circuit state, across refreshes, filters and run-section changes. Cancel asks before discarding text; leaving the run also warns. Confirmed outcomes remain visible, saved entries leave the composer, and unresolved entries retain their original versions and reasons without retry. To act again, explicitly discard the unresolved draft and compose a new batch after reviewing current decisions. bUnit verifies these state transitions; real-browser focus, assistive-technology announcements and phone reflow remain unverified.
+
 ## Do's and Don'ts
 
 - Do keep focus, selection, validation, human decisions and publication distinguishable.
