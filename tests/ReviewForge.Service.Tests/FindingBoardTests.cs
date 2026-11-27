@@ -1,4 +1,6 @@
 using Bunit;
+using Microsoft.AspNetCore.Components.RenderTree;
+using Microsoft.AspNetCore.Components.Rendering;
 using ReviewForge.Core.Domain;
 using ReviewForge.Service.Components.Dashboard;
 using Xunit;
@@ -59,6 +61,71 @@ public sealed class FindingBoardTests
         gate.SetResult(); await move; await duplicate;
         Assert.Equal(2, state.Selected.Count);
     }
+
+    [Theory]
+    [InlineData("unchanged")]
+    [InlineData("canceled")]
+    public async Task Completed_move_resets_selector_before_same_target_retry_even_without_a_new_decision_version(string outcome)
+    {
+        await using var c = new BunitContext();
+        var state = new FindingWorkspaceState { FocusedId = "a" };
+        var row = Row("a");
+        var attempts = new List<(string Id, string Target)>();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var view = c.Render<KeyObservingFindingBoard>(p => p.Add(x => x.State, state).Add(x => x.Findings, new[] { row })
+            .Add(x => x.Active, true).Add(x => x.BlockReason, _ => null)
+            .Add(x => x.OnMove, async (id, target) =>
+            {
+                attempts.Add((id, target));
+                if (attempts.Count != 1) return;
+                await gate.Task;
+                if (outcome == "canceled") throw new OperationCanceledException();
+                // A failed save may refresh authoritative data without changing its version.
+            }));
+        object SelectorKey() => view.Instance.MoveSelectorKey!;
+        var original = view.Find("[aria-label='Move a to']");
+        var originalKey = SelectorKey();
+        var move = original.ChangeAsync(new() { Value = "Approved" });
+        view.WaitForAssertion(() => Assert.Single(attempts));
+        view.Render(p => p.Add(x => x.Findings, new[] { row }));
+        Assert.Equal(originalKey, SelectorKey());
+        Assert.Single(view.FindAll("[data-board-column='Pending'] [data-board-card='a']"));
+        gate.SetResult();
+        var error = await Record.ExceptionAsync(() => move);
+        // Save failures are handled by the queue and return normally. Unhandled callback
+        // exceptions terminate the Blazor circuit; they cannot support an in-circuit retry.
+        // Blazor ignores canceled event-handler tasks; the selector must still reset.
+        Assert.Null(error);
+        view.WaitForAssertion(() => Assert.NotEqual(originalKey, SelectorKey()));
+
+        // bUnit reparses DOM snapshots and does not model native selected-value change
+        // suppression. A changed Blazor element key proves that the browser gets a new select.
+        var reset = view.Find("[aria-label='Move a to']");
+        var resetKey = SelectorKey();
+        Assert.NotEqual(originalKey, resetKey);
+        Assert.Equal("", reset.GetAttribute("value"));
+        Assert.Null(state.Rejection);
+        Assert.Single(view.FindAll("[data-board-column='Pending'] [data-board-card='a']"));
+        await reset.ChangeAsync(new() { Value = "Approved" });
+        Assert.Equal(new[] { ("a", "Approved"), ("a", "Approved") }, attempts);
+        Assert.NotEqual(resetKey, SelectorKey());
+    }
+
+    // bUnit recreates its parsed DOM even when Blazor retains an element. Observe the
+    // actual rendered key through a single-use component subclass, not DOM object identity.
+#pragma warning disable BL0006 // Test-only inspection of Blazor's element replacement contract.
+    public sealed class KeyObservingFindingBoard : FindingBoard
+    {
+        public object? MoveSelectorKey { get; private set; }
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            base.BuildRenderTree(builder);
+            var frames = builder.GetFrames();
+            MoveSelectorKey = frames.Array.Take(frames.Count).Single(f => f.FrameType == RenderTreeFrameType.Element &&
+                f.ElementName == "select" && f.ElementKey is not null).ElementKey;
+        }
+    }
+#pragma warning restore BL0006
 
     [Theory]
     [InlineData(true)]

@@ -33,7 +33,7 @@
                     @if (finding.Evidence?.Validation == FindingValidationStatus.Rejected) { <small>Validation blocked: @finding.Evidence.ValidationReason</small> }
                     @if (finding.Evidence?.Verification == FindingVerificationStatus.Rejected) { <small>Verification blocked: @finding.Evidence.VerificationReason</small> }
                     <label>Move to
-                        <select @key="(finding.DecisionVersion, State.Rejection)" aria-label="@($"Move {payload?.Title ?? finding.FindingId} to")" value="" disabled="@(blocked is not null)" title="@blocked" @onchange="e => OnMove(finding.FindingId, e.Value?.ToString() ?? string.Empty)">
+                        <select @key="(finding.DecisionVersion, State.Rejection, _MoveAttempt)" aria-label="@($"Move {payload?.Title ?? finding.FindingId} to")" value="" disabled="@(blocked is not null)" title="@blocked" @onchange="e => Move(finding.FindingId, e.Value?.ToString() ?? string.Empty)">
                             <option value="">Choose decision</option>
                             @foreach (var target in Columns) { <option value="@target">@target</option> }
                         </select>
@@ -63,6 +63,18 @@
     private static readonly string[] Columns = ["Pending", "Approved", "Deferred", "Rejected"];
     private string _Column = "Pending";
     private bool _Shift;
+    private long _MoveAttempt;
+    private async Task Move(string id, string target)
+    {
+        try { await OnMove(id, target); }
+        finally
+        {
+            // This is a command selector, not persisted state. Recreate it even when
+            // a failed or canceled move leaves the authoritative decision unchanged.
+            _MoveAttempt++;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
     [Parameter] public EventCallback OnChanged { get; set; }
     private string? _LastFocused, _LastFocusedColumn;
     private async Task ColumnChanged(ChangeEventArgs e)
