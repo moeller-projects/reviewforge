@@ -85,10 +85,13 @@ public class FinalizedProfileReclaimTests
     }
 
     [Theory]
-    [InlineData("profile-read")]
-    [InlineData("run-read")]
-    [InlineData("shutdown")]
-    public async Task Failed_reclaim_preflight_preserves_terminal_records_and_leaves_request_for_reclaim(string failure)
+    [InlineData("profile-read", 1)]
+    [InlineData("run-read", 1)]
+    [InlineData("shutdown", 1)]
+    [InlineData("profile-read", 2)]
+    [InlineData("run-read", 2)]
+    [InlineData("shutdown", 2)]
+    public async Task Failed_reclaim_preflight_preserves_terminal_records_and_leaves_request_for_reclaim(string failure, int workerCount)
     {
         var path = Path.Combine(Path.GetTempPath(), $"profile-preflight-{Guid.NewGuid():N}.db");
         var ct = TestContext.Current.CancellationToken;
@@ -115,7 +118,7 @@ public class FinalizedProfileReclaimTests
             if (failure == "shutdown") store.BeforeModelProfileRead = _ => lifetime.Cancel();
             var claims = new InFlightClaims(time);
             var builder = new CountingBuilder();
-            using var worker = new ReviewWorker(queue, Options.Create(new HostOptions { WorkerCount = 1 }),
+            using var worker = new ReviewWorker(queue, Options.Create(new HostOptions { WorkerCount = workerCount }),
                 new RunTracker(), builder, claims, store, NullLogger<ReviewWorker>.Instance, time);
             await worker.StartAsync(lifetime.Token);
             try

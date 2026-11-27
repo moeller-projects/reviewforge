@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
@@ -24,15 +25,28 @@ public sealed class ReviewWorker(
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var group = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        ExceptionDispatchInfo? failure = null;
+        async Task ConsumeAsync()
+        {
+            try { await ProcessQueueAsync(group.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (group.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref failure, ExceptionDispatchInfo.Capture(ex), null);
+                await group.CancelAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
         var workers = new Task[hostOptions.Value.WorkerCount];
-        // Schedule consumers independently so a synchronous provider call cannot prevent
-        // later consumers from starting.
+        // Schedule independently; a fault cancels siblings so WhenAll can surface it
+        // after their bounded cleanup instead of silently losing consumer capacity.
         for (var i = 0; i < workers.Length; i++)
-            workers[i] = Task.Run(() => ProcessQueueAsync(stoppingToken), stoppingToken);
-
-        return Task.WhenAll(workers);
+            workers[i] = Task.Run(ConsumeAsync, group.Token);
+        try { await Task.WhenAll(workers).ConfigureAwait(false); }
+        catch { failure?.Throw(); throw; }
     }
 
     private async Task ProcessQueueAsync(CancellationToken stoppingToken)
