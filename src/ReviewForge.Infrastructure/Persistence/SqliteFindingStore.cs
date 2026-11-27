@@ -14,7 +14,7 @@ namespace ReviewForge.Infrastructure.Persistence;
 /// multiple workers read and write the same database without SQLITE_BUSY failures.
 /// Use <see cref="StoreJournalMode.Delete"/> on filesystems without POSIX advisory locks.
 /// </summary>
-public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecisionStore
+public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecisionStore, IRunHistoryStore
 {
     private readonly DbContextOptions<FindingStoreDbContext> _Options;
     private static readonly JsonSerializerOptions ObservationJsonOptions = new(JsonSerializerDefaults.Web);
@@ -166,6 +166,32 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
                 """;
             cmd.ExecuteNonQuery();
 
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'StartedAtUtcTicks'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE Runs ADD COLUMN StartedAtUtcTicks INTEGER NOT NULL DEFAULT 0";
+                cmd.ExecuteNonQuery();
+                // One-time additive upgrade: parse original offsets at full .NET precision.
+                // Never derive ticks via SQLite's millisecond-rounded date functions.
+                var sortKeys = new List<(string Id, long Ticks)>();
+                cmd.CommandText = "SELECT Id,StartedAt FROM Runs";
+                using (var reader = cmd.ExecuteReader())
+                    while (reader.Read()) sortKeys.Add((reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1).UtcTicks));
+                foreach (var (id, ticks) in sortKeys)
+                {
+                    cmd.CommandText = "UPDATE Runs SET StartedAtUtcTicks=$ticks WHERE Id=$id";
+                    cmd.Parameters.Clear();
+                    cmd.Parameters.AddWithValue("$ticks", ticks);
+                    cmd.Parameters.AddWithValue("$id", id);
+                    cmd.ExecuteNonQuery();
+                }
+                cmd.Parameters.Clear();
+            }
+            cmd.CommandText = """
+                CREATE INDEX IF NOT EXISTS IX_Runs_HistoryTicks ON Runs (StartedAtUtcTicks DESC, Id DESC);
+                CREATE INDEX IF NOT EXISTS IX_Runs_PrHistoryTicks ON Runs (Org,Project,RepositoryId,PrId,StartedAtUtcTicks DESC,Id DESC);
+                """;
+            cmd.ExecuteNonQuery();
             transaction.Commit();
         }
         finally
@@ -591,6 +617,7 @@ public sealed partial class SqliteFindingStore : IFindingStore, IFindingDecision
                 FindingObservationsJson = run.FindingObservations is null ? null : JsonSerializer.Serialize(run.FindingObservations, ObservationJsonOptions),
                 DiagnosticsJson = run.Diagnostics is null ? null : JsonSerializer.Serialize(run.Diagnostics, ObservationJsonOptions),
                 StartedAt = run.StartedAt,
+                StartedAtUtcTicks = run.StartedAt.UtcTicks,
                 CompletedAt = run.CompletedAt,
                 LastObservedCommentAt = run.LastObservedCommentAt,
                 Success = run.Success,

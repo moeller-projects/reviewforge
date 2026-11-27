@@ -122,6 +122,15 @@ public sealed class ReviewQueue : IReviewQueue
             _Pending.Values.Where(r => keys.Contains(r.Pr)).Select(r => new QueueRunSnapshot(r, false)).ToArray());
     }
 
+    public Task<IReadOnlyList<QueueRunSnapshot>> GetPendingHistoryAsync(int count, CancellationToken ct)
+    {
+        if (count is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(count));
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<QueueRunSnapshot>>(_Pending.Values
+            .OrderByDescending(r => r.EnqueuedAt).ThenByDescending(r => r.RunId.ToString("D"), StringComparer.Ordinal)
+            .Take(count).Select(r => new QueueRunSnapshot(r, false)).ToArray());
+    }
+
     public void Complete() => _Channel.Writer.Complete();
 }
 

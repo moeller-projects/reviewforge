@@ -39,6 +39,11 @@ public interface IReviewQueue
     /// <summary>Batch read of pending AND durable claimed rows for supplied PRs. Never claims or renews.</summary>
     Task<IReadOnlyList<QueueRunSnapshot>> GetPendingAsync(IReadOnlyCollection<PrKey> prs, CancellationToken ct);
 
+    /// <summary>Bounded global pending/claimed snapshot, independent of source inventory.
+    /// Implementations which do not support dashboard history must fail explicitly.</summary>
+    Task<IReadOnlyList<QueueRunSnapshot>> GetPendingHistoryAsync(int count, CancellationToken ct)
+        => throw new NotSupportedException("This queue does not support global pending history.");
+
     int Capacity { get; }
 
     int ApproximateDepth { get; }

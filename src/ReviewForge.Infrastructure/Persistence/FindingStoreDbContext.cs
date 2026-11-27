@@ -16,6 +16,8 @@ public sealed class RunEntity
     public required string Pipeline { get; set; }
 
     public DateTimeOffset StartedAt { get; set; }
+    /// <summary>Exact normalized history sort key; SQLite julianday rounds sub-millisecond values.</summary>
+    public long StartedAtUtcTicks { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 
     /// <summary>Newest observed comment timestamp (ADO server time) at fetch; the follow-up

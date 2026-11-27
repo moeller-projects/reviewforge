@@ -182,6 +182,24 @@ public sealed class SqliteReviewQueue : IReviewQueue
         return result;
     }
 
+    public async Task<IReadOnlyList<QueueRunSnapshot>> GetPendingHistoryAsync(int count, CancellationToken ct)
+    {
+        if (count is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(count));
+        using var connection = Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT RunId,Org,Project,RepositoryId,PrId,EnqueuedAt,HeadSha,
+                TraceParent,TraceState,Trigger,Kind,ForceReview,ClaimedBy IS NOT NULL
+            FROM QueuedRuns ORDER BY EnqueuedAt DESC,RunId DESC LIMIT $count
+            """;
+        cmd.Parameters.AddWithValue("$count", count);
+        var result = new List<QueueRunSnapshot>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            result.Add(new(ReadRequest(reader), reader.GetBoolean(12)));
+        return result;
+    }
+
     private async Task<ReviewRequest?> TryClaimAsync(CancellationToken ct)
     {
         var now = _Clock.GetUtcNow();

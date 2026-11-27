@@ -295,7 +295,7 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
 }
 
 /// <summary>In-memory IFindingStore.</summary>
-public partial class FakeFindingStore : IFindingStore, IFindingDecisionStore
+public partial class FakeFindingStore : IFindingStore, IFindingDecisionStore, IRunHistoryStore
 {
     public List<ReviewRun> Runs { get; } = [];
     public int SummaryReads { get; private set; }

@@ -110,6 +110,8 @@ public sealed class ArchitectureTests
         {
             "ChatTier", "DiffBudget", "EnqueueTrigger",
             "PushedFix", "ReviewRequest", "QueueRunSnapshot", "EnqueueResult", "TipCommitInfo", "ProcessRunResult",
+            // Bounded scalar projections returned by the global history port (no adapter entities).
+            "RunHistoryItem", "RunHistoryPage",
         };
 
         var unexpected = types
