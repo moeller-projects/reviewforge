@@ -106,12 +106,15 @@
         <p>Durable execution history unavailable for this run. No stage execution is inferred from live status or the plan.</p>
         <details><summary>Planned stages (not execution evidence)</summary><ol>@foreach (var stage in Status.LoadedStages) { <li>@StageLabels.Label(stage)</li> }</ol></details>
     }
-    <p class="worklist-muted">Durations are observed stage times, not progress estimates. Stage counts are not time progress. Model-call metadata can be loaded below after execution ends. Tool-call details are not collected here. Use run/trace correlation when inspecting service logs.</p>
+    <p class="worklist-muted">Durations are observed stage times, not progress estimates. Stage counts are not time progress. Model-call metadata can be loaded below after execution ends. Select a recorded stage to filter the loaded profiler page; unloaded pages are not searched. Use run/trace correlation when inspecting service logs.</p>
 </section>
 
 @code {
     [Parameter, EditorRequired] public RunStatus Status { get; set; } = default!;
     [Parameter] public RunDiagnostics? Diagnostics { get; set; }
+    [Parameter] public string? SelectedStage { get; set; }
+    [Parameter] public EventCallback<string> StageSelected { get; set; }
+    private string? _PreviousSelectedStage;
     private readonly string _HelpId = "execution-help-" + Guid.NewGuid().ToString("N");
     private ElementReference _Root;
     private IJSObjectReference? _Module, _Controller;
@@ -132,10 +135,19 @@
         }
         _Rows = Project(Diagnostics?.Stages ?? [], Status.StartedAt, Status.State == RunState.Running);
         if (!_Rows.Any(r => r.Index == _Selected)) _Selected = _Rows.FirstOrDefault()?.Index ?? 0;
+        if (_PreviousSelectedStage != SelectedStage)
+        {
+            _PreviousSelectedStage = SelectedStage;
+            if (_Rows.FirstOrDefault(r => r.Stage.Stage == SelectedStage) is { } stage) _Selected = stage.Index;
+        }
     }
 
-    private void Select(int index) => _Selected = index;
-    private void MoveFailed(int direction)
+    private async Task Select(int index)
+    {
+        _Selected = index;
+        if (_Rows.FirstOrDefault(r => r.Index == index) is { } row) await StageSelected.InvokeAsync(row.Stage.Stage);
+    }
+    private async Task MoveFailed(int direction)
     {
         var failures = Sort(_Rows, "chronological").Where(r => r.Stage.Outcome == "failed").ToArray();
         if (failures.Length == 0) return;
@@ -144,7 +156,7 @@
         var target = direction > 0
             ? failures.FirstOrDefault(r => Array.IndexOf(chronological, r) > selectedPosition) ?? failures[0]
             : failures.LastOrDefault(r => Array.IndexOf(chronological, r) < selectedPosition) ?? failures[^1];
-        _Selected = target.Index;
+        await Select(target.Index);
         _FocusSelected = true;
     }
 

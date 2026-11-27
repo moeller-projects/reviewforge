@@ -25,6 +25,9 @@ public partial class RunDetail
     private FindingDecisionHistoryResponse? _History;
     private string? _HistoryId, _Message;
     private string _Section = "Findings";
+    private string? _ProfileStage;
+    private long _ProfileStageVersion;
+    private void SelectProfileStage(string stage) { _ProfileStage = stage; _ProfileStageVersion++; }
     private Guid? _LoadedId;
     private long _Generation;
     private bool _PendingRoute, _Disposed, _Loading, _Saving, _Posting, _HistoryLoading, _Reconciling, _Stale, _AuthenticationExpired, _RefreshRequested;
@@ -57,7 +60,8 @@ public partial class RunDetail
         _Publication = null;
         _Batch = null;
         _History = null;
-        _HistoryId = _Message = null;
+        _HistoryId = _Message = _ProfileStage = null;
+        _ProfileStageVersion = 0;
         _Section = string.Equals(InitialSection, "execution", StringComparison.OrdinalIgnoreCase) ? "Execution" : "Findings";
         _Workspace = new();
         _Loading = true;

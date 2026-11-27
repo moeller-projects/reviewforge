@@ -208,6 +208,26 @@ kbd { font: inherit; color: var(--rf-muted); border: 1px solid var(--rf-line); b
 .model-call-section { margin-block-start: 24px; min-width: 0; }
 .model-call-section code { overflow-wrap: anywhere; }
 .model-call-scroll { overflow-x: auto; margin-block: 12px; }
+.profile-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-block: 12px; }
+.profile-filters label { display: grid; gap: 4px; min-width: 120px; }
+.profile-filters input { max-width: 100%; }
+.profile-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 20px; align-items: start; }
+.profile-records { max-height: 65vh; overflow: auto; min-width: 0; overflow-anchor: none; }
+.profile-records thead { position: sticky; top: 0; background: var(--rf-surface); }
+.profile-explorer [data-profile-row][aria-pressed="true"] { background: var(--rf-selected); }
+.profile-explorer .execution-inspector code { overflow-wrap: anywhere; }
+.profile-explorer h4 { margin-block: 12px 8px; }
+@media (max-width: 1000px) {
+    .profile-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+    .profile-filters label { flex: 1 1 140px; }
+    .profile-records .model-call-table { min-width: 0; }
+    .profile-records .model-call-table thead { position: static; }
+    .profile-records .model-call-table tr { display: grid; border-bottom: 1px solid var(--rf-line); }
+    .profile-records .model-call-table th, .profile-records .model-call-table td { max-width: none; border: 0; }
+    .profile-records .model-call-table thead tr { display: flex; flex-wrap: wrap; }
+}
 .model-call-table { width: 100%; min-width: 700px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .model-call-table caption { text-align: start; color: var(--rf-muted); margin-bottom: 8px; }
 .model-call-table th, .model-call-table td { text-align: start; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--rf-line); overflow-wrap: anywhere; }

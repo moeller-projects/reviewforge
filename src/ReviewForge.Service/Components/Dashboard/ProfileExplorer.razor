@@ -1,0 +1,204 @@
+@using ReviewForge.Core.Ports
+@using static ProfileExplorerPresentation
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="profile-explorer" @ref="_Root" tabindex="-1">
+    <p id="@_ScopeId" class="worklist-muted">Filters and search cover this loaded page only (at most 50 mixed records), not unloaded pages. Paging replaces the page; selection and filters stay. Correlation navigation never fetches unseen pages automatically.</p>
+    <button type="button" data-profile-commands @onclick='() => Command("commands")'>Profiler commands &amp; keyboard help <kbd>Ctrl/⌘ K</kbd></button>
+    @if (_CommandsOpen)
+    {
+        <WorkbenchDialog Label="Profiler commands">
+            <h3>Profiler commands</h3>
+            <p>On record buttons: Up/Down, Home/End. Native Tab and Enter work throughout. / focuses page search outside controls.</p>
+            @foreach (var command in Commands)
+            {
+                <button type="button" @onclick="() => Palette(command.Id)">@command.Label</button>
+            }
+            <button type="button" data-dialog-cancel autofocus @onclick="() => _CommandsOpen = false">Close commands</button>
+        </WorkbenchDialog>
+    }
+    <div class="profile-filters" aria-describedby="@_ScopeId">
+        <label>Search safe metadata <input aria-label="Profile search" data-profile-search maxlength="200" value="@_Search" @oninput="e => _Search = e.Value?.ToString() ?? string.Empty" /></label>
+        <label>Type <select aria-label="Profile type" @bind="_Kind"><option value="">All types</option>@foreach (var value in new[] { "logical", "attempt", "provider", "tool" }) { <option value="@value">@value</option> }</select></label>
+        <label>Outcome <select aria-label="Profile outcome" @bind="_Outcome"><option value="">All outcomes</option>@foreach (var value in Values(r => r.Outcome, _Outcome)) { <option value="@value">@value</option> }</select></label>
+        <label>Model <select aria-label="Profile model" @bind="_Model"><option value="">All models</option>@foreach (var value in Values(r => r.Model, _Model)) { <option value="@value">@value</option> }</select></label>
+        <label>Tool <select aria-label="Profile tool" @bind="_Tool"><option value="">All tools</option>@foreach (var value in Values(r => r.Tool, _Tool)) { <option value="@value">@value</option> }</select></label>
+        <label>Stage <select aria-label="Profile stage" @bind="_Stage"><option value="">All stages</option>@foreach (var value in Values(r => r.Stage, _Stage)) { <option value="@value">@StageLabels.Label(value)</option> }</select></label>
+        <label>Duration <select aria-label="Profile duration" @bind="_Duration"><option value="">All durations</option><option value="slow">At least 1,000 ms</option><option value="missing">Unavailable</option></select></label>
+        <label>View <select aria-label="Profile view" @bind="_View"><option value="table">Metadata table</option><option value="timeline">Timeline</option></select></label>
+        <label>Order <select aria-label="Profile order" @bind="_Order" disabled="@(_View == "timeline")"><option value="chronological">Chronological</option><option value="duration-desc">Duration: slowest first</option><option value="duration-asc">Duration: fastest first</option></select></label>
+        <button type="button" @onclick='() => Command("clear")'>Clear page filters</button>
+    </div>
+    <p role="status">Loaded-page records: @_Rows.Count · Matching: @Visible.Count · Provider: @_Rows.Count(r => r.Kind == "provider") · Logical: @_Rows.Count(r => r.Kind == "logical") · Attempts: @_Rows.Count(r => r.Kind == "attempt") · Tools: @_Rows.Count(r => r.Kind == "tool")</p>
+    <p>Loaded-page observed retries: @_Rows.Count(r => r.Kind == "attempt" && r.AttemptNumber > 1) (explicit application attempt numbers only; not whole-run or SDK retries).</p>
+    <p class="worklist-muted">Loaded-page provider-reported cost only (partial, not whole-run billing): @PageCosts. Missing cost is unavailable, not zero. No currencies are combined.</p>
+    <div class="profile-layout">
+        <div class="model-call-scroll profile-records" data-profile-scroll role="region" aria-label="Profile page records" tabindex="0">
+        @if (Visible.Count == 0) { <p>No matching records on this page. Clear page filters or explicitly page for more; this is not a whole-run search.</p> }
+        else if (_View == "timeline")
+        {
+            <ol class="execution-timeline" aria-label="Chronological metadata timeline">
+            @foreach (var row in Visible)
+            {
+                <li @key="row.Id"><button type="button" data-profile-row="@row.Id" aria-pressed="@Selected(row)" tabindex="@TabIndex(row)" @onclick="() => Select(row)">
+                    <strong>@row.Kind · @(row.Tool ?? row.Model ?? row.Profile)</strong> · @row.Outcome<br />@Time(row.Start) · @Duration(row.Duration) ms
+                    @if (Bar(row, _Rows) is { Length: > 0 } bar) { <span class="execution-track" aria-hidden="true"><span class="execution-bar" style="@bar"></span></span> }
+                    else { <span>Interval unavailable or partial</span> }
+                </button></li>
+            }
+            </ol>
+        }
+        else
+        {
+            <table class="model-call-table">
+                <caption>Observed model-call metadata · Tool and application-retry metadata · UTC, milliseconds; overlapping intervals are not additive</caption>
+                <thead><tr><th scope="col">Record / type</th><th scope="col">Stage / model / tool</th><th scope="col">Timing / outcome</th><th scope="col">Tokens: input / output / total</th></tr></thead>
+                <tbody>@foreach (var row in Visible)
+                {
+                    <tr @key="row.Id"><th scope="row"><button type="button" data-profile-row="@row.Id" aria-pressed="@Selected(row)" tabindex="@TabIndex(row)" @onclick="() => Select(row)">@row.Kind <code>@row.Id</code></button></th>
+                    <td>@StageLabels.Label(row.Stage)<br />@(row.Provider ?? "unavailable") / @(row.Model ?? row.Tool ?? row.Profile)<br />Parent: @row.ParentCoverage</td>
+                    <td>@Time(row.Start)<br />@Duration(row.Duration) ms · @row.Outcome</td><td>@Number(row.Input) / @Number(row.Output) / @Number(row.Total)</td></tr>
+                }</tbody>
+            </table>
+        }
+        </div>
+        @if (_Selected is { } selected)
+        {
+            <section class="execution-inspector" aria-label="Profile record inspector">
+                <h4>@selected.Kind · @(selected.Tool ?? selected.Model ?? selected.Profile)</h4>
+                @if (!Visible.Any(r => r.Id == selected.Id)) { <p>Selected record is outside the current page or filters. Its loaded snapshot stays here until another record is selected.</p> }
+                <button type="button" @onclick='() => Command("return")'>Return to selected record (loaded page)</button>
+                <dl>
+                    <dt>Record ID</dt><dd><code>@selected.Id</code> <button type="button" data-copy-kind="Record ID" data-copy-value="@selected.Id">Copy record ID</button></dd>
+                    <dt>Stage / profile</dt><dd><button type="button" @onclick="() => StageSelected.InvokeAsync(selected.Stage)">@StageLabels.Label(selected.Stage)</button> · @selected.Profile</dd>
+                    @foreach (var link in new[] { ("Parent", selected.Parent), ("Logical call", selected.Logical), ("Attempt", selected.Attempt) })
+                    {
+                        <dt>@link.Item1</dt><dd><code>@Identifier(link.Item2)</code>
+                        @if (link.Item2 is { } target)
+                        {
+                            <button type="button" disabled="@(!_Rows.Any(r => r.Id == target))" @onclick="() => Navigate(target)">Open @link.Item1 on page</button>
+                            <button type="button" data-copy-kind="@link.Item1" data-copy-value="@target">Copy @link.Item1 ID</button>
+                            @if (!_Rows.Any(r => r.Id == target)) { <span>Not on loaded page; may be unpaged, truncated, expired or unobserved.</span> }
+                        }</dd>
+                    }
+                    <dt>Parent coverage</dt><dd>@selected.ParentCoverage</dd>
+                    <dt>Attempt number</dt><dd>@Number(selected.AttemptNumber)</dd>
+                    <dt>Outcome</dt><dd>@selected.Outcome</dd>
+                    <dt>Started / ended (UTC)</dt><dd>@Time(selected.Start)<br />@Time(selected.End)</dd>
+                    <dt>Observed duration (ms)</dt><dd>@Duration(selected.Duration)</dd>
+                    <dt>Governor wait / backoff (ms)</dt><dd>@Duration(selected.Wait) / @Duration(selected.Backoff)</dd>
+                    <dt>Input / output / total tokens</dt><dd>@Number(selected.Input) / @Number(selected.Output) / @Number(selected.Total)</dd>
+                    <dt>Cached input / reasoning tokens</dt><dd>@Number(selected.Cached) / @Number(selected.Reasoning)</dd>
+                    <dt>Provider cost</dt><dd>@Cost(selected)</dd>
+                </dl>
+                <h4>Direct children on this page</h4>
+                @foreach (var child in _Rows.Where(r => r.Parent == selected.Id))
+                { <button type="button" @onclick="() => Navigate(child.Id)">@child.Kind · @(child.Tool ?? child.Model ?? child.Profile) · @child.Outcome</button> }
+                <p class="worklist-muted">Only loaded direct children are shown. No child records or retry counts are inferred. Token usage belongs to provider rows only; total tokens are not billed tokens.</p>
+            </section>
+        }
+    </div>
+    <p data-copy-feedback role="status" aria-live="polite"></p>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ModelProfilePage Page { get; set; } = default!;
+    [Parameter] public string? StageFilter { get; set; }
+    [Parameter] public long PageCursor { get; set; }
+    [Parameter] public EventCallback<string> StageSelected { get; set; }
+    [Parameter] public long StageFilterVersion { get; set; }
+    private static readonly (string Id, string Label)[] Commands = [("search", "Focus page search"), ("clear", "Clear page filters"), ("return", "Return to selected record"), ("table", "Show semantic table"), ("timeline", "Show chronological timeline")];
+    private readonly string _ScopeId = "profile-scope-" + Guid.NewGuid().ToString("N");
+    private IReadOnlyList<ProfileExplorerRow> _Rows = [];
+    private ProfileExplorerRow? _Selected;
+    private ModelProfilePage? _PreviousPage;
+    private string? _PreviousStage;
+    private long _PreviousStageVersion = -1;
+    private string _Search = "", _Kind = "", _Outcome = "", _Model = "", _Tool = "", _Stage = "", _Duration = "", _Order = "chronological", _View = "table";
+    private bool _CommandsOpen, _Disposed;
+    private string? _Focus;
+    private ElementReference _Root;
+    private IJSObjectReference? _Module, _Controller;
+    private DotNetObjectReference<ProfileExplorer>? _Callback;
+    private IReadOnlyList<ProfileExplorerRow> Visible => Filter(_Rows, _Search, _Kind, _Outcome, _Model, _Tool, _Stage, _Duration, _View == "timeline" ? "chronological" : _Order);
+    private IEnumerable<string> Values(Func<ProfileExplorerRow, string?> select, string pinned) => _Rows.Select(select).Append(pinned).Where(v => !string.IsNullOrEmpty(v)).Select(v => v!).Distinct().Order(StringComparer.Ordinal);
+    private string PageCosts => string.Join("; ", _Rows.Where(r => Cost(r) != "unavailable").GroupBy(r => r.Currency).Select(g => $"{Number(g.Sum(r => r.Cost))} {g.Key}")) is { Length: > 0 } costs ? costs : "unavailable";
+    private string Selected(ProfileExplorerRow row) => (_Selected?.Id == row.Id).ToString().ToLowerInvariant();
+    private int TabIndex(ProfileExplorerRow row) => row.Id == (Visible.Any(r => r.Id == _Selected?.Id) ? _Selected?.Id : Visible.FirstOrDefault()?.Id) ? 0 : -1;
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(Page, _PreviousPage))
+        {
+            _PreviousPage = Page;
+            _Rows = Rows(Page);
+            // Do not destroy a pinned inspector when paging or filtering.
+            _Selected = Page.State is "expired" or "legacy-unavailable" ? null
+                : _Rows.FirstOrDefault(r => r.Id == _Selected?.Id) ?? _Selected ?? _Rows.FirstOrDefault();
+        }
+        if (_PreviousStage != StageFilter || _PreviousStageVersion != StageFilterVersion)
+        { _PreviousStage = StageFilter; _PreviousStageVersion = StageFilterVersion; _Stage = StageFilter ?? ""; }
+    }
+    private void Select(ProfileExplorerRow row) => _Selected = row;
+    private void Navigate(Guid id)
+    {
+        if (_Rows.FirstOrDefault(r => r.Id == id) is not { } row) return;
+        Clear(); _Selected = row; _Focus = id.ToString();
+    }
+    private void Clear() => (_Search, _Kind, _Outcome, _Model, _Tool, _Stage, _Duration) = ("", "", "", "", "", "", "");
+    private void Palette(string id) { _CommandsOpen = false; Command(id); }
+    private void Command(string id)
+    {
+        switch (id)
+        {
+            case "commands": _CommandsOpen = true; break;
+            case "search": _Focus = "search"; break;
+            case "clear": Clear(); break;
+            case "return": if (_Selected is { } row) Navigate(row.Id); break;
+            case "table": _View = "table"; break;
+            case "timeline": _View = "timeline"; break;
+        }
+    }
+    [JSInvokable] public Task ExecuteProfileCommand(string id)
+    {
+        if (_Disposed) return Task.CompletedTask;
+        Command(id); StateHasChanged(); return Task.CompletedTask;
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (firstRender)
+            {
+                _Module = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-profiler.js");
+                if (_Disposed) { await _Module.DisposeAsync(); return; }
+                _Callback = DotNetObjectReference.Create(this);
+                _Controller = await _Module.InvokeAsync<IJSObjectReference>("attach", _Root, _Callback);
+                if (_Disposed)
+                {
+                    await _Controller.InvokeVoidAsync("dispose");
+                    await _Controller.DisposeAsync();
+                    _Controller = null;
+                    return;
+                }
+            }
+            if (_Disposed) return;
+            if (_Controller is not null) await _Controller.InvokeVoidAsync("syncPage", PageCursor.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (_Focus is { } target && _Controller is not null) { _Focus = null; await _Controller.InvokeVoidAsync("focus", target); }
+        }
+        catch (JSDisconnectedException) { /* A retired circuit owns no usable DOM. */ }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        if (_Disposed) return;
+        _Disposed = true;
+        try
+        {
+            if (_Controller is not null) { await _Controller.InvokeVoidAsync("dispose"); await _Controller.DisposeAsync(); }
+            if (_Module is not null) await _Module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { /* DOM already retired. */ }
+        _Callback?.Dispose();
+    }
+}

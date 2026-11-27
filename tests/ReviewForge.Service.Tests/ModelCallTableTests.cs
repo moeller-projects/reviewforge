@@ -12,6 +12,7 @@ public class ModelCallTableTests
     public async Task Expired_details_still_show_basic_stage_summaries_and_honest_usage_coverage()
     {
         await using var context = new BunitContext();
+        context.JSInterop.SetupModule("./dashboard-profiler.js").Mode = JSRuntimeMode.Loose;
         context.Services.AddScoped<DashboardBrowserClient>();
         var id = Guid.NewGuid();
         var collector = new ReviewForge.Core.Profiling.ModelProfileCollector(id, 0);
@@ -40,6 +41,7 @@ public class ModelCallTableTests
     public async Task Correlated_activity_rows_and_retained_counts_are_separate_from_provider_calls()
     {
         await using var context = new BunitContext();
+        context.JSInterop.SetupModule("./dashboard-profiler.js").Mode = JSRuntimeMode.Loose;
         context.Services.AddScoped<DashboardBrowserClient>();
         var id = Guid.NewGuid();
         var collector = new ReviewForge.Core.Profiling.ModelProfileCollector(id);
@@ -68,6 +70,7 @@ public class ModelCallTableTests
         Assert.Contains("EditFile", component.Markup);
         Assert.Contains(logical.Id.ToString(), component.Markup);
         Assert.Contains("missing-parent", component.Markup);
+        component.FindAll("[data-profile-row]").First(r => r.TextContent.Contains("attempt")).Click();
         Assert.Contains("Governor wait / backoff", component.Markup);
         Assert.Contains("12 / 4", component.Markup);
         Assert.Contains("SDK-internal", component.Markup);
@@ -85,6 +88,7 @@ public class ModelCallTableTests
     public async Task Reads_render_distinct_coverage_and_paginate_safe_metadata(string state, string label)
     {
         await using var context = new BunitContext();
+        context.JSInterop.SetupModule("./dashboard-profiler.js").Mode = JSRuntimeMode.Loose;
         context.Services.AddScoped<DashboardBrowserClient>();
         var id = Guid.NewGuid();
         var collector = new ReviewForge.Core.Profiling.ModelProfileCollector(id);

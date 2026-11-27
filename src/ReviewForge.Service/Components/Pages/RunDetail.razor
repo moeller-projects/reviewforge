@@ -95,13 +95,12 @@
                 </section>
             }
         </div>
-        @if (_Section == "Execution")
-        {
+        <div hidden="@(_Section != "Execution")">
             <h2>Execution</h2>
-            <RunExecutionView Status="details.Status" Diagnostics="details.Diagnostics" />
-            <ModelCallTable Status="details.Status" />
-        }
-        else if (_Section == "Context")
+            <RunExecutionView Status="details.Status" Diagnostics="details.Diagnostics" SelectedStage="@_ProfileStage" StageSelected="SelectProfileStage" />
+            <ModelCallTable Status="details.Status" StageFilter="@_ProfileStage" StageFilterVersion="_ProfileStageVersion" StageSelected="SelectProfileStage" />
+        </div>
+        @if (_Section == "Context")
         {
             <h2>Context</h2>
             <p>@details.Status.Pr.Org / @details.Status.Pr.Project / @details.Status.Pr.RepositoryId / PR @details.Status.Pr.PrId</p>
