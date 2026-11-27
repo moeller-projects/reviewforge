@@ -157,6 +157,7 @@ public class DashboardBrowserClientTests
     {
         await using var context = new BunitContext();
         context.Services.AddScoped<DashboardConfirmation>();
+        context.Services.AddScoped<DashboardWorklistState>();
         context.Services.AddScoped<DashboardBrowserClient>();
         context.Services.AddSingleton<TimeProvider>(new Microsoft.Extensions.Time.Testing.FakeTimeProvider());
         context.JSInterop.Mode = JSRuntimeMode.Loose;

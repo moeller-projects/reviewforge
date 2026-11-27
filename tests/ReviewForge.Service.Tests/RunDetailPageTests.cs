@@ -32,6 +32,19 @@ public sealed class RunDetailPageTests
         return c;
     }
     [Theory]
+    [InlineData("execution", "Execution")]
+    [InlineData("invalid", "Findings")]
+    public async Task Worklist_deep_link_selects_only_a_section_and_never_mutates(string section, string expected)
+    {
+        await using var c = Context(Details(Finding()));
+        c.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>().NavigateTo($"/dashboard/runs/{Id}?section={section}");
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".run-summary")));
+        Assert.Equal(expected, Assert.Single(page.FindAll(".run-sections button[aria-pressed='true']")).TextContent);
+        Assert.All(c.JSInterop.Invocations.Where(i => i.Identifier == "send"), i => Assert.Equal("GET", i.Arguments[1]));
+    }
+
+    [Theory]
     [InlineData(" shared ", "", true, "shared")]
     [InlineData("", " override ", true, "override")]
     [InlineData("  ", "  ", false, "")]

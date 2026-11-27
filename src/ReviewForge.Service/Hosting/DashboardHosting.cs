@@ -67,6 +67,7 @@ public static class DashboardHosting
         services.AddScoped<AuthenticationStateProvider, DashboardAuthenticationStateProvider>();
         services.AddScoped<DashboardBrowserClient>();
         services.AddScoped<DashboardConfirmation>();
+        services.AddScoped<DashboardWorklistState>();
         return services;
     }
 

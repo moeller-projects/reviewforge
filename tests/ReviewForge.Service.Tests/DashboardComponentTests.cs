@@ -21,10 +21,98 @@ public class DashboardComponentTests
     {
         var c = new BunitContext();
         c.Services.AddScoped<DashboardConfirmation>();
+        c.Services.AddScoped<DashboardWorklistState>();
         c.Services.AddScoped<DashboardBrowserClient>();
         c.Services.AddSingleton<TimeProvider>(new FakeTimeProvider());
         c.JSInterop.Mode = JSRuntimeMode.Loose;
         return c;
+    }
+
+    [Fact]
+    public async Task Returning_in_same_circuit_restores_search_expansion_and_loaded_window()
+    {
+        await using var c = Context();
+        var first = Item();
+        var second = Item(2);
+        var module = c.JSInterop.SetupModule("./dashboard-http.js");
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => ((string)i.Arguments[2]!).Contains("offset=0&"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(Data(first) with { HasMore = true })));
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => ((string)i.Arguments[2]!).Contains("offset=50&"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(Data(second))));
+        var page = c.Render<Dashboard>();
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".worklist-pr-toggle")));
+        page.Find("button[aria-label='Load more runs']").Click();
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".worklist-pr-toggle").Count));
+        page.Find("input[aria-label='Search runs']").Input("Project");
+        page.Find(".worklist-pr-toggle").Click();
+        page.Dispose();
+        var returned = c.Render<Dashboard>();
+        returned.WaitForAssertion(() => Assert.Equal("Project", returned.Find("input[aria-label='Search runs']").GetAttribute("value")));
+        Assert.Equal(2, returned.FindAll(".worklist-pr-toggle").Count);
+        Assert.Equal("false", returned.Find(".worklist-pr-toggle").GetAttribute("aria-expanded"));
+        Assert.Contains("this circuit", returned.Markup);
+        Assert.All(c.JSInterop.Invocations.Where(i => i.Identifier == "send"), i => Assert.Equal("GET", i.Arguments[1]));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Returning_after_failed_or_interrupted_view_change_replaces_a_full_previous_window(bool interrupted)
+    {
+        await using var c = Context();
+        var state = c.Services.GetRequiredService<DashboardWorklistState>();
+        var old = Enumerable.Range(1, 500).Select(i => Item(i, "Old history")).ToArray();
+        state.AttentionOnly = false;
+        state.Items = old;
+        state.Data = Data(old);
+        state.PageCount = 10;
+        var module = c.JSInterop.SetupModule("./dashboard-http.js");
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => ((string)i.Arguments[2]!).Contains("attentionOnly=false"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(Data(old))));
+        var target = module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => ((string)i.Arguments[2]!).Contains("attentionOnly=true"));
+        module.SetupVoid("abort", _ => true).SetVoidResult();
+        if (!interrupted) target.SetResult(new(503, null));
+        var page = c.Render<Dashboard>();
+        page.WaitForAssertion(() => Assert.False(page.Find("button[aria-label='Refresh dashboard']").HasAttribute("disabled")));
+        var switching = page.Find("button[aria-label='Show runs needing attention']").ClickAsync(new());
+        page.WaitForAssertion(() => Assert.True(state.AttentionOnly));
+        if (!interrupted) page.WaitForAssertion(() => Assert.Contains("previous snapshot", page.Markup));
+        await page.InvokeAsync(() => page.Instance.DisposeAsync().AsTask());
+        await switching;
+        var attention = Item(999, "Actual attention");
+        target.SetResult(new(200, JsonSerializer.SerializeToElement(Data(attention))));
+        var returned = c.Render<Dashboard>();
+        returned.WaitForAssertion(() => Assert.Equal(attention.Run.RunId, Assert.Single(state.Items).Run.RunId));
+        Assert.Contains("Actual attention", returned.Markup);
+        Assert.DoesNotContain("Old history", returned.Markup);
+    }
+
+    [Fact]
+    public async Task Worklist_commands_and_scroll_are_circuit_local_and_navigation_only()
+    {
+        await using var c = Context();
+        c.JSInterop.SetupModule("./dashboard-http.js").Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true)
+            .SetResult(new(200, JsonSerializer.SerializeToElement(Data(Item()))));
+        var page = c.Render<Dashboard>();
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".worklist-pr-toggle")));
+        await page.InvokeAsync(() => page.Instance.RememberScroll(250));
+        page.Find("#dashboard-command-entry button").Click();
+        Assert.Contains("Left/Right", page.Find("dialog").TextContent);
+        page.Find("dialog button").Click();
+        page.WaitForAssertion(() => Assert.Empty(page.FindAll("dialog")));
+        Assert.Contains(c.JSInterop.Invocations, i => i.Identifier == "focusSearch");
+        await page.InvokeAsync(() => page.Instance.ExecuteCommand("commands"));
+        page.Find("[data-dialog-cancel]").Click();
+        Assert.Empty(page.FindAll("dialog"));
+        page.Dispose();
+        var returned = c.Render<Dashboard>();
+        returned.WaitForAssertion(() => Assert.Equal(2, c.JSInterop.Invocations.Count(i => i.Identifier == "attachWorklist")));
+        Assert.Equal(250d, c.JSInterop.Invocations.Last(i => i.Identifier == "attachWorklist").Arguments[2]);
+        Assert.Equal(250, c.Services.GetRequiredService<DashboardWorklistState>().ScrollY);
+        Assert.All(c.JSInterop.Invocations.Where(i => i.Identifier == "send"), i => Assert.Equal("GET", i.Arguments[1]));
+        await using var newCircuit = Context();
+        Assert.Equal("", newCircuit.Services.GetRequiredService<DashboardWorklistState>().Search);
+        Assert.Empty(newCircuit.Services.GetRequiredService<DashboardWorklistState>().Items);
     }
 
     [Fact]

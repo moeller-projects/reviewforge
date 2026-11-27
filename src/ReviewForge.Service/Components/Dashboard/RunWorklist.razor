@@ -4,12 +4,12 @@
 <div class="run-worklist" aria-label="Review runs grouped by pull request and revision">
     @if (_Groups.Count == 0)
     {
-        <p class="worklist-empty" role="status">@(AttentionOnly ? "No runs need attention." : "No recent runs.")</p>
+        <p class="worklist-empty" role="status">@(AttentionOnly ? "No runs need attention in this loaded window." : "No recent runs in this loaded window.") Unknown decision and publication status may still need inspection.</p>
     }
     @foreach (var group in _Groups)
     {
         <section class="worklist-pr" @key="group.Pr">
-            <button type="button" class="worklist-pr-toggle" aria-expanded="@Expanded(group.Pr).ToString().ToLowerInvariant()" @onclick="() => Toggle(group.Pr)">
+            <button type="button" data-worklist-row class="worklist-pr-toggle" aria-expanded="@Expanded(group.Pr).ToString().ToLowerInvariant()" @onclick="() => Toggle(group.Pr)">
                 <span aria-hidden="true">@(Expanded(group.Pr) ? "▾" : "▸")</span>
                 <span class="worklist-pr-scope">@group.Pr.Org / @group.Pr.Project / @(group.RepositoryName ?? group.Pr.RepositoryId) · #@group.Pr.PrId</span>
                 <strong>@(group.Title ?? $"PR #{group.Pr.PrId}")</strong>
@@ -20,7 +20,7 @@
                 @foreach (var revision in group.Revisions)
                 {
                     <div class="worklist-revision" @key="revision.HeadSha ?? string.Empty">
-                        <button type="button" class="worklist-revision-toggle" aria-expanded="@Expanded(group.Pr, revision.HeadSha).ToString().ToLowerInvariant()" @onclick="() => Toggle(group.Pr, revision.HeadSha)">
+                        <button type="button" data-worklist-row class="worklist-revision-toggle" aria-expanded="@Expanded(group.Pr, revision.HeadSha).ToString().ToLowerInvariant()" @onclick="() => Toggle(group.Pr, revision.HeadSha)">
                             <span aria-hidden="true">@(Expanded(group.Pr, revision.HeadSha) ? "▾" : "▸")</span>
                             <code title="@revision.HeadSha">@(revision.HeadSha is { } head ? head[..Math.Min(8, head.Length)] : "Unknown revision")</code>
                             @if (revision.IsCurrentHead) { <span class="state">Current head</span> }
@@ -33,7 +33,7 @@
                                 @foreach (var item in revision.Runs)
                                 {
                                     <li class="worklist-run" @key="item.Run.RunId">
-                                        <a class="worklist-run-link" href="@($"/dashboard/runs/{item.Run.RunId}")">
+                                        <a data-worklist-row class="worklist-run-link" href="@(Reviewable(item) ? $"/dashboard/runs/{item.Run.RunId}" : $"/dashboard/runs/{item.Run.RunId}?section=execution")">
                                             <span class="state state-@item.Run.State">@Outcome(item.Run)</span>
                                             <span>@KindLabel(item.Run.Kind)</span>
                                             @if (item.Run.State is RunState.Queued or RunState.Running)
@@ -45,11 +45,24 @@
                                                 <span>@counts.Accepted accepted · @counts.NewlyPosted posted</span>
                                             }
                                             else { <span class="worklist-muted">Findings unavailable</span> }
-                                            @if (item.PendingDecisions is > 0) { <span>@item.PendingDecisions pending</span> }
-                                            @if (item.ApprovedUnpublished is > 0) { <span>@item.ApprovedUnpublished approved · posting unconfirmed</span> }
+                                            @if (item.PendingDecisions is > 0) { <span>@item.PendingDecisions pending decisions</span> }
+                                            @if (item.ApprovedUnpublished is > 0) { <span>@item.ApprovedUnpublished approved unpublished</span> }
                                             <span class="worklist-muted" title="@Time(item.ObservedAt)">@Relative(item.ObservedAt, Now)</span>
+                                            @if (item.Run.State == RunState.Failed) { <span>Execution failed</span> }
+                                            @if (item.Run.IsIncomplete) { <span>Execution incomplete</span> }
+                                            @if (item.Run.IsClaimed || item.Run.IsPending) { <span>Active or awaiting worker</span> }
+                                            @if (item.Run.Kind == RunKind.ReviewDraft && item.Run.State == RunState.Completed)
+                                            {
+                                                @if (item.PendingDecisions is null) { <span>Decisions unavailable</span> }
+                                                <span class="worklist-muted">Eligibility unavailable · Reconciliation status unavailable</span>
+                                            }
+                                            <span class="worklist-next">@(Reviewable(item) ? "Continue review" : "Open execution")</span>
                                             <span class="sr-only">Open run @item.Run.RunId</span>
                                         </a>
+                                        @if (Reviewable(item) && item.ApprovedUnpublished is > 0)
+                                        {
+                                            <a data-worklist-row class="worklist-publication-link" href="@($"/dashboard/runs/{item.Run.RunId}#publication-action")">Check publication / reconciliation</a>
+                                        }
                                     </li>
                                 }
                             </ul>
@@ -66,8 +79,10 @@
     [Parameter] public bool AttentionOnly { get; set; } = true;
     [Parameter] public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
     private IReadOnlyList<RunWorklistPrGroup> _Groups = [];
-    private readonly Dictionary<PrKey, bool> _PrExpanded = [];
-    private readonly Dictionary<(PrKey Pr, string Head), bool> _RevisionExpanded = [];
+    [Parameter] public DashboardWorklistState State { get; set; } = new();
+    private Dictionary<PrKey, bool> _PrExpanded => State.PrExpanded;
+    private Dictionary<(PrKey Pr, string Head), bool> _RevisionExpanded => State.RevisionExpanded;
+    private static bool Reviewable(RunWorklistItem item) => item.Run.Kind == RunKind.ReviewDraft && item.Run.State == RunState.Completed;
 
     protected override void OnParametersSet()
     {

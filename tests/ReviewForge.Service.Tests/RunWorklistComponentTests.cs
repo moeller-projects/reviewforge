@@ -111,6 +111,40 @@ public sealed class RunWorklistComponentTests
         Assert.Contains("No runs need attention", component.Markup);
     }
 
+    [Fact]
+    public async Task Attention_reasons_separate_approval_from_eligibility_and_offer_read_only_targets()
+    {
+        await using var context = new BunitContext();
+        var draft = Item("new", Now, pending: 2) with { ApprovedUnpublished = 3 };
+        var failed = Item("new", Now.AddMinutes(-1)) with { Run = draft.Run with { RunId = Guid.NewGuid(), State = RunState.Failed } };
+        var component = context.Render<RunWorklist>(p => p.Add(x => x.Items, [draft, failed]));
+        Assert.Contains("2 pending decisions", component.Markup);
+        Assert.Contains("3 approved unpublished", component.Markup);
+        Assert.Contains("Eligibility unavailable", component.Markup);
+        Assert.Contains("Reconciliation status unavailable", component.Markup);
+        Assert.Contains("Execution failed", component.Markup);
+        Assert.Contains(component.FindAll("a"), a => a.TextContent.Contains("Continue review") && a.GetAttribute("href") == $"/dashboard/runs/{draft.Run.RunId}");
+        Assert.Contains(component.FindAll("a"), a => a.TextContent.Contains("Open execution") && a.GetAttribute("href") == $"/dashboard/runs/{failed.Run.RunId}?section=execution");
+        Assert.DoesNotContain("ready to post", component.Markup);
+    }
+
+    [Fact]
+    public async Task Unknown_draft_counts_and_incomplete_execution_remain_explicit_without_false_zeroes()
+    {
+        await using var context = new BunitContext();
+        var draft = Item("new", Now) with { PendingDecisions = null, ApprovedUnpublished = null };
+        var incomplete = draft with { Run = draft.Run with { RunId = Guid.NewGuid(), State = null, IsClaimed = true, IsIncomplete = true } };
+        var component = context.Render<RunWorklist>(p => p.Add(x => x.Items, [draft, incomplete]).Add(x => x.AttentionOnly, false));
+        Assert.Contains("Decisions unavailable", component.Markup);
+        Assert.Contains("Reconciliation status unavailable", component.Markup);
+        Assert.Contains("Execution incomplete", component.Markup);
+        Assert.Contains("Active or awaiting worker", component.Markup);
+        Assert.DoesNotContain("0 pending", component.Markup);
+        Assert.DoesNotContain("0 approved", component.Markup);
+        Assert.DoesNotContain("ready", component.Markup);
+        Assert.Empty(component.FindAll(".worklist-publication-link"));
+    }
+
     private static RunWorklistItem Item(string? head, DateTimeOffset started, int pending = 0) => new(Key,
         new DashboardRun(Guid.NewGuid(), head, RunKind.ReviewDraft, RunState.Completed,
             StartedAt: started, CompletedAt: started.AddMinutes(1)),

@@ -9,6 +9,7 @@ namespace ReviewForge.Service.Components.Pages;
 public partial class RunDetail
 {
     [Parameter] public Guid RunId { get; set; }
+    [SupplyParameterFromQuery(Name = "section")] public string? InitialSection { get; set; }
     private RunDetailsResponse? _Details;
     private DashboardRefreshLoop? _Refresh;
     private CancellationTokenSource? _Route;
@@ -57,7 +58,7 @@ public partial class RunDetail
         _Batch = null;
         _History = null;
         _HistoryId = _Message = null;
-        _Section = "Findings";
+        _Section = string.Equals(InitialSection, "execution", StringComparison.OrdinalIgnoreCase) ? "Execution" : "Findings";
         _Workspace = new();
         _Loading = true;
         _Saving = _Posting = _HistoryLoading = _Reconciling = _Stale = _AuthenticationExpired = false;

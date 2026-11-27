@@ -76,6 +76,9 @@ button[aria-pressed="true"] { background: var(--rf-selected); color: var(--rf-ac
 .worklist-runs { list-style: none; padding: 0 0 4px 20px; margin: 0; }
 .worklist-run-link { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-height: 44px; padding: 8px; color: var(--rf-ink); text-decoration: none; }
 .worklist-run-link:hover { background: var(--rf-raised); }
+.worklist-next { font-weight: 600; color: var(--rf-accent); }
+.worklist-publication-link { display: inline-flex; align-items: center; min-height: 44px; padding: 4px 8px; overflow-wrap: anywhere; }
+.worklist-run + .worklist-run { border-top: 1px solid var(--rf-line); }
 .worklist-empty { padding: 16px; color: var(--rf-muted); }
 .worklist-status { justify-content: space-between; }
 .worklist-metadata { max-width: 100ch; }

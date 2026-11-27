@@ -144,6 +144,14 @@ The run-local findings queue stays mounted while Execution or Context is visible
 
 Post eligible approved findings prepares a frozen confirmation from the explicitly selected identities. It shows readable titles/locations, reviewed head, exact approval versions and per-finding exclusions. Approval is still not publication. Publication and session expiry do not discard general selection or drafts. Unknown outcomes stay blocked and require the explicit reconciliation action; refresh and reconnect never replay a POST. Native publication-dialog focus returns to the stable `publication-action` wrapper. Automated component/module tests cover these contracts; real-browser focus, scroll, navigation warnings and reconnect behavior remain a release gate.
 
+## Attention worklist and resume (reference)
+
+The loaded worklist retains full PR scope → observed revision → run grouping. Pending decisions and approved unpublished summaries are separate from publication eligibility. History does not carry authoritative eligibility or reconciliation outcomes: rows label these unavailable and offer Check publication / reconciliation in the existing run, never a ready-to-post count. Successful drafts offer Continue review; failed, active and other read-only runs offer Open execution. Opening any target is navigation only.
+
+Search, manual expansions, bounded loaded pages, retained snapshots and window scroll live in a circuit-scoped presentation state. Returning reuses that window and refreshes its loaded pages; a new circuit starts fresh. Nothing is persisted in browser storage. Stale/partial source metadata and retained-history warnings remain visible. Ctrl/Cmd+K and the discoverable help entry reuse the route-owned command module. Up/Down and Home/End move through visible native controls; Left/Right expand/collapse groups, with native Enter/Space activation and Tab alternatives. Draft PR search and explicitly confirmed advanced automatic publication retain their existing paths.
+
+Component and isolated JS tests verify navigation, circuit return, command guards and scroll wiring. No browser or app startup was authorized for T08; real focus return, browser history/scroll timing, theme contrast and desktop/tablet/phone reflow remain release-verification gaps. No visual approval is claimed.
+
 ## Do's and Don'ts
 
 - Do keep focus, selection, validation, human decisions and publication distinguishable.

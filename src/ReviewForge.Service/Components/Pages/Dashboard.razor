@@ -4,9 +4,12 @@
 @using static ReviewForge.Service.Components.Dashboard.DashboardPresentation
 @inject DashboardBrowserClient Browser
 @inject TimeProvider Clock
+@inject DashboardWorklistState Context
+@inject Microsoft.JSInterop.IJSRuntime JS
+@using Microsoft.JSInterop
 @implements IAsyncDisposable
 <PageTitle>ReviewForge dashboard</PageTitle>
-<main class="dashboard technician-dashboard" aria-busy="@_Loading.ToString().ToLowerInvariant()">
+<main class="dashboard technician-dashboard" tabindex="-1" @ref="_Root" aria-busy="@_Loading.ToString().ToLowerInvariant()">
     <span class="sr-only" role="status" aria-live="polite">@_Announcement</span>
     <header class="dashboard-header">
         <div><h1>Runs needing attention</h1></div>
@@ -16,8 +19,20 @@
             <form method="post" action="/dashboard/logout"><AntiforgeryToken /><button type="submit">Log out</button></form>
         </div>
     </header>
+    <span id="dashboard-command-entry" tabindex="-1"><button type="button" @onclick="() => _CommandsOpen = true">Commands &amp; keyboard help <kbd>Ctrl/⌘ K</kbd></button></span>
+    @if (_CommandsOpen)
+    {
+        <WorkbenchDialog Label="Worklist commands and keyboard help" ReturnFocusId="dashboard-command-entry">
+            <h2>Worklist commands</h2>
+            <p>Up/Down moves between visible rows. Home/End moves to the first/last row. Left/Right collapses or expands groups. Enter opens a run; Enter or Space toggles a group. Tab reaches every action.</p>
+            <p>Search covers loaded history only. Navigation never starts a review or posts comments.</p>
+            <button type="button" @onclick='() => ExecuteCommand("search")'>Search loaded history /</button>
+            <a href="/dashboard/start">Start read-only draft review</a>
+            <button type="button" data-dialog-cancel autofocus @onclick="() => _CommandsOpen = false">Close commands</button>
+        </WorkbenchDialog>
+    }
     <section class="worklist-toolbar" aria-label="Filter runs">
-        <label>Search<input type="search" value="@_Search" @oninput="SearchChanged" placeholder="Title, PR ID, repository or project" aria-label="Search runs" /></label>
+        <label>Search<input data-queue-search type="search" value="@_Search" @oninput="SearchChanged" placeholder="Title, PR ID, repository or project" aria-label="Search runs" /></label>
         <div class="worklist-view" aria-label="Run view">
             <button type="button" aria-pressed="@_AttentionOnly.ToString().ToLowerInvariant()" aria-label="Show runs needing attention" @onclick="() => SetViewAsync(true)">Needs attention</button>
             <button type="button" aria-pressed="@((!_AttentionOnly).ToString().ToLowerInvariant())" aria-label="Show all recent runs" @onclick="() => SetViewAsync(false)">All recent</button>
@@ -33,14 +48,16 @@
     @if (_Data is { } data)
     {
         <div class="worklist-status">
-            <span>@_Items.Count loaded runs · @_Items.Count(i => i.NeedsAttention) need attention</span>
+            <span>@_Items.Count loaded runs · @_Items.Count(i => i.NeedsAttention) known attention items</span>
             <span>Updated @Time(_LastSuccess)</span>
+            @if (data.InventoryStale) { <span class="worklist-muted">Stale source metadata</span> }
+            @if (!data.InventoryComplete) { <span class="worklist-muted">Partial PR inventory</span> }
         </div>
         @if (_RetainedHistory)
         {
             <p class="notice retained-history-warning" role="status">Some loaded runs were outside the refreshed window; their last observed snapshot is retained and may be stale.</p>
         }
-        <RunWorklist Items="Filtered" AttentionOnly="_AttentionOnly" Now="data.GeneratedAt" />
+        <RunWorklist Items="Filtered" AttentionOnly="_AttentionOnly" Now="data.GeneratedAt" State="Context" />
         @if (Filtered.Count == 0 && _Items.Count > 0 && !string.IsNullOrWhiteSpace(_Search))
         {
             <p role="status">No matching runs in loaded history. Try another search or load more.</p>
@@ -50,13 +67,13 @@
             {
                 <button type="button" aria-label="Load more runs" @onclick="LoadMoreAsync" disabled="@(_Loading || _AuthExpired)">Load more runs</button>
             }
-            <span>Search applies to loaded history. Changing view starts a new bounded window. Up to @MaxItems runs per view.</span>
+            <span>Search applies to loaded history, not the server archive. Changing view starts a new bounded window. Up to @MaxItems runs per view. Your search, expansion, loaded window and scroll are kept in this circuit; a new session may reload.</span>
         </div>
         <details class="worklist-metadata">
             <summary>Snapshot and source information@((data.InventoryStale || !data.InventoryComplete || data.SourceWarnings.Count > 0) ? " · warnings" : "")</summary>
             <p>Revisions are ordered by newest observed run, not provider revision numbers. Older revisions stay collapsed unless they need attention.</p>
-            <p>History is a bounded snapshot, not a full archive. Refresh re-reads loaded pages; previously loaded rows displaced by newer runs are retained until this page is reopened. Counts above describe loaded runs only. Closed or unavailable PRs remain accessible by identity.</p>
-            @if (_Items.Count >= MaxItems || _PageCount >= MaxPages) { <p>History limit reached. Reopen this page for the newest window; use run links for older details.</p> }
+            <p>History is a bounded snapshot, not a full archive. Refresh re-reads loaded pages; previously loaded rows displaced by newer runs are retained within this circuit. Counts above describe loaded runs only. Closed or unavailable PRs remain accessible by identity.</p>
+            @if (_Items.Count >= MaxItems || _PageCount >= MaxPages) { <p>History limit reached. This circuit retains its loaded window; a new session may reload the newest window. Use run links for older details.</p> }
             <p>Source inventory @Time(data.InventoryFetchedAt). Unknown finding and decision counts are not treated as zero. Legacy and gate-skipped history may be unavailable after restart.</p>
             @if (data.InventoryStale) { <p>Source inventory is stale; current-head metadata may be outdated.</p> }
             @if (!data.InventoryComplete) { <p>Partial inventory — metadata is missing for some PRs; run history is independent of open-PR inventory.</p> }
@@ -68,15 +85,38 @@
 
 @code {
     private const int PageSize = 50, MaxPages = 10, MaxItems = PageSize * MaxPages;
-    private RunWorklistResponse? _Data;
-    private IReadOnlyList<RunWorklistItem> _Items = [];
+    private RunWorklistResponse? _Data { get => Context.Data; set => Context.Data = value; }
+    private IReadOnlyList<RunWorklistItem> _Items { get => Context.Items; set => Context.Items = value; }
+    private bool _AttentionOnly { get => Context.AttentionOnly; set => Context.AttentionOnly = value; }
+    private bool _HasMore { get => Context.HasMore; set => Context.HasMore = value; }
+    private bool _RetainedHistory { get => Context.RetainedHistory; set => Context.RetainedHistory = value; }
+    private int _PageCount { get => Context.PageCount; set => Context.PageCount = value; }
+    private string _Search { get => Context.Search; set => Context.Search = value; }
+    private DateTimeOffset _LastSuccess { get => Context.LastSuccess; set => Context.LastSuccess = value; }
+    private Microsoft.AspNetCore.Components.ElementReference _Root;
+    private IJSObjectReference? _Commands;
+    private DotNetObjectReference<Dashboard>? _Callback;
+    private bool _CommandsOpen, _FocusSearch;
     private DashboardRefreshLoop? _Refresh;
-    private bool _Loading = true, _Disposed, _AuthExpired, _AttentionOnly = true, _HasMore, _RetainedHistory;
-    private int _PageCount = 1, _RequestedPages = 1, _ViewGeneration;
-    private bool _ReplaceHistoryOnLoad;
-    private string _Search = "", _Announcement = "";
+    private bool _Loading = true, _Disposed, _AuthExpired;
+    private int _RequestedPages = 1, _ViewGeneration;
+    private bool _ReplaceHistoryOnLoad { get => Context.ReplaceHistoryOnLoad; set => Context.ReplaceHistoryOnLoad = value; }
+    private string _Announcement = "";
     private string? _Error;
-    private DateTimeOffset _LastSuccess;
+    protected override void OnInitialized() => _RequestedPages = _PageCount;
+    [JSInvokable] public void RememberScroll(double y) { if (!_Disposed) Context.ScrollY = Math.Max(0, y); }
+    [JSInvokable] public Task ExecuteCommand(string command, bool range = false)
+    {
+        if (_Disposed) return Task.CompletedTask;
+        if (command == "commands") _CommandsOpen = true;
+        else if (command == "search")
+        {
+            _CommandsOpen = false;
+            _FocusSearch = true;
+        }
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
     private IReadOnlyList<RunWorklistItem> Filtered => string.IsNullOrWhiteSpace(_Search) ? _Items : _Items.Where(i =>
         Contains(i.Title) || Contains(i.Pr.PrId.ToString(System.Globalization.CultureInfo.InvariantCulture)) ||
         Contains(i.RepositoryName) || Contains(i.Pr.RepositoryId) || Contains(i.Pr.Project) || Contains(i.Pr.Org)).ToArray();
@@ -102,14 +142,26 @@
     }
 
     // No prerender HTTP: only the interactive authenticated browser may make requests.
-    protected override Task OnAfterRenderAsync(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && !_Disposed)
+        try
         {
-            _Refresh = new(Clock, IsActive, ct => InvokeAsync(() => LoadAsync(ct)));
-            _Refresh.Start();
+            if (firstRender && !_Disposed)
+            {
+                _Commands = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-commands.js");
+                if (_Disposed) { await _Commands.DisposeAsync(); return; }
+                _Callback = DotNetObjectReference.Create(this);
+                await _Commands.InvokeVoidAsync("attachWorklist", _Root, _Callback, Context.ScrollY);
+                _Refresh = new(Clock, IsActive, ct => InvokeAsync(() => LoadAsync(ct)));
+                _Refresh.Start();
+            }
+            if (_FocusSearch && !_Disposed && _Commands is not null)
+            {
+                _FocusSearch = false;
+                await _Commands.InvokeVoidAsync("focusSearch", _Root);
+            }
         }
-        return Task.CompletedTask;
+        catch (JSDisconnectedException) { /* Circuit ended; no commands or requests are replayed. */ }
     }
 
     private async Task LoadAsync(CancellationToken ct)
@@ -178,5 +230,11 @@
     {
         _Disposed = true;
         if (_Refresh is not null) await _Refresh.DisposeAsync();
+        try
+        {
+            if (_Commands is not null) { await _Commands.InvokeVoidAsync("detach", _Root); await _Commands.DisposeAsync(); }
+        }
+        catch (JSDisconnectedException) { /* Circuit ended; no state is persisted in the browser. */ }
+        _Callback?.Dispose();
     }
 }
