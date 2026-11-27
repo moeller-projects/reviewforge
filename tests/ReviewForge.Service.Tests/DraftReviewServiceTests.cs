@@ -463,7 +463,8 @@ public sealed class DraftReviewServiceTests
         var request = new PublishSelectedDraftRequest("head-sha", [new("one", 1)]);
         _Store.ThrowOnPublicationIntent = new InvalidOperationException("private store failure");
         var failed = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
-        Assert.Equal("publication-unavailable", failed.ErrorCode);
+        Assert.Equal("publication-unknown", failed.ErrorCode);
+        Assert.Equal(PublishFindingStatus.Unknown, Assert.Single(failed.Findings).Status);
         Assert.Empty(_Source.PostedFindings);
         Assert.False(_Store.Runs.Single().Findings[0].PublicationAttempted);
         _Store.ThrowOnPublicationIntent = null;
@@ -486,7 +487,8 @@ public sealed class DraftReviewServiceTests
             _Source.ThrowOnGetPullRequest = new InvalidOperationException("prewrite failure");
         };
         var failed = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
-        Assert.Equal("publication-unavailable", failed.ErrorCode);
+        Assert.Equal("publication-unknown", failed.ErrorCode);
+        Assert.Equal(PublishFindingStatus.Unknown, Assert.Single(failed.Findings).Status);
         Assert.True(_Store.Runs.Single().Findings[0].PublicationAttempted);
         Assert.Empty(_Source.PostedFindings);
         _Store.ThrowOnPublicationIntent = null;
@@ -495,6 +497,49 @@ public sealed class DraftReviewServiceTests
         var retry = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
         Assert.Equal(1, retry.UnknownCount);
         Assert.Empty(_Source.PostedFindings);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Later_cleanup_failure_preserves_confirmed_publication_and_unattempted_peers(bool captured)
+    {
+        var findings = new[] { Finding("one"), Finding("two"), Finding("three") };
+        var run = Draft(findings) with { FindingObservations = captured
+            ? findings.Select(f => FindingObservation.Create(f) with { Validation = FindingValidationStatus.Accepted }).ToArray() : null };
+        _Store.Runs.Add(run);
+        var ids = captured ? run.FindingObservations!.Select(o => o.Id.ToString("N")).ToArray() : ["one", "two", "three"];
+        foreach (var id in ids) await Approve(run, id);
+        var request = new PublishSelectedDraftRequest("head-sha", ids.Select(id => new PublishFindingSelection(id, 1)).ToArray());
+        var fetches = 0;
+        _Source.BeforeGetPullRequest = () =>
+        {
+            if (++fetches != 5) return; // Second finding's pin check, after its durable intent.
+            Assert.True(_Store.Runs.Single().Findings[0].Published);
+            Assert.True(_Store.Runs.Single().Findings[1].PublicationAttempted);
+            _Store.ThrowOnPublicationIntent = new InvalidOperationException("cleanup unavailable");
+            _Source.ThrowOnGetPullRequest = new InvalidOperationException("prewrite failure");
+        };
+        var result = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.False(result.Accepted);
+        Assert.Equal("publication-unknown", result.ErrorCode);
+        Assert.Equal(new[] { PublishFindingStatus.Posted, PublishFindingStatus.Unknown, PublishFindingStatus.NotAttempted }, result.Findings.Select(f => f.Status));
+        Assert.Equal(1, result.PostedCount);
+        Assert.Equal(1, result.UnknownCount);
+        Assert.Equal(1, result.NotAttemptedCount);
+        Assert.Equal(_Source.PostedFindings[0].ThreadId, result.Findings[0].ThreadId);
+        Assert.Single(_Source.PostedFindings);
+        var saved = _Store.Runs.Single();
+        Assert.True(saved.Findings[0].Published);
+        Assert.True(saved.Findings[1].PublicationAttempted);
+        Assert.False(saved.Findings[2].PublicationAttempted);
+        if (!captured) Assert.Null(saved.FindingObservations);
+        _Store.ThrowOnPublicationIntent = null;
+        _Source.BeforeGetPullRequest = null;
+        _Source.ThrowOnGetPullRequest = null;
+        var retry = await _Service.PublishSelectedAsync(run.Id, request, CancellationToken.None);
+        Assert.Equal(new[] { PublishFindingStatus.AlreadyPosted, PublishFindingStatus.Unknown, PublishFindingStatus.Posted }, retry.Findings.Select(f => f.Status));
+        Assert.Equal(new[] { "one", "three" }, _Source.PostedFindings.Select(p => p.Finding.DedupeKey));
     }
 
     [Fact]

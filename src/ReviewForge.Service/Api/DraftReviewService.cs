@@ -238,17 +238,38 @@ public sealed class DraftReviewService(
         IReadOnlyList<(string Id, StoredFinding Row)> selected, Guid claimId, bool throwOnFailure, CancellationToken ct)
     {
         var outcomes = selected.Select(s => new PublishFindingOutcome(s.Id, PublishFindingStatus.NotAttempted)).ToArray();
-        PublishSelectedDraftResult Result(string? code = null) => new(code is null, code, outcomes);
         var index = 0;
         var externalStarted = false;
         string? intentKey = null;
         int? observedThreadId = null;
+
+        async Task ClearPrewriteIntentAsync()
+        {
+            if (intentKey is null || externalStarted) return;
+            var key = intentKey;
+            intentKey = null; // Never retry audit cleanup implicitly if it fails.
+            await SetPublicationIntentAsync(run.Id, key, attempted: false).ConfigureAwait(false);
+        }
+
+        async Task<PublishSelectedDraftResult> ResultAsync(string? code = null)
+        {
+            try { await ClearPrewriteIntentAsync().ConfigureAwait(false); }
+            catch (Exception) when (!throwOnFailure)
+            {
+                // The durable intent is now uncertain, not permission to repost. Keep
+                // all earlier confirmations and leave later selections unattempted.
+                outcomes[index] = new(selected[index].Id, PublishFindingStatus.Unknown);
+                code = "publication-unknown";
+            }
+            return new(code is null, code, outcomes);
+        }
+
         try
         {
-            if (!claims.Renew(run.Pr, claimId)) return Result("busy");
+            if (!claims.Renew(run.Pr, claimId)) return await ResultAsync("busy").ConfigureAwait(false);
             var initialPr = await source.GetPullRequestAsync(run.Pr, ct).ConfigureAwait(false);
             if (!string.Equals(initialPr.SourceCommitSha, run.HeadSha, StringComparison.OrdinalIgnoreCase))
-                return Result("head-changed");
+                return await ResultAsync("head-changed").ConfigureAwait(false);
             var currentThreads = await source.GetThreadsAsync(run.Pr, ct).ConfigureAwait(false);
             var completedKeys = new Dictionary<string, int?>(StringComparer.Ordinal);
             for (; index < selected.Count; index++)
@@ -256,7 +277,7 @@ public sealed class DraftReviewService(
                 externalStarted = false;
                 intentKey = null;
                 observedThreadId = null;
-                if (!claims.Renew(run.Pr, claimId)) return Result("busy");
+                if (!claims.Renew(run.Pr, claimId)) return await ResultAsync("busy").ConfigureAwait(false);
                 var row = selected[index].Row;
                 if (row.Published || completedKeys.ContainsKey(row.DedupeKey))
                 {
@@ -281,19 +302,20 @@ public sealed class DraftReviewService(
                     continue;
                 }
                 ct.ThrowIfCancellationRequested();
-                if (!claims.Renew(run.Pr, claimId)) return Result("busy");
+                if (!claims.Renew(run.Pr, claimId)) return await ResultAsync("busy").ConfigureAwait(false);
                 var currentPr = await source.GetPullRequestAsync(run.Pr, ct).ConfigureAwait(false);
                 if (!string.Equals(currentPr.SourceCommitSha, run.HeadSha, StringComparison.OrdinalIgnoreCase))
-                    return Result("head-changed");
-                if (!claims.Renew(run.Pr, claimId)) return Result("busy");
+                    return await ResultAsync("head-changed").ConfigureAwait(false);
+                if (!claims.Renew(run.Pr, claimId)) return await ResultAsync("busy").ConfigureAwait(false);
                 var finding = JsonSerializer.Deserialize<RichFinding>(row.FindingJson!, JsonOptions)
                     ?? throw new InvalidOperationException("invalid stored finding");
                 intentKey = row.DedupeKey;
                 await SetPublicationIntentAsync(run.Id, intentKey, attempted: true).ConfigureAwait(false);
-                if (!claims.Renew(run.Pr, claimId)) return Result("busy");
+                if (!claims.Renew(run.Pr, claimId)) return await ResultAsync("busy").ConfigureAwait(false);
                 var pinned = await source.GetPullRequestAsync(run.Pr, ct).ConfigureAwait(false);
-                if (!string.Equals(pinned.SourceCommitSha, run.HeadSha, StringComparison.OrdinalIgnoreCase)) return Result("head-changed");
-                if (!claims.Renew(run.Pr, claimId)) return Result("busy");
+                if (!string.Equals(pinned.SourceCommitSha, run.HeadSha, StringComparison.OrdinalIgnoreCase))
+                    return await ResultAsync("head-changed").ConfigureAwait(false);
+                if (!claims.Renew(run.Pr, claimId)) return await ResultAsync("busy").ConfigureAwait(false);
                 // From the moment the host call begins, any exception is ambiguous: reconcile on retry.
                 externalStarted = true;
                 var threadId = finding.Anchor is not null && !finding.AnchorDowngraded
@@ -304,22 +326,20 @@ public sealed class DraftReviewService(
                 outcomes[index] = new(selected[index].Id, PublishFindingStatus.Posted, threadId);
                 completedKeys[row.DedupeKey] = threadId;
             }
-            return Result(outcomes.Any(o => o.Status == PublishFindingStatus.Unknown) ? "publication-unknown" : null);
+            return await ResultAsync(outcomes.Any(o => o.Status == PublishFindingStatus.Unknown) ? "publication-unknown" : null).ConfigureAwait(false);
         }
         catch (Exception)
         {
             if (throwOnFailure) throw;
             if (index < outcomes.Length)
                 outcomes[index] = new(selected[index].Id, externalStarted ? PublishFindingStatus.Unknown : PublishFindingStatus.Failed, observedThreadId);
-            return Result(externalStarted ? "publication-unknown" : "publication-failed");
+            return await ResultAsync(externalStarted ? "publication-unknown" : "publication-failed").ConfigureAwait(false);
         }
         finally
         {
-            // A failed pin check, lost claim or disconnect before the host call is not
-            // ambiguous. Use independent bounded audit IO, even if the browser cancelled.
-            // A cleanup failure propagates as unavailable; the durable intent remains safe.
-            if (intentKey is not null && !externalStarted)
-                await SetPublicationIntentAsync(run.Id, intentKey, attempted: false).ConfigureAwait(false);
+            // Also clean up before rethrowing on the legacy publication boundary.
+            // Structured results have already finalized cleanup inside ResultAsync.
+            await ClearPrewriteIntentAsync().ConfigureAwait(false);
         }
     }
 
