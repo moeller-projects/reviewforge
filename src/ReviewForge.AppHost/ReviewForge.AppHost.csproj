@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/17.0.0">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -11,10 +11,12 @@
 
     <ItemGroup>
         <!-- Keeps the service in the AppHost build dependency graph. -->
-        <ProjectReference Include="../ReviewForge.Service/ReviewForge.Service.csproj" />
+        <ProjectReference Include="../ReviewForge.Service/ReviewForge.Service.csproj"
+                          ReferenceOutputAssembly="false" ExcludeAssets="all" />
     </ItemGroup>
 
     <ItemGroup>
+      <PackageReference Include="Aspire.Hosting.AppHost" />
       <PackageReference Include="Aspire.Hosting.Dotnet" />
     </ItemGroup>
 
