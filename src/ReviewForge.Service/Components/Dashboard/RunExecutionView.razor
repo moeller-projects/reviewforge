@@ -1,0 +1,34 @@
+@using ReviewForge.Core.Domain
+@using System.Globalization
+@using static DashboardPresentation
+
+<section aria-label="Run execution diagnostics">
+    <p>Queued: @Time(Status.EnqueuedAt) · Started: @Time(Status.StartedAt) · Completed: @Time(Status.CompletedAt)</p>
+    @if (Diagnostics is { } diagnostics)
+    {
+        <p>Run correlation: <code>@diagnostics.RunId</code> · Trace: <code>@(diagnostics.TraceId ?? "unavailable")</code></p>
+        <ol class="stage-list">
+            @foreach (var stage in diagnostics.Stages)
+            {
+                <li class="stage-diagnostic">
+                    <span>@StageLabels.Label(stage.Stage)</span> · <strong>@stage.Outcome</strong>
+                    <span>@(stage.DurationMilliseconds is { } ms ? ms.ToString("0.##", CultureInfo.InvariantCulture) + " ms" : "duration unavailable")</span>
+                    <small>@Time(stage.StartedAt) → @Time(stage.CompletedAt)</small>
+                    @if (stage.FailureCode is { } failureCode) { <code>@failureCode</code> }
+                </li>
+            }
+        </ol>
+        <details><summary>Planned stages (not execution evidence)</summary><ol>@foreach (var stage in diagnostics.PlannedStages) { <li>@StageLabels.Label(stage)</li> }</ol></details>
+    }
+    else
+    {
+        <p>Durable execution history unavailable for this run. Current live stage: @(Status.CurrentStage ?? "unavailable").</p>
+        <details><summary>Planned stages (not execution evidence)</summary><ol>@foreach (var stage in Status.LoadedStages) { <li>@StageLabels.Label(stage)</li> }</ol></details>
+    }
+    <p class="worklist-muted">Durations are observed stage times, not progress estimates. Use the run/trace correlation when inspecting service logs.</p>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public RunStatus Status { get; set; } = default!;
+    [Parameter] public RunDiagnostics? Diagnostics { get; set; }
+}
