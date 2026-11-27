@@ -198,7 +198,8 @@ documents the browser cookie/antiforgery boundary.
 4. Save **Approve**, **Reject**, or **Defer**. Reject requires a reason. Approval does not post;
    rejection is internal and never closes a thread or posts a rebuttal. Decisions are scoped to
    this run's reviewed revision and do not silently suppress findings on later revisions.
-5. Select approved, technically eligible, unpublished findings and confirm **Post selected findings**.
+5. Select findings and prepare **Post eligible approved findings**. Review the frozen preview's
+   titles/locations, reviewed head, approval versions and per-finding exclusions before confirming.
    The server checks approval versions, the PR claim, and the current head again. If the head changed,
    start a new draft. Empty selection is never interpreted as publish all in the technician API.
 
@@ -220,6 +221,28 @@ review the current version before submitting again. Approval and dragging never 
 and moving a posted finding never retracts its thread. Ordinary and resolve runs remain read-only.
 Real-browser drag, focus, touch, reflow and assistive-technology validation remain release gates.
 
+### Keyboard, preferences, and focus
+
+In the findings queue or board, focus a row/card: Up/Down moves focus, Enter opens evidence,
+Space toggles selection, and Shift+Up/Down extends a range. Escape returns from evidence
+before clearing selection; it does not discard reason drafts. `/` focuses loaded-finding search.
+Use **Commands & keyboard help** or Ctrl/Cmd+K for the scoped command dialog and ordinary
+button alternatives. Commands do not capture typing, IME composition, inputs, textareas,
+selects, contenteditable, unrelated native controls, or an open dialog.
+
+Single-letter shortcuts are **off by default**. Enable them in the command dialog for J/K
+navigation, A approve, R reject, D defer, and ? help. **Advance to next pending after a
+confirmed individual save** is on by default; turn it off to stay. Advancement waits for a
+confirmed save and successful authoritative refresh, follows the current filtered order,
+and announces completion without changing filters. Bulk saves never advance through items.
+
+Color theme defaults to System, with immediate Light/Dark overrides. Browser storage contains
+only theme, shortcut/advance preferences and queue width (25–65%), not findings, selections,
+reasons, profiling payloads or credentials. Run-local drafts, focus, selection and scroll stay
+in circuit memory across reads and run-section/view changes, not durable cross-device storage.
+On phones, inspect a finding then use **Return to findings**; Board also offers a column picker
+and **Move to** instead of precision dragging. Real-browser focus and touch checks remain open.
+
 ### Selected decisions
 
 Select findings with their checkboxes, a Shift range, or **Select all matching**. Selection
@@ -233,6 +256,14 @@ Each selection contains `findingId`, `expectedVersion`, `state`, and `reason`. I
 unique and belong to the run. Only successful completed draft runs are editable. The API
 also accepts rejection when every rejected item supplies its own nonblank effective reason;
 the dashboard's shared/override rejection composer pins those reasons and versions before submission.
+
+Choose **Reject selected with reasons** to preview the pinned titles/locations and effective
+reason for each finding. A nonblank override wins over the shared reason; clearing the override
+restores the shared reason. Every effective reason must contain 1–2,000 characters after trimming.
+The confirmation freezes identities, expected versions and reasons; later selection changes cannot
+add items to that request. Cancel or leaving the run warns before discarding edited reasons.
+Confirmed saves leave the composer; unresolved items keep their reasons and original versions.
+Review current decisions, explicitly discard the unresolved draft, and compose a new batch to retry.
 
 Read `errorCode` and every entry in `items`, even with HTTP 200: operational failures can
 return a structured partial response. `Saved` confirms a new immutable version; `Conflict`
@@ -270,7 +301,11 @@ this draft approval workflow. Ordinary draft-PR and other safety gates remain in
   unpublished findings. The server filters attention before pagination. A completed review with
   findings is not an execution failure. Deferred decisions remain accessible through history.
 - **Expansion:** attention groups/revisions open initially; older loaded history stays collapsed.
-  Manual expansion choices survive polling and search/view changes.
+  Manual expansion choices survive polling and search/view changes. Search, expansion, the loaded
+  window and scroll are restored when returning within the same circuit; a new circuit may reload
+  the bounded window. Successful drafts offer **Continue review**; other runs open Execution.
+  History does not establish technical publication eligibility or reconciliation outcomes: follow
+  **Check publication / reconciliation** into the run for authoritative details.
 - **Bounds:** load more up to 500 run identities across ten pages per view. Changing attention/all
   view starts a new bounded window. Search applies to loaded rows, not the entire database.
   Within a view, refreshed rows displaced by newer arrivals remain as explicitly labeled snapshots.
@@ -339,15 +374,52 @@ provenance and bounded summaries, uncertainties, and acceptance-criteria evidenc
 missing model provenance stays unavailable. Raw prompts, tool transcripts, configuration objects,
 and exception messages are not diagnostic payloads.
 
-Execution also offers **Load model calls** after termination for new Review, ReviewDraft and Resolve runs, including verifier and fix passes. Model metadata is retained separately for 30 days by default, with a hard 10,000-detail cap per run. Safe aggregate counts and stage summaries survive detail expiry. Prompts, responses, tool content, source, unrestricted errors and estimated costs are excluded. See [model-call profiling](model-profiling.md) for options, storage, coverage and provider omissions. No live per-call stream or tool trace is exposed.
+Execution offers **Load model calls** only after termination for new Review, ReviewDraft and
+Resolve runs, including verifier, author-commanded fix, resolve triage and bounded edit passes
+where those paths run. Running runs keep stage progress, not live call tables. The post-run
+inspector links logical calls, observable application attempts, physical provider calls and tool
+invocations using generated IDs, safe stage/profile/model/tool labels, timestamps, durations,
+outcomes, supported token counts, governor wait and backoff. Copying correlation IDs is explicit.
+Prompts, responses, tool arguments/results, source, paths, unrestricted errors and credentials
+are excluded; this is metadata inspection, not a transcript viewer.
+
+Timeline/table filters and safe-metadata search apply **only to the current page**, at most 50
+mixed records. Paging replaces the page. Parent/child navigation never fetches unseen pages;
+missing links stay unavailable. A pinned inspector can remain outside current filters/page until
+another selection; expiry clears details. Read failures retain the last page with stale feedback.
+Retained whole-run/stage summaries are separate from page filters. Observed durations can overlap
+and must not be summed as wall-clock run time. Usage sums state reporting coverage and belong to
+physical provider calls, not their logical/attempt parents or tools.
+
+SDK-internal retries are unavailable. Missing usage/model data stays unavailable, never zero.
+Current OpenAI/Codex adapters report no monetary cost field; costs remain unavailable. Only explicit
+provider-reported costs may be displayed, separated by currency, never estimated from prices or
+subscriptions. Loaded-page retries/costs do not establish whole-run retry or monetary totals.
+
+Details expire 30 days after terminal completion by default. Startup-validated `ModelProfiling`
+options are `RetentionDays` (30; 1–3650), `DetailLimit` (10000; 1–10000), `CleanupBatchSize`
+(10 profiles; 1–100) and `CleanupIntervalMinutes` (60; 1–1440). Environment overrides use e.g.
+`ModelProfiling__RetentionDays=30`. The hard 10,000-detail ceiling is shared across provider,
+logical, attempt and tool rows. Truncation and incomplete capture are explicit; observed summaries
+continue beyond the detail cap and survive expiry/cleanup with the run's stage diagnostics.
+Legacy runs are not backfilled; legacy activity/stage aggregates may be unavailable. Expired,
+observed-empty, interrupted and provider-incomplete states are not interchangeable. See
+[model-call profiling](model-profiling.md) for the capture matrix, storage and provider limitations.
 
 A crash before the first durable shell can leave no journal. Legacy stage history is unavailable
 rather than reconstructed. Skipped attempts remain tracker-only: skipped ReviewRun rows are never
 persisted and can disappear after tracker eviction/restart without changing successful coverage.
 
 Memory-queue requests are lost on restart. With `Persistence:QueueMode=Sqlite`, durable
-requests can be reclaimed after claim expiry and **re-executed from the beginning**, not
-resumed at their last stage. Persisted run shells are not stage checkpoints; stale shells
+requests can be reclaimed after claim expiry. A finalized profile plus a terminal durable run
+is acknowledged without re-execution, restoring its Completed/Failed status even if details
+expired. Otherwise execution starts from the beginning, not the last stage; an unfinalized
+profile marker denotes incomplete capture, not a checkpoint. Reclaim-preflight read errors
+preserve run/profile history, leave the request unacknowledged and release the PR claim.
+A consumer fault cancels sibling consumers, awaits their shutdown, and propagates the original
+error through the hosted worker (fail-fast), rather than silently reducing worker capacity,
+retrying or overwriting completed history. Service/lease recovery is required before reclamation.
+Persisted run shells are not stage checkpoints; stale shells
 can be reaped as failures. Persisted results and queue rows support status read-through;
 captured journals support investigation. Neither is a checkpoint for resuming execution.
 

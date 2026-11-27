@@ -22,7 +22,9 @@ The dashboard runs in Blazor Interactive Server behind an environment-configured
 
 Existing review and resolve pipelines, private checkout safety, claims, head pins, audit versions and technical publication gates remain authoritative. Only successful completed draft runs permit decisions. Approval does not publish. Unknown outcomes are visible and never automatically retried. Shared-key sessions are not individual-user identity.
 
-The confirmed workbench roadmap adds queue/evidence review, keyboard commands, bulk decisions, alternate Kanban and terminal-run metadata-only profiling. These are delivery goals, not claims that all slices already ship. Detailed profiling must exclude prompts, responses, source and unrestricted errors; costs are provider-reported only.
+The implemented workbench provides default queue/evidence review, scoped keyboard commands, versioned bulk decisions with shared/override rejection reasons, alternate Kanban and terminal-run metadata-only profiling for new review, draft and resolve executions. Publication remains an explicit preview/confirmation, separate from approval. Dashboard search covers loaded history; profiler search/filters cover its current mixed-record page. Detailed profiling excludes prompts, responses, source/tool content and unrestricted errors. Details default to 30-day retention with a shared hard 10,000-record cap; safe run/stage summaries survive expiry. Costs are provider-reported only and unavailable from current adapters; hidden SDK retries are unavailable.
+
+Implementation and automated verification are not release approval. Real-browser accessibility, focus/touch/reflow, both themes, reconnect/expiry, Ubuntu CI, live-provider and deployment checks remain open; the parent owns the independent whole-change review. Synthetic fixture measurements are not production or browser benchmarks.
 
 ## Brand Commitments
 

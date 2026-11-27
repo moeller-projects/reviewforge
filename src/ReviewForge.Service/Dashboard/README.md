@@ -29,8 +29,10 @@ or queue services. It provides:
 
 - `GetDashboardAsync` for PR selection and `GetRunWorklistAsync` for bounded global history.
 - `GetDraftCapabilityAsync` and `SubmitDraftAsync` for the default read-only workflow.
-- `GetRunStatusAsync` / `GetRunDetailsAsync` for run inspection.
-- `SetFindingDecisionAsync` for versioned human decisions and `GetFindingDecisionHistoryAsync`
+- `GetRunStatusAsync` / `GetRunDetailsAsync` for run inspection and `GetModelCallsAsync` for
+  explicit terminal-only mixed profiling pages.
+- `SetFindingDecisionAsync` / `SetBatchFindingDecisionsAsync` for versioned individual/batch
+  human decisions and `GetFindingDecisionHistoryAsync`
   for one finding's bounded history on demand.
 - `PublishSelectedDraftAsync` for explicit, nonempty approved selections and `ReconcileDraftAsync`
   for read-and-audit recovery that never posts to the PR.
@@ -70,6 +72,36 @@ Framework, theme, dialog and adapter assets are public, manifest-listed, and con
 or personalized data. Personalized responses retain no-store and nosniff headers. The
 static-asset development catch-all is disabled to preserve unknown API route semantics.
 
+## Workbench state and commands
+
+Queue is the default; Board reuses the same `FindingWorkspaceState`, inspector and command guards.
+Selection is independent of technical publication eligibility, survives filtering and reports hidden
+items. Select-all-matching covers only loaded findings. Board drag and native Move to affect one
+card; rejection opens the reason composer and never publishes. Only confirmed authoritative saves
+change placement. Decisions remain restricted to successful completed drafts.
+
+The shared rejection composer snapshots selected IDs/versions, previews shared reasons with
+per-item overrides, validates effective reasons and submits one batch under one PR claim. HTTP 200
+can contain partial outcomes: consume `errorCode` and every item. Only confirmed saves leave
+selection; conflicts, unknown and unattempted items remain. No automatic mutation retry/replay.
+Publication is separately prepared from explicit selection with readable exclusions/head/versions,
+then confirmed. Unknown publication needs explicit read-and-audit reconciliation, never reposting.
+
+`dashboard-commands.js` owns route-root keyboard listeners. Findings use Up/Down, Enter, Space,
+Shift+Up/Down, Escape, `/` and Ctrl/Cmd+K; J/K, A/R/D and ? are opt-in. Worklist controls use
+Up/Down, Home/End and Left/Right expansion with native activation. Typing, composition, unrelated
+native controls and open dialogs keep their keys. Command availability is shared with buttons;
+listeners and late callbacks are retired on disposal/hidden-section transitions. The profiler and
+stage inspector have their own record/stage focus scopes, not global finding shortcuts.
+
+Advance after a confirmed individual save and successful refresh defaults on; stay is optional.
+The deterministic filtered pending order is not silently broadened on completion. Bulk actions
+never advance. Theme, queue width and shortcut/advance choices are the only persistent browser
+preferences. Finding payloads, drafts, reasons, selections and profile data stay out of storage.
+Run sections retain mounted findings/execution state in circuit memory; leaving the run retires it.
+Worklist search/expansion/window/scroll survive return within the circuit, not a new circuit.
+Dashboard search covers loaded history; profiler filters/search cover only its current mixed page.
+
 ## Execution inspection
 
 The run's Execution section shows only recorded stage evidence, with timeline and duration-table
@@ -82,6 +114,33 @@ Select a stage button with Up/Down or Home/End, or use the previous/next failed-
 (which wrap chronologically). The inspector exposes safe outcome/failure codes and timestamps.
 Explicit Copy run ID / Copy trace ID buttons announce success or offer manual copy if browser
 clipboard access fails. This surface never includes raw run errors or configuration.
+
+### Post-run profiling
+
+`ModelCallTable` explicitly loads metadata after termination for Review, ReviewDraft and Resolve,
+including verifier/fix/triage/edit paths where applicable. `ProfileExplorer` renders at most 50 mixed
+provider/logical/attempt/tool records per page; paging replaces rows, with a pinned inspector snapshot.
+Stage selection, timeline/table, page filters, loaded-only correlation navigation and explicit safe ID
+copy share that read-only surface. Retained whole-run/stage summaries do not depend on the loaded
+page. Active runs expose stage progress only. Legacy/expired/truncated/incomplete/empty states stay
+explicit, and provider-incomplete is an observed outcome rather than lost capture.
+
+Core collection is vendor-free; `IModelProfileStore` separates SQLite details from retained summaries.
+The metadata whitelist excludes prompts, responses, source/paths, tool content, raw errors and
+credentials. Tokens belong to physical provider calls with reporting coverage; overlapping durations
+are not additive wall-clock time. Hidden SDK retries and missing model/usage fields are unavailable.
+Current adapters expose no reported monetary cost; no price inference is permitted. Page-local
+observed retries or currency-separated reported costs are not whole-run totals.
+
+`ModelProfilingOptions` validates retention (default 30 days from completion), shared detail limit
+(default/hard maximum 10,000), cleanup batch size (10) and interval (60 minutes). Cleanup removes
+only details; run/stage aggregates and existing diagnostics/decision/publication audits survive.
+`ReviewWorker` acknowledges reclaimed finalized profiles with terminal durable runs without
+re-execution. Failed reclaim preflight preserves durable history and the queue row, releases the
+claim and propagates; it must not run failure persistence over old completed history. A non-cancellation
+preflight error fails the hosted worker visibly. Unfinalized markers are incomplete capture, not stage
+checkpoints. See [profiling reference](../../../docs/model-profiling.md) for options/ranges, schemas,
+provider omissions and instrumentation coverage.
 
 ## Deployment requirements
 

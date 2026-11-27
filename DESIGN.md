@@ -160,6 +160,26 @@ A native order control offers chronological, slowest-first and fastest-first ord
 
 The inspector stacks below the stage view at narrower widths; both views retain text independent of bar color. Component and isolated JS tests cover timing, state, sorting, navigation and copy/disposal. App/browser startup was not authorized for T09: actual timeline geometry, keyboard focus/announcements, desktop/tablet/phone reflow and both-theme contrast still require release verification. No visual approval is claimed.
 
+## Alternate board and post-run explorer (reference)
+
+Queue remains default. Board columns use the same filtered findings, selection, focused evidence,
+versioned commands and required-reason composer. Native Move to and the phone column picker are
+alternatives to drag-and-drop; a move acts on one card, not the selected batch. Placement waits
+for authoritative confirmation, and neither moving nor approving publishes or retracts threads.
+
+The terminal-only profiler uses timeline/table and one read-only inspector over at most 50 mixed
+logical/attempt/provider/tool records. Filters and safe-metadata search are page-scoped; paging
+replaces rows, while a pinned selection may remain outside that page until replaced or expired.
+Loaded parent/child navigation never fetches missing records automatically. Retained run/stage
+summaries are independent of the page. Usage belongs to physical provider calls with explicit
+coverage, overlapping durations are not additive, and absent costs/hidden SDK retries remain
+unavailable. Stage and profiler keyboard scopes are separate from finding decisions. No profile
+payload or investigation state is persisted in browser storage.
+
+These are source/component/module-tested contracts, not rendered approval. Mechanical detector
+results do not establish theme contrast, native focus/drag behavior, assistive-technology usability,
+responsive layout or browser restoration timing. Those release checks remain open.
+
 ## Do's and Don'ts
 
 - Do keep focus, selection, validation, human decisions and publication distinguishable.
