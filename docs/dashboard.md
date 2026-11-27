@@ -201,6 +201,24 @@ documents the browser cookie/antiforgery boundary.
    The server checks approval versions, the PR claim, and the current head again. If the head changed,
    start a new draft. Empty selection is never interpreted as publish all in the technician API.
 
+### Queue or decision board
+
+Findings open in **Queue** by default. **Board** groups the same filtered findings into
+Pending, Approved, Deferred, and Rejected columns. Pipeline and publication state remain
+separate labels. Both views share the evidence inspector, history, selection, filters and
+unsaved reasons; switching views or run sections retains that context and run-local scroll.
+
+Use a card's **Move to** select with keyboard, mouse or touch, or drag one card to a column.
+A move always targets that card, not the selected group. Rejected opens the existing required-reason
+composer for that one card; cancel writes nothing. Use the explicit selected actions for a batch.
+On phones, **Show column on phone** switches columns without precision dragging.
+
+Placement changes only after authoritative data confirms the versioned decision. During a save,
+the original placement remains visible. Conflicts keep current placement and unsaved reasons;
+review the current version before submitting again. Approval and dragging never publish comments,
+and moving a posted finding never retracts its thread. Ordinary and resolve runs remain read-only.
+Real-browser drag, focus, touch, reflow and assistive-technology validation remain release gates.
+
 ### Selected decisions
 
 Select findings with their checkboxes, a Shift range, or **Select all matching**. Selection
@@ -213,7 +231,7 @@ The batch request contains `headSha` and a nonempty `selections` array (maximum 
 Each selection contains `findingId`, `expectedVersion`, `state`, and `reason`. IDs must be
 unique and belong to the run. Only successful completed draft runs are editable. The API
 also accepts rejection when every rejected item supplies its own nonblank effective reason;
-a shared/override rejection composer is not part of this slice.
+the dashboard's shared/override rejection composer pins those reasons and versions before submission.
 
 Read `errorCode` and every entry in `items`, even with HTTP 200: operational failures can
 return a structured partial response. `Saved` confirms a new immutable version; `Conflict`

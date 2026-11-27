@@ -120,6 +120,26 @@ kbd { font: inherit; color: var(--rf-muted); border: 1px solid var(--rf-line); b
 .finding-queue, .finding-inspector { min-width: 0; max-height: 75dvh; overflow: auto; padding: 12px; scroll-padding: 12px; }
 .finding-inspector { border-left: 1px solid var(--rf-line); overflow-wrap: anywhere; }
 .finding-queue ul { list-style: none; padding: 0; margin: 0; }
+[data-finding-view][hidden] { display: none; }
+.board-workspace { grid-template-columns: minmax(0, 65%) minmax(0, 1fr); }
+.board-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.board-column { min-width: 0; background: var(--rf-ground); padding: 8px; border: 1px solid var(--rf-line); border-radius: 6px; }
+.board-column h3 { margin: 0 0 12px; display: flex; justify-content: space-between; gap: 8px; font-size: .9375rem; }
+.board-card { display: grid; gap: 8px; margin-bottom: 8px; padding: 8px; background: var(--rf-surface); border: 1px solid var(--rf-line); border-radius: 6px; overflow-wrap: anywhere; }
+.board-card.focused { outline: 2px solid var(--rf-accent); outline-offset: 1px; }
+.board-card.selected { background: var(--rf-selected); }
+.board-card > button { display: grid; gap: 4px; text-align: left; padding: 4px; border: 0; background: transparent; }
+.board-card small, .board-guidance { color: var(--rf-muted); font-size: .8125rem; }
+.board-card select { width: 100%; min-width: 0; }
+.board-card label { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.board-card[draggable='true'] { cursor: grab; }
+.board-column-picker { display: none; }
+@media (min-width: 1400px) { .board-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+    .board-columns { display: block; }
+    .board-column:not(.phone-active) { display: none; }
+    .board-column-picker { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+}
 .finding-row { display: flex; align-items: start; gap: 8px; border: 1px solid transparent; border-bottom-color: var(--rf-line); }
 .finding-row.focused { border-color: var(--rf-accent); }
 .finding-row.selected { background: var(--rf-selected); }

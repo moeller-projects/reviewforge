@@ -84,7 +84,7 @@
                 </section>
             }
             <FindingQueue @key="RunId" State="_Workspace" Findings="details.Findings" HeadSha="@(details.ReviewedHeadSha ?? "")"
-                Disabled="@(Busy || _Stale || _AuthenticationExpired)" Submitting="_Saving" Unknown="_Unknown" BrowserUrl="@(details.Source?.BrowserUrl)"
+                Disabled="@(Busy || _Stale || _AuthenticationExpired)" Submitting="_Saving" Hidden="@(_Section != "Findings")" Unknown="_Unknown" BrowserUrl="@(details.Source?.BrowserUrl)"
                 OnChanged="StateHasChanged" OnSave="SaveAsync" OnBatch="SaveBatchAsync" OnHistory="HistoryAsync" />
             @if (_HistoryId is not null)
             {

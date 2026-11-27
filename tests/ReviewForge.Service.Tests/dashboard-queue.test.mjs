@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../../src/ReviewForge.Service/wwwroot/dashboard-queue.js', import.meta.url), 'utf8');
 globalThis.requestAnimationFrame = callback => callback();
-const { attach, detach, returnToRow, enterInspector, restoreContinuity } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { attach, detach, returnToRow, enterInspector, restoreContinuity, rememberView, restoreView } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 test('pane preference is bounded, scoped, restored and detached; return targets identity', () => {
   let listener, removed, width, focused = false, scrolled = false;
   const input = { value: '40', addEventListener: (n, f) => listener = f, removeEventListener: (n, f) => removed = f };
@@ -56,6 +56,18 @@ test('reads restore a connected editor and its selection without stealing anothe
   doc.activeElement = {}; restoreContinuity(root); assert.equal(restored, 1);
   doc.activeElement = body; editor.isConnected = false; restoreContinuity(root); assert.equal(restored, 1);
   detach(root); assert.deepEqual(listeners, {}); restoreContinuity(root);
+});
+test('queue and board scroll positions are run-local and return skips hidden duplicate identities', () => {
+  globalThis.requestAnimationFrame = cb => cb();
+  const input = { value: '40', addEventListener() {}, removeEventListener() {} };
+  const scroller = { scrollTop: 120, scrollLeft: 8 }; let focused;
+  const row = (hidden, name) => ({ dataset: { findingId: 'a' }, closest: () => hidden ? {} : null, focus: () => focused = name, scrollIntoView() {} });
+  const root = { querySelector: s => s === '[data-pane-size]' ? input : scroller, style: { setProperty() {} }, querySelectorAll: () => [row(true, 'hidden'), row(false, 'visible')] };
+  attach(root); rememberView(root, 'queue'); scroller.scrollTop = 50; scroller.scrollLeft = 2; rememberView(root, 'board');
+  restoreView(root, 'queue'); assert.equal(scroller.scrollTop, 120); assert.equal(scroller.scrollLeft, 8);
+  restoreView(root, 'board'); assert.equal(scroller.scrollTop, 50); assert.equal(scroller.scrollLeft, 2);
+  returnToRow(root, 'a'); assert.equal(focused, 'visible'); detach(root);
+  scroller.scrollTop = 0; restoreView(root, 'queue'); assert.equal(scroller.scrollTop, 0);
 });
 test('storage denial and invalid preferences do not block resizing', () => {
   let width;

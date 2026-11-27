@@ -1,0 +1,87 @@
+@using ReviewForge.Core.Domain
+
+<div class="finding-board" aria-label="Decision board">
+    <label class="board-column-picker">Show column on phone
+        <select aria-label="Board column" value="@_Column" @onchange="ColumnChanged">
+            @foreach (var column in Columns) { <option>@column</option> }
+        </select>
+    </label>
+    <p class="board-guidance">Move one card using Move to, or drag it to a column. Approval never posts; moving a posted finding never retracts its thread.</p>
+    <p data-board-status role="status"></p>
+    <div class="board-columns">
+    @foreach (var column in Columns)
+    {
+        var rows = Findings.Where(f => (f.Decision?.State ?? FindingDecisionState.Pending).ToString() == column).ToArray();
+        <section class="board-column @(_Column == column ? "phone-active" : "")" data-board-column="@column" aria-label="@($"{column} findings")">
+            <h3>@column <small>@rows.Length</small></h3>
+            <ul>
+            @foreach (var finding in rows)
+            {
+                var payload = FindingWorkspaceState.Payload(finding);
+                var blocked = BlockReason(finding);
+                <li @key="finding.FindingId" data-board-card="@finding.FindingId" data-board-blocked="@((blocked is not null).ToString().ToLowerInvariant())" draggable="@(blocked is null ? "true" : "false")"
+                    class="board-card @(State.FocusedId == finding.FindingId ? "focused" : "") @(State.Selected.Contains(finding.FindingId) ? "selected" : "")" aria-busy="@(MovingId == finding.FindingId ? "true" : "false")">
+                    <label><input type="checkbox" aria-label="@($"Select {payload?.Title ?? finding.FindingId}")" checked="@State.Selected.Contains(finding.FindingId)" disabled="@Disabled"
+                        @onclick="e => _Shift = e.ShiftKey" @onchange="() => OnSelect.InvokeAsync((finding, _Shift))" /> Select</label>
+                    <button type="button" data-finding-id="@finding.FindingId" tabindex="@(Active && RovingId == finding.FindingId ? 0 : -1)" aria-current="@(State.FocusedId == finding.FindingId ? "true" : null)"
+                        @onfocus="() => State.FocusedId = finding.FindingId" @onclick="() => OnInspect.InvokeAsync(finding.FindingId)">
+                        <strong>@(payload?.Title ?? "Finding payload unavailable")</strong>
+                        <small>@(payload?.Severity ?? "Severity unavailable") · @(payload?.Anchor?.FilePath ?? "Location unavailable"):@payload?.Anchor?.StartLine</small>
+                    </button>
+                    <small>@FindingWorkspaceState.PipelineLabel(finding) · @FindingWorkspaceState.PublicationLabel(finding) @(finding.PreviouslyKnown ? "· Previously known" : "")</small>
+                    <small>@(finding.PublicationEligible ? "Technically eligible" : "Not technically eligible") · Approval and current-head checks remain separate.</small>
+                    @if (finding.Evidence?.Validation == FindingValidationStatus.Rejected) { <small>Validation blocked: @finding.Evidence.ValidationReason</small> }
+                    @if (finding.Evidence?.Verification == FindingVerificationStatus.Rejected) { <small>Verification blocked: @finding.Evidence.VerificationReason</small> }
+                    <label>Move to
+                        <select @key="(finding.DecisionVersion, State.Rejection)" aria-label="@($"Move {payload?.Title ?? finding.FindingId} to")" value="" disabled="@(blocked is not null)" title="@blocked" @onchange="e => OnMove(finding.FindingId, e.Value?.ToString() ?? string.Empty)">
+                            <option value="">Choose decision</option>
+                            @foreach (var target in Columns) { <option value="@target">@target</option> }
+                        </select>
+                    </label>
+                    @if (blocked is not null) { <small>@blocked</small> }
+                    @if (MovingId == finding.FindingId) { <small role="status">Saving decision… placement awaits authoritative confirmation.</small> }
+                </li>
+            }
+            </ul>
+            @if (rows.Length == 0) { <p class="empty">No matching findings.</p> }
+        </section>
+    }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public FindingWorkspaceState State { get; set; } = default!;
+    [Parameter] public IReadOnlyList<RunFindingDto> Findings { get; set; } = [];
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? MovingId { get; set; }
+    [Parameter] public string? RovingId { get; set; }
+    [Parameter, EditorRequired] public Func<RunFindingDto, string?> BlockReason { get; set; } = default!;
+    [Parameter, EditorRequired] public Func<string, string, Task> OnMove { get; set; } = default!;
+    [Parameter] public EventCallback<string> OnInspect { get; set; }
+    [Parameter] public EventCallback<(RunFindingDto Finding, bool Range)> OnSelect { get; set; }
+    private static readonly string[] Columns = ["Pending", "Approved", "Deferred", "Rejected"];
+    private string _Column = "Pending";
+    private bool _Shift;
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private string? _LastFocused, _LastFocusedColumn;
+    private async Task ColumnChanged(ChangeEventArgs e)
+    {
+        _Column = e.Value?.ToString() ?? "Pending";
+        if (Findings.FirstOrDefault(f => (f.Decision?.State ?? FindingDecisionState.Pending).ToString() == _Column) is { } first)
+        {
+            State.FocusedId = _LastFocused = first.FindingId;
+            _LastFocusedColumn = _Column;
+        }
+        await OnChanged.InvokeAsync();
+    }
+    protected override void OnParametersSet()
+    {
+        var focused = Findings.FirstOrDefault(f => f.FindingId == State.FocusedId);
+        var column = focused is null ? null : (focused.Decision?.State ?? FindingDecisionState.Pending).ToString();
+        if ((_LastFocused != State.FocusedId || _LastFocusedColumn != column) && column is not null)
+            _Column = column;
+        _LastFocused = State.FocusedId;
+        _LastFocusedColumn = column;
+    }
+}

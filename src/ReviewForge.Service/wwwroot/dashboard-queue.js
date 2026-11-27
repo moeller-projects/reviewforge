@@ -10,7 +10,7 @@ export function attach(root) {
     input.value = String(width); apply();
     const resize = () => { apply(); try { localStorage.setItem(preferenceKey, String(width)); } catch { /* No finding data is stored. */ } };
     input.addEventListener('input', resize);
-    const scope = { input, resize, scroll: new Map() };
+    const scope = { input, resize, scroll: new Map(), views: new Map() };
     scope.remember = event => {
         const target = event.target;
         scope.focus = { target, start: target.selectionStart, end: target.selectionEnd };
@@ -54,11 +54,21 @@ function focusAfterLayout(root, resolveTarget) {
         target?.scrollIntoView({ block: 'nearest' });
     });
 }
+export function rememberView(root, view) {
+    const scope = panes.get(root), scroller = root.querySelector('.finding-queue');
+    if (scope && scroller) scope.views.set(view, [scroller.scrollTop, scroller.scrollLeft]);
+}
+export function restoreView(root, view) {
+    const scope = panes.get(root), scroller = root.querySelector('.finding-queue');
+    if (!scope || !scroller) return;
+    const [top, left] = scope.views.get(view) ?? [0, 0];
+    scroller.scrollTop = top; scroller.scrollLeft = left;
+}
 export function enterInspector(root) {
     focusAfterLayout(root, () => root.querySelector('[data-inspector-focus]'));
 }
 export function returnToRow(root, id) {
     // Identity lookup avoids building CSS selectors from finding data; filtered rows fall back to visible search.
-    focusAfterLayout(root, () => [...root.querySelectorAll('[data-finding-id]')].find(row => row.dataset.findingId === id)
+    focusAfterLayout(root, () => [...root.querySelectorAll('[data-finding-id]')].find(row => row.dataset.findingId === id && !row.closest?.('[hidden]'))
         ?? root.querySelector('[data-queue-search]'));
 }
