@@ -124,11 +124,33 @@ public sealed class PublishFindingsStage(
 
         var publishedFixCount = 0;
         var posted = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
-        foreach (var (key, threadId) in regressedThreadIds)
+        // Keep successful mappings observable even if a later post or reply fails.
+        var newlyPosted = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        ctx.Published = ctx.Published with {PostedThreadIds = posted, NewlyPostedThreadIds = newlyPosted};
+
+        foreach (var finding in ctx.Validation.AcceptedFindings.Where(f =>
+                     f.DedupeKey is not null && liveThreadKeys.Contains(f.DedupeKey)))
         {
-            // The finding is not re-posted (triage reopens the thread); stamp the existing
-            // thread id so persistence keeps the key → thread mapping intact (P1-11).
-            posted[key] = threadId;
+            var thread = ctx.Fetch.Threads.First(t => t.DedupeKey == finding.DedupeKey
+                && t.Status is ReviewThreadStatus.Active or ReviewThreadStatus.Pending);
+            await store.MarkFindingPublishedAsync(ctx.RunId, finding.DedupeKey!, thread.Id, ct).ConfigureAwait(false);
+            posted[finding.DedupeKey!] = thread.Id;
+        }
+
+        if (regressedThreadIds.Count > 0)
+        {
+            // Fetch is the pre-triage snapshot. A planned reopen is not a successful
+            // publication: reconcile only when the external thread is actually live.
+            var currentThreads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
+            foreach (var (key, threadId) in regressedThreadIds)
+            {
+                if (currentThreads.Any(t => t.Id == threadId && t.DedupeKey == key
+                    && t.Status is ReviewThreadStatus.Active or ReviewThreadStatus.Pending))
+                {
+                    await store.MarkFindingPublishedAsync(ctx.RunId, key, threadId, ct).ConfigureAwait(false);
+                    posted[key] = threadId;
+                }
+            }
         }
 
         using var gate = new SemaphoreSlim(MaxConcurrentPosts, MaxConcurrentPosts);
@@ -151,7 +173,10 @@ public sealed class PublishFindingsStage(
                         }
                         : finding;
                     var threadId = await source.PostFindingThreadAsync(ctx.Pr, toPublish, ct).ConfigureAwait(false);
+                    newlyPosted[finding.DedupeKey!] = threadId;
                     posted[finding.DedupeKey!] = threadId;
+                    // Persist before any follow-up write (including pushed-fix bookkeeping).
+                    await store.MarkFindingPublishedAsync(ctx.RunId, finding.DedupeKey!, threadId, ct).ConfigureAwait(false);
                     FindingsTelemetry.FindingsPosted.Add(1, new TagList {{"kind", "inline"}});
                     if (finding.AppliedFix is { } applied)
                     {
@@ -166,10 +191,6 @@ public sealed class PublishFindingsStage(
                         // The commit announcement WAS the finding body — the row is replied.
                         await store.MarkPushedFixRepliedAsync(inlineRowId, ct).ConfigureAwait(false);
                     }
-
-                    // Mechanism A: durable per-finding record immediately after the post, so a
-                    // crash before finalize never loses the fact that this finding was posted.
-                    await store.SetThreadIdAsync(ctx.RunId, finding.DedupeKey!, threadId, ct).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -192,15 +213,20 @@ public sealed class PublishFindingsStage(
                         ? rowId
                         : (int?) null;
                     if (committedRowId is { } existingRowId
-                        && await AlreadyPostedGeneralAsync(ctx, finding.DedupeKey!, body, ct).ConfigureAwait(false))
+                        && await FindPostedGeneralAsync(ctx, finding.DedupeKey!, body, ct).ConfigureAwait(false) is { } existingThreadId)
                     {
+                        posted[finding.DedupeKey!] = existingThreadId;
+                        await store.MarkFindingPublishedAsync(ctx.RunId, finding.DedupeKey!, existingThreadId, ct).ConfigureAwait(false);
                         await store.MarkPushedFixRepliedAsync(existingRowId, ct).ConfigureAwait(false);
                         return;
                     }
 
                     PublishGuardChecks.ThrowIfClaimLost(ctx, "before general finding");
-                    await source.PostGeneralCommentAsync(ctx.Pr, body, finding.DedupeKey, ct)
+                    var threadId = await source.PostGeneralCommentAsync(ctx.Pr, body, finding.DedupeKey, ct)
                         .ConfigureAwait(false);
+                    newlyPosted[finding.DedupeKey!] = threadId;
+                    posted[finding.DedupeKey!] = threadId;
+                    await store.MarkFindingPublishedAsync(ctx.RunId, finding.DedupeKey!, threadId, ct).ConfigureAwait(false);
                     FindingsTelemetry.FindingsPosted.Add(1, new TagList {{"kind", "general"}});
                     if (committedRowId is { } postedRowId)
                     {
@@ -467,14 +493,14 @@ public sealed class PublishFindingsStage(
             && string.Equals(first.Text.Trim(), body.Trim(), StringComparison.Ordinal));
     }
 
-    private async Task<bool> AlreadyPostedGeneralAsync(
+    private async Task<int?> FindPostedGeneralAsync(
         ReviewContext ctx, string dedupeKey, string text, CancellationToken ct)
     {
         var threads = await source.GetThreadsAsync(ctx.Pr, ct).ConfigureAwait(false);
-        return threads.Any(t =>
+        return threads.FirstOrDefault(t =>
             t.DedupeKey == dedupeKey
             && t.LastNonSystemComment is {IsBot: true} last
-            && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal));
+            && string.Equals(last.Text.Trim(), text.Trim(), StringComparison.Ordinal))?.Id;
     }
 
 

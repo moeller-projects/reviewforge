@@ -1252,6 +1252,9 @@ public class StageTests : IDisposable
         ctx.Reasoning.Collector.MarkRegressed("k");
         ctx.Reasoning = ctx.Reasoning with {Result = new ReviewResult {Narrative = new ReviewNarrative(), Findings = [regressed], Uncertainties = []}};
         ctx.Validation = ctx.Validation with {AcceptedFindings = [regressed]};
+        ctx.Fetch = ctx.Fetch with {Threads = source.Threads.ToArray()};
+        // Publication reconciles the actual post-triage state, not the planned reopen.
+        source.Threads[0] = source.Threads[0] with {Status = ReviewThreadStatus.Active};
 
         await new PublishFindingsStage(source, new FakeFindingStore(), NullLogger<PublishFindingsStage>.Instance)
             .ExecuteAsync(ctx, CancellationToken.None);
