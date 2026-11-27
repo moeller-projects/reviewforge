@@ -197,13 +197,35 @@ public class BrowserSessionTests
         Assert.Equal("nosniff", shell.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/_blazor/negotiate?negotiateVersion=1", null, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/reviews/dashboard", Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync($"/reviews/{Guid.NewGuid()}", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/reviews/{Guid.NewGuid()}", Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, "/reviews/discover", new { }, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, "/resolutions", new { }, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, "/mcp", new { }, Ct)).StatusCode);
         client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "wrong");
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/reviews/dashboard", Ct)).StatusCode);
         Assert.DoesNotContain(logs, message => message.Contains("test-key", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Run_detail_shell_and_history_require_auth_and_allow_only_intended_session_reads()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = Browser(factory);
+        var id = Guid.NewGuid();
+        var history = $"/reviews/{id}/decisions/history?findingId=key";
+        Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync($"/dashboard/runs/{id}", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/dashboard/start", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/dashboard/session", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(history, Ct)).StatusCode);
+        await Login(client, await Token(client));
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/dashboard/runs/{id}", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(history, Ct)).StatusCode);
+        client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "wrong");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(history, Ct)).StatusCode);
+        var endpoint = factory.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+            .Single(e => e.RoutePattern.RawText == "/reviews/{runId:guid}/decisions/history");
+        Assert.NotNull(endpoint.Metadata.GetMetadata<DashboardSessionAccess>());
+        Assert.Equal(ApiKeyOptions.StatusPolicy, endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>()!.PolicyName);
     }
 
     [Fact]
@@ -236,6 +258,66 @@ public class BrowserSessionTests
         client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "test-key-1");
         client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
         Assert.Equal(HttpStatusCode.Accepted, (await HttpClientJsonExtensions.PostAsJsonAsync(client, "/reviews", new { org = "o", project = "p", repositoryId = "r", prId = 92 }, Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Technician_routes_require_session_csrf_and_bad_header_is_not_rescued()
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = Browser(factory);
+        await Login(client, await Token(client));
+        var id = Guid.NewGuid();
+        foreach (var path in new[] { $"/reviews/{id}", $"/reviews/{id}/details", "/reviews/drafts/capability", "/reviews/history?offset=0&count=50&attentionOnly=false" })
+        {
+            Assert.NotEqual(HttpStatusCode.Unauthorized, (await client.GetAsync(path, Ct)).StatusCode);
+            client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "wrong");
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(path, Ct)).StatusCode);
+            client.DefaultRequestHeaders.Remove(ApiKeyOptions.HeaderName);
+        }
+        var finding = new ReviewForge.Core.Domain.RichFinding { RuleId = "r", Title = "t", Severity = "high", Category = "bug", Description = "claim" };
+        var observation = ReviewForge.Core.Domain.FindingObservation.Create(finding);
+        await factory.Services.GetRequiredService<ReviewForge.Core.Ports.IFindingStore>().SaveRunAsync(new(id,
+            new("o", "p", "r", 4), "head", ReviewForge.Core.Domain.ReviewKind.Full, DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow, true, [], Pipeline: "ReviewDraft", FindingObservations: [observation]), Ct);
+        foreach (var path in new[] { "/reviews/drafts", $"/reviews/{id}/decisions" })
+        {
+            object body = path.EndsWith("decisions", StringComparison.Ordinal)
+                ? new SetFindingDecisionRequest(observation.Id.ToString("N"), "head", ReviewForge.Core.Domain.FindingDecisionState.Approved, null, 0)
+                : new SubmitReviewRequest("o", "p", "r", 1);
+            Assert.Equal(HttpStatusCode.BadRequest, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, body, Ct)).StatusCode);
+            client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", await Token(client));
+            Assert.NotEqual(HttpStatusCode.BadRequest, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, body, Ct)).StatusCode);
+            client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "wrong");
+            Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, body, Ct)).StatusCode);
+            client.DefaultRequestHeaders.Remove(ApiKeyOptions.HeaderName);
+            client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
+        }
+        var latest = Assert.Single(await factory.Services.GetRequiredService<ReviewForge.Core.Ports.IFindingDecisionStore>().GetFindingDecisionsAsync(id, Ct));
+        Assert.Equal("dashboard-session", latest.Actor);
+        Assert.Empty(factory.Source.PostedFindings);
+    }
+
+    [Theory]
+    [InlineData("publish")]
+    [InlineData("reconcile")]
+    public async Task Publication_requires_authentication_csrf_and_preserves_header_priority(string action)
+    {
+        using var factory = new ReviewForgeFactory().WithoutWorkers();
+        using var client = Browser(factory);
+        var path = $"/reviews/{Guid.NewGuid()}/{action}";
+        object request = action == "publish" ? new PublishSelectedDraftRequest("head", [new("id", 1)]) : new ReconcileDraftRequest(["id"]);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
+        await Login(client, await Token(client));
+        Assert.Equal(HttpStatusCode.BadRequest, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
+        client.DefaultRequestHeaders.Add("X-CSRF-TOKEN", await Token(client));
+        Assert.Equal(HttpStatusCode.NotFound, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
+        client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "wrong");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
+        client.DefaultRequestHeaders.Remove(ApiKeyOptions.HeaderName);
+        client.DefaultRequestHeaders.Remove("X-CSRF-TOKEN");
+        client.DefaultRequestHeaders.Add(ApiKeyOptions.HeaderName, "test-key-1");
+        Assert.Equal(HttpStatusCode.NotFound, (await HttpClientJsonExtensions.PostAsJsonAsync(client, path, request, Ct)).StatusCode);
+        Assert.Empty(factory.Source.PostedFindings);
     }
 
     [Fact]

@@ -1,0 +1,90 @@
+@page "/dashboard/runs/{RunId:guid}"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@using ReviewForge.Core.Domain
+@using ReviewForge.Service.Components.Dashboard
+@implements IAsyncDisposable
+@inject DashboardBrowserClient Browser
+@inject TimeProvider Clock
+
+<PageTitle>Run details · ReviewForge</PageTitle>
+<main class="dashboard run-detail" aria-busy="@(Busy.ToString().ToLowerInvariant())">
+    <header class="dashboard-header"><div><a href="/dashboard">← Runs</a><h1>Run details</h1><code>@RunId</code></div>
+        <button type="button" class="compact-action" disabled="@(Busy || _AuthenticationExpired)" @onclick="RefreshAsync">Refresh</button>
+    </header>
+    @if (_Message is not null) { <p class="notice" role="status">@_Message @if (_AuthenticationExpired) { <a href="/dashboard/login">Log in again</a> }</p> }
+    @if (_Loading && _Details is null) { <p role="status">Loading run…</p> }
+    @if (_Details is { } details)
+    {
+        <section class="run-summary" aria-label="Selected run">
+            <h2>@(details.Source?.Title ?? $"PR #{details.Status.Pr.PrId}")</h2>
+            <p>@(details.Source?.RepositoryName ?? details.Status.Pr.RepositoryId) · @details.Status.State · @details.Status.Kind</p>
+            <p>Reviewed head: <code>@(details.ReviewedHeadSha ?? "unavailable")</code> · Updated @details.Status.UpdatedAt.ToString("u")</p>
+            @if (details.Status.Detail is not null) { <p>@details.Status.Detail</p> }
+        </section>
+        @if (details.Source?.Warning is { } warning) { <p class="notice">@warning</p> }
+        @if (HeadChanged) { <p class="notice" role="alert">The latest observed PR head changed. Publication is disabled; start a new draft.</p> }
+        else if (string.IsNullOrWhiteSpace(details.Source?.CurrentHeadSha)) { <p class="notice">Current head is unknown. Publication will check the head on the server.</p> }
+        <nav class="run-sections" aria-label="Run sections">
+            @foreach (var section in new[] { "Findings", "Execution", "Context" })
+            { <button type="button" class="compact-action" aria-pressed="@((_Section == section).ToString().ToLowerInvariant())" @onclick="() => _Section = section">@section</button> }
+        </nav>
+        @if (_Section == "Findings")
+        {
+            <p>Lightweight verification is not deep investigation or a confidence assessment. Deep investigation is deferred to phase two.</p>
+            @if (!details.ObservationsAvailable) { <p class="notice">Candidate observations and counts are unavailable (legacy or not yet captured). Unknown publication state is not proof that a finding was never posted.</p> }
+            <div class="finding-toolbar">
+                <label>Show <select aria-label="Finding filter" value="@_Filter" @onchange="ChangeFilter" disabled="@Busy">
+                    <option value="actionable">Actionable</option><option value="all">All</option><option value="accepted">Accepted</option>
+                    <option value="pipeline-rejected">Pipeline-rejected</option><option value="human-rejected">Human-rejected</option>
+                    <option value="posted">Posted</option><option value="history">History / previously known</option>
+                </select></label>
+                <button type="button" class="compact-action post-selected" disabled="@(Busy || _Selected.Count == 0 || HeadChanged || _Stale || _AuthenticationExpired)" @onclick="PreparePublication">Post selected findings</button>
+                @if (_Unknown.Count > 0)
+                {
+                    <button type="button" class="compact-action reconcile-publication" disabled="@(Busy || _AuthenticationExpired)" @onclick="ReconcileAsync">Reconcile unknown findings</button>
+                }
+            </div>
+            @if (_Confirmation is { } confirmation)
+            { <RunPublicationConfirmation Request="confirmation" Disabled="_Posting" OnConfirm="PostAsync" OnCancel="CancelPublication" /> }
+            @if (_Publication is { } result)
+            {
+                <section aria-label="Publication outcomes" role="status">
+                    <h2>Publication outcomes</h2>
+                    @if (result.ErrorCode is not null) { <p>Publication was not fully confirmed. Refresh before taking further action.</p> }
+                    <ul>@foreach (var outcome in result.Findings) { <li><code>@outcome.FindingId</code>: @outcome.Status</li> }</ul>
+                    @if (result.UnknownCount > 0) { <p>Unknown outcomes are not retried automatically. Refresh and allow server reconciliation before retrying; an external comment may already exist.</p> }
+                </section>
+            }
+            @foreach (var finding in VisibleFindings)
+            {
+                <RunFindingCard @key="finding.FindingId" Finding="finding" HeadSha="@(details.ReviewedHeadSha ?? "")"
+                    Disabled="@(Busy || _Stale || _AuthenticationExpired)" Selectable="CanSelect(finding)" Selected="_Selected.Contains(finding.FindingId)"
+                    PublicationUnknown="_Unknown.Contains(finding.FindingId)" EditorEpoch="_EditorEpoch" BrowserUrl="@(details.Source?.BrowserUrl)" OnSelect="selected => Select(finding, selected)" OnSave="SaveAsync" OnHistory="HistoryAsync" />
+            }
+            @if (!VisibleFindings.Any()) { <p>No findings in this view. Queued/running runs may not have durable findings yet.</p> }
+            @if (_HistoryId is not null)
+            {
+                <section class="decision-history" aria-label="Decision history"><h2>Decision history · <code>@_HistoryId</code></h2>
+                    @if (_History is { Events.Count: 0 }) { <p>No saved decisions.</p> }
+                    @if (_History is { } history)
+                    { <ol>@foreach (var item in history.Events) { <li>Version @item.Version · @item.State · @item.Reason · @item.DecidedAt.ToString("u") · @item.Actor</li> }</ol><p>Newest first; at most 100 immutable events for this finding and revision.</p> }
+                </section>
+            }
+        }
+        else if (_Section == "Execution")
+        {
+            <h2>Execution</h2>
+            <RunExecutionView Status="details.Status" Diagnostics="details.Diagnostics" />
+        }
+        else
+        {
+            <h2>Context</h2>
+            <p>@details.Status.Pr.Org / @details.Status.Pr.Project / @details.Status.Pr.RepositoryId / PR @details.Status.Pr.PrId</p>
+            <p>Reviewed revision: <code>@(details.ReviewedHeadSha ?? "unavailable")</code></p>
+            <p>Latest observed head: <code>@(details.Source?.CurrentHeadSha ?? "unavailable")</code> · Observed @(details.Source?.ObservedAt?.ToString("u") ?? "unavailable")</p>
+            @if (details.Counts is { } counts) { <p>Candidates @counts.Candidates · Accepted @counts.Accepted · Rejected @counts.Rejected · Previously known @counts.PreviouslyKnown · Newly posted @counts.NewlyPosted</p> }
+            else { <p>Durable candidate counts unavailable.</p> }
+            <RunContextView Context="details.Diagnostics?.Context" />
+        }
+    }
+</main>

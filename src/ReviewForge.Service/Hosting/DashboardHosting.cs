@@ -33,8 +33,12 @@ public static class DashboardHosting
             {
                 // Redirect page navigation only; API and circuit clients must receive 401, not login HTML.
                 var request = context.Request;
-                if (HttpMethods.IsGet(request.Method) &&
-                    string.Equals(request.Path.Value?.TrimEnd('/'), "/dashboard", StringComparison.OrdinalIgnoreCase))
+                var path = request.Path.Value?.TrimEnd('/') ?? "";
+                var pageNavigation = string.Equals(path, "/dashboard", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(path, "/dashboard/start", StringComparison.OrdinalIgnoreCase)
+                    || (path.StartsWith("/dashboard/runs/", StringComparison.OrdinalIgnoreCase)
+                        && Guid.TryParse(path["/dashboard/runs/".Length..], out _));
+                if (HttpMethods.IsGet(request.Method) && pageNavigation)
                     context.Response.Redirect($"{request.PathBase}/dashboard/login");
                 else
                     context.Response.StatusCode = StatusCodes.Status401Unauthorized;
