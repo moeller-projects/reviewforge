@@ -124,6 +124,14 @@ Small controls have gently rounded corners. History is a single divided surface 
 - **Dialogs:** native `dialog.showModal()` owns focus containment/background inertness. Cancel receives initial focus. Escape invokes cancellation, never confirmation. Disposal removes cancel listeners and restores a connected return target; rerun uses its focusable context wrapper because the initiating button is disabled while pending.
 - **Publication:** explicit confirmation remains separate from approval and selection. No mutation is triggered by theme, navigation or dialog dismissal.
 
+## Keyboard review (reference)
+
+The findings workbench owns its keyboard listener and disposes it when the route leaves. Arrow keys move the active row, Enter opens evidence, Space toggles selection, and Shift+arrows extends the selection. Escape returns from evidence before clearing selection; drafts remain intact. `/` focuses loaded-finding search. The clickable Commands & keyboard help entry and Ctrl/Cmd+K open a native command dialog with focus return.
+
+Single-letter J/K, A/R/D and ? are off by default. The dialog offers that preference and advance/stay after saving; only these presentation choices are stored. Editors, native controls, composition, repeated keydown and unrelated dialogs keep their own input behavior. Approve/defer use the guarded individual save; reject opens the existing required-reason editor. Only a confirmed versioned save followed by a successful refresh advances to another pending finding in the filtered deterministic order. Exhaustion is announced without changing filters. Publication still requires its separate selection preview and confirmation.
+
+bUnit and isolated JavaScript tests cover routing and state, not real-browser focus, reflow or assistive-technology behavior. Those checks remain a release gate.
+
 ## Do's and Don'ts
 
 - Do keep focus, selection, validation, human decisions and publication distinguishable.

@@ -8,6 +8,43 @@ public sealed class FindingWorkspaceStateTests
     private static RunFindingDto Row(string id, string severity, string file) => new(id,
         new("RULE", id, severity, "bug", "claim", null, null, new(file, 1, 2), false), null, null, false, null, 0, false, null, false, false);
     [Fact]
+    public void Confirmed_decision_advances_in_snapshot_order_only_to_current_matching_pending()
+    {
+        var a = Row("a", "high", "a.cs"); var b = Row("b", "high", "b.cs"); var c = Row("c", "high", "c.cs");
+        var state = new FindingWorkspaceState { FocusedId = "b" };
+        state.AdvanceAfterSave("b", ["a", "b", "c"], [a, b, c]);
+        Assert.Equal("c", state.FocusedId); Assert.False(state.Complete);
+        state.AdvanceAfterSave("c", ["a", "b", "c"], [a, b, c]);
+        Assert.Equal("a", state.FocusedId);
+        state.Search = "not matched";
+        state.AdvanceAfterSave("a", ["a", "b", "c"], [a, b, c]);
+        Assert.True(state.Complete); Assert.Equal("a", state.FocusedId); Assert.Equal("not matched", state.Search);
+        state.Advance = false; state.Complete = false;
+        state.AdvanceAfterSave("a", ["a", "b"], [a, b]); Assert.Equal("a", state.FocusedId); Assert.False(state.Complete);
+    }
+    [Fact]
+    public void Resetting_only_finding_to_pending_does_not_announce_exhaustion()
+    {
+        var finding = Row("a", "high", "a.cs");
+        var state = new FindingWorkspaceState { FocusedId = "a" };
+        state.AdvanceAfterSave("a", ["a"], [finding]);
+        Assert.False(state.Complete);
+        Assert.Equal("a", state.FocusedId);
+    }
+
+    [Fact]
+    public void Decision_guard_is_shared_and_preserves_unsaved_or_conflicting_drafts()
+    {
+        var row = Row("a", "high", "a.cs") with { CanDecide = true };
+        var state = new FindingWorkspaceState();
+        Assert.Null(state.DecisionBlockReason(row, "head", false));
+        Assert.NotNull(state.DecisionBlockReason(row, "head", true));
+        Assert.NotNull(state.DecisionBlockReason(row, "", false));
+        Assert.NotNull(state.DecisionBlockReason(row with { CanDecide = false }, "head", false));
+        state.Drafts["a"] = new(99, FindingDecisionState.Rejected, "retained") { Dirty = true };
+        Assert.NotNull(state.DecisionBlockReason(row, "head", false));
+    }
+    [Fact]
     public void Filters_order_and_range_use_identity_not_input_positions()
     {
         var a = Row("a", "high", "a.cs"); var b = Row("b", "critical", "z.cs"); var c = Row("c", "low", "c.cs");

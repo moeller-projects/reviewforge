@@ -7,6 +7,28 @@ public sealed class FindingWorkspaceState
 {
     public string? FocusedId { get; set; }
     public string? RangeAnchor { get; private set; }
+    public bool Advance { get; set; } = true;
+    public bool Complete { get; set; }
+    public string? DecisionBlockReason(RunFindingDto finding, string headSha, bool disabled) =>
+        DecisionBlockReason(finding, headSha, disabled, Drafts.GetValueOrDefault(finding.FindingId));
+    public static string? DecisionBlockReason(RunFindingDto finding, string headSha, bool disabled, FindingEditorDraft? draft)
+    {
+        if (disabled) return "Actions are unavailable while busy, stale or signed out.";
+        if (!finding.CanDecide || string.IsNullOrWhiteSpace(headSha)) return "Only completed draft findings with a reviewed revision can be decided.";
+        if (draft is { Dirty: true } && draft.Version != finding.DecisionVersion)
+            return "Authoritative decision changed. Review the current version before saving.";
+        return null;
+    }
+    public void AdvanceAfterSave(string savedId, IReadOnlyList<string> previousOrder, IReadOnlyList<RunFindingDto> findings)
+    {
+        if (!Advance) return;
+        var matching = Matching(findings);
+        var index = previousOrder.ToList().IndexOf(savedId);
+        var next = previousOrder.Skip(index + 1).Concat(previousOrder.Take(Math.Max(index, 0)))
+            .FirstOrDefault(id => id != savedId && matching.Any(f => f.FindingId == id && (f.Decision?.State ?? FindingDecisionState.Pending) == FindingDecisionState.Pending));
+        Complete = !matching.Any(f => (f.Decision?.State ?? FindingDecisionState.Pending) == FindingDecisionState.Pending);
+        if (next is not null) FocusedId = next;
+    }
     public HashSet<string> Selected { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, FindingEditorDraft> Drafts { get; } = new(StringComparer.Ordinal);
     public string Search { get; set; } = "";

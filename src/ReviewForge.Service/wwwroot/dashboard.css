@@ -107,6 +107,13 @@ dt { color: var(--rf-muted); } dd { margin: 0; }
 .queue-filters, .queue-selection { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 12px 0; align-items: end; }
 .queue-filters label { display: grid; gap: 4px; font-size: .8125rem; }
 .queue-selection { font-size: .8125rem; color: var(--rf-muted); }
+.command-toolbar { font-size: .8125rem; }
+kbd { font: inherit; color: var(--rf-muted); border: 1px solid var(--rf-line); border-radius: 4px; padding: 1px 4px; white-space: nowrap; }
+.command-list { display: grid; gap: 8px; margin: 16px 0; }
+.command-list button { display: flex; justify-content: space-between; gap: 12px; text-align: left; }
+.command-list small { color: var(--rf-muted); }
+.workbench-dialog > label { display: block; margin: 12px 0; }
+.decision-commands { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .pane-size { display: flex; gap: 12px; align-items: center; font-size: .8125rem; }
 .pane-size input { width: 160px; }
 .finding-workspace { display: grid; grid-template-columns: minmax(0, var(--queue-width, 40%)) minmax(0, 1fr); border: 1px solid var(--rf-line); background: var(--rf-surface); }

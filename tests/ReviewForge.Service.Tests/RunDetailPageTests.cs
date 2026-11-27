@@ -31,6 +31,52 @@ public sealed class RunDetailPageTests
             .SetResult(new(status, JsonSerializer.SerializeToElement(details)));
         return c;
     }
+    [Theory]
+    [InlineData(200, FindingDecisionStatus.Saved, 4, true)]
+    [InlineData(200, FindingDecisionStatus.Saved, 3, false)]
+    [InlineData(200, FindingDecisionStatus.Conflict, 4, false)]
+    [InlineData(409, FindingDecisionStatus.Conflict, 4, false)]
+    [InlineData(500, FindingDecisionStatus.Saved, 4, false)]
+    public async Task Only_confirmed_individual_save_advances_and_never_posts(int status, FindingDecisionStatus response, long version, bool advances)
+    {
+        await using var c = Context(Details(Finding("a", FindingDecisionState.Pending), Finding("b", FindingDecisionState.Pending)));
+        var http = c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!;
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions"))
+            .SetResult(new(status, JsonSerializer.SerializeToElement(new FindingDecisionResponse(response, version, null))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        page.Find(".finding-row button").Click();
+        page.Find("[data-command='approve']").Click();
+        page.WaitForAssertion(() => Assert.Contains(advances ? "Decision saved" : status == 409 ? "decision changed" : "not confirmed", page.Markup));
+        Assert.Equal(advances ? "b" : "a", page.Find("[aria-current='true']").GetAttribute("data-finding-id"));
+        Assert.DoesNotContain(http.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"));
+    }
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task Saved_decision_respects_stay_and_requires_refresh_before_advance(bool stay, bool failedRefresh)
+    {
+        await using var c = new BunitContext(); c.Services.AddScoped<DashboardBrowserClient>(); c.Services.AddSingleton(TimeProvider.System); c.JSInterop.Mode = JSRuntimeMode.Loose;
+        var http = c.JSInterop.SetupModule("./dashboard-http.js");
+        var reads = http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/details"));
+        reads.SetResult(new(200, JsonSerializer.SerializeToElement(Details(Finding("a", FindingDecisionState.Pending), Finding("b", FindingDecisionState.Pending)))));
+        http.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/decisions"))
+            .SetResult(new(200, JsonSerializer.SerializeToElement(new FindingDecisionResponse(FindingDecisionStatus.Saved, 4, null))));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        if (stay)
+        {
+            page.Find(".command-help").Click(); page.Find("[aria-label='Advance after saving']").Change(false); page.Find("[data-dialog-cancel]").Click();
+        }
+        reads.SetResult(failedRefresh ? new(500, null) : new(200, JsonSerializer.SerializeToElement(Details(Finding("a"), Finding("b")))));
+        page.Find("[data-command='approve']").Click();
+        page.WaitForAssertion(() => Assert.Contains("Decision saved", page.Markup));
+        Assert.Equal("a", page.Find("[aria-current='true']").GetAttribute("data-finding-id"));
+        if (failedRefresh) Assert.Contains("refresh failed", page.Markup);
+        Assert.Equal(!stay && !failedRefresh, page.Markup.Contains("Review complete"));
+        Assert.Equal("all", page.Find("select[aria-label='Decision filter']").GetAttribute("value"));
+    }
     [Fact]
     public async Task Queue_mounts_only_focused_evidence_and_keeps_general_selection_across_filters()
     {

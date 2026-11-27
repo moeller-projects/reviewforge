@@ -2,6 +2,7 @@
 
 <div class="finding-decision-editor" aria-label="Human finding decision">
     @if (_Draft.Dirty && _Draft.Version != Finding.DecisionVersion) { <p class="notice" role="status">Authoritative decision changed. Your unsaved draft is retained; review the new version before saving.</p><button type="button" disabled="@Disabled" @onclick="() => _Draft.Version = Finding.DecisionVersion">Use current version with my draft</button> }
+    @if (BlockReason is { } blocked) { <small role="status">@blocked</small> }
     <label>Decision
         <select value="@_State.ToString()" @onchange="ChangeState" disabled="@CannotEdit" aria-label="Finding decision">
             <option value="Pending">Pending</option>
@@ -32,7 +33,8 @@
     private FindingDecisionState _State { get => _Draft.State; set { _Draft.State = value; _Draft.Dirty = true; } }
     private string _Reason { get => _Draft.Reason; set { _Draft.Reason = value; _Draft.Dirty = true; } }
     private bool _Saving;
-    private bool CannotEdit => Disabled || _Saving || (_Draft.Dirty && _Draft.Version != Finding.DecisionVersion) || !Finding.CanDecide || string.IsNullOrWhiteSpace(HeadSha);
+    private string? BlockReason => FindingWorkspaceState.DecisionBlockReason(Finding, HeadSha, Disabled || _Saving, _Draft);
+    private bool CannotEdit => BlockReason is not null;
 
     protected override void OnParametersSet()
     {

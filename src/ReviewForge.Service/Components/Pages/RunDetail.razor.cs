@@ -110,23 +110,33 @@ public partial class RunDetail
     private void CancelPublication() { if (!_Posting) _Confirmation = null; }
     private async Task SaveAsync(SetFindingDecisionRequest request)
     {
-        if (Busy || _Stale || _AuthenticationExpired || _Route is null) return;
+        if (Busy || _Stale || _AuthenticationExpired || _Route is null || _Details is null
+            || _Details.Status.Kind != RunKind.ReviewDraft || _Details.Status.State != RunState.Completed) return;
+        var finding = _Details.Findings.FirstOrDefault(f => f.FindingId == request.FindingId);
+        if (finding is null || _Workspace.DecisionBlockReason(finding, _Details.ReviewedHeadSha ?? "", false) is not null
+            || request.HeadSha != _Details.ReviewedHeadSha || request.ExpectedVersion != finding.DecisionVersion
+            || (request.State == FindingDecisionState.Rejected && string.IsNullOrWhiteSpace(request.Reason))) return;
+        var order = _Workspace.Matching(_Details.Findings).Select(f => f.FindingId).ToArray();
         var generation = _Generation;
         var id = RunId;
         _Saving = true;
         var result = await Browser.SetFindingDecisionAsync(id, request, _Route.Token);
         if (!Current(generation)) return;
         _Saving = false;
-        if (result.Outcome == BrowserOutcome.Ok) _Workspace.Drafts.Remove(request.FindingId);
+        var confirmed = result.Outcome == BrowserOutcome.Ok && result.Value?.Status == FindingDecisionStatus.Saved
+            && result.Value.CurrentVersion > request.ExpectedVersion;
+        if (confirmed) _Workspace.Drafts.Remove(request.FindingId);
         _History = null;
         _HistoryId = null;
         if (result.Outcome is BrowserOutcome.Ok or BrowserOutcome.Conflict)
         {
             await RefreshAsync();
             if (!Current(generation)) return;
+            if (confirmed && !_Stale && _Details is not null) _Workspace.AdvanceAfterSave(request.FindingId, order, _Details.Findings);
             _Message = result.Outcome == BrowserOutcome.Conflict
                 ? "The decision changed or the PR is busy. Refreshed authoritative data; your edit was not overwritten or resubmitted. Review before saving again."
-                : "Decision saved. Approval does not publish findings.";
+                : confirmed ? _Stale ? "Decision saved, but refresh failed. Refresh before continuing; review did not advance. Approval does not publish findings."
+                    : "Decision saved. Approval does not publish findings." : "Decision was not confirmed. Review authoritative data before editing again.";
         }
         else Fail(result.Outcome, "Decision was not confirmed. Refresh before editing again.");
     }
