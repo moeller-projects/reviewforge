@@ -442,9 +442,10 @@ short name), `Creators` (matches creator id or name; a **required allowlist** wh
 `AllowAllCreators=true` explicitly opts into reviewing PRs from any author, external
 contributors included), `MaxEnqueuesPerSweep` (default 20), `MaxDegreeOfParallelism`
 (default 4, validated 1–16), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables
-the background sweep worker; checked-in base config enables a 15-minute interval and
-Production config an hourly interval, both with `AllowAllCreators=false` — inspect the
-effective creator allowlist and environment overrides before deployment), `FailureBackoffBase` (default 30 min) / `FailureBackoffMax`
+the background sweep worker; checked-in base config enables a 15-minute interval in all
+environments unless overridden, with `AllowAllCreators=false` and a placeholder creator ID.
+No Production override is shipped — configure the creator allowlist and inspect effective
+environment overrides before deployment), `FailureBackoffBase` (default 30 min) / `FailureBackoffMax`
 (default 8 h) — a head whose recent runs keep failing is skipped until a doubling backoff
 elapses, and `WarmupEnabled` (default false) — when on, each accepted enqueue pre-fetches
 its head commits into the shared git mirror (`WarmupMaxPerSweep` = 5 per sweep,

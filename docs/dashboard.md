@@ -356,9 +356,12 @@ linked-item-reference calls for PRs lacking inline metadata. Shared caching limi
 fetches but does not prove large-organization source latency is acceptable.
 
 `DiscoverySweepWorker` remains the only periodic automatic-review mechanism. Checked-in
-`config.toml` enables a 15-minute sweep and `config.Production.toml` an hourly sweep, both
-with `AllowAllCreators=false` and configured creator IDs. Inspect the effective interval,
-allowlist, and environment overrides for the deployment; do not blindly enable all creators.
+`config.toml` enables a 15-minute sweep in every environment unless overridden, with
+`AllowAllCreators=false` and a placeholder creator ID. No `config.Production.toml` is shipped;
+local overrides are also excluded from Docker builds. For an hourly production sweep, set
+`Discovery__SweepInterval=01:00:00` in the deployment environment or provision a runtime
+configuration override. Configure the creator allowlist and inspect the effective interval
+and environment overrides before deployment; do not blindly enable all creators.
 Unset/null `Discovery:SweepInterval` disables periodic sweeps. Dashboard reads never run a
 sweep, whether discovery is enabled or disabled. The authenticated manual discovery API
 remains a separate action.
