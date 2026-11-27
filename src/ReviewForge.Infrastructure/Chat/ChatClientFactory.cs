@@ -84,6 +84,9 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
             _ => throw new InvalidOperationException($"unknown reasoning provider '{_Options.Provider}'"),
         };
 
+        if (_Options.Provider == ChatProviderKind.OpenAi)
+            raw = new ReviewForge.Core.Profiling.ProfiledChatClient(raw, "openai", null);
+
         // Between usage tracking and the transport: tracking measures real provider
         // traffic, the governor shapes it. Both tiers share one process-wide governor.
         return _Governor is { } governor
@@ -145,7 +148,8 @@ public sealed class ChatClientFactory : IChatClientFactory, IDisposable
                 })
             .Build();
 
-        return new CodexStreamingChatClient(configured);
+        return new CodexStreamingChatClient(new ReviewForge.Core.Profiling.ProfiledChatClient(
+            configured, "openai-codex", null));
     }
 
     private IChatClient CreateOpenAiClient()

@@ -8,7 +8,7 @@ namespace ReviewForge.Service;
 
 public interface IPipelineBuilder
 {
-    ReviewPipeline Build(RunKind kind, ReviewRequest request, ReviewContext context);
+    ReviewPipeline Build(RunKind kind, ReviewRequest request, ReviewContext context, IRunProgress? progress = null);
 }
 
 public sealed class ReviewPipelineBuilder(
@@ -20,9 +20,11 @@ public sealed class ReviewPipelineBuilder(
     AgentFactory agentFactory,
     StageCatalog stageCatalog,
     ResolveContextInitializer resolveContextInitializer,
-    ILoggerFactory loggerFactory) : IPipelineBuilder
+    ILoggerFactory loggerFactory,
+    IFindingStore store,
+    TimeProvider? clock = null) : IPipelineBuilder
 {
-    public ReviewPipeline Build(RunKind kind, ReviewRequest request, ReviewContext context)
+    public ReviewPipeline Build(RunKind kind, ReviewRequest request, ReviewContext context, IRunProgress? progress = null)
     {
         if (request.Kind != kind)
             throw new ArgumentException("The requested run kind does not match the pipeline kind.", nameof(kind));
@@ -39,11 +41,18 @@ public sealed class ReviewPipelineBuilder(
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown run kind."),
         };
 
+        progress?.DefinitionLoaded(definition.Stages);
+        context.PlannedStages = definition.Stages.Select(id => id.ToString()).ToArray();
+
         if (kind == RunKind.Resolve)
             resolveContextInitializer.Initialize(request, context);
 
         var build = new PipelineBuildContext(definition, request, agentFactory.Create());
-        var stages = definition.Stages.Select(id => stageCatalog.Create(id, build));
+        var stages = definition.Stages.Select(id =>
+        {
+            var stage = stageCatalog.Create(id, build);
+            return new ProgressStage(id, stage, progress, store, clock);
+        });
         return new ReviewPipeline(stages, loggerFactory.CreateLogger<ReviewPipeline>());
     }
 }

@@ -9,7 +9,8 @@ public sealed record SubmitReviewRequest(
     [property: Required] string Org,
     [property: Required] string Project,
     [property: Required] string RepositoryId,
-    [property: Range(1, int.MaxValue)] int PrId);
+    [property: Range(1, int.MaxValue)] int PrId,
+    bool ForceReview = false);
 
 public sealed record SubmitReviewResponse(Guid RunId, string StatusUrl);
 
@@ -27,9 +28,11 @@ public static class Endpoints
             .AddEndpointFilter<ApiKeyEndpointFilter>();
 
         reviews.MapPost("/", SubmitReview)
+            .WithMetadata(new DashboardSessionAccess())
             .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
             .WithName("SubmitReview")
             .WithSummary("Enqueue a review run for a pull request")
+            .WithDescription("Optional forceReview is a JSON boolean: omitted or false preserves normal same-head suppression; true bypasses only that suppression for a manual ordinary review. Draft PRs still skip. The server fetches the authoritative head.")
             .Produces<SubmitReviewResponse>(202)
             .Produces<ConflictResponse>(409)
             .ProducesProblem(400)
@@ -51,7 +54,85 @@ public static class Endpoints
             .WithTags("Reviews")
             .Produces<DiscoveryReport>();
 
+        reviews.MapGet("/dashboard", GetDashboard)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
+            .WithName("GetDashboard")
+            .Produces<DashboardResponse>();
+
+        reviews.MapGet("/history", GetRunHistory)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
+            .WithName("GetRunHistory")
+            .Produces<RunWorklistResponse>()
+            .Produces<TechnicianErrorResponse>(400);
+
+        reviews.MapPost("/drafts", SubmitDraft)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
+            .Produces<SubmitReviewResponse>(202)
+            .Produces<TechnicianErrorResponse>(503);
+
+        reviews.MapGet("/drafts/capability", (IOptions<ReviewForge.Core.Pipeline.VerifyFindingsOptions> options) =>
+                TypedResults.Ok(new DraftCapabilityResponse(options.Value.Enabled,
+                    options.Value.Enabled ? null : "Lightweight finding verification is disabled.")))
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy);
+
+        reviews.MapGet("/{runId:guid}/model-calls", GetModelCalls)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
+            .Produces<ReviewForge.Core.Ports.ModelProfilePage>()
+            .Produces<TechnicianErrorResponse>(400)
+            .Produces<TechnicianErrorResponse>(404);
+
+        reviews.MapGet("/{runId:guid}/details", GetRunDetails)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
+            .Produces<RunDetailsResponse>()
+            .Produces<TechnicianErrorResponse>(404);
+
+        reviews.MapGet("/{runId:guid}/decisions/history", GetFindingDecisionHistory)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
+            .Produces<FindingDecisionHistoryResponse>()
+            .Produces<TechnicianErrorResponse>(400)
+            .Produces<TechnicianErrorResponse>(404);
+
+        reviews.MapPost("/{runId:guid}/decisions", SetFindingDecision)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
+            .Produces<FindingDecisionResponse>()
+            .Produces<FindingDecisionResponse>(400)
+            .Produces<FindingDecisionResponse>(404)
+            .Produces<FindingDecisionResponse>(409);
+
+        reviews.MapPost("/{runId:guid}/decisions/batch", SetBatchFindingDecisions)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
+            .Produces<BatchFindingDecisionResponse>()
+            .Produces<BatchFindingDecisionResponse>(400)
+            .Produces<BatchFindingDecisionResponse>(404)
+            .Produces<BatchFindingDecisionResponse>(409);
+
+        reviews.MapPost("/{runId:guid}/reconcile", ReconcileSelectedDraft)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
+            .Produces<PublishSelectedDraftResult>()
+            .Produces<PublishSelectedDraftResult>(400)
+            .Produces<PublishSelectedDraftResult>(404)
+            .Produces<PublishSelectedDraftResult>(409);
+
+        reviews.MapPost("/{runId:guid}/publish", PublishSelectedDraft)
+            .WithMetadata(new DashboardSessionAccess())
+            .RequireRateLimiting(ApiKeyOptions.SubmitPolicy)
+            .Produces<PublishSelectedDraftResult>()
+            .Produces<PublishSelectedDraftResult>(400)
+            .Produces<PublishSelectedDraftResult>(404)
+            .Produces<PublishSelectedDraftResult>(409);
+
         reviews.MapGet("/{runId:guid}", GetRunStatus)
+            .WithMetadata(new DashboardSessionAccess())
             .RequireRateLimiting(ApiKeyOptions.StatusPolicy)
             .WithName("GetRunStatus")
             .WithSummary("Run status — in-memory tracker first, then queue/store read-through so finalized runs stay visible after restart")
@@ -76,6 +157,103 @@ public static class Endpoints
     private static IResult SubmitReview(SubmitReviewRequest request, RunSubmissionService runs)
         => Submit(request, RunKind.Review, runs);
 
+    private static IResult SubmitDraft(SubmitReviewRequest request, RunSubmissionService runs,
+        IOptions<ReviewForge.Core.Pipeline.VerifyFindingsOptions> options)
+        => options.Value.Enabled ? Submit(request, RunKind.ReviewDraft, runs)
+            : TypedResults.Json(new TechnicianErrorResponse("verification-disabled"), statusCode: 503);
+
+    private static async Task<IResult> GetModelCalls(Guid runId, RunSubmissionService runs,
+        ReviewForge.Core.Ports.IModelProfileStore profiles, TimeProvider clock, CancellationToken ct,
+        long after = 0, int count = 50)
+    {
+        if (after < 0 || count is < 1 or > 100)
+            return TypedResults.BadRequest(new TechnicianErrorResponse("invalid-profile-page"));
+        var status = await runs.GetStatusAsync(runId, ct).ConfigureAwait(false);
+        if (status is null) return TypedResults.NotFound(new TechnicianErrorResponse("run-not-found"));
+        if (status.State is RunState.Queued or RunState.Running or RunState.Skipped)
+            return TypedResults.Ok(new ReviewForge.Core.Ports.ModelProfilePage(
+                status.State == RunState.Skipped ? "skipped-not-recorded" : "not-yet-available",
+                runId, null, 0, false, false, [], null));
+        return TypedResults.Ok(await profiles.ReadModelProfileAsync(runId, after, count, clock.GetUtcNow(), ct).ConfigureAwait(false));
+    }
+
+    private static async Task<IResult> GetRunDetails(Guid runId, RunDetailsService details, CancellationToken ct)
+        => await details.GetAsync(runId, ct) is { } result ? TypedResults.Ok(result)
+            : TypedResults.NotFound(new TechnicianErrorResponse("run-not-found"));
+
+    private static async Task<IResult> GetFindingDecisionHistory(Guid runId, string? findingId,
+        RunDetailsService details, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(findingId) || findingId.Length > 2048)
+            return TypedResults.BadRequest(new TechnicianErrorResponse("invalid-finding-id"));
+        return await details.GetHistoryAsync(runId, findingId, ct) is { } history
+            ? TypedResults.Ok(history) : TypedResults.NotFound(new TechnicianErrorResponse("finding-not-found"));
+    }
+
+    private static async Task<IResult> SetFindingDecision(Guid runId, SetFindingDecisionRequest request,
+        HttpContext http, FindingDecisionService decisions, CancellationToken ct)
+    {
+        // Header priority matches ApiKeyEndpointFilter. Neither a claimed name nor credential is an actor.
+        var actor = !http.Request.Headers.ContainsKey(ApiKeyOptions.HeaderName)
+            && http.RequestServices.GetRequiredService<DashboardSessions>().IsValid(http.User)
+            ? "dashboard-session" : "header-key";
+        var result = await decisions.DecideAsync(runId, request.FindingId, request.HeadSha, request.State,
+            request.Reason, actor, request.ExpectedVersion, ct);
+        var response = new FindingDecisionResponse(result.Status, result.CurrentVersion,
+            result.Decision is null ? null : FindingDecisionDto.From(result.Decision));
+        return TypedResults.Json(response, statusCode: result.Status switch
+        {
+            FindingDecisionStatus.Saved => 200,
+            FindingDecisionStatus.Conflict => 409,
+            FindingDecisionStatus.RunNotFound or FindingDecisionStatus.FindingNotFound => 404,
+            _ => 400,
+        });
+    }
+
+    private static async Task<IResult> SetBatchFindingDecisions(Guid runId, BatchFindingDecisionRequest request,
+        HttpContext http, FindingDecisionService decisions, CancellationToken ct)
+    {
+        var actor = !http.Request.Headers.ContainsKey(ApiKeyOptions.HeaderName)
+            && http.RequestServices.GetRequiredService<DashboardSessions>().IsValid(http.User)
+            ? "dashboard-session" : "header-key";
+        var result = await decisions.DecideBatchAsync(runId, request, actor, ct);
+        // Operational failures still return the structured partial outcomes. ErrorCode is mandatory
+        // for these failures; 200 is transport success, not a claim that every item saved.
+        return TypedResults.Json(result, statusCode: result.ErrorCode switch
+        {
+            "invalid-selection" or "invalid-actor" or "run-not-editable" => 400,
+            "run-not-found" => 404,
+            "revision-mismatch" or "busy" => 409,
+            _ => 200,
+        });
+    }
+
+    private static async Task<IResult> PublishSelectedDraft(Guid runId, PublishSelectedDraftRequest request,
+        DraftReviewService drafts, CancellationToken ct)
+    {
+        var result = await drafts.PublishSelectedAsync(runId, request, ct);
+        return TypedResults.Json(result, statusCode: result.Accepted ? 200 : result.ErrorCode switch
+        {
+            "run-not-found" => 404,
+            "selection-required" or "invalid-selection" or "ineligible-finding" or "run-not-publishable" => 400,
+            _ => 409,
+        });
+    }
+
+    private static async Task<IResult> ReconcileSelectedDraft(Guid runId, ReconcileDraftRequest request,
+        DraftReviewService drafts, CancellationToken ct)
+    {
+        var result = await drafts.ReconcileSelectedAsync(runId, request, ct);
+        return TypedResults.Json(result, statusCode: result.ErrorCode switch
+        {
+            "run-not-found" => 404,
+            "invalid-selection" or "run-not-publishable" => 400,
+            "busy" => 409,
+            "reconciliation-unavailable" => 503,
+            _ => 200,
+        });
+    }
+
     private static IResult SubmitResolution(
         SubmitReviewRequest request,
         RunSubmissionService runs,
@@ -99,6 +277,21 @@ public static class Endpoints
             _ => throw new UnreachableException(),
         };
 
+    private static async Task<IResult> GetRunHistory(RunWorklistQueryService query, CancellationToken ct,
+        int offset = 0, int count = 50, bool attentionOnly = false,
+        string? org = null, string? project = null, string? repositoryId = null, int? prId = null)
+    {
+        var hasScope = org is not null || project is not null || repositoryId is not null || prId is not null;
+        if (offset is < 0 or > 10_000 || count is < 1 or > 100 || hasScope &&
+            (string.IsNullOrWhiteSpace(org) || string.IsNullOrWhiteSpace(project) || string.IsNullOrWhiteSpace(repositoryId) || prId is null or < 1))
+            return TypedResults.BadRequest(new TechnicianErrorResponse("invalid-history-query"));
+        PrKey? pr = hasScope ? new(org!, project!, repositoryId!, prId!.Value) : null;
+        return TypedResults.Ok(await query.GetAsync(offset, count, pr, attentionOnly, ct));
+    }
+
+    private static async Task<IResult> GetDashboard(DashboardQueryService query, CancellationToken ct)
+        => TypedResults.Ok(await query.GetAsync(ct));
+
     private static async Task<IResult> DiscoverPullRequests(DiscoveryService discovery, CancellationToken ct)
         => TypedResults.Ok(await discovery.RunSweepAsync(ct));
 
@@ -106,6 +299,6 @@ public static class Endpoints
     /// tracker → queue row → store row; unknown → 404.</summary>
     private static async Task<IResult> GetRunStatus(Guid runId, RunSubmissionService runs, CancellationToken ct)
         => await runs.GetStatusAsync(runId, ct) is { } status
-            ? TypedResults.Ok(status)
-            : TypedResults.NotFound();
+            ? TypedResults.Ok(RunDetailsService.SafeStatus(status))
+            : TypedResults.NotFound(new TechnicianErrorResponse("run-not-found"));
 }

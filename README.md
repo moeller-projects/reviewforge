@@ -80,15 +80,24 @@ export REVIEWFORGE_API_KEYS=...           # comma-separated API keys for review 
 #   account over a developer's personal ~/.codex.
 # provider openai:       export OPENAI_API_KEY=...
 
-dotnet run --project src/ReviewForge.Service          # serves http://localhost:5080
+dotnet dev-certs https --trust                       # local development certificate
+dotnet run --project src/ReviewForge.Service          # serves https://localhost:9090
 
 dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll submit \
   --org my-org --project my-project --repo my-repo --pr 1234 --api-key ...
 dotnet src/ReviewForge.Cli/bin/Debug/net11.0/reviewforge.dll status --run-id <guid> --api-key ...
 ```
 
-Endpoints (`/reviews*` and `/resolutions` require the `X-Api-Key` header; keys are configured via the
-`REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation):
+Endpoints (API clients use `X-Api-Key`; keys are configured via the
+`REVIEWFORGE_API_KEYS` environment variable, comma- or semicolon-separated for rotation).
+A valid dashboard session is also accepted by the dashboard, history, run-status,
+run-details, decision-history, draft-capability, and model-call GET endpoints, and by
+review/draft submission, finding-decision (single/batch), publication, and reconciliation
+POST endpoints. Every session-authenticated POST requires antiforgery validation.
+Discovery, resolution submission, and MCP remain API-key-only. See
+[dashboard API and antiforgery reference](docs/dashboard.md#api-and-antiforgery-reference).
+
+Endpoints:
 `POST /reviews` → 202 `{runId, statusUrl}`, 400 on validation errors, 401 without a valid
 key, 409 when a review for the same PR is already in flight (the conflicting run id is in
 the body), 429 over the submit limit (`Api:SubmitPermitLimit` per `Api:SubmitWindowSeconds`,
@@ -101,8 +110,9 @@ restart) · `POST /resolutions` (opt-in autonomous comment resolution) · `POST 
 an endpoint filter, the limiter is middleware), so rejected requests still consume rate
 budget. The limiter always partitions by remote IP — never by the presented `X-Api-Key`,
 which is unauthenticated input and would give each key guess a fresh permit budget. Deploying
-behind a reverse proxy requires forwarded-headers support, otherwise every client shares
-the proxy's single partition.
+behind a reverse proxy without trusted forwarded-header processing makes every client share
+the proxy's single partition. This host does not configure forwarded-header trust; see the
+[dashboard HTTPS deployment limitations](docs/dashboard.md#https-and-deployment).
 
 The same submission/status logic is exposed as an MCP server (Streamable HTTP) at `/mcp` for
 agent-chat clients, with the same `X-Api-Key` auth and the status rate-limit policy (every
@@ -115,10 +125,34 @@ JSON-RPC message is a POST, so the submit budget would strangle a session). Tool
 `get_review_status(runId)` → the run status or null, and `list_open_prs(project?, repositoryId?,
 maxResults=100)` → open PRs in the org with title/author/draft/branch fields (bounded — when
 `truncated` is true, narrow the filters), so an agent can call `enqueue_review` or
-`enqueue_review_draft` per pick. Point an MCP client at `http://localhost:5080/mcp` with
+`enqueue_review_draft` per pick. Point an MCP client at `https://localhost:9090/mcp` with
 the `X-Api-Key` header set — or, for clients that cannot set headers, pass the key as the
 `api_key` query parameter (`/mcp` only; the header is preferred because query strings appear
 in request logs).
+
+## PR review dashboard
+
+Open `https://localhost:9090/` and sign in with an environment-configured API key.
+The dashboard at `/dashboard` prioritizes runs needing attention, grouped by PR, observed
+revision chronology, and newest run. Start a read-only draft at `/dashboard/start`, inspect
+`/dashboard/runs/{runId}`, save approve/reject/defer decisions, then explicitly publish
+selected approved findings. Draft reviews require `VerifyFindings:Enabled=true`; manual
+drafts can inspect draft PRs and already-reviewed heads without changing automatic gates.
+Deep investigation and confidence assessment are deferred. This is separate from the
+Aspire telemetry dashboard. Service, CLI, MCP and browser share the HTTPS origin;
+Compose requires runtime-mounted TLS material as described in the setup guide below.
+Sessions have a fixed eight-hour maximum and are invalidated on service restart; the
+dashboard currently supports a single service instance.
+
+See [dashboard operation, API, and deployment](docs/dashboard.md) for HTTPS setup,
+authentication/antiforgery boundaries, summary semantics, freshness, restart behavior,
+and outstanding release-validation requirements.
+
+`POST /reviews` additionally accepts optional `"forceReview": true` (default `false`).
+It bypasses only same-head suppression for an ordinary manual review; drafts still skip
+and all claim, authorization, and publication safeguards remain. Only the dashboard's
+confirmed advanced automatic-publication action sets this flag; existing CLI/MCP/discovery
+defaults are unchanged. The default read-only draft action does not publish or set it.
 
 ## Autonomous comment resolution
 
@@ -196,12 +230,16 @@ dotnet user-secrets set "Parameters:openai-api-key" "<openai-key>"
 dotnet user-secrets set "Parameters:api-key" "<reviewforge-api-key>"
 ```
 
-The dashboard URL is printed on startup; `WorkDir` is the system temp dir
+The telemetry dashboard URL is printed on startup; the ReviewForge service uses
+`https://localhost:9090` directly (do not run another Service instance on that port).
+Trust the development certificate before starting Aspire. `WorkDir` is the system temp dir
 (`Path.GetTempPath()/reviewforge`). Aspire injects the
 `OTEL_EXPORTER_OTLP_*` variables automatically, so no OTLP endpoint is ever hardcoded.
 
-**Production — Docker Compose.** `docker compose up -d` runs exactly as before (no telemetry
-export). To add the standalone Aspire dashboard as an opt-in sink:
+**Production — Docker Compose.** Configure the runtime PFX, public CA PEM and certificate
+password first; see [TLS setup](docs/dashboard.md#https-and-deployment). Then
+`docker compose up -d` serves HTTPS on port 9090 with no telemetry export by default.
+To add the standalone Aspire dashboard as an opt-in sink:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://dashboard:18889 docker compose --profile observability up -d
@@ -242,7 +280,9 @@ deployed configuration to the `Review`, `Workspace`, `Persistence`, `Git`, and `
   after the claim TTL, `GET /reviews/{runId}` reads through the queue row (`Queued`) and the
   store row (`Completed`/`Failed`), and expired claims are counted by
   `reviewforge.queue.reclaimed_total`. In-flight PR claims remain in-memory for now — a
-  restarted run is re-acquired idempotently at dequeue.
+  restarted run is re-acquired idempotently at dequeue. Recovery re-executes the request
+  from the beginning; it does not resume a persisted stage. Live stage progress and skipped
+  attempts are transient. Stale persisted run shells can be reaped as failures.
 - `Review:Sharding` was removed (unused); large diffs use the `MaxDiffChars` truncation path.
 - `Reasoning:FollowUpModel` — optional cheaper/faster model for the Fast tier: follow-up
   reviews and `/fixit` passes route to it; full reviews keep `Reasoning:Model`. Must carry
@@ -402,7 +442,10 @@ short name), `Creators` (matches creator id or name; a **required allowlist** wh
 `AllowAllCreators=true` explicitly opts into reviewing PRs from any author, external
 contributors included), `MaxEnqueuesPerSweep` (default 20), `MaxDegreeOfParallelism`
 (default 4, validated 1–16), `SweepInterval` (a `hh:mm:ss` interval; unset/null disables
-the background sweep worker), `FailureBackoffBase` (default 30 min) / `FailureBackoffMax`
+the background sweep worker; checked-in base config enables a 15-minute interval in all
+environments unless overridden, with `AllowAllCreators=false` and a placeholder creator ID.
+No Production override is shipped — configure the creator allowlist and inspect effective
+environment overrides before deployment), `FailureBackoffBase` (default 30 min) / `FailureBackoffMax`
 (default 8 h) — a head whose recent runs keep failing is skipped until a doubling backoff
 elapses, and `WarmupEnabled` (default false) — when on, each accepted enqueue pre-fetches
 its head commits into the shared git mirror (`WarmupMaxPerSweep` = 5 per sweep,

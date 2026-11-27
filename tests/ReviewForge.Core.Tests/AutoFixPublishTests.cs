@@ -313,8 +313,10 @@ public class AutoFixPublishTests
         Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
     }
 
-    [Fact]
-    public async Task Committed_general_finding_marks_row_replied_after_post()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Committed_general_finding_records_publication_and_marks_fix_replied(bool alreadyPosted)
     {
         var source = new FakePullRequestSource();
         var ctx = Ctx(source);
@@ -328,14 +330,24 @@ public class AutoFixPublishTests
         store.PushedFixes.Add(new PushedFix(
             1, ctx.RunId, "k1", "abcdef123456", "fix(src): quote variable", null,
             Pushed: true, AiDrafted: false, ReplyPosted: false, DateTimeOffset.UtcNow));
+        if (alreadyPosted)
+        {
+            source.Threads.Add(new ReviewThread(17, "k1", ReviewThreadStatus.Closed,
+                [new ThreadComment("b", "bot", true, CommentFormatter.FormatFinding(finding), DateTimeOffset.UtcNow)]));
+        }
+        await new BeginRunStage(store).ExecuteAsync(ctx, CancellationToken.None);
 
         await new PublishFindingsStage(
                 source, store, NullLogger<PublishFindingsStage>.Instance,
                 autoFix: new AutoFixOptions {Enabled = true, PublishMode = AutoFixOptions.ModeCommitOnHead})
             .ExecuteAsync(ctx, CancellationToken.None);
 
-        Assert.Contains(source.GeneralComments, text => text.Contains("Fixed in abcdef1", StringComparison.Ordinal));
+        Assert.Equal(!alreadyPosted, source.GeneralCommentDedupeKeys.Contains("k1"));
         Assert.True(Assert.Single(store.PushedFixes).ReplyPosted);
+        var row = Assert.Single((await store.GetRunAsync(ctx.RunId, CancellationToken.None))!.Findings);
+        Assert.True(row.Published);
+        Assert.Equal(alreadyPosted ? 17 : 1000, row.ThreadId);
+        Assert.Equal(row.ThreadId, ctx.Published.PostedThreadIds["k1"]);
     }
 
     [Fact]

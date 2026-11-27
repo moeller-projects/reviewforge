@@ -222,6 +222,25 @@ public sealed class CommitFixesStageTests
     }
 
     [Fact]
+    public async Task Forced_review_still_fails_push_compare_and_swap_and_abandons_intent()
+    {
+        var error = new PrHeadChangedException("head-sha", "racing-head");
+        var git = new FakeGitOps {ThrowOnPush = error};
+        var store = new FakeFindingStore();
+        using var ctx = Ctx(fixes: Fix("k1", "src/a.sh"));
+        ctx.ForceReview = true;
+
+        var thrown = await Assert.ThrowsAsync<PrHeadChangedException>(() =>
+            Stage(git, store, Options()).ExecuteAsync(ctx, TestContext.Current.CancellationToken));
+
+        Assert.Same(error, thrown);
+        Assert.Single(git.Commits);
+        Assert.Empty(git.Pushes);
+        Assert.Empty(store.PushedFixes);
+        Assert.Null(ctx.AutoFix.PushedHeadSha);
+    }
+
+    [Fact]
     public async Task Remote_tip_mismatch_at_the_pin_fails_with_head_changed()
     {
         var git = new FakeGitOps {RemoteTip = "someone-elses-sha"};

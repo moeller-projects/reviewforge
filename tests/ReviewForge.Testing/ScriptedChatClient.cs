@@ -18,6 +18,10 @@ public sealed class ScriptedChatClient : IChatClient
     }
 
     public int Calls { get; private set; }
+    public Exception? ThrowOnResponse { get; set; }
+    public Exception? ThrowOnStream { get; set; }
+    public Exception? ThrowOnStreamDispose { get; set; }
+    public IReadOnlyList<ChatResponseUpdate>? StreamingUpdates { get; set; }
 
     public List<IReadOnlyList<ChatMessage>> Received { get; } = [];
 
@@ -28,6 +32,7 @@ public sealed class ScriptedChatClient : IChatClient
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
     {
+        if (ThrowOnResponse is { } failure) throw failure;
         lock (_Gate)
         {
             Calls++;
@@ -41,7 +46,32 @@ public sealed class ScriptedChatClient : IChatClient
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("streaming not scripted");
+        => StreamingUpdates is null ? throw new NotSupportedException("streaming not scripted")
+            : ThrowOnStreamDispose is { } error ? new DisposalFailureStream(Stream(cancellationToken), error) : Stream(cancellationToken);
+
+    private async IAsyncEnumerable<ChatResponseUpdate> Stream(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        foreach (var update in StreamingUpdates!)
+        {
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            yield return update;
+        }
+        if (ThrowOnStream is { } failure) throw failure;
+    }
+
+    private sealed class DisposalFailureStream(IAsyncEnumerable<ChatResponseUpdate> inner, Exception error) : IAsyncEnumerable<ChatResponseUpdate>
+    {
+        public IAsyncEnumerator<ChatResponseUpdate> GetAsyncEnumerator(CancellationToken cancellationToken = default)
+            => new Enumerator(inner.GetAsyncEnumerator(cancellationToken), error);
+        private sealed class Enumerator(IAsyncEnumerator<ChatResponseUpdate> inner, Exception error) : IAsyncEnumerator<ChatResponseUpdate>
+        {
+            public ChatResponseUpdate Current => inner.Current;
+            public ValueTask<bool> MoveNextAsync() => inner.MoveNextAsync();
+            public async ValueTask DisposeAsync() { await inner.DisposeAsync(); throw error; }
+        }
+    }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 

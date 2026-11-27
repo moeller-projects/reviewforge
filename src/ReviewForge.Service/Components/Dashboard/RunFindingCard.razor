@@ -1,0 +1,48 @@
+@using ReviewForge.Core.Domain
+<article class="finding-card">
+    <header>
+        <small><code>@Finding.FindingId</code></small>
+    </header>
+    <FindingEvidence Label="Candidate" Payload="Finding.Candidate" />
+    <details><summary>Accepted evidence and location</summary><FindingEvidence Label="Accepted" Payload="Finding.AcceptedFinding" /></details>
+    @if (Finding.Evidence is { } evidence)
+    {
+        <p>Validation: @evidence.Validation · @evidence.ValidationReason <small>(@evidence.ValidationProvenance)</small></p>
+        <p>Lightweight verification: @evidence.Verification · @evidence.VerificationReason <small>(@evidence.VerificationProvenance)</small></p>
+    }
+    else { <p>Validation and lightweight verification unavailable.</p> }
+    <p>Human decision: @(Finding.Decision?.State.ToString() ?? "Pending") · @(Finding.Decision?.Reason ?? "No reason recorded") · version @Finding.DecisionVersion</p>
+    <p>Publication: @((PublicationUnknown || Finding.PublicationUnknown) ? "Unknown — reconcile before any retry" : Finding.Published switch { true => "Posted", false => "Unpublished", null => "Unknown / legacy" })
+        @if (ThreadUrl is { } link) { <a href="@link" target="_blank" rel="noopener noreferrer">Open thread</a> }
+        @if (Finding.PreviouslyKnown) { <span> · Previously known</span> }
+    </p>
+    @if (!Finding.CanDecide || string.IsNullOrWhiteSpace(HeadSha)) { <p>Read-only: decisions require a successful completed draft run and an available reviewed revision.</p> }
+    <FindingDecisionEditor Finding="Finding" HeadSha="@HeadSha" Disabled="Disabled" Drafts="Drafts" OnSave="OnSave" OnChanged="OnChanged" />
+    <button type="button" class="compact-action finding-history" disabled="@Disabled" @onclick="() => OnHistory.InvokeAsync(Finding.FindingId)">Decision history</button>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public RunFindingDto Finding { get; set; } = default!;
+    [Parameter] public string HeadSha { get; set; } = "";
+    [Parameter] public Dictionary<string, FindingEditorDraft>? Drafts { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool PublicationUnknown { get; set; }
+    [Parameter] public string? BrowserUrl { get; set; }
+    [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public EventCallback<string> OnHistory { get; set; }
+    private string? ThreadUrl
+    {
+        get
+        {
+            if (Finding.ThreadId is not > 0 || !Uri.TryCreate(BrowserUrl, UriKind.Absolute, out var uri)
+                || uri.Scheme is not ("https" or "http") || !string.IsNullOrEmpty(uri.UserInfo)) return null;
+            var builder = new UriBuilder(uri) { Fragment = "" };
+            var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query)
+                .Where(p => !string.Equals(p.Key, "discussionId", StringComparison.OrdinalIgnoreCase))
+                .SelectMany(p => p.Value.Select(v => $"{Uri.EscapeDataString(p.Key)}={Uri.EscapeDataString(v ?? "")}"));
+            builder.Query = string.Join("&", query.Append($"discussionId={Finding.ThreadId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}"));
+            return builder.Uri.AbsoluteUri;
+        }
+    }
+}

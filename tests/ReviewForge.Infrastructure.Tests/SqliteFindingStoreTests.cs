@@ -32,9 +32,255 @@ public class SqliteFindingStoreTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Diagnostics_upgrade_reopen_and_journal_only_update_preserve_publication_and_legacy()
+    {
+        var observation = FindingObservation.Create(new RichFinding {
+            RuleId = "r", Title = "title", Severity = "high", Category = "bug", Description = "claim", DedupeKey = "key" });
+        var run = Run("head", DateTimeOffset.UtcNow, true, "key") with { FindingObservations = [observation] };
+        await _Store.SaveRunAsync(run, TestContext.Current.CancellationToken);
+        Assert.Null((await _Store.GetRunAsync(run.Id, TestContext.Current.CancellationToken))!.Diagnostics);
+        using var ctx = new ReviewForge.Core.Pipeline.ReviewContext(Key, run.StartedAt, run.Id);
+        var snapshot = ctx.SnapshotDiagnostics();
+        await _Store.RecordFindingPublicationAsync(run.Id, "key", 42, true, TestContext.Current.CancellationToken);
+        await _Store.UpdateRunDiagnosticsAsync(Guid.NewGuid(), snapshot, TestContext.Current.CancellationToken);
+        await _Store.UpdateRunDiagnosticsAsync(run.Id, snapshot, TestContext.Current.CancellationToken);
+        await _Store.SaveRunAsync(run with { Findings = [], FindingObservations = null }, TestContext.Current.CancellationToken);
+        var reopened = new SqliteFindingStore(_ConnectionString);
+        var saved = (await reopened.GetRunAsync(run.Id, TestContext.Current.CancellationToken))!;
+        Assert.NotNull(saved.Diagnostics);
+        Assert.True(saved.Success);
+        Assert.Equal(42, Assert.Single(saved.Findings).ThreadId);
+        Assert.True(saved.Findings[0].Published);
+        Assert.True(Assert.Single(saved.FindingObservations!).NewlyPosted);
+        // Simulate an older database, then reopen through the guarded additive upgrade.
+        using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE Runs DROP COLUMN DiagnosticsJson";
+            command.ExecuteNonQuery();
+        }
+        var upgraded = new SqliteFindingStore(_ConnectionString);
+        Assert.Null((await upgraded.GetRunAsync(run.Id, TestContext.Current.CancellationToken))!.Diagnostics);
+    }
+
     private static ReviewRun Run(string head, DateTimeOffset completed, bool success = true, params string[] keys)
         => new(Guid.NewGuid(), Key, head, ReviewKind.Full, completed.AddMinutes(-5), completed, success,
             [.. keys.Select(k => new StoredFinding(k, "rule", "high", "title", "f.cs", 1, null))]);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Candidate_snapshots_finalize_independently_of_identity_rows_and_survive_reopen(bool sqlite)
+    {
+        IFindingStore store = sqlite ? _Store : new ReviewForge.Testing.FakeFindingStore();
+        var ct = TestContext.Current.CancellationToken;
+        var run = Run("head", DateTimeOffset.UtcNow, true, "carried") with { FindingObservations = [] };
+        await store.SaveRunAsync(run with { CompletedAt = null, Success = false }, ct);
+        var rejected = FindingObservation.Create(new RichFinding
+        {
+            RuleId = "rule", Severity = "high", Category = "bug", Title = "rejected",
+            Description = "full rejected claim", DedupeKey = "rejected",
+        }) with { Validation = FindingValidationStatus.Rejected, ValidationReason = "no-anchor" };
+        await store.SaveRunAsync(run with { Success = false, FindingObservations = [rejected] }, ct);
+        if (sqlite) store = new SqliteFindingStore(_ConnectionString);
+        var loaded = (await store.GetRunAsync(run.Id, ct))!;
+        Assert.Equal(rejected, Assert.Single(loaded.FindingObservations!));
+        Assert.Equal(rejected, Assert.Single((await store.GetRecentRunsAsync(Key, 1, ct))[0].FindingObservations!));
+        // Shell reapers and older callers do not know about observations.
+        await store.SaveRunAsync(loaded with { FindingObservations = null }, ct);
+        Assert.Equal(rejected, Assert.Single((await store.GetRunAsync(run.Id, ct))!.FindingObservations!));
+        Assert.Equal(1, FindingObservationCounts.From(loaded.FindingObservations!).Rejected);
+        Assert.DoesNotContain("rejected", await store.GetKnownDedupeKeysAsync(Key, ct));
+        // A successful finalization still must not turn the observation into a dedupe identity.
+        await store.SaveRunAsync(loaded with { Success = true }, ct);
+        Assert.Equal(["carried"], await store.GetKnownDedupeKeysAsync(Key, ct));
+        Assert.Null((await store.GetRunAsync((await SaveLegacy()).Id, ct))!.FindingObservations);
+
+        async Task<ReviewRun> SaveLegacy()
+        {
+            var legacy = Run("legacy", DateTimeOffset.UtcNow.AddMinutes(-1));
+            await store.SaveRunAsync(legacy, ct);
+            return legacy;
+        }
+    }
+
+    [Theory]
+    [InlineData(FindingVerificationStatus.Confirmed)]
+    [InlineData(FindingVerificationStatus.Rejected)]
+    [InlineData(FindingVerificationStatus.Unverified)]
+    [InlineData(FindingVerificationStatus.Deterministic)]
+    [InlineData(FindingVerificationStatus.Failed)]
+    public async Task Observation_verification_and_complete_payload_roundtrip(FindingVerificationStatus status)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var observation = FindingObservation.Create(new RichFinding
+        {
+            RuleId = "rule", Severity = "high", Category = "bug", Title = "candidate", Description = "claim",
+            DedupeKey = "candidate", Anchor = new("file.cs", 2, 3), Snippet = "full snippet", Suggestion = "replacement",
+        }) with
+        {
+            Validation = FindingValidationStatus.Accepted, ValidationReason = "anchor-in-diff",
+            Verification = status, VerificationReason = "short reason", VerificationProvenance = "test-verifier",
+            NewlyPosted = true,
+        };
+        var run = Run("head", DateTimeOffset.UtcNow) with { FindingObservations = [observation] };
+        await _Store.SaveRunAsync(run, ct);
+        var loaded = (await new SqliteFindingStore(_ConnectionString).GetRunAsync(run.Id, ct))!;
+        Assert.Equal(observation, Assert.Single(loaded.FindingObservations!));
+        Assert.Empty(await _Store.GetKnownDedupeKeysAsync(Key, ct));
+    }
+
+    [Fact]
+    public async Task Missing_observation_column_is_upgraded_without_inventing_legacy_history()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var legacy = Run("head", DateTimeOffset.UtcNow);
+        await _Store.SaveRunAsync(legacy, ct);
+        await using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            await connection.OpenAsync(ct);
+            using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE Runs DROP COLUMN FindingObservationsJson";
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        var reopened = new SqliteFindingStore(_ConnectionString);
+        Assert.Null((await reopened.GetRunAsync(legacy.Id, ct))!.FindingObservations);
+        var observed = legacy with { FindingObservations = [] };
+        await reopened.SaveRunAsync(observed, ct);
+        Assert.Empty((await new SqliteFindingStore(_ConnectionString).GetRunAsync(legacy.Id, ct))!.FindingObservations!);
+    }
+
+    [Fact]
+    public async Task Dashboard_summaries_select_success_behind_failures_exclude_live_ids_and_count_without_audit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var start = DateTimeOffset.UtcNow;
+        var success = Run("head", start, true, "carry-forward", "new", "thread-123");
+        await _Store.SaveRunAsync(success, ct);
+        for (var i = 1; i <= 25; i++)
+            await _Store.SaveRunAsync(Run("head", start.AddMinutes(i), false), ct);
+        var live = Run("head", start.AddHours(1));
+        await _Store.SaveRunAsync(live, ct);
+        var shell = Run("old", start) with { CompletedAt = null, Success = false, Pipeline = "Resolve" };
+        await _Store.SaveRunAsync(shell, ct);
+        await _Store.SaveRunAsync(Run("head", start.AddHours(2)) with { Pipeline = "ReviewDraft" }, ct);
+        var summaries = await _Store.GetRunSummariesAsync([new(Key, "head")], [live.Id], [live.Id], ct);
+        Assert.Equal(4, summaries.Count);
+        Assert.Equal(2, Assert.Single(summaries, s => s.RunId == success.Id).ReviewFindings);
+        Assert.Contains(summaries, s => s.RunId == shell.Id && s.CompletedAt == null);
+        Assert.Contains(summaries, s => s.RunId == live.Id);
+        Assert.Contains(summaries, s => !s.Success && s.HeadSha == "head");
+        Assert.Empty(await _Store.GetRunSummariesAsync([], [], [], ct));
+    }
+
+    [Fact]
+    public async Task Fake_dashboard_summaries_bound_deep_history_like_the_sql_adapter()
+    {
+        var store = new ReviewForge.Testing.FakeFindingStore();
+        var start = DateTimeOffset.UtcNow;
+        for (var i = 0; i < 1000; i++) store.Runs.Add(Run("head", start.AddMinutes(i)));
+        var summaries = await store.GetRunSummariesAsync([new(Key, "head")], [], [], TestContext.Current.CancellationToken);
+        Assert.Single(summaries);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Observations_are_excluded_from_ranking_but_only_selected_details_are_counted(bool sqlite)
+    {
+        IFindingStore store = sqlite ? _Store : new ReviewForge.Testing.FakeFindingStore();
+        var ct = TestContext.Current.CancellationToken;
+        var start = DateTimeOffset.UtcNow;
+        var realSuccess = Run("head", start, true, "real");
+        await store.SaveRunAsync(realSuccess, ct);
+        var observations = new List<Guid>();
+        for (var i = 1; i <= 150; i++)
+        {
+            var corrected = Run("head", start.AddMinutes(i), true, "superseded");
+            observations.Add(corrected.Id);
+            await store.SaveRunAsync(corrected, ct);
+        }
+        var otherHead = Run("old", start.AddHours(4), true, "old");
+        await store.SaveRunAsync(otherHead, ct);
+        var summaries = await store.GetRunSummariesAsync([new(Key, "head")], observations, [observations[^1]], ct);
+        Assert.Equal(3, summaries.Count);
+        Assert.Equal(1, Assert.Single(summaries, s => s.RunId == realSuccess.Id).ReviewFindings);
+        Assert.Contains(summaries, s => s.RunId == observations[^1]);
+        Assert.Contains(summaries, s => s.RunId == otherHead.Id);
+        Assert.DoesNotContain(summaries, s => observations.Take(149).Contains(s.RunId));
+    }
+
+    [Fact]
+    public async Task Dashboard_pr_join_and_selected_run_counts_use_existing_indexes()
+    {
+        await using var connection = new SqliteConnection(_ConnectionString);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            EXPLAIN QUERY PLAN
+            WITH wanted(Org,Project,RepositoryId,PrId) AS (VALUES ('org','proj','repo',7))
+            SELECT r.Id, (SELECT COUNT(*) FROM Findings f WHERE f.RunId=r.Id AND substr(f.DedupeKey,1,7)!='thread-')
+            FROM Runs r JOIN wanted w ON r.Org=w.Org AND r.Project=w.Project
+                AND r.RepositoryId=w.RepositoryId AND r.PrId=w.PrId
+            """;
+        using var reader = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        var plan = new List<string>();
+        while (await reader.ReadAsync(TestContext.Current.CancellationToken)) plan.Add(reader.GetString(3));
+        Assert.Contains(plan, p => p.Contains("SEARCH r USING", StringComparison.Ordinal)
+            && (p.Contains("IX_Runs_Org_Project_RepositoryId_PrId", StringComparison.Ordinal)
+                || p.Contains("IX_Runs_PrHistoryTicks", StringComparison.Ordinal)));
+        Assert.Contains(plan, p => p.Contains("SEARCH f USING INDEX IX_Findings_RunId", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Dashboard_summaries_chunk_large_inventory_and_match_full_identity()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var heads = Enumerable.Range(1, 501).Select(i => new CurrentHeadQuery(Key with { PrId = i }, "head")).ToArray();
+        foreach (var head in heads)
+            await _Store.SaveRunAsync(Run("head", DateTimeOffset.UtcNow) with { Pr = head.Pr }, ct);
+        await _Store.SaveRunAsync(Run("head", DateTimeOffset.UtcNow) with { Pr = Key with { Org = "another" } }, ct);
+        var result = await _Store.GetRunSummariesAsync(heads, [], [], ct);
+        Assert.Equal(501, result.Count);
+        Assert.All(result, r => Assert.Equal("org", r.Pr.Org));
+    }
+
+    [Fact]
+    public async Task Publication_and_new_post_attribution_commit_or_rollback_together()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var finding = new RichFinding { RuleId = "r", Title = "finding", Severity = "high", Category = "bug", Description = "claim", DedupeKey = "key" };
+        var run = Run("head", DateTimeOffset.UtcNow, true, "key") with { FindingObservations = [FindingObservation.Create(finding)] };
+        await _Store.SaveRunAsync(run, ct);
+        await using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            await connection.OpenAsync(ct);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TRIGGER FailPublicationAudit BEFORE UPDATE OF FindingObservationsJson ON Runs BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;";
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        await Assert.ThrowsAsync<DbUpdateException>(() => _Store.RecordFindingPublicationAsync(run.Id, "key", 123, true, ct));
+        var unchanged = (await _Store.GetRunAsync(run.Id, ct))!;
+        Assert.False(unchanged.Findings[0].Published);
+        Assert.Null(unchanged.Findings[0].ThreadId);
+        Assert.False(Assert.Single(unchanged.FindingObservations!).NewlyPosted);
+        await using (var connection = new SqliteConnection(_ConnectionString))
+        {
+            await connection.OpenAsync(ct);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "DROP TRIGGER FailPublicationAudit";
+            await command.ExecuteNonQueryAsync(ct);
+        }
+        await _Store.RecordFindingPublicationAsync(run.Id, "key", 123, true, ct);
+        var posted = (await _Store.GetRunAsync(run.Id, ct))!;
+        Assert.True(posted.Findings[0].Published);
+        Assert.Equal(123, posted.Findings[0].ThreadId);
+        Assert.True(Assert.Single(posted.FindingObservations!).NewlyPosted);
+        await _Store.RecordFindingPublicationAsync(run.Id, "key", 123, false, ct);
+        Assert.True(Assert.Single((await _Store.GetRunAsync(run.Id, ct))!.FindingObservations!).NewlyPosted);
+    }
 
     [Fact]
     public async Task Ping_succeeds_against_real_store()
@@ -104,11 +350,13 @@ public class SqliteFindingStoreTests : IDisposable
         await using (var transaction = writer.BeginTransaction())
         {
             await using (var write = new SqliteCommand(
-                             "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, Pipeline, StartedAt, Success) " +
-                             "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', 'Review', $started, 1)", writer, transaction))
+                             "INSERT INTO Runs (Id, Org, Project, RepositoryId, PrId, HeadSha, Kind, Pipeline, StartedAt, StartedAtUtcTicks, Success) " +
+                             "VALUES ($id, 'o', 'p', 'r', 1, 'h', 'Full', 'Review', $started, $ticks, 1)", writer, transaction))
             {
                 write.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
-                write.Parameters.AddWithValue("$started", DateTimeOffset.UtcNow.ToString("O"));
+                var started = DateTimeOffset.UtcNow;
+                write.Parameters.AddWithValue("$started", started.ToString("O"));
+                write.Parameters.AddWithValue("$ticks", started.UtcTicks);
                 await write.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
             }
 
@@ -205,6 +453,35 @@ public class SqliteFindingStoreTests : IDisposable
         var finding = Assert.Single(loaded.Findings);
         Assert.Equal("k1", finding.DedupeKey);
         Assert.Equal(42, finding.ThreadId);
+    }
+
+    [Fact]
+    public async Task Ordinary_publication_audit_survives_finalize_and_legacy_rows_remain_readable()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var run = new ReviewRun(Guid.NewGuid(), Key, "head", ReviewKind.Full, now, null, false,
+            [new StoredFinding("posted", "rule", "high", "title", "f.cs", 2, null,
+                 AppliedFixJson: "{\"fix\":true}", FindingJson: "{\"description\":\"full finding\"}"),
+             new StoredFinding("legacy", "rule", "low", "old title", null, null, 99)]);
+        await _Store.SaveRunAsync(run, CancellationToken.None);
+        await _Store.MarkFindingPublishedAsync(run.Id, "posted", 123, CancellationToken.None);
+        await _Store.MarkFindingPublishedAsync(run.Id, "posted", null, CancellationToken.None);
+        await _Store.SaveRunAsync(run with {CompletedAt = now.AddMinutes(1), Success = true}, CancellationToken.None);
+
+        var loaded = (await _Store.GetRunAsync(run.Id, CancellationToken.None))!;
+        var posted = loaded.Findings.Single(f => f.DedupeKey == "posted");
+        Assert.True(posted.Published);
+        Assert.Equal(123, posted.ThreadId);
+        Assert.Equal(run.Findings[0].FindingJson, posted.FindingJson);
+        Assert.Equal(run.Findings[0].AppliedFixJson, posted.AppliedFixJson);
+        var legacy = loaded.Findings.Single(f => f.DedupeKey == "legacy");
+        Assert.False(legacy.Published); // Unknown publication state is not evidence it was never posted.
+        Assert.Equal(99, legacy.ThreadId);
+        Assert.Null(legacy.FindingJson);
+        var prior = (await _Store.GetLastCompletedRunAsync(Key, CancellationToken.None))!;
+        Assert.Equal(posted, prior.Findings!.Single(f => f.DedupeKey == "posted"));
+        var recent = Assert.Single(await _Store.GetRecentRunsAsync(Key, 1, CancellationToken.None));
+        Assert.Equal(posted, recent.Findings.Single(f => f.DedupeKey == "posted"));
     }
 
     [Fact]

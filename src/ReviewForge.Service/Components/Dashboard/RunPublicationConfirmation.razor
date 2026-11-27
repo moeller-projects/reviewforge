@@ -1,0 +1,29 @@
+<WorkbenchDialog Label="Confirm publication" ReturnFocusId="@ReturnFocusId">
+<section class="publication-confirmation">
+    <h2 id="publication-title">Confirm publication</h2>
+    <p>Post only these @(Request.Selections!.Count) approved findings to the PR at reviewed head <code>@Request.HeadSha</code>?</p>
+    <h3>Eligible approved selection</h3>
+    <ul>@foreach (var selection in Request.Selections!)
+    {
+        var item = Preview.FirstOrDefault(p => p.FindingId == selection.FindingId);
+        <li><strong>@(item?.Title ?? selection.FindingId)</strong> · @(item?.Location ?? "Location unavailable") · <code>@selection.FindingId</code> · approval version @selection.ExpectedDecisionVersion</li>
+    }</ul>
+    @if (Preview.Any(p => p.ExclusionReason is not null))
+    {
+        <h3>Excluded from this post</h3>
+        <ul>@foreach (var item in Preview.Where(p => p.ExclusionReason is not null))
+        { <li><strong>@item.Title</strong> · @item.Location · <code>@item.FindingId</code>: @item.ExclusionReason</li> }</ul>
+    }
+    <p>This writes external comments. Approval alone never posts.</p>
+    <button type="button" class="compact-action confirm-publication" disabled="@(Disabled || Request.Selections is not { Count: > 0 })" @onclick="OnConfirm">Confirm post selected findings</button>
+    <button type="button" class="compact-action" data-dialog-cancel autofocus disabled="@Disabled" @onclick="OnCancel">Cancel</button>
+</section>
+</WorkbenchDialog>
+@code {
+    [Parameter, EditorRequired] public PublishSelectedDraftRequest Request { get; set; } = default!;
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public IReadOnlyList<PublicationPreviewItem> Preview { get; set; } = [];
+    [Parameter] public string? ReturnFocusId { get; set; }
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+}

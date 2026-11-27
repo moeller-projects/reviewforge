@@ -1,0 +1,346 @@
+@using ReviewForge.Core.Domain
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="queue-workbench" data-disabled-commands="@DisabledCommands" @ref="_Root">
+<div class="finding-toolbar" aria-label="Finding view">
+    <button type="button" data-view="queue" aria-pressed="@(!_Board ? "true" : "false")" @onclick="() => SwitchView(false)">Queue</button>
+    <button type="button" data-view="board" aria-pressed="@(_Board ? "true" : "false")" @onclick="() => SwitchView(true)">Board</button>
+</div>
+<div class="finding-toolbar command-toolbar">
+    <span id="workbench-command-entry" tabindex="-1"><button type="button" class="command-help" @onclick='() => ExecuteCommand("commands")'>Commands &amp; keyboard help <kbd>Ctrl/⌘ K</kbd></button></span>
+    <span>↑/↓ navigate · Enter inspect · Space select · Shift+↑/↓ range · / search · Escape return</span>
+</div>
+@if (_CommandMessage is not null) { <p class="notice" role="status">@_CommandMessage</p> }
+@if (State.Complete) { <p class="notice" role="status">Review complete: no pending findings remain in this filtered order. Filters are unchanged.</p> }
+@if (_CommandsOpen)
+{
+    <WorkbenchDialog Label="Finding commands and keyboard help">
+        <h2>Finding commands</h2>
+        <p>Commands apply only to this workbench. Approval never publishes. Unsaved reason drafts are retained.</p>
+        <div class="command-list">
+        @foreach (var command in Commands)
+        {
+            <button type="button" disabled="@(Unavailable(command.Id) is not null)" title="@Unavailable(command.Id)" @onclick="() => PaletteCommand(command.Id)">@command.Label <kbd>@command.Shortcut</kbd></button>
+            @if (Unavailable(command.Id) is { } reason) { <small>@reason</small> }
+        }
+        </div>
+        <label><input type="checkbox" aria-label="Single-letter shortcuts" checked="@_SingleLetter" @onchange="LettersChanged" /> Enable single-letter shortcuts (J/K, A approve, R reject, D defer, ? help)</label>
+        <label><input type="checkbox" aria-label="Advance after saving" checked="@State.Advance" @onchange="AdvanceChanged" /> Advance to next pending after a confirmed individual save</label>
+        <p>Typing, native controls and IME keep their own keys. Escape returns from evidence before clearing selection; it never discards reason drafts.</p>
+        <button type="button" data-dialog-cancel autofocus @onclick="() => _CommandsOpen = false">Close commands</button>
+    </WorkbenchDialog>
+}
+@if (State.Rejection is { } rejection)
+{
+    <RejectionComposer Composer="rejection" Findings="Findings" HeadSha="@HeadSha" Disabled="Disabled" Submitting="Submitting" OnChanged="OnChanged" OnSave="OnBatch" OnDismiss="DismissRejection" />
+}
+<div class="queue-filters">
+    <label>Search loaded findings <input type="search" data-queue-search aria-label="Search loaded findings" @bind="State.Search" @bind:event="oninput" @bind:after="FiltersChanged" /></label>
+    <label>Pipeline <select aria-label="Pipeline filter" @bind="State.Pipeline" @bind:after="FiltersChanged"><option value="all">All pipeline states</option><option>Pipeline-accepted</option><option>Pipeline-rejected</option><option>Unavailable</option></select></label>
+    <label>Decision <select aria-label="Decision filter" @bind="State.Decision" @bind:after="FiltersChanged"><option value="all">All decisions</option>@foreach (var state in Enum.GetValues<FindingDecisionState>()) { <option>@state</option> }</select></label>
+    <label>Publication <select aria-label="Publication filter" @bind="State.Publication" @bind:after="FiltersChanged"><option value="all">All publication states</option><option>Unpublished</option><option>Posted</option><option>Unknown</option><option>Previously known</option></select></label>
+    <label>Severity <select aria-label="Severity filter" @bind="State.Severity" @bind:after="FiltersChanged"><option value="all">All severities</option>@foreach (var severity in new[] { "critical", "high", "medium", "low", "info" }) { <option>@severity</option> }</select></label>
+    <label>Order <select aria-label="Finding order" @bind="State.Sort" @bind:after="FiltersChanged"><option value="severity">Severity, then file</option><option value="file">File, then location</option></select></label>
+</div>
+<div class="queue-selection">
+    <button type="button" disabled="@Disabled" @onclick="SelectMatching">Select all matching (@Matching.Count)</button>
+    <button type="button" disabled="@Disabled" @onclick="ClearAsync">Clear selection</button>
+    <span role="status">@State.Selected.Count selected · @State.Selected.Count(id => !Matching.Any(f => f.FindingId == id)) hidden</span>
+    <span>Shift-click to select a range. Selection does not approve or publish.</span>
+</div>
+<div class="finding-toolbar" aria-label="Batch decisions">
+    @foreach (var command in Commands.Where(c => c.Id.StartsWith("batch-", StringComparison.Ordinal)))
+    {
+        <button type="button" data-command="@command.Id" disabled="@(Unavailable(command.Id) is not null)" title="@Unavailable(command.Id)" @onclick="() => ExecuteCommand(command.Id)">@command.Label</button>
+    }
+    <span>Save up to 500 selected findings, including hidden items. Approval does not publish.</span>
+    @if (BatchBlockReason is { } batchReason) { <small>@batchReason</small> }
+</div>
+<label class="pane-size">Queue width <input type="range" min="25" max="65" step="1" value="40" aria-label="Queue pane width" data-pane-size /></label>
+<div class="finding-workspace @(_Board ? "board-workspace" : "") @(_Inspecting ? "inspecting" : "")">
+    <section class="finding-queue" aria-label="Findings queue">
+        <div data-finding-view="queue" hidden="@_Board">
+        <ul>
+        @{ var rovingId = _Board ? null : RovingId; }
+        @foreach (var finding in Matching)
+        {
+            var payload = FindingWorkspaceState.Payload(finding);
+            <li class="finding-row @(State.FocusedId == finding.FindingId ? "focused" : "") @(State.Selected.Contains(finding.FindingId) ? "selected" : "")" @key="finding.FindingId">
+                <input type="checkbox" tabindex="@(rovingId == finding.FindingId ? 0 : -1)" @onfocus="() => State.FocusedId = finding.FindingId" aria-label="@($"Select {payload?.Title ?? finding.FindingId}")" checked="@State.Selected.Contains(finding.FindingId)" disabled="@Disabled"
+                    @onclick="e => _Shift = e.ShiftKey" @onchange="() => Toggle(finding, _Shift)" />
+                <button type="button" data-finding-id="@finding.FindingId" tabindex="@(rovingId == finding.FindingId ? 0 : -1)" @onfocus="() => State.FocusedId = finding.FindingId" aria-current="@(State.FocusedId == finding.FindingId ? "true" : null)" @onclick="() => InspectRow(finding.FindingId)">
+                    <strong>@(payload?.Title ?? "Finding payload unavailable")</strong>
+                    <small>@(payload?.Severity ?? "Severity unavailable") · @(payload?.Anchor?.FilePath ?? "Location unavailable"):@payload?.Anchor?.StartLine · @payload?.RuleId</small>
+                    <small>@FindingWorkspaceState.PipelineLabel(finding) · @(finding.Decision?.State ?? FindingDecisionState.Pending) · @FindingWorkspaceState.PublicationLabel(finding) @(finding.PreviouslyKnown ? "· Previously known" : "")</small>
+                    <small>@(finding.PublicationEligible ? "Technically eligible" : "Not technically eligible") · Approval and current-head checks remain separate.</small>
+                </button>
+            </li>
+        }
+        </ul>
+        @if (Matching.Count == 0) { <p class="empty">No loaded findings match. Clear filters or refresh a queued/running run.</p> }
+        </div>
+        @if (_BoardVisited)
+        {
+            <div data-finding-view="board" hidden="@(!_Board)">
+                <FindingBoard State="State" Findings="Matching" Active="_Board" Disabled="Disabled" MovingId="@_MovingId" RovingId="@RovingId" BlockReason="MoveBlockReason" OnMove="MoveCard" OnChanged="OnChanged" OnInspect="InspectRow" OnSelect="item => Toggle(item.Finding, item.Range)" />
+            </div>
+        }
+    </section>
+    <section class="finding-inspector" aria-label="Focused finding evidence">
+        <h2 tabindex="-1" data-inspector-focus>Finding evidence</h2>
+        <button type="button" class="return-to-queue" @onclick='() => ExecuteCommand("return")'>Return to findings</button>
+        <div class="decision-commands">
+        @foreach (var command in Commands.Where(c => c.Id is "approve" or "reject" or "defer"))
+        {
+            <button type="button" data-command="@command.Id" disabled="@(Unavailable(command.Id) is not null)" title="@Unavailable(command.Id)" @onclick="() => ExecuteCommand(command.Id)">@command.Label @if (_SingleLetter) { <kbd>@command.Shortcut</kbd> }</button>
+        }
+        </div>
+        @if (Findings.FirstOrDefault(f => f.FindingId == State.FocusedId) is { } focused)
+        {
+            @if (!Matching.Any(f => f.FindingId == focused.FindingId)) { <p class="notice">Focused finding is hidden by the current filters.</p> }
+            <RunFindingCard @key="focused.FindingId" Finding="focused" HeadSha="@HeadSha" Disabled="Disabled" BrowserUrl="@BrowserUrl"
+                PublicationUnknown="Unknown.Contains(focused.FindingId)" Drafts="State.Drafts" OnSave="SaveGuarded" OnHistory="OnHistory" OnChanged="OnChanged" />
+        }
+        else { <p>Select a finding to inspect its evidence.</p> }
+    </section>
+</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public FindingWorkspaceState State { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<RunFindingDto> Findings { get; set; } = [];
+    [Parameter] public string HeadSha { get; set; } = "";
+    [Parameter] public string? BrowserUrl { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool Submitting { get; set; }
+    [Parameter] public bool Hidden { get; set; }
+    [Parameter] public HashSet<string> Unknown { get; set; } = [];
+    [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback<BatchFindingDecisionRequest> OnBatch { get; set; }
+    [Parameter] public EventCallback<string> OnHistory { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private IReadOnlyList<RunFindingDto> Matching => State.Matching(Findings.Select(f => Unknown.Contains(f.FindingId) ? f with { PublicationUnknown = true } : f).ToArray());
+    private ElementReference _Root;
+    private IJSObjectReference? _Module, _CommandsModule, _BoardModule;
+    private bool _Board, _BoardVisited, _DecisionSaving;
+    private string? _MovingId;
+    private DotNetObjectReference<FindingQueue>? _Callback;
+    private bool _SingleLetter, _CommandsOpen;
+    private string? _CommandMessage, _LastFocused;
+    private bool _WasDisabled, _WasHidden, _RestoreContinuity;
+    private string DisabledCommands => string.Join(" ", Commands.Where(c => Unavailable(c.Id) is not null).Select(c => c.Id)
+        .Concat(!_Inspecting && State.Selected.Count == 0 ? new[] { "escape" } : []));
+    private string? RovingId => Matching.Any(f => f.FindingId == State.FocusedId) ? State.FocusedId : Matching.FirstOrDefault()?.FindingId;
+    private static readonly (string Id, string Label, string Shortcut)[] Commands =
+    [ ("next", "Next finding", "↓ / J"), ("previous", "Previous finding", "↑ / K"), ("inspect", "Inspect finding", "Enter"),
+      ("select", "Toggle selection", "Space"), ("approve", "Approve", "A (opt-in)"), ("reject", "Reject with reason", "R (opt-in)"),
+      ("defer", "Defer", "D (opt-in)"), ("reset", "Reset to pending", ""),
+      ("batch-approve", "Approve selected", ""), ("batch-reject", "Reject selected with reasons", ""), ("batch-defer", "Defer selected", ""), ("batch-reset", "Reset selected to pending", ""), ("search", "Search loaded findings", "/"), ("return", "Return to findings", "Escape") ];
+    public sealed record CommandPreferences(bool SingleLetter = false, bool Advance = true);
+    protected override void OnParametersSet()
+    {
+        if ((_WasDisabled && !Disabled) || (_WasHidden && !Hidden)) _RestoreContinuity = true;
+        _WasDisabled = Disabled;
+        _WasHidden = Hidden;
+        if (_LastFocused is not null && _LastFocused != State.FocusedId && _Inspecting) _PendingFocus = "inspector";
+        _LastFocused = State.FocusedId;
+    }
+    private string? BatchBlockReason => State.BatchBlockReason(Findings, HeadSha, Disabled || _DecisionSaving);
+    private string? Unavailable(string command)
+    {
+        if (command.StartsWith("batch-", StringComparison.Ordinal)) return BatchBlockReason;
+        if (command is "search" or "return" or "escape") return null;
+        if (Disabled || _DecisionSaving) return "Actions are unavailable while busy, stale or signed out.";
+        var finding = Findings.FirstOrDefault(f => f.FindingId == State.FocusedId);
+        if (finding is null || !Matching.Any(f => f.FindingId == finding.FindingId)) return "Choose a finding in the current filtered queue.";
+        if (command is not ("approve" or "reject" or "defer" or "reset")) return null;
+        return State.DecisionBlockReason(finding, HeadSha, Disabled)
+            ?? (State.Drafts.GetValueOrDefault(finding.FindingId)?.Dirty == true ? "Save or review the unsaved draft in the decision editor first." : null);
+    }
+    private void FiltersChanged() => State.Complete = false;
+    private async Task PaletteCommand(string command) { _CommandsOpen = false; await ExecuteCommand(command); }
+    private async Task LettersChanged(ChangeEventArgs e) { _SingleLetter = e.Value is true; await StorePreferences(); }
+    private async Task AdvanceChanged(ChangeEventArgs e) { State.Advance = e.Value is true; await StorePreferences(); }
+    private async Task StorePreferences()
+    {
+        try { if (_CommandsModule is not null) await _CommandsModule.InvokeVoidAsync("savePreferences", _Root, _SingleLetter, State.Advance); }
+        catch (JSDisconnectedException) { /* Presentation preferences are not replayed on reconnect. */ }
+    }
+    [JSInvokable]
+    public async Task ExecuteCommand(string command, bool range = false)
+    {
+        if (_Disposed || Hidden || _CommandsOpen || State.Rejection is not null) return;
+        _CommandMessage = null;
+        if (command == "commands") _CommandsOpen = true;
+        else if (Unavailable(command) is { } reason) _CommandMessage = reason;
+        else if (command == "batch-reject")
+        {
+            State.Rejection = new(HeadSha, Findings.Where(f => State.Selected.Contains(f.FindingId)).ToArray());
+            await OnChanged.InvokeAsync();
+        }
+        else if (command is "batch-approve" or "batch-defer" or "batch-reset")
+        {
+            var state = command == "batch-approve" ? FindingDecisionState.Approved : command == "batch-defer" ? FindingDecisionState.Deferred : FindingDecisionState.Pending;
+            var snapshot = State.SnapshotBatch(Findings, HeadSha, state, Disabled);
+            if (snapshot is not null) await OnBatch.InvokeAsync(snapshot);
+        }
+        else if (command is "next" or "previous")
+        {
+            var rows = Matching;
+            var index = rows.ToList().FindIndex(f => f.FindingId == State.FocusedId);
+            var next = Math.Clamp(index + (command == "next" ? 1 : -1), 0, rows.Count - 1);
+            if (range && index >= 0 && State.RangeAnchor is null) State.Select(rows[index].FindingId, true, false, rows);
+            State.FocusedId = rows[next].FindingId;
+            State.Complete = false;
+            if (range) State.Select(State.FocusedId, true, true, rows);
+            _Inspecting = false; _PendingFocus = "queue";
+        }
+        else if (command == "inspect" && State.FocusedId is { } id) Focus(id);
+        else if (command == "select" && Findings.FirstOrDefault(f => f.FindingId == State.FocusedId) is { } selected) await Toggle(selected, range);
+        else if (command == "search") _PendingFocus = "search";
+        else if (command == "return" || (command == "escape" && _Inspecting)) ReturnAsync();
+        else if (command == "escape") await ClearAsync();
+        else if (command is "approve" or "reject" or "defer" or "reset" && Findings.FirstOrDefault(f => f.FindingId == State.FocusedId) is { } finding)
+        {
+            var decision = command == "approve" ? FindingDecisionState.Approved : command == "defer" ? FindingDecisionState.Deferred : command == "reset" ? FindingDecisionState.Pending : FindingDecisionState.Rejected;
+            if (decision == FindingDecisionState.Rejected)
+            {
+                State.Drafts[finding.FindingId] = new(finding.DecisionVersion, decision, "") { Dirty = true };
+                Focus(finding.FindingId); _PendingFocus = "reason";
+                await OnChanged.InvokeAsync();
+            }
+            else await SaveGuarded(new(finding.FindingId, HeadSha, decision, null, finding.DecisionVersion));
+        }
+        if (!_Disposed) await InvokeAsync(StateHasChanged);
+    }
+    private async Task SwitchView(bool board)
+    {
+        if (_Disposed) return;
+        try { if (_Module is not null) await _Module.InvokeVoidAsync("rememberView", _Root, _Board ? "board" : "queue"); }
+        catch (JSDisconnectedException) { return; }
+        if (_Disposed) return;
+        _Board = board; _BoardVisited |= board;
+        _RestoreView = true;
+    }
+    private bool _RestoreView;
+    private string? MoveBlockReason(RunFindingDto finding) => _MovingId is not null ? "A decision is awaiting confirmation."
+        : State.DecisionBlockReason(finding, HeadSha, Disabled)
+        ?? (State.Drafts.GetValueOrDefault(finding.FindingId)?.Dirty == true ? "Save or review the unsaved draft in the decision editor first." : null);
+    [JSInvokable]
+    public async Task MoveCard(string id, string target)
+    {
+        if (_Disposed || Hidden || !_Board || _CommandsOpen || State.Rejection is not null
+            || !Enum.TryParse<FindingDecisionState>(target, out var decision) || !Enum.IsDefined(decision)) return;
+        var finding = Matching.FirstOrDefault(f => f.FindingId == id);
+        if (finding is null || MoveBlockReason(finding) is not null) return;
+        if (decision == (finding.Decision?.State ?? FindingDecisionState.Pending)) return;
+        if (decision == FindingDecisionState.Rejected)
+        {
+            // The existing reason composer pins exactly this card, never the general selection.
+            State.Rejection = new(HeadSha, new[] { finding });
+            await OnChanged.InvokeAsync();
+        }
+        else
+        {
+            State.FocusedId = id;
+            _MovingId = id;
+            await InvokeAsync(StateHasChanged);
+            try { await ExecuteCommand(decision == FindingDecisionState.Approved ? "approve" : decision == FindingDecisionState.Deferred ? "defer" : "reset"); }
+            finally
+            {
+                _MovingId = null;
+                // A move can recreate its controls or change columns even when the focused identity stays put.
+                if (!_Disposed && !Hidden) { _Inspecting = false; _PendingFocus = "queue"; }
+            }
+        }
+        if (!_Disposed) await InvokeAsync(StateHasChanged);
+    }
+    private async Task SaveGuarded(SetFindingDecisionRequest request)
+    {
+        var finding = Findings.FirstOrDefault(f => f.FindingId == request.FindingId);
+        if (_Disposed || Hidden || _DecisionSaving || finding is null || State.DecisionBlockReason(finding, HeadSha, Disabled) is not null
+            || request.HeadSha != HeadSha || request.ExpectedVersion != finding.DecisionVersion
+            || (request.State == FindingDecisionState.Rejected && string.IsNullOrWhiteSpace(request.Reason))) return;
+        var previous = State.FocusedId;
+        _DecisionSaving = true;
+        try { await OnSave.InvokeAsync(request); }
+        finally { _DecisionSaving = false; }
+        if (!_Disposed && previous != State.FocusedId) _PendingFocus = _Inspecting ? "inspector" : "queue";
+    }
+    private bool _Inspecting, _Shift, _Disposed;
+    private string? _PendingFocus;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (firstRender)
+            {
+                var module = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-queue.js");
+                if (_Disposed) { await module.DisposeAsync(); return; }
+                _Module = module;
+                await module.InvokeVoidAsync("attach", _Root);
+                var commands = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-commands.js");
+                if (_Disposed) { await commands.DisposeAsync(); return; }
+                _CommandsModule = commands;
+                _Callback = DotNetObjectReference.Create(this);
+                var board = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-board.js");
+                if (_Disposed) { await board.DisposeAsync(); return; }
+                _BoardModule = board;
+                await board.InvokeVoidAsync("attach", _Root, _Callback);
+                var preferences = await commands.InvokeAsync<CommandPreferences?>("attach", _Root, _Callback);
+                if (preferences is not null) { _SingleLetter = preferences.SingleLetter; State.Advance = preferences.Advance; await InvokeAsync(StateHasChanged); }
+            }
+            if (_Disposed || _Module is null) return;
+            if (_RestoreView)
+            {
+                _RestoreView = false;
+                await _Module.InvokeVoidAsync("restoreView", _Root, _Board ? "board" : "queue", State.FocusedId);
+            }
+            if (_RestoreContinuity)
+            {
+                _RestoreContinuity = false;
+                if (_PendingFocus is null) await _Module.InvokeVoidAsync("restoreContinuity", _Root);
+            }
+            if (_PendingFocus is not { } pending) return;
+            _PendingFocus = null;
+            if (pending is "search" or "reason")
+            {
+                if (_CommandsModule is not null) await _CommandsModule.InvokeVoidAsync(pending == "search" ? "focusSearch" : "focusReason", _Root);
+            }
+            else if (pending == "inspector") await _Module.InvokeVoidAsync("enterInspector", _Root);
+            else await _Module.InvokeVoidAsync("returnToRow", _Root, State.FocusedId);
+        }
+        catch (JSDisconnectedException) { }
+    }
+    private async Task DismissRejection()
+    {
+        if (Submitting) return;
+        State.Rejection = null;
+        await OnChanged.InvokeAsync();
+    }
+    private Task InspectRow(string id) { State.FocusedId = id; return ExecuteCommand("inspect"); }
+    private void Focus(string id) { State.FocusedId = _LastFocused = id; State.Complete = false; _Inspecting = true; _PendingFocus = "inspector"; }
+    private async Task Toggle(RunFindingDto finding, bool range) { if (!Disabled) { State.Select(finding.FindingId, !State.Selected.Contains(finding.FindingId), range, Matching); await OnChanged.InvokeAsync(); } }
+    private async Task SelectMatching() { if (!Disabled) { foreach (var f in Matching) State.Selected.Add(f.FindingId); await OnChanged.InvokeAsync(); } }
+    private async Task ClearAsync() { if (!Disabled) { State.Selected.Clear(); await OnChanged.InvokeAsync(); } }
+    private void ReturnAsync()
+    {
+        _Inspecting = false;
+        _PendingFocus = "queue";
+    }
+    public async ValueTask DisposeAsync()
+    {
+        _Disposed = true;
+        if (_Module is null) return;
+        try
+        {
+            await _Module.InvokeVoidAsync("detach", _Root); await _Module.DisposeAsync();
+            if (_CommandsModule is not null) { await _CommandsModule.InvokeVoidAsync("detach", _Root); await _CommandsModule.DisposeAsync(); }
+            if (_BoardModule is not null) { await _BoardModule.InvokeVoidAsync("detach", _Root); await _BoardModule.DisposeAsync(); }
+        }
+        catch (JSDisconnectedException) { }
+        finally { _Callback?.Dispose(); }
+    }
+}

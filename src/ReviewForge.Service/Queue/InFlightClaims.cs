@@ -92,6 +92,17 @@ public sealed class InFlightClaims(TimeProvider? clock = null, TimeSpan? ttl = n
         }
     }
 
+    /// <summary>Atomic read-only copy of unexpired holders. Does not evict, acquire, or renew claims.</summary>
+    public IReadOnlyDictionary<PrKey, Guid> Snapshot()
+    {
+        lock (_Gate)
+        {
+            var now = _Clock.GetUtcNow();
+            return _Claims.Where(p => now - p.Value.ClaimedAt <= _Ttl)
+                .ToDictionary(p => p.Key, p => p.Value.RunId);
+        }
+    }
+
     /// <summary>True when any run holds an unexpired claim on the PR (non-mutating peek;
     /// used by discovery to attribute "already in flight" before evaluating backoff).</summary>
     public bool IsClaimed(PrKey pr)

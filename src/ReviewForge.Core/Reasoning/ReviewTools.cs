@@ -123,6 +123,8 @@ public sealed class ReviewTools(
                     return $"recorded finding {key} — regression of a previously resolved finding";
                 }
 
+                finding.DedupeKey = key;
+                if (!collector.RegressedKeys.Contains(key)) collector.RecordSuppressedFinding(finding);
                 collector.MarkRedetected(key);
             }
 

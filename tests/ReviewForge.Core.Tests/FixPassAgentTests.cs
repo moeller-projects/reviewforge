@@ -302,7 +302,7 @@ public class NativeReviewAgentCoverageTests : IDisposable
         var usage = Activator.CreateInstance(tokenUsageType, nonPublic: true)!;
         var createPipeline = typeof(NativeReviewAgent).GetMethod(
             "CreatePipeline", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var pipeline = (IChatClient) createPipeline.Invoke(agent, [collector, usage, ChatTier.Full, 30])!;
+        var pipeline = (IChatClient) createPipeline.Invoke(agent, [collector, usage, ChatTier.Full, 30, ToolProfile.Review, null])!;
         var updates = new List<ChatResponseUpdate>();
 
         long cached = 0;

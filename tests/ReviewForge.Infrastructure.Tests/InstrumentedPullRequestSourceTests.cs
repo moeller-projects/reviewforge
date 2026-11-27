@@ -42,6 +42,7 @@ public sealed class InstrumentedPullRequestSourceTests
 
         Assert.Equal(inner.Pr, await source.GetPullRequestAsync(Pr, CancellationToken.None));
         Assert.Single(await source.GetOpenPullRequestsAsync(CancellationToken.None));
+        Assert.Same(inner.Inventory, await source.GetOpenPullRequestInventoryAsync(TestContext.Current.CancellationToken));
         Assert.Single(await source.GetLinkedWorkItemsAsync(Pr, CancellationToken.None));
         Assert.Single(await source.GetChangedFilesAsync(Pr, CancellationToken.None));
         Assert.Single(await source.GetThreadsAsync(Pr, CancellationToken.None));

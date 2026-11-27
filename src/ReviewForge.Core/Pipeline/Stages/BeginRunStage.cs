@@ -29,7 +29,9 @@ public sealed class BeginRunStage(IFindingStore store, ILogger<BeginRunStage>? l
         var run = new ReviewRun(
             ctx.RunId, ctx.Pr, ctx.RequirePullRequest().SourceCommitSha, ctx.Classification.Kind,
             ctx.StartedAt, CompletedAt: null, Success: false, findings,
-            Pipeline: ctx.RunKind.ToString());
+            Pipeline: ctx.RunKind.ToString(),
+            FindingObservations: ctx.SnapshotFindingObservations(),
+            Diagnostics: ctx.SnapshotDiagnostics());
 
         return store.SaveRunAsync(run, ct);
     }

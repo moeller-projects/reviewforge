@@ -13,9 +13,10 @@ var apiKey = builder.AddParameter("api-key", secret: true);
 // Directory.CreateDirectory(reviewforgeWorkDir);
 
 builder.AddDotnetProject("reviewforge", "../ReviewForge.Service/ReviewForge.Service.csproj")
-    .WithHttpEndpoint(name: "http", targetPort: 5080)
+    // Direct HTTPS keeps the Service, CLI, MCP and browser on one origin without a proxy port.
+    .WithHttpsEndpoint(port: 9090, targetPort: 9090, name: "https", isProxied: false)
     // The dashboard health tile reflects readiness; liveness remains available to orchestrators.
-    .WithHttpHealthCheck("/health")
+    .WithHttpHealthCheck("/health", endpointName: "https")
     .WithExternalHttpEndpoints()
     // .WithEnvironment("Workspace__WorkDir", reviewforgeWorkDir)
     // .WithEnvironment(

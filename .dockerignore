@@ -4,6 +4,14 @@
 **/bin/
 **/obj/
 **/*.user
+# Host credentials, environment overrides and TLS material never enter build layers.
+**/.env*
+**/config.*.toml
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key
+**/*.crt
 work/
 artifacts/
 tests/

@@ -137,7 +137,7 @@ triage prompts are intentionally not overridable.
 dotnet build                                        # build everything
 dotnet test                                         # full suite incl. coverage gates
 dotnet test tests/ReviewForge.Core.Tests /p:CollectCoverage=true
-dotnet run --project src/ReviewForge.Service        # serves http://localhost:5080
+dotnet run --project src/ReviewForge.Service        # serves https://localhost:9090 (requires a certificate)
 ```
 
 Service endpoints: `POST /reviews` and opt-in `POST /resolutions` → 202 `{runId, statusUrl}`
@@ -166,7 +166,7 @@ runtime (non-root `app` user, uid 1654; healthcheck on `/health`). LibGit2Sharp 
 SQLite use their bundled native binaries; no `git` binary is needed.
 
 ```bash
-docker compose up --build        # needs REVIEWFORGE_ADO_PAT (plus ADO_ORG_URL/ADO_PROJECT)
+docker compose up --build        # needs ADO/API credentials and TLS paths/password; see docs/dashboard.md
 docker logs -f reviewforge
 ```
 
@@ -187,7 +187,16 @@ Mounts (see `docker-compose.yml`):
   (atomic token rotation rewrites auth.json), owner-only because it holds a long-lived
   refresh token: `sudo chown -R 1654:1654 ~/.codex && chmod 700 ~/.codex && chmod 600 ~/.codex/auth.json`.
 
-Container listens on 8080; compose maps host 5080 → 8080 to match the CLI default.
+Service, CLI, browser and MCP use `https://localhost:9090` by default. Aspire exposes that
+port directly without a proxy; do not run a standalone Service on the same port concurrently.
+Container HTTPS listens on 9090; Compose maps host 9090 → 9090. Set
+`REVIEWFORGE_TLS_CERT_PATH` (PFX with private key/chain), `REVIEWFORGE_TLS_CA_PATH`
+(public CA PEM), and `REVIEWFORGE_TLS_CERT_PASSWORD` in the environment. Compose mounts
+the files read-only at `/https/reviewforge.pfx` and `/https/ca.pem`; both must be readable by
+uid 1654. The curl healthcheck validates HTTPS using the mounted CA, including the localhost
+hostname. Never disable certificate verification. Runtime TLS material, `.env*` files and
+local `config.*.toml` overrides are excluded from Docker build context. See `docs/dashboard.md`
+for certificate setup, client trust and deployment verification gaps.
 
 ## Extension points (recap)
 

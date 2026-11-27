@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Options;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
@@ -19,19 +20,33 @@ public sealed class ReviewWorker(
     InFlightClaims claims,
     IFindingStore store,
     ILogger<ReviewWorker> logger,
-    TimeProvider? clock = null) : BackgroundService
+    TimeProvider? clock = null,
+    IOptions<ModelProfilingOptions>? profilingOptions = null) : BackgroundService
 {
     private readonly TimeProvider _Clock = clock ?? TimeProvider.System;
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var group = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        ExceptionDispatchInfo? failure = null;
+        async Task ConsumeAsync()
+        {
+            try { await ProcessQueueAsync(group.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (group.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref failure, ExceptionDispatchInfo.Capture(ex), null);
+                await group.CancelAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
         var workers = new Task[hostOptions.Value.WorkerCount];
-        // Schedule consumers independently so a synchronous provider call cannot prevent
-        // later consumers from starting.
+        // Schedule independently; a fault cancels siblings so WhenAll can surface it
+        // after their bounded cleanup instead of silently losing consumer capacity.
         for (var i = 0; i < workers.Length; i++)
-            workers[i] = Task.Run(() => ProcessQueueAsync(stoppingToken), stoppingToken);
-
-        return Task.WhenAll(workers);
+            workers[i] = Task.Run(ConsumeAsync, group.Token);
+        try { await Task.WhenAll(workers).ConfigureAwait(false); }
+        catch { failure?.Throw(); throw; }
     }
 
     private async Task ProcessQueueAsync(CancellationToken stoppingToken)
@@ -46,37 +61,60 @@ public sealed class ReviewWorker(
                 ["Pr"] = request.Pr.ToString(),
             });
 
-            // The claim was taken at enqueue with a finite TTL; if this request sat
-            // queued past expiry, another run may own the PR now. Revalidate before
-            // spending an LLM run: re-claim if free, skip if a different run holds it.
-            if (!claims.IsHeldBy(request.Pr, request.RunId)
-                && !claims.TryClaim(request.Pr, request.RunId, out var holder))
-            {
-                logger.LogInformation(
-                    "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
-                    request.RunId, request.Pr, holder);
-                tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued", request.Kind);
-                // The request was already dequeued (claimed) from the queue; without this
-                // ack a durable row would stay claimed and be reclaimed forever.
-                queue.Acknowledge(request.RunId);
-                continue; // finally-block of the run loop is not entered; nothing to release
-            }
+            // Durable requests may outlive this process and have no tracker entry yet.
+            tracker.Register(request);
 
-            tracker.Set(request.RunId, request.Pr, RunState.Running, kind: request.Kind);
-            logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
             var repoTag = new TagList {{ReviewForgeTelemetry.TagRepoId, request.Pr.RepositoryId}, {"kind", request.Kind.ToString().ToLowerInvariant()}};
-            ReviewTelemetry.ReviewsStarted.Add(1, repoTag);
             var runStart = Stopwatch.GetTimestamp();
             ReviewContext? ctx = null;
             try
             {
-                ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId)
+                // A crash after terminal profile commit but before queue ack must not run the
+                // same execution again. Finalized is independent of detail expiry, emptiness,
+                // truncation and capture completeness. Check before execution claim validation:
+                // a newer run may already hold the PR claim. Marker-only interruptions still resume.
+                if (store is IModelProfileStore profiles &&
+                    (await profiles.ReadModelProfileAsync(request.RunId, 0, 1, _Clock.GetUtcNow(), stoppingToken)).Finalized)
+                {
+                    var terminal = await store.GetRunAsync(request.RunId, stoppingToken);
+                    if (terminal?.CompletedAt is null)
+                        throw new InvalidOperationException("Finalized profile has no terminal run.");
+                    tracker.Set(request.RunId, request.Pr, terminal.Success ? RunState.Completed : RunState.Failed,
+                        kind: request.Kind);
+                    logger.LogInformation("run {RunId} already finalized; acknowledging reclaimed request", request.RunId);
+                    queue.Acknowledge(request.RunId);
+                    continue; // finally releases only this run's PR claim
+                }
+
+                // The claim was taken at enqueue with a finite TTL; if this request sat
+                // queued past expiry, another run may own the PR now. Only unfinished runs
+                // need an execution claim: re-claim if free, skip if a different run holds it.
+                if (!claims.IsHeldBy(request.Pr, request.RunId)
+                    && !claims.TryClaim(request.Pr, request.RunId, out var holder))
+                {
+                    logger.LogInformation(
+                        "skipping run {RunId} for {Pr}: claim lost while queued (held by {Holder})",
+                        request.RunId, request.Pr, holder);
+                    tracker.Set(request.RunId, request.Pr, RunState.Skipped, "claim lost while queued", request.Kind);
+                    // The request was already dequeued (claimed) from the queue; without this
+                    // ack a durable row would stay claimed and be reclaimed forever.
+                    queue.Acknowledge(request.RunId);
+                    continue; // finally cannot release the competing run's claim
+                }
+
+                ctx = new ReviewContext(request.Pr, _Clock.GetUtcNow(), request.RunId,
+                    profilingOptions?.Value.DetailLimit ?? 10_000, _Clock)
                 {
                     RunKind = request.Kind,
                     PublishGuard = () => claims.IsHeldBy(request.Pr, request.RunId),
                     EnqueueContext = request.EnqueueContext,
                     Trigger = request.Trigger,
+                    ForceReview = request.ForceReview,
                 };
+
+                tracker.Set(request.RunId, request.Pr, RunState.Running, kind: request.Kind);
+                logger.LogInformation("review run {RunId} started for {Pr}", request.RunId, request.Pr);
+                ReviewTelemetry.ReviewsStarted.Add(1, repoTag);
 
                 // Keep the reservation alive for the whole run so a review that outlives the
                 // claim TTL does not admit a duplicate; the publish guard still fails the run
@@ -97,7 +135,8 @@ public sealed class ReviewWorker(
                     .RunUntilCancelled(heartbeatCts.Token);
                 try
                 {
-                    await pipelineBuilder.Build(request.Kind, request, ctx).RunAsync(ctx, stoppingToken);
+                    await pipelineBuilder.Build(request.Kind, request, ctx,
+                        new TrackedRunProgress(tracker, request.RunId)).RunAsync(ctx, stoppingToken);
                 }
                 finally
                 {
@@ -105,6 +144,8 @@ public sealed class ReviewWorker(
                     await heartbeat.ConfigureAwait(false);
                 }
 
+                if (!ctx.Terminated)
+                    await FinalizeProfileAsync(ctx, false, TimeSpan.FromSeconds(5));
                 var state = ctx.Terminated == true ? RunState.Skipped : RunState.Completed;
                 tracker.Set(request.RunId, request.Pr, state, ctx.TerminationReason, request.Kind);
                 logger.LogInformation("run {RunId} {State}: {Reason}",
@@ -114,6 +155,13 @@ public sealed class ReviewWorker(
                 ReviewTelemetry.ReviewsCompleted.Add(1, tags);
                 ReviewTelemetry.ReviewDurationMilliseconds.Record(
                     Stopwatch.GetElapsedTime(runStart).TotalMilliseconds, tags);
+            }
+            catch (Exception ex) when (ctx is null)
+            {
+                // Preflight is not execution: never replace an existing terminal result or
+                // acknowledge a request whose durable status could not be established.
+                logger.LogError(ex, "preflight failed for run {RunId}; durable records preserved and request left for reclamation", request.RunId);
+                throw;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -152,12 +200,24 @@ public sealed class ReviewWorker(
             }
             finally
             {
-                // Durable queues keep the claimed row until ack; the channel queue is a no-op.
-                queue.Acknowledge(request.RunId);
+                // Only executions we actually started are acked here. Successful preflight
+                // of a finalized request acknowledges explicitly; failed preflight remains reclaimable.
+                if (ctx is not null) queue.Acknowledge(request.RunId);
                 ctx?.Dispose();
                 claims.Release(request.Pr, request.RunId);
             }
         }
+    }
+
+    private async Task FinalizeProfileAsync(ReviewContext ctx, bool incomplete, TimeSpan timeout)
+    {
+        if (store is not IModelProfileStore profiles)
+            throw new InvalidOperationException("The finding store must support model profiling.");
+        using var token = new CancellationTokenSource(timeout);
+        var completed = _Clock.GetUtcNow();
+        ctx.ModelProfile.Resume(await profiles.BeginModelProfileAsync(ctx.ModelProfile.Snapshot(), token.Token));
+        await profiles.FinalizeModelProfileAsync(ctx.ModelProfile.Snapshot(), completed,
+            completed.AddDays(profilingOptions?.Value.RetentionDays ?? 30), incomplete, token.Token);
     }
 
     /// <summary>
@@ -166,6 +226,8 @@ public sealed class ReviewWorker(
     /// </summary>
     private async Task PersistFailureAsync(ReviewRequest request, ReviewContext? ctx, TimeSpan timeout)
     {
+        // A journal/notification failure after a gate skip must not turn the skip into a stored run.
+        if (ctx?.Terminated == true) return;
         try
         {
             using var timeoutCts = new CancellationTokenSource(timeout);
@@ -178,7 +240,10 @@ public sealed class ReviewWorker(
                 _Clock.GetUtcNow(),
                 Success: false,
                 Findings: [],
-                Pipeline: request.Kind.ToString()), timeoutCts.Token);
+                Pipeline: request.Kind.ToString(),
+                FindingObservations: ctx?.SnapshotFindingObservations(),
+                Diagnostics: ctx?.SnapshotDiagnostics()), timeoutCts.Token);
+            if (ctx is not null) await FinalizeProfileAsync(ctx, false, timeout);
         }
         catch (Exception storeEx)
         {

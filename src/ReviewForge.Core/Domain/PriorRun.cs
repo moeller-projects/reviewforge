@@ -35,7 +35,10 @@ public sealed record ReviewRun(
     bool Success,
     IReadOnlyList<StoredFinding> Findings,
     DateTimeOffset? LastObservedCommentAt = null,
-    string Pipeline = "Review");
+    string Pipeline = "Review",
+    // Null = legacy/unavailable; empty = captured with no recorded candidates.
+    IReadOnlyList<FindingObservation>? FindingObservations = null,
+    RunDiagnostics? Diagnostics = null);
 
 [ExcludeFromCodeCoverage]
 public sealed record StoredFinding(
@@ -50,4 +53,7 @@ public sealed record StoredFinding(
     // Commanded fixes ("thread-{id}" keys) are audit-only rows.
     string? AppliedFixJson = null,
     string? FindingJson = null,
-    bool Published = false);
+    bool Published = false,
+    // Durable host-write intent, independent of candidate-observation availability.
+    // An unconfirmed attempt is reconciled, never automatically reposted.
+    bool PublicationAttempted = false);

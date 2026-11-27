@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-27T10:22:53Z",
+  "title": "Design System: ReviewForge",
+  "extensions": {
+    "breakpoints": [{ "name": "stacked", "value": "760px" }],
+    "shadows": [],
+    "motion": [{ "name": "reduced-motion", "value": "animation: none; transition: none; scroll-behavior: auto", "purpose": "Respect prefers-reduced-motion; no page entrance choreography." }]
+  },
+  "components": [
+    {
+      "name": "Primary action", "kind": "button", "refersTo": "button-primary",
+      "description": "Deliberate primary action with a visible keyboard focus outline.",
+      "html": "<button class=\"ds-primary\">Start review</button>",
+      "css": ".ds-primary { background: var(--rf-accent); color: var(--rf-on-accent); border: 1px solid var(--rf-accent); border-radius: 5px; padding: 8px 12px; min-height: 40px; font: inherit; cursor: pointer; } .ds-primary:hover, .ds-primary:active { text-decoration: underline; } .ds-primary:focus-visible { outline: 2px solid var(--rf-focus); outline-offset: 3px; }"
+    },
+    {
+      "name": "Secondary action", "kind": "button", "refersTo": "button-secondary",
+      "description": "Neutral action used for refresh and cancellation.",
+      "html": "<button class=\"ds-secondary\">Refresh</button>",
+      "css": ".ds-secondary { background: var(--rf-surface); color: var(--rf-ink); border: 1px solid var(--rf-line); border-radius: 5px; padding: 8px 12px; min-height: 40px; font: inherit; cursor: pointer; } .ds-secondary:hover, .ds-secondary:active { background: var(--rf-raised); } .ds-secondary:focus-visible { outline: 2px solid var(--rf-focus); outline-offset: 3px; }"
+    },
+    {
+      "name": "Search field", "kind": "input",
+      "description": "Native field with themed caret, placeholder and focus.",
+      "html": "<label class=\"ds-search\">Search loaded history<input placeholder=\"Search loaded history\"></label>",
+      "css": ".ds-search { display: flex; flex-direction: column; gap: 6px; color: var(--rf-ink); font: inherit; } .ds-search input { background: var(--rf-surface); color: var(--rf-ink); border: 1px solid var(--rf-line); border-radius: 5px; padding: 8px 12px; min-height: 40px; font: inherit; caret-color: var(--rf-accent); } .ds-search input::placeholder { color: var(--rf-muted); } .ds-search input:hover { border-color: var(--rf-muted); } .ds-search input:focus-visible { outline: 2px solid var(--rf-focus); outline-offset: 3px; }"
+    },
+    {
+      "name": "Navigation", "kind": "nav",
+      "description": "Text links with an active underline and explicit focus.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Main navigation\"><a href=\"#runs\" aria-current=\"page\">Runs</a><a href=\"#start\">Start review</a></nav>",
+      "css": ".ds-nav { display: flex; gap: 16px; font: inherit; } .ds-nav a { color: var(--rf-muted); text-decoration: none; padding: 8px 0; } .ds-nav a[aria-current], .ds-nav a:hover { color: var(--rf-accent); text-decoration: underline; text-underline-offset: .18em; } .ds-nav a:focus-visible { outline: 2px solid var(--rf-focus); outline-offset: 3px; }"
+    },
+    {
+      "name": "Completed status", "kind": "chip",
+      "description": "A text label; color is supporting information, not the only status signal.",
+      "html": "<span class=\"ds-status\">Completed</span>",
+      "css": ".ds-status { display: inline-block; background: var(--rf-success-bg); color: var(--rf-success); padding: 2px 7px; border-radius: 4px; font: 600 .8125rem system-ui, sans-serif; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The review workbench",
+    "overview": "The confirmed replacement is Linear-inspired: compact hierarchy, clear text, aligned controls and quiet surfaces, without copied branding. The review content carries the screen. This is a working interface, not a marketing display.",
+    "keyCharacteristics": [
+      "Cool layered neutrals with a restrained blue action and focus vocabulary.",
+      "System typography with monospace reserved for code and identifiers.",
+      "Native controls and purpose-built Blazor components, without a general UI framework."
+    ],
+    "rules": [],
+    "dos": [
+      "Do keep focus, selection, validation, human decisions and publication distinguishable.",
+      "Do use semantic tokens for every state in both themes.",
+      "Do label uncertain data and preserve existing security and safe HTTP boundaries."
+    ],
+    "donts": [
+      "Don't add decorative metric cards, remote fonts or a replacement component framework.",
+      "Don't store credentials, findings, reasons or selections in browser persistence.",
+      "Don't treat bUnit/JS tests as proof of real-browser contrast, focus, reflow or first-paint behavior."
+    ]
+  }
+}

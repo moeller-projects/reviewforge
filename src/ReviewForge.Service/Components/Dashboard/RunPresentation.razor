@@ -1,0 +1,60 @@
+<section class="run-summary" aria-label="@Heading">
+    <h3>@Heading</h3>
+    @if (Run is { } run)
+    {
+        <span class="@($"state state-{run.State}")">@DashboardPresentation.Outcome(run)</span>
+        <span>@DashboardPresentation.Stage(run)</span>
+        @if (CurrentHead is not null)
+        {
+            <p>Run head: <code>@(run.HeadSha ?? "Unknown")</code> · @(run.HeadSha is null ? "Head not captured; not current-head coverage." : run.HeadSha == CurrentHead ? "Current head" : "Different head; not current-head coverage.")</p>
+        }
+        @if (DashboardPresentation.Progress(run) is { } percent)
+        {
+            <progress value="@percent" max="100" aria-label="Run progress"></progress><span>@percent%</span>
+        }
+        else if (run.State is RunState.Queued or RunState.Running || run.IsClaimed || run.IsPending)
+        {
+            <progress aria-label="Run progress indeterminate"></progress><span>Progress unknown</span>
+        }
+        <p>@DashboardPresentation.Detail(run)</p>
+        <p>Review findings: @(run.ReviewFindings?.ToString() ?? "Unknown")</p>
+        <small title="@DashboardPresentation.Time(run.CompletedAt ?? run.UpdatedAt ?? run.StartedAt ?? run.EnqueuedAt)">@DashboardPresentation.Relative(run.CompletedAt ?? run.UpdatedAt ?? run.StartedAt ?? run.EnqueuedAt, Now)</small>
+        @if (ShowMetadata)
+        {
+            <dl>
+                <dt>Run ID</dt><dd><code>@run.RunId</code></dd>
+                <dt>Kind / trigger</dt><dd>@(run.Kind?.ToString() ?? "Unknown") / @(run.Trigger?.ToString() ?? "Unknown")</dd>
+                <dt>Run head</dt><dd><code>@(run.HeadSha ?? "Unknown")</code></dd>
+                <dt>Enqueued</dt><dd>@DashboardPresentation.Time(run.EnqueuedAt)</dd>
+                <dt>Started</dt><dd>@DashboardPresentation.Time(run.StartedAt)</dd>
+                <dt>Updated</dt><dd>@DashboardPresentation.Time(run.UpdatedAt)</dd>
+                <dt>Completed</dt><dd>@DashboardPresentation.Time(run.CompletedAt)</dd>
+            </dl>
+            @if (run.LoadedStages.Count == 0)
+            {
+                <p>Stage history unavailable. Durable results do not retain stage history.</p>
+            }
+            else
+            {
+                <ol class="stage-list" aria-label="Loaded stages in execution order">
+                    @foreach (var stage in run.LoadedStages)
+                    {
+                        <li aria-current="@(stage == run.CurrentStage ? "step" : null)"><span>@StageLabels.Label(stage)</span> <strong>@StageLabels.Mark(run, stage)</strong></li>
+                    }
+                </ol>
+            }
+        }
+    }
+    else
+    {
+        <p>@(CurrentHead is null ? "No current-head review attempt." : "No PR-level review attempt.")</p>
+    }
+</section>
+
+@code {
+    [Parameter] public string Heading { get; set; } = "Latest attempt";
+    [Parameter] public DashboardRun? Run { get; set; }
+    [Parameter] public bool ShowMetadata { get; set; }
+    [Parameter] public string? CurrentHead { get; set; }
+    [Parameter] public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+}

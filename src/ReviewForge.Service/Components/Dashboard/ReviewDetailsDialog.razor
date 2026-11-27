@@ -1,0 +1,78 @@
+@using static DashboardPresentation
+@inject TimeProvider Clock
+@implements IDisposable
+@{
+    var Row = Reruns.Current(this.Row.PullRequest.Candidate.Key) ?? _LastKnown ?? this.Row;
+    var now = Clock.GetUtcNow();
+}
+<div class="review-details">
+    <h2>@Row.PullRequest.Candidate.Pr.Title</h2>
+    @if (Reruns.HasInventory && Reruns.Current(Row.PullRequest.Candidate.Key) is null)
+    {
+        <p class="notice" role="status">PR is no longer in the retrieved inventory. It may be closed or unavailable. Showing the last known details.</p>
+    }
+    <p>@Row.PullRequest.Candidate.Key.Project / @Row.PullRequest.RepositoryName · #@Row.PullRequest.Candidate.Key.PrId · @Row.PullRequest.Candidate.CreatorName</p>
+    <dl>
+        <dt>Current head</dt><dd><code>@Row.PullRequest.Candidate.Pr.SourceCommitSha</code></dd>
+        <dt>Target branch</dt><dd>@Row.PullRequest.Candidate.TargetBranch</dd>
+        <dt>Coverage</dt><dd>@Coverage(Row.CurrentHeadReviewed)</dd>
+        <dt>Basic automatic-review filters</dt><dd>@(Row.Eligibility?.Status.ToString() ?? "Unknown"): @(Row.Eligibility?.Reason ?? "Metadata unavailable")</dd>
+        <dt>Rerun availability</dt><dd>@Reruns.Context(Row)</dd>
+    </dl>
+    @foreach (var warning in Row.PullRequest.MetadataWarnings)
+    {
+        <p class="notice">@warning</p>
+    }
+    @if (ExternalUrl(Row.PullRequest.BrowserUrl) is { } url)
+    {
+        <a href="@url" target="_blank" rel="noopener noreferrer">Open PR in Azure DevOps <span class="sr-only">(opens in a new tab)</span> ↗</a>
+    }
+    @if (Row.ActiveBlocker is { } blocker)
+    {
+        <p class="notice">Rerun blocked: @Blocker(Row). This run does not establish current-head review coverage.</p>
+        @if (blocker.RunId != Row.LatestAttempt?.RunId)
+        {
+            <RunPresentation Run="blocker" Heading="Active blocker" ShowMetadata="true" Now="now" />
+        }
+    }
+    <RunPresentation Run="Row.LastSuccessfulReview" Heading="Last successful current-head review" ShowMetadata="true" Now="now" />
+    <RunPresentation Run="Row.LatestPrAttempt" Heading="Latest PR attempt" CurrentHead="@Row.PullRequest.Candidate.Pr.SourceCommitSha" ShowMetadata="true" Now="now" />
+    <RunPresentation Run="Row.LatestAttempt" Heading="Latest current-head attempt" ShowMetadata="true" Now="now" />
+    <footer class="details-actions">
+        <RerunReviewButton Row="Row" State="Reruns" OnAccepted="OnAccepted" />
+        <button type="button" @onclick="Close" aria-label="Close details">Close</button>
+    </footer>
+</div>
+
+@code {
+    private DashboardRerunState? _Subscribed;
+    private DashboardRow? _LastKnown;
+    private bool _Disposed;
+    [Parameter, EditorRequired] public DashboardRow Row { get; set; } = default!;
+    protected override void OnParametersSet()
+    {
+        _LastKnown = Reruns.Current(Row.PullRequest.Candidate.Key) ?? Row;
+        if (ReferenceEquals(_Subscribed, Reruns)) return;
+        if (_Subscribed is not null) _Subscribed.Changed -= Changed;
+        _Subscribed = Reruns;
+        _Subscribed.Changed += Changed;
+    }
+    private void Changed()
+    {
+        if (_Disposed) return;
+        _ = InvokeAsync(() =>
+        {
+            if (_Disposed) return;
+            _LastKnown = Reruns.Current(Row.PullRequest.Candidate.Key) ?? _LastKnown;
+            StateHasChanged();
+        });
+    }
+    public void Dispose()
+    {
+        _Disposed = true;
+        if (_Subscribed is not null) _Subscribed.Changed -= Changed;
+    }
+    [Parameter] public EventCallback Close { get; set; }
+    [Parameter] public DashboardRerunState Reruns { get; set; } = new();
+    [Parameter] public EventCallback OnAccepted { get; set; }
+}

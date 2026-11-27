@@ -1,0 +1,78 @@
+@inject DashboardBrowserClient Browser
+@inject DashboardConfirmation Confirmation
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+<span id="@_ContextId" tabindex="0" title="@State.Context(Row)" aria-label="@State.Context(Row)">
+    <button type="button" disabled="@(!State.CanBegin(Row))" @onclick="RerunAsync" aria-label="Rerun review">Rerun review</button>
+</span>
+@if (State.AcceptedRun(Row.PullRequest.Candidate.Key) is { } id)
+{
+    <p role="status">Queued review · @id</p>
+}
+
+@code {
+    [Parameter, EditorRequired] public DashboardRow Row { get; set; } = default!;
+    [Parameter] public DashboardRerunState State { get; set; } = new();
+    [Parameter] public EventCallback OnAccepted { get; set; }
+    [Parameter] public EventCallback<SubmitReviewResponse> OnRunAccepted { get; set; }
+    private DashboardRerunState? _Subscribed;
+    private bool _Disposed;
+    private readonly string _ContextId = $"rerun-{Guid.NewGuid():N}";
+    private readonly CancellationTokenSource _Lifetime = new();
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_Subscribed, State)) return;
+        if (_Subscribed is not null) _Subscribed.Changed -= Changed;
+        _Subscribed = State;
+        State.Changed += Changed;
+    }
+    private void Changed() { if (!_Disposed) _ = InvokeAsync(() => { if (!_Disposed) StateHasChanged(); }); }
+    private Task _Work = Task.CompletedTask;
+    private Task RerunAsync() => _Disposed ? Task.CompletedTask : !_Work.IsCompleted ? _Work : _Work = SubmitAsync();
+    private async Task SubmitAsync()
+    {
+        // Must happen before the first await, including confirmation; shared across both entry points.
+        if (!State.TryBegin(Row)) return;
+        var key = Row.PullRequest.Candidate.Key;
+        try
+        {
+            if (!await Confirmation.ConfirmAsync("Start a new ordinary review even if this head was already reviewed? Drafts still skip. Claims, authorization and all other safeguards still apply.", _Lifetime.Token, _ContextId) || _Disposed || State.AuthenticationExpired) return;
+            var result = await Browser.SubmitReviewAsync(new SubmitReviewRequest(key.Org, key.Project, key.RepositoryId, key.PrId, ForceReview: true), _Lifetime.Token);
+            if (_Disposed || result.Outcome == BrowserOutcome.Cancelled) return;
+            if (result.Outcome == BrowserOutcome.Accepted && result.Value is { } accepted)
+            {
+                State.Accepted(key, accepted.RunId);
+                Confirmation.Notify($"Queued review {accepted.RunId}. Gates may still skip this run.");
+                await OnRunAccepted.InvokeAsync(accepted);
+                await OnAccepted.InvokeAsync();
+                return;
+            }
+            var detail = result.Outcome switch
+            {
+                BrowserOutcome.Conflict => "A run is already in flight for this PR. Refresh to see its status; retry after it finishes.",
+                BrowserOutcome.Invalid => "The review request was invalid. Refresh the PR details before retrying.",
+                BrowserOutcome.Unavailable => "The review queue is full or unavailable. Wait a moment before retrying.",
+                BrowserOutcome.RateLimited => "Too many requests. Wait a moment before retrying.",
+                BrowserOutcome.Unauthenticated => "Session expired. Log in again; this request will not be retried automatically.",
+                BrowserOutcome.Forbidden => "Access denied. Log in again before retrying.",
+                _ => "Could not confirm submission. Check your connection and refresh before retrying; the request may have reached the server.",
+            };
+            Confirmation.Notify(detail);
+            if (result.Outcome is BrowserOutcome.Unauthenticated or BrowserOutcome.Forbidden)
+            {
+                State.ExpireAuthentication();
+                Navigation.NavigateTo("/dashboard/login", forceLoad: true);
+            }
+        }
+        catch (OperationCanceledException) when (_Lifetime.IsCancellationRequested) { }
+        finally { State.End(key); }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        _Disposed = true;
+        if (_Subscribed is not null) _Subscribed.Changed -= Changed;
+        _Lifetime.Cancel();
+        await _Work;
+        _Lifetime.Dispose();
+    }
+}

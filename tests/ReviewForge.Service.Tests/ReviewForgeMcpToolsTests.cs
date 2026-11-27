@@ -23,7 +23,7 @@ public sealed class ReviewForgeMcpToolsTests
             NullLogger<RunSubmissionService>.Instance);
         return new ReviewForgeMcpTools(runs, _Source, Options.Create(new ResolveOptions()),
             Options.Create(new VerifyFindingsOptions {Enabled = verifyEnabled}),
-            new DraftReviewService(_Store, _Source, _Claims, runs));
+            new DraftReviewService(_Store, _Source, _Claims, runs, _Store));
     }
 
     [Fact]

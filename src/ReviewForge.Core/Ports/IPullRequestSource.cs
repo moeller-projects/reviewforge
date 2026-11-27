@@ -13,6 +13,10 @@ public interface IPullRequestSource
     /// <summary>Org-wide active PRs across all projects and repositories.</summary>
     Task<IReadOnlyList<PullRequestCandidate>> GetOpenPullRequestsAsync(CancellationToken ct);
 
+    /// <summary>Organization-wide metadata without discovery filtering or per-PR enrichment.
+    /// Returns explicit completeness and safe warnings; cancellation must propagate.</summary>
+    Task<PullRequestInventory> GetOpenPullRequestInventoryAsync(CancellationToken ct);
+
     /// <summary>Linked work items, including acceptance criteria, bug repro/system fields and non-deleted comments with timestamps.</summary>
     Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct);
 

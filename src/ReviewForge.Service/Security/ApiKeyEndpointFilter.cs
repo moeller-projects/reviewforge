@@ -15,7 +15,19 @@ public sealed class ApiKeyEndpointFilter(
 {
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
-        if (ApiKeyGate.Evaluate(options.Value, environment, context.HttpContext.Request) is { } rejection)
+        var http = context.HttpContext;
+        if (!http.Request.Headers.ContainsKey(ApiKeyOptions.HeaderName)
+            && http.GetEndpoint()?.Metadata.GetMetadata<DashboardSessionAccess>() is not null
+            && http.User.Identity?.IsAuthenticated == true
+            && http.RequestServices.GetRequiredService<DashboardSessions>().IsValid(http.User))
+        {
+            if (HttpMethods.IsPost(http.Request.Method)
+                && !await DashboardHosting.ValidCsrf(http, http.RequestServices.GetRequiredService<Microsoft.AspNetCore.Antiforgery.IAntiforgery>()))
+                return Results.BadRequest();
+            return await next(context);
+        }
+
+        if (ApiKeyGate.Evaluate(options.Value, environment, http.Request) is { } rejection)
         {
             if (rejection.Status == StatusCodes.Status503ServiceUnavailable)
             {

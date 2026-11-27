@@ -150,12 +150,23 @@ public sealed class VerdictParserTests
         Assert.True(verdicts["k1"].Rejected); // case-insensitive verdict value
     }
 
-    [Fact]
-    public void Parse_non_rejected_verdict_values_keep_the_finding()
+    [Theory]
+    [InlineData("""[{"key":"k1","verdict":"unsure"}]""")]
+    [InlineData("""[{"key":"k1"}]""")]
+    [InlineData("""[{"key":"k1","verdict":null}]""")]
+    public void Parse_unknown_or_absent_verdict_is_not_confirmation(string text)
     {
-        var verdicts = VerdictParser.Parse("""[{"key":"k1","verdict":"unsure"}]""");
+        var verdicts = VerdictParser.Parse(text);
 
         Assert.NotNull(verdicts);
-        Assert.False(verdicts["k1"].Rejected);
+        Assert.Empty(verdicts);
+    }
+
+    [Fact]
+    public void Parse_confirmed_is_case_insensitive()
+    {
+        var verdicts = VerdictParser.Parse("""[{"key":"k1","verdict":"CONFIRMED"}]""");
+
+        Assert.False(Assert.Single(verdicts!).Value.Rejected);
     }
 }

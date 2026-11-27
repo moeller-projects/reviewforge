@@ -48,9 +48,15 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             ("TaskDone", new Dictionary<string, object?> {["summary"] = "triaged"})));
         var ctx = Context();
         ctx.Resolve!.ResolvableComments = [Comment(1), Comment(2)];
+        ctx.RunKind = RunKind.Resolve;
+        using var scope = ReviewForge.Core.Profiling.ModelCallContext.Enter(ctx.ModelProfile, "TriageComments");
 
         await new TriageCommentsStage(new NativeReviewAgent(new FakeChatClientFactory(chat))).ExecuteAsync(ctx, CancellationToken.None);
 
+        var profile = ctx.ModelProfile.Snapshot();
+        Assert.Equal(ReviewForge.Core.Profiling.ModelCallProfile.Triage, Assert.Single(profile.Calls).Profile);
+        Assert.Equal(4, profile.Activities!.Count(a => a.Kind == "tool"));
+        Assert.All(profile.Activities!.Where(a => a.Kind == "tool"), a => Assert.Equal(profile.Calls[0].CallId, a.ParentId));
         Assert.Equal(2, ctx.Resolve!.ThreadVerdicts.Count);
         Assert.Equal(TriageVerdict.OutOfScope, ctx.Resolve!.ThreadVerdicts[0].Verdict);
         Assert.Equal("duplicate verdict", ctx.Resolve!.ThreadVerdicts[0].Evidence);
@@ -85,8 +91,15 @@ public sealed class ResolveStageBoundaryTests : IDisposable
             ("EditFile", new Dictionary<string, object?> {["path"] = "A.cs", ["edits"] = new[] {new LineEdit(hash, null, null, null, "new")}})));
         var ctx = Context();
         ctx.Resolve!.ResolvePlan = new ResolvePlan([new PlannedFix(1, new ThreadAnchor("A.cs", 1, 1), "fix", "A.cs:1", ["A.cs"])], new HashSet<string> {"A.cs"}, []);
+        ctx.RunKind = RunKind.Resolve;
+        using var scope = ReviewForge.Core.Profiling.ModelCallContext.Enter(ctx.ModelProfile, "ApplyFixes");
 
         await new ApplyFixesStage(new NativeReviewAgent(new FakeChatClientFactory(chat)), 2).ExecuteAsync(ctx, CancellationToken.None);
+        var profile = ctx.ModelProfile.Snapshot();
+        Assert.All(profile.Calls, call => Assert.Equal(ReviewForge.Core.Profiling.ModelCallProfile.Fix, call.Profile));
+        var tool = Assert.Single(profile.Activities!, a => a.Kind == "tool");
+        Assert.Equal("EditFile", tool.ToolName);
+        Assert.Contains(profile.Calls, call => call.CallId == tool.ParentId && call.AttemptId == tool.AttemptId);
 
         Assert.Equal("old\n", File.ReadAllText(path));
         Assert.Equal(ResolutionOutcome.AgentDeclined, ctx.Resolve!.ResolutionOutcomes[1]);

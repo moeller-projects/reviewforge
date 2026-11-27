@@ -1,0 +1,47 @@
+@using ReviewForge.Core.Ports
+@using ReviewForge.Core.Profiling
+@using System.Globalization
+
+@if (Page.Aggregate is { } aggregate)
+{
+    <section aria-label="Retained whole-run summary">
+        <h4>Retained whole-run observations</h4>
+        <p>Completed: @aggregate.CompletedCalls · Failed: @aggregate.FailedCalls · Cancelled: @aggregate.CancelledCalls · Interrupted: @aggregate.InterruptedCalls · Provider-incomplete: @Number(aggregate.ProviderIncompleteCalls)</p>
+        <p>Logical calls: @Count(aggregate.Activities, "logical") · Application attempts: @Count(aggregate.Activities, "attempt") · Tools: @Count(aggregate.Activities, "tool")</p>
+        <p class="worklist-muted">Whole-run retry count is unavailable in retained summaries; logical/attempt count differences are not inferred retries. Application attempts include guard-short-circuited requests without provider traffic. Tool outcomes describe dispatch, not whether returned content accepted a finding or edit.</p>
+        <p>Input: @Usage(aggregate.Usage?.InputTokens) · Output: @Usage(aggregate.Usage?.OutputTokens) · Total: @Usage(aggregate.Usage?.TotalTokens)<br />Cached input: @Usage(aggregate.Usage?.CachedInputTokens) · Reasoning: @Usage(aggregate.Usage?.ReasoningTokens)</p>
+        <p>Whole-run provider-reported cost: unavailable (no retained monetary summary). Missing cost is not zero; loaded-page costs below are partial only.</p>
+    </section>
+}
+else { <p>Retained whole-run usage and activity summaries unavailable for this profile. No aggregates are reconstructed from loaded details.</p> }
+@if (Page.Aggregate?.Stages is { Count: > 0 } stages)
+{
+    <div class="model-call-scroll" role="region" aria-label="Retained stage summaries" tabindex="0">
+        <table class="model-call-table">
+            <caption>Retained stage summaries · includes calls omitted from details; durations may overlap</caption>
+            <thead><tr><th scope="col">Stage</th><th scope="col">Calls / outcomes</th><th scope="col">Observed provider duration (ms), not wall time</th><th scope="col">Usage sums and reporting coverage</th></tr></thead>
+            <tbody>
+            @foreach (var (stage, summary) in stages.OrderBy(s => s.Key, StringComparer.Ordinal))
+            {
+                <tr @key="stage">
+                    <th scope="row"><button type="button" @onclick="() => StageSelected.InvokeAsync(stage)">@StageLabels.Label(stage)</button></th>
+                    <td>@summary.ObservedCalls calls<br />Completed: @summary.CompletedCalls · Failed: @summary.FailedCalls<br />Cancelled: @summary.CancelledCalls · Interrupted: @summary.InterruptedCalls<br />Provider-incomplete: @Number(summary.ProviderIncompleteCalls)<br />Logical calls: @Count(summary.Activities, "logical") · Application attempts: @Count(summary.Activities, "attempt") · Tools: @Count(summary.Activities, "tool")</td>
+                    <td>@ProfileExplorerPresentation.Duration(summary.ObservedDurationMilliseconds)</td>
+                    <td>Input: @Usage(summary.Usage?.InputTokens)<br />Output: @Usage(summary.Usage?.OutputTokens)<br />Total: @Usage(summary.Usage?.TotalTokens)<br />Cached input: @Usage(summary.Usage?.CachedInputTokens)<br />Reasoning: @Usage(summary.Usage?.ReasoningTokens)</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+<p class="worklist-muted">Provider-incomplete is an observed provider outcome, not missing capture. Partial usage sums include only reporting provider calls. Total tokens are not billed tokens. Parent/child usage is never summed; overlapping duration sums are not wall-clock run time. Capture truncation or interruption limits the observations even when reporting coverage is complete.</p>
+
+@code {
+    [Parameter, EditorRequired] public ModelProfilePage Page { get; set; } = default!;
+    [Parameter] public EventCallback<string> StageSelected { get; set; }
+    private static string Count(IReadOnlyDictionary<string, ExecutionActivitySummary>? summaries, string kind) =>
+        summaries is null ? "unavailable" : summaries.TryGetValue(kind, out var value) ? Number(value.Observed) : "0";
+    private static string Usage(ModelTokenSummary? value) => value?.Tokens is null ? "unavailable" :
+        $"{Number(value.Tokens)} ({value.Coverage}; {Number(value.ReportedCalls)}/{Number(value.ObservedCalls)} calls reported)";
+    private static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
+}

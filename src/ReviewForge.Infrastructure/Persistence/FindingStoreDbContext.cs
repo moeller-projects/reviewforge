@@ -16,6 +16,8 @@ public sealed class RunEntity
     public required string Pipeline { get; set; }
 
     public DateTimeOffset StartedAt { get; set; }
+    /// <summary>Exact normalized history sort key; SQLite julianday rounds sub-millisecond values.</summary>
+    public long StartedAtUtcTicks { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 
     /// <summary>Newest observed comment timestamp (ADO server time) at fetch; the follow-up
@@ -23,6 +25,10 @@ public sealed class RunEntity
     public DateTimeOffset? LastObservedCommentAt { get; set; }
 
     public bool Success { get; set; }
+
+    /// <summary>Run-scoped candidate snapshot; null means legacy/unavailable, not empty.</summary>
+    public string? FindingObservationsJson { get; set; }
+    public string? DiagnosticsJson { get; set; }
     public List<FindingEntity> Findings { get; set; } = [];
 }
 
@@ -43,6 +49,7 @@ public sealed class FindingEntity
 
     public string? FindingJson { get; set; }
     public bool Published { get; set; }
+    public bool PublicationAttempted { get; set; }
 }
 
 /// <summary>Durable resolve action and its reply state.</summary>

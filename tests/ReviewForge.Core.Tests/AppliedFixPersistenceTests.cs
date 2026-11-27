@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ReviewForge.Core.AutoFix;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Pipeline;
@@ -8,6 +9,35 @@ namespace ReviewForge.Core.Tests;
 public class AppliedFixPersistenceTests
 {
     private static readonly PrKey Key = new("org", "project", "repo", 7);
+
+    [Fact]
+    public void Accepted_finding_payload_round_trips_with_draft_web_options()
+    {
+        var finding = new RichFinding
+        {
+            RuleId = "rule", Title = "title", Severity = "high", Category = "bug",
+            Description = "Full description", Snippet = "before", Suggestion = "after",
+            Anchor = new FindingAnchor("script.sh", 3, 4), DedupeKey = "k1",
+            AnchorDowngraded = true, IsRegression = true,
+            AppliedFix = new AppliedFix("k1", new FixProposal("script.sh", 3, 4, "after", "reason")),
+        };
+        var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
+        {
+            Validation = new() {AcceptedFindings = [finding]},
+            AutoFix = new() {AppliedFixes = [finding.AppliedFix!]},
+        };
+
+        foreach (var row in new[] {Assert.Single(AppliedFixPersistence.BuildRows(ctx)),
+                     Assert.Single(AppliedFixPersistence.BuildFinalRows(ctx, _ => 17))})
+        {
+            Assert.NotNull(row.FindingJson);
+            Assert.Equal(finding, JsonSerializer.Deserialize<RichFinding>(row.FindingJson,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            Assert.Contains("\"description\":", row.FindingJson);
+            Assert.NotNull(row.AppliedFixJson);
+            Assert.False(row.Published);
+        }
+    }
 
     [Fact]
     public void Commanded_fix_uses_source_thread_when_posted_thread_is_not_resolved()
@@ -47,7 +77,8 @@ public class AppliedFixPersistenceTests
     public void Carried_forward_finding_does_not_keep_prior_run_fix_attribution()
     {
         var prior = new StoredFinding(
-            "k1", "rule", "high", "title", "script.sh", 3, 17, "{\"fix\":true}");
+            "k1", "rule", "high", "title", "script.sh", 3, 17, "{\"fix\":true}",
+            FindingJson: "{\"description\":\"prior\"}", Published: true);
         var ctx = new ReviewContext(Key, DateTimeOffset.UtcNow)
         {
             Fetch = new FetchOutcome
@@ -62,5 +93,7 @@ public class AppliedFixPersistenceTests
         Assert.Equal("k1", row.DedupeKey);
         Assert.Null(row.AppliedFixJson);
         Assert.Equal(17, row.ThreadId);
+        Assert.Equal(prior.FindingJson, row.FindingJson);
+        Assert.True(row.Published);
     }
 }

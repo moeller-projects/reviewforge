@@ -48,6 +48,7 @@ public static partial class ServiceCollectionExtensions
             })
             .ValidateDataAnnotations()
             .ValidateOnStart();
+        AddValidatedOptions<ModelProfilingOptions>(services, configuration, ModelProfilingOptions.SectionName);
         AddValidatedOptions<WorkspaceOptions>(services, configuration, WorkspaceOptions.SectionName);
         var persistenceConfiguration = NormalizeEnumConfiguration<QueueMode>(
             configuration, PersistenceOptions.SectionName, nameof(PersistenceOptions.QueueMode));

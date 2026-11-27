@@ -1,0 +1,34 @@
+@using ReviewForge.Core.Domain
+
+<section aria-label="Captured run context">
+    @if (Context is { } context)
+    {
+        <dl class="run-context-metadata">
+            <dt>Rulebook</dt><dd>@(context.RuleBookVersion ?? "unavailable")</dd>
+            <dt>Review depth</dt><dd>@(context.ReviewDepth ?? "unavailable")</dd>
+            <dt>Model provenance</dt><dd>@context.ModelProvenance</dd>
+            <dt>Source / target</dt><dd><code>@(context.SourceRevision ?? "unavailable")</code> / <code>@(context.TargetRevision ?? "unavailable")</code></dd>
+            <dt>Changed / reviewable files</dt><dd>@(context.ChangedFileCount?.ToString() ?? "unavailable") / @(context.ReviewableFileCount?.ToString() ?? "unavailable")</dd>
+        </dl>
+        @if (context.ReviewSummary is { } summary) { <h3>Review summary</h3><p>@summary</p> }
+        @if (context.VerificationSummary is { } verification) { <h3>Verification summary</h3><p>@verification</p> }
+        @if (context.PrSummary is { } prSummary) { <details><summary>PR summary</summary><p>@prSummary</p></details> }
+        @if (context.Uncertainties.Count > 0)
+        {
+            <h3>Uncertainties</h3>
+            <ul>@foreach (var item in context.Uncertainties) { <li><strong>@item.Topic</strong>: @item.Question <span>@item.Context</span></li> }</ul>
+        }
+        @if (context.AcceptanceCriteria.Count > 0)
+        {
+            <h3>Acceptance criteria</h3>
+            <ul>@foreach (var item in context.AcceptanceCriteria) { <li>#@item.WorkItemId · @item.Status · @item.Criterion <span>@item.Evidence</span></li> }</ul>
+        }
+        @if (context.CollectionsTruncated) { <p class="notice">Captured context was truncated to bounded diagnostic limits.</p> }
+    }
+    else { <p>Run context provenance unavailable for this legacy or not-yet-captured run.</p> }
+    <p class="worklist-muted">Only captured provenance is shown. Missing model/configuration information is not inferred.</p>
+</section>
+
+@code {
+    [Parameter] public RunContextDiagnostic? Context { get; set; }
+}

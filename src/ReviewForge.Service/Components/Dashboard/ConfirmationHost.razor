@@ -1,0 +1,22 @@
+@inject DashboardConfirmation Confirmation
+@implements IDisposable
+@if (Confirmation.Message is { } message)
+{
+    <p class="notice workbench-feedback" role="status">@message</p>
+}
+@if (Confirmation.Prompt is { } prompt)
+{
+    <WorkbenchDialog Label="Rerun review?" ReturnFocusId="@Confirmation.ReturnFocusId">
+        <h2>Rerun review?</h2>
+        <p>@prompt</p>
+        <footer class="details-actions">
+            <button type="button" data-dialog-cancel autofocus @onclick="() => Confirmation.Complete(false)">Cancel</button>
+            <button type="button" class="primary-action" @onclick="() => Confirmation.Complete(true)">Rerun review</button>
+        </footer>
+    </WorkbenchDialog>
+}
+@code {
+    protected override void OnInitialized() => Confirmation.Changed += Changed;
+    private void Changed() => _ = InvokeAsync(StateHasChanged);
+    public void Dispose() => Confirmation.Changed -= Changed;
+}

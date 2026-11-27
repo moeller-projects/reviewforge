@@ -33,10 +33,14 @@ LABEL org.opencontainers.image.title="reviewforge" \
 # Persistent state lives in /var/reviewforge (volume): repo checkouts, per-run findings/{runId}.jsonl, SQLite store.
 # Codex OAuth lives in /home/app/.codex (volume) — mounted read-write because token rotation
 # rewrites auth.json atomically (temp + move).
-RUN mkdir -p /var/reviewforge/work /home/app/.codex \
+RUN apk add --no-cache curl \
+ && mkdir -p /var/reviewforge/work /home/app/.codex \
  && chown -R app:app /var/reviewforge /home/app/.codex
 
-ENV ASPNETCORE_URLS=http://+:8080 \
+# Unprefixed Urls overrides config.toml after the host reapplies environment configuration.
+# Certificates are runtime-only read-only mounts, never copied into the image.
+ENV Urls=https://+:9090 \
+    Kestrel__Certificates__Default__Path=/https/reviewforge.pfx \
     DOTNET_RUNNING_IN_CONTAINER=true \
     DOTNET_NOLOGO=1 \
     Workspace__WorkDir=/var/reviewforge/work \
@@ -46,9 +50,9 @@ USER app
 WORKDIR /app
 COPY --from=publish --chown=app:app /app/publish .
 
-EXPOSE 8080
+EXPOSE 9090
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
+  CMD curl --fail --silent --show-error --cacert /https/ca.pem https://localhost:9090/health >/dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["dotnet", "ReviewForge.Service.dll"]

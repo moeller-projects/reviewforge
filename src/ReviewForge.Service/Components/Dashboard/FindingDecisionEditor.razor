@@ -1,0 +1,66 @@
+@using ReviewForge.Core.Domain
+
+<div class="finding-decision-editor" aria-label="Human finding decision">
+    @if (_Draft.Dirty && _Draft.Version != Finding.DecisionVersion) { <p class="notice" role="status">Authoritative decision changed. Your unsaved draft is retained; review the new version before saving.</p><button type="button" disabled="@Disabled" @onclick="() => _Draft.Version = Finding.DecisionVersion">Use current version with my draft</button> }
+    @if (BlockReason is { } blocked) { <small role="status">@blocked</small> }
+    <label>Decision
+        <select value="@_State.ToString()" @onchange="ChangeState" disabled="@CannotEdit" aria-label="Finding decision">
+            <option value="Pending">Pending</option>
+            <option value="Approved">Approve</option>
+            <option value="Rejected">Reject</option>
+            <option value="Deferred">Defer</option>
+        </select>
+    </label>
+    <label>@(_State == FindingDecisionState.Rejected ? "Rejection reason (required)" : "Reason (optional)")
+        <textarea value="@_Reason" @oninput="ChangeReason" maxlength="@FindingDecision.MaxReasonLength" rows="2"
+            disabled="@CannotEdit" aria-label="Decision reason"></textarea>
+    </label>
+    <button type="button" class="compact-action" @onclick="SaveAsync"
+        disabled="@(CannotEdit || (_State == FindingDecisionState.Rejected && string.IsNullOrWhiteSpace(_Reason)))">
+        @(_Saving ? "Saving…" : "Save decision")
+    </button>
+    <small class="worklist-muted">Approval does not post. Rejection stays internal and applies only to this reviewed revision.</small>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public RunFindingDto Finding { get; set; } = default!;
+    [Parameter, EditorRequired] public string HeadSha { get; set; } = "";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public Dictionary<string, FindingEditorDraft>? Drafts { get; set; }
+    private readonly Dictionary<string, FindingEditorDraft> _Local = new(StringComparer.Ordinal);
+    private FindingEditorDraft _Draft = new(0, FindingDecisionState.Pending, "");
+    private FindingDecisionState _State { get => _Draft.State; set { _Draft.State = value; _Draft.Dirty = true; } }
+    private string _Reason { get => _Draft.Reason; set { _Draft.Reason = value; _Draft.Dirty = true; } }
+    private bool _Saving;
+    private string? BlockReason => FindingWorkspaceState.DecisionBlockReason(Finding, HeadSha, Disabled || _Saving, _Draft);
+    private bool CannotEdit => BlockReason is not null;
+
+    protected override void OnParametersSet()
+    {
+        var drafts = Drafts ?? _Local;
+        if (!drafts.TryGetValue(Finding.FindingId, out var draft) || (!draft.Dirty && draft.Version != Finding.DecisionVersion))
+            drafts[Finding.FindingId] = draft = new(Finding.DecisionVersion, Finding.Decision?.State ?? FindingDecisionState.Pending, Finding.Decision?.Reason ?? "");
+        _Draft = draft;
+    }
+
+    private async Task ChangeState(ChangeEventArgs args)
+    {
+        if (Enum.TryParse<FindingDecisionState>(args.Value?.ToString(), out var state) && Enum.IsDefined(state))
+        { _State = state; await OnChanged.InvokeAsync(); }
+    }
+    private async Task ChangeReason(ChangeEventArgs args)
+    { _Reason = args.Value?.ToString() ?? ""; await OnChanged.InvokeAsync(); }
+    private async Task SaveAsync()
+    {
+        if (CannotEdit || (_State == FindingDecisionState.Rejected && string.IsNullOrWhiteSpace(_Reason))) return;
+        _Saving = true;
+        try
+        {
+            await OnSave.InvokeAsync(new(Finding.FindingId, HeadSha, _State,
+                string.IsNullOrWhiteSpace(_Reason) ? null : _Reason.Trim(), _Draft.Version));
+        }
+        finally { _Saving = false; }
+    }
+}

@@ -948,6 +948,8 @@ public class DiscoverySweepWorkerTests
 
         public bool RenewClaim(Guid runId) => true;
         public ReviewRequest? TryGetQueued(Guid runId) => null;
+        public Task<IReadOnlyList<QueueRunSnapshot>> GetPendingAsync(IReadOnlyCollection<PrKey> prs, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<QueueRunSnapshot>>([]);
     }
 
     [Fact]
