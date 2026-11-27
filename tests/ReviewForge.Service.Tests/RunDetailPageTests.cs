@@ -333,7 +333,9 @@ public sealed class RunDetailPageTests
     [Fact]
     public async Task Publication_preview_names_locations_versions_and_exclusions_and_retains_hidden_general_selection()
     {
-        await using var c = Context(Details(Finding("approved"), Finding("pending", FindingDecisionState.Pending), Finding("unknown") with { PublicationUnknown = true }));
+        var approved = Finding("approved");
+        approved = approved with { AcceptedFinding = approved.AcceptedFinding! with { Title = "<script>accepted</script>" } };
+        await using var c = Context(Details(approved, Finding("pending", FindingDecisionState.Pending), Finding("unknown") with { PublicationUnknown = true }));
         c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!
             .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"))
             .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(true, null, [new("approved", PublishFindingStatus.Posted)]))));
@@ -343,8 +345,10 @@ public sealed class RunDetailPageTests
         page.Find("input[type=search]").Input("no match");
         page.Find("button.post-selected").Click();
         var preview = page.Find("dialog[aria-label='Confirm publication']");
-        Assert.Contains("<script>title</script>", preview.TextContent);
-        Assert.Contains("file.cs:1", preview.TextContent);
+        Assert.Contains("<script>accepted</script>", preview.TextContent);
+        Assert.Empty(preview.QuerySelectorAll("script"));
+        Assert.Contains("file.cs:2", preview.TextContent);
+        Assert.DoesNotContain("file.cs:1", preview.TextContent);
         Assert.Contains("approval version 3", preview.TextContent);
         Assert.Contains("Not approved", preview.TextContent);
         Assert.Contains("Unknown publication outcome", preview.TextContent);

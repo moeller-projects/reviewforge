@@ -7,8 +7,12 @@ public sealed record PublicationPreviewItem(string FindingId, string Title, stri
 {
     public static PublicationPreviewItem From(RunFindingDto finding, string? exclusion)
     {
-        var payload = FindingWorkspaceState.Payload(finding);
-        var location = payload?.Anchor is { } anchor ? $"{anchor.FilePath}:{anchor.StartLine}" : "Location unavailable";
+        // Accepted payloads contain the validated/reanchored location actually sent to
+        // the host. Candidates remain useful only when no accepted payload exists.
+        var payload = finding.AcceptedFinding ?? finding.Candidate;
+        var location = payload is null ? "Location unavailable"
+            : payload.Anchor is { } anchor && !payload.AnchorDowngraded
+                ? $"{anchor.FilePath}:{anchor.StartLine}" : "General PR comment";
         return new(finding.FindingId, payload?.Title ?? "Finding payload unavailable", location, finding.DecisionVersion, exclusion);
     }
 
