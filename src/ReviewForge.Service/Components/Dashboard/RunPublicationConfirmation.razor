@@ -1,0 +1,14 @@
+<section class="publication-confirmation notice" role="dialog" aria-modal="true" aria-labelledby="publication-title" tabindex="-1">
+    <h2 id="publication-title">Confirm publication</h2>
+    <p>Post only these @(Request.Selections!.Count) approved findings to the PR at reviewed head <code>@Request.HeadSha</code>?</p>
+    <ul>@foreach (var selection in Request.Selections!) { <li><code>@selection.FindingId</code> · approval version @selection.ExpectedDecisionVersion</li> }</ul>
+    <p>This writes external comments. Approval alone never posts.</p>
+    <button type="button" class="compact-action confirm-publication" disabled="@Disabled" @onclick="OnConfirm">Confirm post selected findings</button>
+    <button type="button" class="compact-action" disabled="@Disabled" @onclick="OnCancel">Cancel</button>
+</section>
+@code {
+    [Parameter, EditorRequired] public PublishSelectedDraftRequest Request { get; set; } = default!;
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+}

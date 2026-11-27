@@ -1,0 +1,22 @@
+@if (Payload is { } payload)
+{
+    <section class="finding-evidence" aria-label="@Label">
+        <h3>@Label · @payload.Title</h3>
+        <p>@payload.Severity · @payload.RuleId · @payload.Category</p>
+        <p class="finding-prose">@payload.Description</p>
+        @if (payload.Anchor is { } anchor)
+        {
+            <p><code>@anchor.FilePath:@anchor.StartLine–@anchor.EndLine</code></p>
+        }
+        else { <p>Location unavailable / general finding</p> }
+        @if (payload.AnchorDowngraded) { <p>Original anchor downgraded during validation.</p> }
+        @if (payload.Snippet is not null) { <h4>Snippet</h4><pre><code>@payload.Snippet</code></pre> }
+        @if (payload.Suggestion is not null) { <h4>Suggestion</h4><pre><code>@payload.Suggestion</code></pre> }
+    </section>
+}
+else { <p>@Label payload unavailable.</p> }
+
+@code {
+    [Parameter] public FindingPayloadDto? Payload { get; set; }
+    [Parameter] public string Label { get; set; } = "Evidence";
+}
