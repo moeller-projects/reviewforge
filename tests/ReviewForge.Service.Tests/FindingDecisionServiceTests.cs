@@ -74,7 +74,7 @@ public sealed class FindingDecisionServiceTests
         var store = new FakeFindingStore();
         var clock = new FakeTimeProvider(new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero));
         var observation = Candidate() with { Validation = FindingValidationStatus.Accepted };
-        var row = new StoredFinding("key", "rule", "high", "title", null, null, null, FindingJson: "{}");
+        var row = new StoredFinding("key", "rule", "high", "title", null, null, null, FindingJson: observation.FindingJson);
         var run = Run() with { FindingObservations = [observation], Findings = [row] };
         await store.SaveRunAsync(run, ct);
         var resolved = Assert.Single(FindingDecisionService.ResolveFindings(run));

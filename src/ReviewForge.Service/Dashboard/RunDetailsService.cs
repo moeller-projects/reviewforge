@@ -1,4 +1,3 @@
-using System.Text.Json;
 using ReviewForge.Core.Domain;
 using ReviewForge.Core.Ports;
 
@@ -35,8 +34,6 @@ public sealed record RunDetailsResponse(RunStatus Status, string? ReviewedHeadSh
 public sealed class RunDetailsService(RunSubmissionService runs, IFindingStore store, IFindingDecisionStore decisions,
     RunSourceMetadataService? source = null)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public async Task<RunDetailsResponse?> GetAsync(Guid runId, CancellationToken ct)
     {
         var status = await runs.GetStatusAsync(runId, ct).ConfigureAwait(false);
@@ -94,10 +91,8 @@ public sealed class RunDetailsService(RunSubmissionService runs, IFindingStore s
     private static FindingPayloadDto? Payload(string? json)
     {
         if (json is null) return null;
-        // Corrupt/legacy payloads are explicitly unavailable, never exposed as raw JSON/errors.
-        RichFinding? f;
-        try { f = JsonSerializer.Deserialize<RichFinding>(json, JsonOptions); }
-        catch (JsonException) { return null; }
+        // Use the same validity boundary as publication eligibility.
+        var f = FindingPayloadReader.Read(json);
         return f is null ? null : new(f.RuleId, f.Title, f.Severity, f.Category, f.Description,
             f.Snippet, f.Suggestion, f.Anchor, f.AnchorDowngraded);
     }

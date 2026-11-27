@@ -12,7 +12,7 @@ public sealed record FindingDecisionResult(FindingDecisionStatus Status, long Cu
 /// A human decision must never be used to override this eligibility.</summary>
 public sealed record ResolvedDecisionFinding(string Id, FindingObservation? Observation, StoredFinding? AcceptedFinding)
 {
-    public bool PublicationEligible => AcceptedFinding?.FindingJson is not null &&
+    public bool PublicationEligible => FindingPayloadReader.Read(AcceptedFinding?.FindingJson) is not null &&
         (Observation is null || (Observation.Validation == FindingValidationStatus.Accepted &&
             Observation.Verification != FindingVerificationStatus.Rejected));
 }

@@ -118,6 +118,25 @@ public sealed class RunDetailsServiceTests
         Assert.False(posted.PublicationUnknown);
     }
 
+    [Theory]
+    [InlineData("invalid-json")]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("")]
+    [InlineData("{\"ruleId\":\"r\",\"title\":\"t\",\"severity\":\"unknown\",\"category\":\"bug\",\"description\":\"c\"}")]
+    public async Task Unreadable_payload_is_unavailable_and_ineligible(string json)
+    {
+        var store = new FakeFindingStore();
+        var runs = new RunSubmissionService(new ReviewQueue(), new RunTracker(), new InFlightClaims(), store, TimeProvider.System, NullLogger<RunSubmissionService>.Instance);
+        var query = new RunDetailsService(runs, store, store);
+        var run = new ReviewRun(Guid.NewGuid(), new("o", "p", "r", 1), "head", ReviewKind.Full, DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow, true, [new("key", "r", "high", "title", null, null, null, FindingJson: json)], Pipeline: "ReviewDraft");
+        store.Runs.Add(run);
+        var row = Assert.Single((await query.GetAsync(run.Id, TestContext.Current.CancellationToken))!.Findings);
+        Assert.Null(row.AcceptedFinding);
+        Assert.False(row.PublicationEligible);
+    }
+
     [Fact]
     public async Task Queue_readthrough_running_unknown_empty_and_corrupt_legacy_are_honest()
     {
@@ -144,6 +163,7 @@ public sealed class RunDetailsServiceTests
         Assert.Null(legacy.Counts);
         var row = Assert.Single(legacy.Findings);
         Assert.Null(row.AcceptedFinding);
+        Assert.False(row.PublicationEligible);
         Assert.Null(row.Published);
     }
 }
