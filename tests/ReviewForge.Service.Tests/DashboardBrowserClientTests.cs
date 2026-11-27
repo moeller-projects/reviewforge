@@ -62,6 +62,84 @@ public class DashboardBrowserClientTests
     }
 
     [Fact]
+    public async Task Technician_methods_use_typed_ids_and_safe_deserializable_decisions()
+    {
+        await using var context = new BunitContext();
+        var module = context.JSInterop.SetupModule("./dashboard-http.js");
+        var send = module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true);
+        send.SetResult(new(404, null));
+        await using var client = new DashboardBrowserClient(context.JSInterop.JSRuntime);
+        var id = Guid.NewGuid();
+        Assert.Equal(BrowserOutcome.NotFound, (await client.GetRunStatusAsync(id, TestContext.Current.CancellationToken)).Outcome);
+        await client.GetRunDetailsAsync(id, TestContext.Current.CancellationToken);
+        await client.GetDraftCapabilityAsync(TestContext.Current.CancellationToken);
+        await client.SubmitDraftAsync(new("o", "p", "r", 1), TestContext.Current.CancellationToken);
+        var decision = new FindingDecisionDto(id, "id/../other", "head", ReviewForge.Core.Domain.FindingDecisionState.Approved, null, "dashboard-session", DateTimeOffset.UtcNow, 1);
+        send.SetResult(new(409, JsonSerializer.SerializeToElement(new FindingDecisionResponse(FindingDecisionStatus.Conflict, 1, decision))));
+        var result = await client.SetFindingDecisionAsync(id, new(decision.FindingId, "head", decision.State, null, 0), TestContext.Current.CancellationToken);
+        Assert.Equal(BrowserOutcome.Conflict, result.Outcome);
+        Assert.Equal(decision, result.Value!.Decision);
+        Assert.Equal(new[] { $"/reviews/{id:D}", $"/reviews/{id:D}/details", "/reviews/drafts/capability", "/reviews/drafts", $"/reviews/{id:D}/decisions" },
+            module.Invocations["send"].Select(i => (string)i.Arguments[2]!));
+    }
+
+    [Fact]
+    public async Task Publication_method_keeps_selection_in_body_and_reads_safe_partial_outcomes()
+    {
+        await using var context = new BunitContext();
+        var module = context.JSInterop.SetupModule("./dashboard-http.js");
+        var response = new PublishSelectedDraftResult(false, "publication-unknown", [new("id/../other", PublishFindingStatus.Unknown)]);
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true)
+            .SetResult(new(409, JsonSerializer.SerializeToElement(response)));
+        await using var client = new DashboardBrowserClient(context.JSInterop.JSRuntime);
+        var id = Guid.NewGuid();
+        var request = new PublishSelectedDraftRequest("head", [new("id/../other", 3)]);
+        var result = await client.PublishSelectedDraftAsync(id, request, TestContext.Current.CancellationToken);
+        Assert.Equal(BrowserOutcome.Conflict, result.Outcome);
+        Assert.Equal("publication-unknown", result.Value!.ErrorCode);
+        Assert.Equal(PublishFindingStatus.Unknown, Assert.Single(result.Value.Findings).Status);
+        var invocation = Assert.Single(module.Invocations["send"]);
+        Assert.Equal("POST", invocation.Arguments[1]);
+        Assert.Equal($"/reviews/{id:D}/publish", invocation.Arguments[2]);
+        Assert.Same(request, invocation.Arguments[3]);
+    }
+
+    [Fact]
+    public async Task History_query_encodes_scope_without_route_or_query_injection()
+    {
+        await using var context = new BunitContext();
+        var module = context.JSInterop.SetupModule("./dashboard-http.js");
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true).SetResult(new(503, null));
+        await using var client = new DashboardBrowserClient(context.JSInterop.JSRuntime);
+        await client.GetRunWorklistAsync(50, 50, new("o&count=100", "p/#?", "r=other", 2), false, TestContext.Current.CancellationToken);
+        var call = Assert.Single(module.Invocations["send"]);
+        Assert.Equal("GET", call.Arguments[1]);
+        Assert.Equal("/reviews/history?offset=50&count=50&attentionOnly=false&org=o%26count%3D100&project=p%2F%23%3F&repositoryId=r%3Dother&prId=2", call.Arguments[2]);
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.GetRunWorklistAsync(-1, ct: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.GetRunWorklistAsync(count: 101, ct: TestContext.Current.CancellationToken));
+        Assert.Single(module.Invocations["send"]);
+    }
+
+    [Fact]
+    public async Task Decision_history_is_a_single_lazy_member_query_with_encoded_id()
+    {
+        await using var context = new BunitContext();
+        var module = context.JSInterop.SetupModule("./dashboard-http.js");
+        module.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true)
+            .SetResult(new(200, System.Text.Json.JsonSerializer.SerializeToElement(new FindingDecisionHistoryResponse([]))));
+        await using var client = new DashboardBrowserClient(context.JSInterop.JSRuntime);
+        var id = Guid.NewGuid();
+        var result = await client.GetFindingDecisionHistoryAsync(id, "key/with&count=999", TestContext.Current.CancellationToken);
+        Assert.Equal(BrowserOutcome.Ok, result.Outcome);
+        Assert.Empty(result.Value!.Events);
+        var call = Assert.Single(module.Invocations["send"]);
+        Assert.Equal($"/reviews/{id:D}/decisions/history?findingId=key%2Fwith%26count%3D999", call.Arguments[2]);
+        Assert.Equal("GET", call.Arguments[1]);
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetFindingDecisionHistoryAsync(id, "", TestContext.Current.CancellationToken));
+        Assert.Single(module.Invocations["send"]);
+    }
+
+    [Fact]
     public async Task Shell_renders_radzen_and_logout_without_data_or_submission_services()
     {
         await using var context = new BunitContext();
@@ -72,7 +150,8 @@ public class DashboardBrowserClientTests
         context.JSInterop.SetupModule("./dashboard-http.js")
             .Setup<DashboardBrowserClient.BrowserHttpResponse>("send", _ => true).SetResult(new(503, null));
         var shell = context.Render<Dashboard>();
-        Assert.Contains("ReviewForge dashboard", shell.Markup);
+        Assert.Contains("Runs needing attention", shell.Markup);
+        Assert.Equal("/dashboard/start", shell.Find("a.dashboard-start").GetAttribute("href"));
         Assert.Contains("rz-button", shell.Markup);
         Assert.Equal("/dashboard/logout", shell.Find("form").GetAttribute("action"));
         Assert.Equal("post", shell.Find("form").GetAttribute("method"));
