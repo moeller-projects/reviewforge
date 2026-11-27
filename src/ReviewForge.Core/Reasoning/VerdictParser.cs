@@ -5,8 +5,9 @@ namespace ReviewForge.Core.Reasoning;
 /// <summary>
 /// Parses the findings verifier's JSON reply. Extracts from the first '[' to the last ']'
 /// and deserializes a small DTO; unknown keys are ignored (per-finding fail-open) and any
-/// verdict value other than "rejected" (case-insensitive) keeps the finding. The verifier
-/// can only subtract — it never edits titles, severities, or anchors.
+/// verdict must explicitly be "confirmed" or "rejected" (case-insensitive). Unknown or
+/// missing verdicts are omitted, not treated as confirmation. The verifier can only
+/// subtract — it never edits titles, severities, or anchors.
 /// </summary>
 public static class VerdictParser
 {
@@ -52,6 +53,8 @@ public static class VerdictParser
             }
 
             var rejected = string.Equals(entry.Verdict, "rejected", StringComparison.OrdinalIgnoreCase);
+            if (!rejected && !string.Equals(entry.Verdict, "confirmed", StringComparison.OrdinalIgnoreCase))
+                continue;
             verdicts[key] = new FindingsVerifierPrompt.Verdict(rejected, entry.Reason ?? string.Empty);
         }
 
