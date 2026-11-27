@@ -35,7 +35,10 @@ public sealed record ReviewRun(
     bool Success,
     IReadOnlyList<StoredFinding> Findings,
     DateTimeOffset? LastObservedCommentAt = null,
-    string Pipeline = "Review");
+    string Pipeline = "Review",
+    // Null = legacy/unavailable; empty = captured with no recorded candidates.
+    IReadOnlyList<FindingObservation>? FindingObservations = null,
+    RunDiagnostics? Diagnostics = null);
 
 [ExcludeFromCodeCoverage]
 public sealed record StoredFinding(
