@@ -61,6 +61,7 @@ public class DashboardRerunTests
         Assert.DoesNotContain(module.Invocations["send"], i => Equals(i.Arguments[1], "POST"));
         if (fromDetails) details.Find("button[aria-label='Rerun review']").Click();
         else page.Find("button[aria-label='Rerun review']").Click();
+        dialogs.WaitForAssertion(() => Assert.Single(dialogs.FindAll("button.primary-action")));
         dialogs.Find("button.primary-action").Click();
         await submitted.Task.WaitAsync(TimeSpan.FromSeconds(5), Xunit.TestContext.Current.CancellationToken);
         Assert.Single(module.Invocations["send"], i => Equals(i.Arguments[1], "POST"));
@@ -102,7 +103,7 @@ public class DashboardRerunTests
         Assert.Equal(row, state.Current(row.PullRequest.Candidate.Key));
         Assert.Equal(status is 401 or 403, page.Find("button[aria-label='Rerun review']").HasAttribute("disabled"));
         if (status is 401 or 403)
-            Assert.EndsWith("/dashboard/login", c.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>().Uri);
+            page.WaitForAssertion(() => Assert.EndsWith("/dashboard/login", c.Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>().Uri));
     }
 
     [Fact]
