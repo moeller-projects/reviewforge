@@ -60,6 +60,10 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<IFindingDecisionStore>(sp =>
             sp.GetRequiredService<IFindingStore>() as IFindingDecisionStore
             ?? throw new InvalidOperationException("The registered finding store must support human decisions."));
+        services.AddSingleton<IRunHistoryStore>(sp =>
+            sp.GetRequiredService<IFindingStore>() as IRunHistoryStore
+            ?? throw new InvalidOperationException("The registered finding store must support run history."));
+        services.AddSingleton<RunWorklistQueryService>();
         services.AddSingleton<FindingDecisionService>();
         services.AddSingleton<RunSourceMetadataService>();
         services.AddSingleton<RunDetailsService>();
