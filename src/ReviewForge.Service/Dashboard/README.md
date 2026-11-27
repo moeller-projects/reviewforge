@@ -22,28 +22,49 @@ server hub requires authorization for page, negotiate, and reconnect and uses .N
 provider revalidates every 30 seconds for logout/expiry; the HTTP action boundary refuses
 revoked/expired sessions immediately, even before the UI notices.
 
-## HTTP boundary for later dashboard components
+## Component HTTP boundary
 
 Inject scoped `DashboardBrowserClient`, not `DashboardQueryService`, `RunSubmissionService`,
 or queue services. It provides:
 
-- `GetDashboardAsync(CancellationToken)` -> `BrowserResult<DashboardResponse>`
-- `SubmitReviewAsync(SubmitReviewRequest, CancellationToken)` -> `BrowserResult<SubmitReviewResponse>`
+- `GetDashboardAsync` for PR selection and `GetRunWorklistAsync` for bounded global history.
+- `GetDraftCapabilityAsync` and `SubmitDraftAsync` for the default read-only workflow.
+- `GetRunStatusAsync` / `GetRunDetailsAsync` for run inspection.
+- `SetFindingDecisionAsync` for versioned human decisions and `GetFindingDecisionHistoryAsync`
+  for one finding's bounded history on demand.
+- `PublishSelectedDraftAsync` for explicit, nonempty approved selections and `ReconcileDraftAsync`
+  for read-and-audit recovery that never posts to the PR.
+- `SubmitReviewAsync` for the confirmed advanced ordinary-review action.
+
+All calls return typed `BrowserResult<T>` and accept cancellation. Run/finding wire DTOs
+are explicit safe projections, not persistence entities or raw exception payloads.
 
 `BrowserOutcome` distinguishes success/accepted, invalid input, unauthenticated/forbidden,
-conflict, rate limiting, unavailable queue/service, network failure, and cancellation.
-The adapter imports `dashboard-http.js`, permits only the two same-origin routes, sends
-session credentials, obtains a fresh CSRF token from protected `GET /dashboard/session`
-for submissions, and aborts fetch on cancellation. It never receives or resends an API key.
-Error response bodies are not exposed to components. Do not call JS interop during prerender.
+conflict, not found, rate limiting, unavailable queue/service, network failure, and cancellation.
+The adapter imports `dashboard-http.js`, strictly allowlists methods/routes/query parameters,
+sends same-origin session credentials, obtains a fresh CSRF token from protected
+`GET /dashboard/session` for each POST, and aborts fetch on cancellation. It never receives
+or resends an API key. Only typed safe decision/publication error results reach components;
+arbitrary server error bodies do not. Do not call JS interop during prerender.
 
-Only `GET /reviews/dashboard` and `POST /reviews` opt into `DashboardSessionAccess`
-metadata. Cookie POSTs validate antiforgery at the API-key filter before submission.
+JSON responses above 16 KiB cross Interactive Server interop through an `IJSStreamReference`,
+not a single SignalR completion. The browser client reads at most 8 MiB, disposes the stream
+and reference, and maps unreadable/oversized streams to a safe transport error. Keep the
+SignalR message limit unchanged; raising it globally is not the large-findings transport.
+
+The inventory, history, draft capability/submission, run status/details, decisions and
+selected-publication endpoints opt into `DashboardSessionAccess` metadata. Cookie POSTs
+validate antiforgery at the API-key filter before any mutation.
 An explicitly presented header key must itself be valid; a cookie cannot rescue a bad key.
 All existing endpoint rate limits, validation, claims, queue capacity and ForceReview
-semantics remain in force. Header-key clients need no CSRF token. Discovery, individual
-run status, resolutions and MCP remain header-key-only (MCP's existing query-key mode is
-unchanged). API auth failures remain JSON/status errors, never HTML login redirects.
+semantics remain in force. Header-key clients need no CSRF token. Discovery, resolutions
+and MCP remain header-key-only (MCP's existing query-key mode is unchanged). API auth
+failures remain JSON/status errors, never HTML login redirects.
+
+`/dashboard` groups runs by full PR identity, observed head chronology and run chronology;
+`/dashboard/start` owns submission separately from worklist polling. Run detail links use
+`/dashboard/runs/{runId}`. Human decisions, lightweight verification and publication state
+are separate concepts. See [technician workflow](../../../docs/dashboard.md#start-inspect-and-decide).
 
 Framework, Radzen and adapter assets are public, manifest-listed, and contain no secrets
 or personalized data. Personalized responses retain no-store and nosniff headers. The

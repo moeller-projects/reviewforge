@@ -1,8 +1,9 @@
-# PR review dashboard
+# Technician review dashboard
 
-The PR dashboard is part of the Service host, not the Aspire telemetry dashboard.
-It reads organization-wide Azure DevOps inventory and submits ordinary manual reviews
-through the existing API. Opening or refreshing it never enqueues automatic reviews.
+The technician dashboard is part of the Service host, not the Aspire telemetry dashboard.
+Use it to start read-only review drafts, inspect runs, record finding decisions, and explicitly
+post selected approved findings. Opening or refreshing it never enqueues reviews.
+The advanced ordinary-review action can publish automatically; it is not the default.
 
 ## HTTPS and deployment
 
@@ -132,13 +133,25 @@ is an alternative **only** for these API endpoints:
 
 | Endpoint | Contract |
 |---|---|
-| `GET /reviews/dashboard` | Aggregate inventory, review summaries, eligibility, warnings, and operational state; status rate-limit policy. |
-| `POST /reviews` | Submit an ordinary manual review; submit rate-limit policy; cookie authentication also requires a valid antiforgery token. |
+| `GET /reviews/dashboard` | PR inventory and advisory operational state for PR selection. |
+| `GET /reviews/history` | Bounded run worklist; `offset`, `count`, `attentionOnly`, and optional complete PR scope. |
+| `GET /reviews/drafts/capability` | Whether strict finding verification permits draft reviews. |
+| `POST /reviews/drafts` | Submit an explicitly requested read-only draft. |
+| `GET /reviews/{runId}` | Safe status read-through from tracker, queue, then durable run. |
+| `GET /reviews/{runId}/details` | Finding payloads, verification evidence, human decisions, and publication audit. |
+| `POST /reviews/{runId}/decisions` | Save a revision-scoped decision using its expected version. |
+| `GET /reviews/{runId}/decisions/history?findingId=…` | Latest 100 immutable decisions for one run-local finding, loaded on demand. |
+| `POST /reviews/{runId}/publish` | Explicit nonempty selected approved findings and expected approval versions. |
+| `POST /reviews/{runId}/reconcile` | Explicitly inspect existing threads and repair publication audit; never posts findings. |
+| `POST /reviews` | Advanced ordinary review, which may publish and apply configured authorized fixes. |
+
+Reads use the status rate-limit policy; submissions, decisions, and publication use the submission policy.
+Every cookie-authenticated POST also requires a valid antiforgery token.
 
 The same-origin browser adapter obtains a request token from authenticated
-`GET /dashboard/session` and sends `X-CSRF-TOKEN` for submission. Login and logout use
-antiforgery form tokens. The session does not grant access to `GET /reviews/{runId}`,
-`POST /reviews/discover`, `/resolutions`, or `/mcp`. MCP's existing query-key alternative
+`GET /dashboard/session` and sends `X-CSRF-TOKEN` for each mutation. Login and logout use
+antiforgery form tokens. The session does not grant access to `POST /reviews/discover`,
+`/resolutions`, or `/mcp`. MCP's existing query-key alternative
 is not accepted for dashboard login. An explicitly supplied invalid API-key header is
 not rescued by a valid cookie. API failures return HTTP status codes, not HTML redirects.
 
@@ -157,8 +170,10 @@ Example ordinary submission body (no browser-supplied head SHA is trusted):
 `forceReview` is optional and defaults to `false`. True bypasses **only** same-head
 suppression for a manual ordinary review. Draft checks, shared PR claims, author/fix
 permissions, head pinning, and push safeguards remain. It is rejected for other run kinds
-or nonmanual submission. Dashboard reruns set it to true after confirmation; discovery,
-CLI, MCP, Resolve, and ReviewDraft do not implicitly opt in.
+or nonmanual submission. The advanced ordinary-review action sets it after confirmation.
+Explicit manual read-only ReviewDraft runs independently allow draft PRs and already-reviewed
+heads without `forceReview`; this does not change ordinary automatic-review or Resolve gates.
+Draft reviews require `VerifyFindings:Enabled=true`.
 
 Submission responses remain: 202 `{runId, statusUrl}`, 400 invalid request/antiforgery,
 401 missing or invalid authentication, 409 another run owns the PR (conflicting `runId`
@@ -170,34 +185,60 @@ The opt-in OpenAPI endpoint described in the [README](../README.md#configuration
 the optional submission flag and dashboard response schema; this reference additionally
 documents the browser cookie/antiforgery boundary.
 
-## Reading the dashboard
+## Start, inspect, and decide
 
-- **Visibility:** all retrieved open PRs visible to the configured organization credentials,
-  not just PRs eligible for automatic review. Project/repository filters narrow the display.
-- **Basic eligibility:** Eligible/Ineligible/Unknown describes available draft, target,
-  creator, linked-item, and same-head/comment facts. Missing inputs are Unknown, not a
-  definitive exclusion. Eligible is not a guarantee of next-sweep scheduling: backoff,
-  caps, claims, bot-head and comment checks still apply. Discovery-enabled status is separate.
-- **Current-head coverage:** only a successful ordinary Review of the current head counts.
-  A new head is Unreviewed until reviewed. Resolve and ReviewDraft are not review coverage.
-  A failed or skipped rerun does not erase an earlier successful current-head review.
-- **Latest PR attempt:** the latest ordinary-review attempt across all heads, including a
-  manual review that fails during context fetch before its head is captured. The grid and
-  details explicitly label unknown/different heads; they never imply current-head coverage.
-  Details also retain the separate latest current-head attempt (`latestAttempt` in the API)
-  and last successful current-head review. An old-head active run is not progress for the
-  new head. Any run kind can hold the shared claim and block rerun.
-- **Review findings:** stored review findings, including carried-forward findings and excluding
-  command-fix audit rows. This is neither newly detected nor currently unresolved findings.
-- **Progress:** uses the actual loaded stage list. Failure retains the faulting stage;
-  skipped runs can finish below 100%; completed runs are 100%. No stages are resumed after restart.
+1. Choose **Start draft review** to open `/dashboard/start`. Search the retrieved PRs,
+   including draft PRs and already-reviewed heads. An active PR claim prevents a second run.
+2. Select a PR to start a read-only draft. Verification must be enabled. Accepted submission
+   opens `/dashboard/runs/{runId}`; it does not mean analysis has completed.
+3. Inspect **Findings**, with **Execution** and **Context** available for investigation.
+   Compare candidate evidence, pipeline validation, lightweight verification, and publication state.
+4. Save **Approve**, **Reject**, or **Defer**. Reject requires a reason. Approval does not post;
+   rejection is internal and never closes a thread or posts a rebuttal. Decisions are scoped to
+   this run's reviewed revision and do not silently suppress findings on later revisions.
+5. Select approved, technically eligible, unpublished findings and confirm **Post selected findings**.
+   The server checks approval versions, the PR claim, and the current head again. If the head changed,
+   start a new draft. Empty selection is never interpreted as publish all in the technician API.
 
-Summary cards can overlap. Reviewed means successful current-head coverage; Needs attention
-also includes failed latest current-head ordinary reviews and unknown-head rerun failures, so a failed rerun can appear in both. Known old-head failures remain visible as PR-level diagnostics but do not by themselves mark a successfully reviewed current head as needing attention.
-Completed reviews with findings are not failures. Needs attention excludes active ordinary
-reviews and excludes unreviewed drafts/known basic-filter-ineligible PRs. Unreviewed,
-nondraft Unknown-eligibility PRs remain visible in Needs attention. Reviewing includes
-ordinary-review blockers on old or unknown heads; other run-kind blockers appear in detail.
+A human approval cannot override failed anchor validation or a rejected verifier outcome.
+Deep repository investigation, objection-driven reinvestigation, and confidence assessment are
+phase-two work. The current lightweight verifier is not a confidence score; an unverified finding
+must not be displayed as confirmed. Ordinary reviews can retain findings when lightweight
+verification fails; strict drafts fail instead when required verdicts are missing.
+
+Publication can partially succeed. Inspect each finding's posted, already-posted, failed,
+unknown, or not-attempted result. Unknown means reconciliation is needed, not that no external
+write occurred. Use **Reconcile unknown findings** to inspect existing PR threads without
+reposting. If no matching thread is observed, the outcome stays unknown; check the PR manually,
+reconcile later, or start a new draft. The UI never automatically repeats a mutation.
+
+The collapsed **Automatic publication (advanced)** action on the start page is separate. It
+confirms an ordinary review that can publish and apply configured author-authorized fixes without
+this draft approval workflow. Ordinary draft-PR and other safety gates remain in effect.
+
+## Reading the run worklist
+
+- **Grouping:** full PR identity (organization/project/repository/PR ID), then reviewed head,
+  then runs. Numeric PR IDs from different scopes never merge.
+- **Ordering:** revisions use the newest observed run timestamp, not lexical SHA order or a
+  provider revision number. Runs are newest first. Unknown-head attempts have a separate group.
+- **Needs attention:** active/failed runs and completed drafts with pending decisions or approved
+  unpublished findings. The server filters attention before pagination. A completed review with
+  findings is not an execution failure. Deferred decisions remain accessible through history.
+- **Expansion:** attention groups/revisions open initially; older loaded history stays collapsed.
+  Manual expansion choices survive polling and search/view changes.
+- **Bounds:** load more up to 500 run identities across ten pages per view. Changing attention/all
+  view starts a new bounded window. Search applies to loaded rows, not the entire database.
+  Within a view, refreshed rows displaced by newer arrivals remain as explicitly labeled snapshots.
+- **Counts:** candidates, accepted/rejected outcomes, and newly posted findings describe this run.
+  Carried-forward dedupe identities are not new discoveries. Missing legacy evidence/counts remain
+  unavailable rather than being shown as zero or reconstructed as fact.
+- **Source metadata:** closed or inaccessible PRs do not remove durable run history. The current-head
+  label is based on latest observed source metadata, not a publication-time guarantee.
+
+Only successful ordinary reviews establish current-head coverage. Draft and Resolve runs do not;
+failed reruns do not erase earlier successful ordinary coverage. The inventory API retains its
+advisory coverage/eligibility fields, separate from the technician worklist's attention semantics.
 
 ## Freshness, warnings, and discovery
 
@@ -225,8 +266,9 @@ These intervals are not an end-to-end freshness or latency SLA.
 Partial inventory is marked incomplete, with safe `sourceWarnings`; summaries describe only
 the retrieved rows. Missing source metadata can make eligibility Unknown. A total refresh
 failure retains server-cached inventory with explicit stale/refresh-failure markers while
-still merging fresh operational state. A cold failure has no inventory fallback and fails
-the request; a client HTTP failure may retain its previous snapshot with an error indication. Cold inventory refreshes may make sequential cheap
+still merging fresh operational state. A cold failure has no inventory fallback: the inventory-picker request fails, while the history
+query explicitly reports unavailable source metadata and retains durable run identities. A client
+HTTP failure may retain its previous snapshot with a visible error indication. Cold inventory refreshes may make sequential cheap
 linked-item-reference calls for PRs lacking inline metadata. Shared caching limits repeated
 fetches but does not prove large-organization source latency is acceptable.
 
@@ -240,22 +282,28 @@ remains a separate action.
 
 ## Restart and release limitations
 
-Dashboard persistence reads rank current-head attempt/success, latest PR-level ordinary review,
-and latest incomplete shell in SQL in batches of at most 100 PR identities. All scoped tracker
-IDs are excluded before persisted ranking, so terminal corrections reveal older real successes.
-Only selected per-PR attempt/success/blocker IDs request finding-count enrichment; retained
-terminal IDs otherwise remain cheap state observations for accepted-rerun reconciliation. Neither
-adapter loads finding JSON or materializes entire run history for the dashboard.
+The worklist uses bounded global history pages with scalar counts projected in SQLite, without
+loading finding payloads into list responses. Exact UTC ticks preserve history ordering across
+sub-millisecond timestamps and timezone offsets. Tracker/queue overlays cannot replace durable
+terminal outcomes with stale nonterminal state. Inventory only enriches the run list; it does not
+filter out closed PRs. The separate inventory endpoint retains its bounded per-PR coverage queries.
 
-Live stage progress and skipped attempts exist only in the bounded in-memory tracker;
-skipped ReviewRun rows are never persisted. A skipped rerun can disappear from history
-after tracker eviction/restart, without changing prior durable successful coverage.
+New runs retain a bounded execution journal once an existing run shell has been persisted:
+actual stage start/end, observed duration, outcome, safe failure code, and run/trace correlation.
+Execution is separate from the loaded stage plan. Captured context includes rulebook/review-depth
+provenance and bounded summaries, uncertainties, and acceptance-criteria evidence where available;
+missing model provenance stays unavailable. Raw prompts, tool transcripts, configuration objects,
+and exception messages are not diagnostic payloads.
+
+A crash before the first durable shell can leave no journal. Legacy stage history is unavailable
+rather than reconstructed. Skipped attempts remain tracker-only: skipped ReviewRun rows are never
+persisted and can disappear after tracker eviction/restart without changing successful coverage.
 
 Memory-queue requests are lost on restart. With `Persistence:QueueMode=Sqlite`, durable
 requests can be reclaimed after claim expiry and **re-executed from the beginning**, not
 resumed at their last stage. Persisted run shells are not stage checkpoints; stale shells
-can be reaped as failures. Persisted results and queue rows support status read-through,
-but do not recreate the live stage timeline.
+can be reaped as failures. Persisted results and queue rows support status read-through;
+captured journals support investigation. Neither is a checkpoint for resuming execution.
 
 Before production release, obtain both Ubuntu and Windows CI coverage evidence, exercise
 real Azure DevOps paging/partial failures and representative organization scale, and validate

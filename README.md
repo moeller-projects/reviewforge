@@ -127,9 +127,13 @@ in request logs).
 ## PR review dashboard
 
 Open `https://localhost:9090/` and sign in with an environment-configured API key.
-The dashboard at `/dashboard` shows organization-wide open PRs, current-head review
-coverage, latest attempts, live stages, and confirmed forced reruns. It is separate from
-the Aspire telemetry dashboard. Service, CLI, MCP and browser share the HTTPS origin;
+The dashboard at `/dashboard` prioritizes runs needing attention, grouped by PR, observed
+revision chronology, and newest run. Start a read-only draft at `/dashboard/start`, inspect
+`/dashboard/runs/{runId}`, save approve/reject/defer decisions, then explicitly publish
+selected approved findings. Draft reviews require `VerifyFindings:Enabled=true`; manual
+drafts can inspect draft PRs and already-reviewed heads without changing automatic gates.
+Deep investigation and confidence assessment are deferred. This is separate from the
+Aspire telemetry dashboard. Service, CLI, MCP and browser share the HTTPS origin;
 Compose requires runtime-mounted TLS material as described in the setup guide below.
 Sessions have a fixed eight-hour maximum and are invalidated on service restart; the
 dashboard currently supports a single service instance.
@@ -140,8 +144,9 @@ and outstanding release-validation requirements.
 
 `POST /reviews` additionally accepts optional `"forceReview": true` (default `false`).
 It bypasses only same-head suppression for an ordinary manual review; drafts still skip
-and all claim, authorization, and publication safeguards remain. Dashboard reruns set
-this flag; existing CLI/MCP/discovery defaults are unchanged.
+and all claim, authorization, and publication safeguards remain. Only the dashboard's
+confirmed advanced automatic-publication action sets this flag; existing CLI/MCP/discovery
+defaults are unchanged. The default read-only draft action does not publish or set it.
 
 ## Autonomous comment resolution
 
