@@ -69,6 +69,71 @@ public sealed class RunWorklistQueryServiceTests
         Assert.Empty((await service.GetAsync(0, 100, null, true, ct)).Items);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Durable_completion_reconciles_surviving_queue_claim_after_tracker_restart(bool sqlite, bool scoped)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = Path.Combine(Path.GetTempPath(), $"worklist-reconcile-{Guid.NewGuid():N}.db");
+        var connection = $"Data Source={path};Pooling=False";
+        try
+        {
+            using var cache = new DashboardInventoryCache(new FakePullRequestSource(), TimeProvider.System);
+            var pr = new PrKey("o", "p", "r", 1);
+            var at = DateTimeOffset.UtcNow.AddMinutes(-2);
+            var completed = new ReviewRequest(Guid.NewGuid(), pr, at);
+            var unfinished = new ReviewRequest(Guid.NewGuid(), pr, at.AddSeconds(1));
+            var originalQueue = new ReviewForge.Infrastructure.Persistence.SqliteReviewQueue(connection);
+            Assert.True(originalQueue.TryEnqueue(completed).Accepted);
+            Assert.True(originalQueue.TryEnqueue(unfinished).Accepted);
+            await using (var reader = originalQueue.ReadAllAsync(ct).GetAsyncEnumerator(ct))
+            {
+                Assert.True(await reader.MoveNextAsync());
+                Assert.True(await reader.MoveNextAsync());
+            }
+            IFindingStore store = sqlite
+                ? new ReviewForge.Infrastructure.Persistence.SqliteFindingStore(connection)
+                : new FakeFindingStore();
+            await store.SaveRunAsync(new(completed.RunId, pr, "completed-head", ReviewKind.Full,
+                at, at.AddMinutes(1), true, []), ct);
+            await store.SaveRunAsync(new(unfinished.RunId, pr, "unfinished-head", ReviewKind.Full,
+                at.AddSeconds(1), null, false, []), ct);
+            // Crash after persistence but before queue acknowledgement: restart with no tracker observations.
+            if (sqlite) store = new ReviewForge.Infrastructure.Persistence.SqliteFindingStore(connection);
+            var queue = new ReviewForge.Infrastructure.Persistence.SqliteReviewQueue(connection);
+            Assert.All(await queue.GetPendingHistoryAsync(1000, ct), p => Assert.True(p.IsClaimed));
+            var service = new RunWorklistQueryService(cache, new RunTracker(), queue,
+                new InFlightClaims(), (IRunHistoryStore)store, TimeProvider.System);
+            PrKey? scope = scoped ? pr : null;
+
+            // Query attention first: SQL must retrieve the successful row for reconciliation even
+            // though that row does not itself require attention, before filtering/paging the result.
+            var attention = await service.GetAsync(0, 1, scope, true, ct);
+            var pending = Assert.Single(attention.Items);
+            Assert.Equal(unfinished.RunId, pending.Run.RunId);
+            Assert.Null(pending.Run.State);
+            Assert.True(pending.Run.IsPending);
+            Assert.True(pending.Run.IsIncomplete);
+            Assert.False(attention.HasMore);
+
+            var history = await service.GetAsync(0, 100, scope, false, ct);
+            Assert.Equal(2, history.Items.Count);
+            var durable = history.Items.Single(i => i.Run.RunId == completed.RunId).Run;
+            Assert.Equal(RunState.Completed, durable.State);
+            Assert.Equal(at.AddMinutes(1), durable.CompletedAt);
+            Assert.False(durable.IsPending);
+            Assert.False(durable.IsIncomplete);
+            Assert.False(history.HasMore);
+        }
+        finally
+        {
+            foreach (var suffix in new[] { "", "-wal", "-shm" }) File.Delete(path + suffix);
+        }
+    }
+
     [Fact]
     public async Task Unmatched_mutation_claims_are_blockers_not_fictitious_run_identities()
     {

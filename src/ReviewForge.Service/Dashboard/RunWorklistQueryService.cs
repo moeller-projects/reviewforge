@@ -27,12 +27,16 @@ public sealed class RunWorklistQueryService(DashboardInventoryCache inventory, R
                 { IsStale = true, RefreshFailed = true };
         }
         var pending = await queue.GetPendingHistoryAsync(1000, ct).ConfigureAwait(false);
+        var scopedPending = pending.Where(p => pr is null || p.Request.Pr == pr).ToArray();
         var held = claims.Snapshot();
         // Snapshot AFTER queue read: retained terminal corrections override stale durable claims.
         var live = tracker.Snapshot().Where(s => pr is null || s.Pr == pr).ToDictionary(s => s.RunId);
-        var reconcileIds = live.Values.Where(s => s.State is RunState.Queued or RunState.Running).Select(s => s.RunId).ToArray();
+        // A restart can lose the tracker after persistence finalizes but before queue acknowledgement.
+        // Include bounded pending identities so SQL returns terminal corrections even in attention mode.
+        var reconcileIds = live.Values.Where(s => s.State is RunState.Queued or RunState.Running)
+            .Select(s => s.RunId).Union(scopedPending.Select(p => p.Request.RunId)).ToArray();
         var rows = new Dictionary<Guid, RunWorklistItem>();
-        foreach (var p in pending.Where(p => pr is null || p.Request.Pr == pr))
+        foreach (var p in scopedPending)
         {
             var r = p.Request;
             rows[r.RunId] = new(r.Pr, new(r.RunId, r.HeadSha, r.Kind, p.IsClaimed ? null : RunState.Queued,
