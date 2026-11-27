@@ -91,6 +91,12 @@ public class ReviewForgeFactory : WebApplicationFactory<Program>
         return this;
     }
 
+    public ReviewForgeFactory WithFindingVerification(bool enabled)
+    {
+        _Environment.Set("VerifyFindings__Enabled", enabled.ToString().ToLowerInvariant());
+        return this;
+    }
+
     /// <summary>Overrides the fixed-window submit limit for rate-limit tests.</summary>
     public ReviewForgeFactory WithSubmitLimit(int permitLimit, int windowSeconds)
     {
