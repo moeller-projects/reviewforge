@@ -47,6 +47,9 @@ public class FakePullRequestSource : IPullRequestSource
     /// (deterministic partial-failure tests).</summary>
     public string? ThrowOnPostKey { get; set; }
 
+    /// <summary>Test hook after an external post succeeds (disconnect/concurrency races).</summary>
+    public Action? AfterPost { get; set; }
+
     /// <summary>When set, the Nth PostFindingThreadAsync call throws (order-agnostic partial failure).</summary>
     public int? ThrowOnNthPost { get; set; }
 
@@ -85,11 +88,13 @@ public class FakePullRequestSource : IPullRequestSource
     public PullRequestInventory Inventory { get; set; } = new([], true, []);
     public int InventoryFetches { get; private set; }
 
+    public Exception? ThrowOnGetInventory { get; set; }
+
     public virtual Task<PullRequestInventory> GetOpenPullRequestInventoryAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         InventoryFetches++;
-        return Task.FromResult(Inventory);
+        return ThrowOnGetInventory is { } error ? Task.FromException<PullRequestInventory>(error) : Task.FromResult(Inventory);
     }
 
     public virtual async Task<IReadOnlyList<WorkItem>> GetLinkedWorkItemsAsync(PrKey pr, CancellationToken ct)
@@ -135,6 +140,7 @@ public class FakePullRequestSource : IPullRequestSource
             var id = _NextThreadId++;
             PostedFindings.Add((finding, id));
             PostedFindingBodies.Add(CommentFormatter.FormatFinding(finding));
+            AfterPost?.Invoke();
             return Task.FromResult(id);
         }
     }
@@ -160,7 +166,9 @@ public class FakePullRequestSource : IPullRequestSource
         {
             GeneralComments.Add(text);
             GeneralCommentDedupeKeys.Add(dedupeKey);
-            return Task.FromResult(_NextThreadId++);
+            var id = _NextThreadId++;
+            AfterPost?.Invoke();
+            return Task.FromResult(id);
         }
     }
 
@@ -179,6 +187,8 @@ public class FakePullRequestSource : IPullRequestSource
         lock (_Gate)
         {
             StatusChanges.Add((threadId, status));
+            var index = Threads.FindIndex(t => t.Id == threadId);
+            if (index >= 0) Threads[index] = Threads[index] with { Status = status };
         }
 
         return Task.CompletedTask;
