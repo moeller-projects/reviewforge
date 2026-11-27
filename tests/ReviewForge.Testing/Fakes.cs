@@ -295,7 +295,7 @@ public class SlowFakePullRequestSource(int delayMs = 0) : FakePullRequestSource
 }
 
 /// <summary>In-memory IFindingStore.</summary>
-public class FakeFindingStore : IFindingStore
+public partial class FakeFindingStore : IFindingStore
 {
     public List<ReviewRun> Runs { get; } = [];
     public int SummaryReads { get; private set; }
@@ -362,7 +362,15 @@ public class FakeFindingStore : IFindingStore
         return Task.FromResult(0);
     }
 
-    public virtual Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(KnownKeys);
+    public virtual Task<IReadOnlyList<string>> GetKnownDedupeKeysAsync(PrKey pr, CancellationToken ct)
+    {
+        lock (Runs)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(KnownKeys.Concat(Runs.Where(r => r.Pr == pr)
+                .SelectMany(r => r.Findings).Where(f => !f.DedupeKey.StartsWith(AppliedFix.CommandKeyPrefix, StringComparison.Ordinal))
+                .Select(f => f.DedupeKey)).Distinct(StringComparer.Ordinal).ToArray());
+        }
+    }
 
     public virtual Task<IReadOnlySet<long>> GetCommandedFixThreadIdsAsync(PrKey pr, CancellationToken ct)
         => Task.FromResult<IReadOnlySet<long>>(
@@ -374,6 +382,23 @@ public class FakeFindingStore : IFindingStore
                 .Select(long.Parse)
                 .ToHashSet());
 
+    public Exception? ThrowOnDiagnosticsUpdate { get; set; }
+
+    public virtual Task UpdateRunDiagnosticsAsync(Guid runId, RunDiagnostics diagnostics, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if ((ThrowOnDiagnosticsUpdate ?? ThrowOnSave) is { } error) return Task.FromException(error);
+        lock (Runs)
+        {
+            var index = Runs.FindIndex(r => r.Id == runId);
+            if (index < 0) return Task.CompletedTask;
+            Runs[index] = Runs[index] with { Diagnostics = diagnostics };
+            var recentIndex = RecentRuns.FindIndex(r => r.Id == runId);
+            if (recentIndex >= 0) RecentRuns[recentIndex] = RecentRuns[recentIndex] with { Diagnostics = diagnostics };
+        }
+        return Task.CompletedTask;
+    }
+
     public virtual Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {
         if (ThrowOnSave is { } error)
@@ -381,32 +406,93 @@ public class FakeFindingStore : IFindingStore
             return Task.FromException(error);
         }
 
-        Runs.RemoveAll(r => r.Id == run.Id);
-        Runs.Add(run);
-        RecentRuns.RemoveAll(r => r.Id == run.Id);
-        RecentRuns.Add(run);
+        lock (Runs)
+        {
+            // Match SQLite's upsert: existing rows retain durable publication backfills
+            // and fix attribution; finalize only adds newly relevant finding rows.
+            if (Runs.FirstOrDefault(r => r.Id == run.Id) is { } existing)
+            {
+                var knownKeys = existing.Findings.Select(f => f.DedupeKey).ToHashSet(StringComparer.Ordinal);
+                run = run with
+                {
+                    Findings = existing.Findings.Concat(run.Findings.Where(f => !knownKeys.Contains(f.DedupeKey))).ToArray(),
+                    FindingObservations = run.FindingObservations?.ToArray() ?? existing.FindingObservations,
+                    Diagnostics = run.Diagnostics ?? existing.Diagnostics,
+                };
+            }
+
+            // Snapshot the collection as SQLite serialization does, not the caller's mutable list.
+            run = run with { FindingObservations = run.FindingObservations?.ToArray() };
+            // An UPDATE keeps SQLite rowid/insertion order, including retention ranking.
+            var runIndex = Runs.FindIndex(r => r.Id == run.Id);
+            if (runIndex >= 0) Runs[runIndex] = run;
+            else Runs.Add(run);
+            var recentIndex = RecentRuns.FindIndex(r => r.Id == run.Id);
+            if (recentIndex >= 0) RecentRuns[recentIndex] = run;
+            else RecentRuns.Add(run);
+        }
         return Task.CompletedTask;
     }
 
 
     public virtual Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct)
     {
-        ThreadIdBackfills.Add((runId, dedupeKey, threadId));
+        lock (Runs)
+        {
+            ThreadIdBackfills.Add((runId, dedupeKey, threadId));
+            UpdateFinding(runId, dedupeKey, f => f with {ThreadId = threadId});
+        }
+
         return Task.CompletedTask;
     }
 
     public virtual Task MarkFindingPublishedAsync(Guid runId, string dedupeKey, int? threadId, CancellationToken ct)
     {
-        var run = Runs.FirstOrDefault(r => r.Id == runId);
-        if (run is not null)
+        ct.ThrowIfCancellationRequested();
+        lock (Runs)
         {
-            var findings = run.Findings.Select(f => f.DedupeKey == dedupeKey
-                ? f with {Published = true, ThreadId = threadId ?? f.ThreadId}
-                : f).ToArray();
-            Runs[Runs.IndexOf(run)] = run with {Findings = findings};
+            if (threadId is { } id)
+                ThreadIdBackfills.Add((runId, dedupeKey, id));
+            UpdateFinding(runId, dedupeKey, f => f with {Published = true, ThreadId = threadId ?? f.ThreadId});
         }
 
         return Task.CompletedTask;
+    }
+
+    public virtual Task RecordFindingPublicationAsync(Guid runId, string dedupeKey, int threadId, bool newlyPosted, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (Runs)
+        {
+            var run = Runs.Single(r => r.Id == runId);
+            if (!run.Findings.Any(f => f.DedupeKey == dedupeKey))
+                throw new InvalidOperationException("Publication finding is not stored in this run.");
+            ThreadIdBackfills.Add((runId, dedupeKey, threadId));
+            UpdateFinding(runId, dedupeKey, f => f with { Published = true, ThreadId = threadId });
+            if (newlyPosted)
+                foreach (var records in new[] { Runs, RecentRuns })
+                {
+                    var index = records.FindIndex(r => r.Id == runId);
+                    if (index >= 0 && records[index].FindingObservations is { } observations)
+                        records[index] = records[index] with { FindingObservations = observations.Select(o => o.DedupeKey == dedupeKey
+                            ? o with { NewlyPosted = true } : o).ToArray() };
+                }
+        }
+        return Task.CompletedTask;
+    }
+
+    private void UpdateFinding(Guid runId, string dedupeKey, Func<StoredFinding, StoredFinding> update)
+    {
+        foreach (var runs in new[] {Runs, RecentRuns})
+        {
+            if (runs.FirstOrDefault(r => r.Id == runId) is { } run)
+            {
+                runs[runs.IndexOf(run)] = run with
+                {
+                    Findings = run.Findings.Select(f => f.DedupeKey == dedupeKey ? update(f) : f).ToArray(),
+                };
+            }
+        }
     }
 
     public virtual Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)

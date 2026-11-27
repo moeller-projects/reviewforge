@@ -43,14 +43,27 @@ public interface IFindingStore
     /// <summary>
     /// Saves a run. Upsert semantics: unknown run id → insert (in-flight shell when
     /// CompletedAt/Success say so); known run id → finalize (update head/completion/success,
-    /// merge any missing finding rows, keep backfilled thread ids).
+    /// merge any missing finding rows, keep backfilled thread ids). Non-null
+    /// FindingObservations replaces the run-scoped snapshot independently of finding identities;
+    /// null preserves an existing snapshot (legacy/reaper caller) and means unavailable on insert.
+    /// Rejected observations must never be inserted as dedupe finding rows.
     /// </summary>
     Task SaveRunAsync(ReviewRun run, CancellationToken ct);
+
+    /// <summary>Updates ONLY the diagnostics of an existing run. Missing rows are a no-op:
+    /// journaling must never create gate-skipped runs or overwrite publication/observation snapshots.
+    /// SaveRunAsync with null diagnostics preserves any existing snapshot.</summary>
+    Task UpdateRunDiagnosticsAsync(Guid runId, RunDiagnostics diagnostics, CancellationToken ct);
 
     /// <summary>Backfill the posted thread id for a finding of the run.</summary>
     Task SetThreadIdAsync(Guid runId, string dedupeKey, int threadId, CancellationToken ct);
 
     Task MarkFindingPublishedAsync(Guid runId, string dedupeKey, int? threadId, CancellationToken ct);
+
+    /// <summary>Atomically record a confirmed external thread and its new-post attribution.
+    /// Reconciliation (newlyPosted=false) never erases prior attribution. Legacy runs without
+    /// observation snapshots remain unavailable rather than having a history reconstructed.</summary>
+    Task RecordFindingPublicationAsync(Guid runId, string dedupeKey, int threadId, bool newlyPosted, CancellationToken ct);
 
     /// <summary>Newest runs for the PR regardless of outcome (failure backoff, diagnostics).</summary>
     Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct);

@@ -23,6 +23,10 @@ public sealed class RunEntity
     public DateTimeOffset? LastObservedCommentAt { get; set; }
 
     public bool Success { get; set; }
+
+    /// <summary>Run-scoped candidate snapshot; null means legacy/unavailable, not empty.</summary>
+    public string? FindingObservationsJson { get; set; }
+    public string? DiagnosticsJson { get; set; }
     public List<FindingEntity> Findings { get; set; } = [];
 }
 

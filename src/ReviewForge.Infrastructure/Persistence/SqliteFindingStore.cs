@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using ReviewForge.Core.AutoFix;
@@ -13,9 +14,13 @@ namespace ReviewForge.Infrastructure.Persistence;
 /// multiple workers read and write the same database without SQLITE_BUSY failures.
 /// Use <see cref="StoreJournalMode.Delete"/> on filesystems without POSIX advisory locks.
 /// </summary>
-public sealed class SqliteFindingStore : IFindingStore
+public sealed partial class SqliteFindingStore : IFindingStore
 {
     private readonly DbContextOptions<FindingStoreDbContext> _Options;
+    private static readonly JsonSerializerOptions ObservationJsonOptions = new(JsonSerializerDefaults.Web);
+
+    private static IReadOnlyList<FindingObservation>? ReadObservations(string? json)
+        => json is null ? null : JsonSerializer.Deserialize<FindingObservation[]>(json, ObservationJsonOptions);
 
     public SqliteFindingStore(string connectionString, StoreJournalMode journalMode = StoreJournalMode.Wal)
     {
@@ -58,6 +63,20 @@ public sealed class SqliteFindingStore : IFindingStore
             if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
             {
                 cmd.CommandText = "ALTER TABLE Runs ADD COLUMN LastObservedCommentAt TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'DiagnosticsJson'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE Runs ADD COLUMN DiagnosticsJson TEXT NULL";
+                cmd.ExecuteNonQuery();
+            }
+
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Runs') WHERE name = 'FindingObservationsJson'";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+            {
+                cmd.CommandText = "ALTER TABLE Runs ADD COLUMN FindingObservationsJson TEXT NULL";
                 cmd.ExecuteNonQuery();
             }
 
@@ -360,7 +379,9 @@ public sealed class SqliteFindingStore : IFindingStore
                     f.FindingJson, f.Published))
             ],
             run.LastObservedCommentAt,
-            run.Pipeline);
+            run.Pipeline,
+            ReadObservations(run.FindingObservationsJson),
+            run.DiagnosticsJson is null ? null : JsonSerializer.Deserialize<RunDiagnostics>(run.DiagnosticsJson, ObservationJsonOptions));
     }
 
     /// <summary>Runs one of the bounded rowid-ordered id queries against <paramref name="sql"/>.</summary>
@@ -418,7 +439,8 @@ public sealed class SqliteFindingStore : IFindingStore
         return run is null
             ? null
             : new ReviewRun(run.Id, pr, run.HeadSha, Enum.Parse<ReviewKind>(run.Kind),
-                run.StartedAt, run.CompletedAt, run.Success, [], run.LastObservedCommentAt, run.Pipeline);
+                run.StartedAt, run.CompletedAt, run.Success, [], run.LastObservedCommentAt, run.Pipeline,
+                ReadObservations(run.FindingObservationsJson));
     }
 
     public async Task<IReadOnlyList<ResolveAction>> GetResolveActionsAsync(
@@ -529,6 +551,14 @@ public sealed class SqliteFindingStore : IFindingStore
             .ToHashSet();
     }
 
+    public async Task UpdateRunDiagnosticsAsync(Guid runId, RunDiagnostics diagnostics, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        var json = JsonSerializer.Serialize(diagnostics, ObservationJsonOptions);
+        await db.Runs.Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.DiagnosticsJson, json), ct).ConfigureAwait(false);
+    }
+
     public async Task SaveRunAsync(ReviewRun run, CancellationToken ct)
     {
         await using var db = CreateContext();
@@ -548,6 +578,8 @@ public sealed class SqliteFindingStore : IFindingStore
                 HeadSha = run.HeadSha,
                 Kind = run.Kind.ToString(),
                 Pipeline = run.Pipeline,
+                FindingObservationsJson = run.FindingObservations is null ? null : JsonSerializer.Serialize(run.FindingObservations, ObservationJsonOptions),
+                DiagnosticsJson = run.Diagnostics is null ? null : JsonSerializer.Serialize(run.Diagnostics, ObservationJsonOptions),
                 StartedAt = run.StartedAt,
                 CompletedAt = run.CompletedAt,
                 LastObservedCommentAt = run.LastObservedCommentAt,
@@ -562,6 +594,11 @@ public sealed class SqliteFindingStore : IFindingStore
             existing.HeadSha = run.HeadSha;
             existing.Kind = run.Kind.ToString();
             existing.Pipeline = run.Pipeline;
+            if (run.Diagnostics is not null)
+                existing.DiagnosticsJson = JsonSerializer.Serialize(run.Diagnostics, ObservationJsonOptions);
+            // Reaper/legacy callers without a snapshot must not erase a captured shell.
+            if (run.FindingObservations is not null)
+                existing.FindingObservationsJson = JsonSerializer.Serialize(run.FindingObservations, ObservationJsonOptions);
             existing.CompletedAt = run.CompletedAt;
             existing.LastObservedCommentAt = run.LastObservedCommentAt;
             existing.Success = run.Success;
@@ -606,6 +643,25 @@ public sealed class SqliteFindingStore : IFindingStore
                 .SetProperty(f => f.ThreadId, f => threadId ?? f.ThreadId), ct).ConfigureAwait(false);
     }
 
+    public async Task RecordFindingPublicationAsync(Guid runId, string dedupeKey, int threadId, bool newlyPosted, CancellationToken ct)
+    {
+        await using var db = CreateContext();
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var run = await db.Runs.Include(r => r.Findings).SingleAsync(r => r.Id == runId, ct).ConfigureAwait(false);
+        var findings = run.Findings.Where(f => f.DedupeKey == dedupeKey).ToArray();
+        if (findings.Length == 0) throw new InvalidOperationException("Publication finding is not stored in this run.");
+        foreach (var finding in findings)
+        {
+            finding.Published = true;
+            finding.ThreadId = threadId;
+        }
+        if (newlyPosted && ReadObservations(run.FindingObservationsJson) is { } observations)
+            run.FindingObservationsJson = JsonSerializer.Serialize(observations.Select(o => o.DedupeKey == dedupeKey
+                ? o with { NewlyPosted = true } : o).ToArray(), ObservationJsonOptions);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<ReviewRun>> GetRecentRunsAsync(PrKey pr, int count, CancellationToken ct)
     {
         await using var db = CreateContext();
@@ -640,7 +696,7 @@ public sealed class SqliteFindingStore : IFindingStore
                             f.DedupeKey, f.RuleId, f.Severity, f.Title, f.FilePath, f.Line, f.ThreadId,
                             f.AppliedFixJson, f.FindingJson, f.Published))
                     ],
-                    r.LastObservedCommentAt, r.Pipeline))
+                    r.LastObservedCommentAt, r.Pipeline, ReadObservations(r.FindingObservationsJson)))
         ];
     }
 
@@ -661,7 +717,7 @@ public sealed class SqliteFindingStore : IFindingStore
                 .Select(r => new ReviewRun(
                     r.Id, new PrKey(r.Org, r.Project, r.RepositoryId, r.PrId), r.HeadSha,
                     Enum.Parse<ReviewKind>(r.Kind), r.StartedAt, r.CompletedAt, r.Success,
-                    [], r.LastObservedCommentAt, r.Pipeline))
+                    [], r.LastObservedCommentAt, r.Pipeline, ReadObservations(r.FindingObservationsJson)))
         ];
     }
 
