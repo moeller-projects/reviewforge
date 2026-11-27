@@ -6,15 +6,16 @@ namespace ReviewForge.Core.AutoFix;
 
 /// <summary>
 /// Builds the finding rows persisted by begin-run/persist-run: accepted findings (with
-/// their applied-fix JSON), carried-forward prior findings, and — at finalize time —
+/// their full payload and applied-fix JSON), carried-forward prior findings, and — at finalize time —
 /// audit-only rows for commanded fixes. Commanded fixes use "thread-{id}" keys that are
 /// never finding identities: they are excluded from carry-forward and known-key queries.
 /// </summary>
 internal static class AppliedFixPersistence
 {
     private static readonly JsonSerializerOptions JsonOptions = new() {WriteIndented = false};
+    private static readonly JsonSerializerOptions FindingJsonOptions = new(JsonSerializerDefaults.Web);
 
-    /// <summary>Accepted findings + carry-forward, with deterministic-fix JSON attached.</summary>
+    /// <summary>Accepted finding payloads + carry-forward, with deterministic-fix audit JSON attached.</summary>
     public static List<StoredFinding> BuildRows(ReviewContext ctx)
         => BuildRows(ctx, includeCommandedAuditRows: false, threadIdResolver: null);
 
@@ -36,7 +37,8 @@ internal static class AppliedFixPersistence
                 f.DedupeKey!, f.RuleId, f.Severity, f.Title,
                 f.Anchor?.FilePath, f.Anchor?.StartLine,
                 threadIdResolver?.Invoke(f.DedupeKey!),
-                f.DedupeKey is not null && fixJsonByKey.TryGetValue(f.DedupeKey, out var json) ? json : null))
+                f.DedupeKey is not null && fixJsonByKey.TryGetValue(f.DedupeKey, out var json) ? json : null,
+                FindingJson: JsonSerializer.Serialize(f, FindingJsonOptions)))
             // Carry-forward from P0-1: prior keys remain known identities. Commanded-fix
             // audit rows ("thread-") are NOT identities — they must never re-enter the
             // known-key set or the carry-forward chain.
