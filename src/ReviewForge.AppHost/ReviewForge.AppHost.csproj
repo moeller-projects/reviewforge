@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.6.4">
+<Project Sdk="Aspire.AppHost.Sdk/17.0.0">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -15,7 +15,6 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Aspire.Hosting.AppHost" />
       <PackageReference Include="Aspire.Hosting.Dotnet" />
     </ItemGroup>
 
