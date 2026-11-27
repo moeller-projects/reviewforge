@@ -61,6 +61,8 @@ public static partial class ServiceCollectionExtensions
             sp.GetRequiredService<IFindingStore>() as IFindingDecisionStore
             ?? throw new InvalidOperationException("The registered finding store must support human decisions."));
         services.AddSingleton<FindingDecisionService>();
+        services.AddSingleton<RunSourceMetadataService>();
+        services.AddSingleton<RunDetailsService>();
         return services;
     }
 }
