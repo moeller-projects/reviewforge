@@ -33,13 +33,9 @@
             <p>Lightweight verification is not deep investigation or a confidence assessment. Deep investigation is deferred to phase two.</p>
             @if (!details.ObservationsAvailable) { <p class="notice">Candidate observations and counts are unavailable (legacy or not yet captured). Unknown publication state is not proof that a finding was never posted.</p> }
             <div class="finding-toolbar">
-                <label>Show <select aria-label="Finding filter" value="@_Filter" @onchange="ChangeFilter" disabled="@Busy">
-                    <option value="actionable">Actionable</option><option value="all">All</option><option value="accepted">Accepted</option>
-                    <option value="pipeline-rejected">Pipeline-rejected</option><option value="human-rejected">Human-rejected</option>
-                    <option value="posted">Posted</option><option value="history">History / previously known</option>
-                </select></label>
+                <span>@EligibleSelected eligible approved selected · @(_Selected.Count - EligibleSelected) excluded (not approved, technically ineligible, posted, unknown or head changed).</span>
                 <span id="publication-action" class="publication-action" tabindex="-1" aria-label="Publication actions">
-                    <button type="button" class="compact-action post-selected" disabled="@(Busy || _Selected.Count == 0 || HeadChanged || _Stale || _AuthenticationExpired)" @onclick="PreparePublication">Post selected findings</button>
+                    <button type="button" class="compact-action post-selected" disabled="@(Busy || EligibleSelected == 0 || HeadChanged || _Stale || _AuthenticationExpired)" @onclick="PreparePublication">Post selected findings</button>
                 </span>
                 @if (_Unknown.Count > 0)
                 {
@@ -57,13 +53,9 @@
                     @if (result.UnknownCount > 0) { <p>Unknown outcomes are not retried automatically. Refresh and allow server reconciliation before retrying; an external comment may already exist.</p> }
                 </section>
             }
-            @foreach (var finding in VisibleFindings)
-            {
-                <RunFindingCard @key="finding.FindingId" Finding="finding" HeadSha="@(details.ReviewedHeadSha ?? "")"
-                    Disabled="@(Busy || _Stale || _AuthenticationExpired)" Selectable="CanSelect(finding)" Selected="_Selected.Contains(finding.FindingId)"
-                    PublicationUnknown="_Unknown.Contains(finding.FindingId)" EditorEpoch="_EditorEpoch" BrowserUrl="@(details.Source?.BrowserUrl)" OnSelect="selected => Select(finding, selected)" OnSave="SaveAsync" OnHistory="HistoryAsync" />
-            }
-            @if (!VisibleFindings.Any()) { <p>No findings in this view. Queued/running runs may not have durable findings yet.</p> }
+            <FindingQueue @key="RunId" State="_Workspace" Findings="details.Findings" HeadSha="@(details.ReviewedHeadSha ?? "")"
+                Disabled="@(Busy || _Stale || _AuthenticationExpired)" Unknown="_Unknown" BrowserUrl="@(details.Source?.BrowserUrl)"
+                OnChanged="StateHasChanged" OnSave="SaveAsync" OnHistory="HistoryAsync" />
             @if (_HistoryId is not null)
             {
                 <section class="decision-history" aria-label="Decision history"><h2>Decision history · <code>@_HistoryId</code></h2>

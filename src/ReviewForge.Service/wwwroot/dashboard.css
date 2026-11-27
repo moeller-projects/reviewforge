@@ -104,6 +104,32 @@ dt { color: var(--rf-muted); } dd { margin: 0; }
 .draft-pr-choices { list-style: none; padding: 0; margin: 12px 0; max-height: 55vh; overflow: auto; }
 .draft-pr-choices li + li { border-top: 1px solid var(--rf-line); }
 .draft-pr-choice { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; border: 0; border-radius: 0; }
+.queue-filters, .queue-selection { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 12px 0; align-items: end; }
+.queue-filters label { display: grid; gap: 4px; font-size: .8125rem; }
+.queue-selection { font-size: .8125rem; color: var(--rf-muted); }
+.pane-size { display: flex; gap: 12px; align-items: center; font-size: .8125rem; }
+.pane-size input { width: 160px; }
+.finding-workspace { display: grid; grid-template-columns: minmax(0, var(--queue-width, 40%)) minmax(0, 1fr); border: 1px solid var(--rf-line); background: var(--rf-surface); }
+.finding-queue, .finding-inspector { min-width: 0; max-height: 75dvh; overflow: auto; padding: 12px; scroll-padding: 12px; }
+.finding-inspector { border-left: 1px solid var(--rf-line); overflow-wrap: anywhere; }
+.finding-queue ul { list-style: none; padding: 0; margin: 0; }
+.finding-row { display: flex; align-items: start; gap: 8px; border: 1px solid transparent; border-bottom-color: var(--rf-line); }
+.finding-row.focused { border-color: var(--rf-accent); }
+.finding-row.selected { background: var(--rf-selected); }
+.finding-row input { margin: 14px 0 0 8px; flex: 0 0 auto; }
+.finding-row button { display: grid; gap: 4px; min-width: 0; width: 100%; text-align: left; padding: 10px 8px; border: 0; background: transparent; overflow-wrap: anywhere; }
+.finding-row small { color: var(--rf-muted); font-size: .8125rem; }
+.return-to-queue { display: none; }
+@media (max-width: 760px) {
+    .finding-workspace { display: block; }
+    .finding-queue, .finding-inspector { max-height: none; }
+    .finding-inspector { display: none; border-left: 0; }
+    .finding-workspace.inspecting .finding-queue { display: none; }
+    .finding-workspace.inspecting .finding-inspector { display: block; }
+    .return-to-queue { display: inline-block; }
+    .pane-size { display: none; }
+    .queue-filters > label { min-width: 0; max-width: 100%; }
+}
 .finding-card { border-top: 1px solid var(--rf-line); padding: 20px 0; margin: 12px 0; min-width: 0; }
 .finding-card > header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .finding-card pre { overflow: auto; max-height: 24rem; padding: 12px; background: var(--rf-raised); }

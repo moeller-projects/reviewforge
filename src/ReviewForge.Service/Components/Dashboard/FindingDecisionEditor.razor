@@ -1,6 +1,7 @@
 @using ReviewForge.Core.Domain
 
 <div class="finding-decision-editor" aria-label="Human finding decision">
+    @if (_Draft.Dirty && _Draft.Version != Finding.DecisionVersion) { <p class="notice" role="status">Authoritative decision changed. Your unsaved draft is retained; review the new version before saving.</p><button type="button" disabled="@Disabled" @onclick="() => _Draft.Version = Finding.DecisionVersion">Use current version with my draft</button> }
     <label>Decision
         <select value="@_State.ToString()" @onchange="ChangeState" disabled="@CannotEdit" aria-label="Finding decision">
             <option value="Pending">Pending</option>
@@ -25,19 +26,20 @@
     [Parameter, EditorRequired] public string HeadSha { get; set; } = "";
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
-    private FindingDecisionState _State;
-    private string _Reason = "";
-    private (string FindingId, long Version)? _Loaded;
+    [Parameter] public Dictionary<string, FindingEditorDraft>? Drafts { get; set; }
+    private readonly Dictionary<string, FindingEditorDraft> _Local = new(StringComparer.Ordinal);
+    private FindingEditorDraft _Draft = new(0, FindingDecisionState.Pending, "");
+    private FindingDecisionState _State { get => _Draft.State; set { _Draft.State = value; _Draft.Dirty = true; } }
+    private string _Reason { get => _Draft.Reason; set { _Draft.Reason = value; _Draft.Dirty = true; } }
     private bool _Saving;
-    private bool CannotEdit => Disabled || _Saving || !Finding.CanDecide || string.IsNullOrWhiteSpace(HeadSha);
+    private bool CannotEdit => Disabled || _Saving || (_Draft.Dirty && _Draft.Version != Finding.DecisionVersion) || !Finding.CanDecide || string.IsNullOrWhiteSpace(HeadSha);
 
     protected override void OnParametersSet()
     {
-        var key = (Finding.FindingId, Finding.DecisionVersion);
-        if (_Loaded == key) return;
-        _Loaded = key;
-        _State = Finding.Decision?.State ?? FindingDecisionState.Pending;
-        _Reason = Finding.Decision?.Reason ?? "";
+        var drafts = Drafts ?? _Local;
+        if (!drafts.TryGetValue(Finding.FindingId, out var draft) || (!draft.Dirty && draft.Version != Finding.DecisionVersion))
+            drafts[Finding.FindingId] = draft = new(Finding.DecisionVersion, Finding.Decision?.State ?? FindingDecisionState.Pending, Finding.Decision?.Reason ?? "");
+        _Draft = draft;
     }
 
     private void ChangeState(ChangeEventArgs args)
@@ -52,7 +54,7 @@
         try
         {
             await OnSave.InvokeAsync(new(Finding.FindingId, HeadSha, _State,
-                string.IsNullOrWhiteSpace(_Reason) ? null : _Reason.Trim(), Finding.DecisionVersion));
+                string.IsNullOrWhiteSpace(_Reason) ? null : _Reason.Trim(), _Draft.Version));
         }
         finally { _Saving = false; }
     }

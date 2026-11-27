@@ -11,33 +11,22 @@ public partial class RunDetail
     private DashboardRefreshLoop? _Refresh;
     private CancellationTokenSource? _Route;
     private readonly List<Task> _Retired = [];
-    private readonly HashSet<string> _Selected = new(StringComparer.Ordinal);
+    private FindingWorkspaceState _Workspace = new();
+    private HashSet<string> _Selected => _Workspace.Selected;
     private readonly HashSet<string> _Unknown = new(StringComparer.Ordinal);
     private PublishSelectedDraftRequest? _Confirmation;
     private PublishSelectedDraftResult? _Publication;
     private FindingDecisionHistoryResponse? _History;
     private string? _HistoryId, _Message;
-    private string _Section = "Findings", _Filter = "actionable";
+    private string _Section = "Findings";
     private Guid? _LoadedId;
-    private long _Generation, _EditorEpoch;
+    private long _Generation;
     private bool _PendingRoute, _Disposed, _Loading, _Saving, _Posting, _HistoryLoading, _Reconciling, _Stale, _AuthenticationExpired, _RefreshRequested;
     private bool Busy => _Loading || _Saving || _Posting || _HistoryLoading || _Reconciling || _Confirmation is not null;
     private bool HeadChanged => !string.IsNullOrWhiteSpace(_Details?.ReviewedHeadSha)
         && !string.IsNullOrWhiteSpace(_Details?.Source?.CurrentHeadSha)
         && !string.Equals(_Details.ReviewedHeadSha, _Details.Source.CurrentHeadSha, StringComparison.OrdinalIgnoreCase);
-    private IEnumerable<RunFindingDto> VisibleFindings => (_Details?.Findings ?? []).Where(f => _Filter switch
-    {
-        "all" => true,
-        "accepted" => f.AcceptedFinding is not null,
-        "pipeline-rejected" => PipelineRejected(f),
-        "human-rejected" => f.Decision?.State == FindingDecisionState.Rejected,
-        "posted" => f.Published == true,
-        "history" => f.PreviouslyKnown || f.Decision is not null || f.Published == true,
-        _ => !PipelineRejected(f) && !f.PreviouslyKnown && f.Published != true
-            && f.Decision?.State is not (FindingDecisionState.Rejected or FindingDecisionState.Deferred),
-    });
-    private static bool PipelineRejected(RunFindingDto f) => f.Evidence?.Validation == FindingValidationStatus.Rejected
-        || f.Evidence?.Verification == FindingVerificationStatus.Rejected;
+    private int EligibleSelected => _Details?.Findings.Count(f => _Selected.Contains(f.FindingId) && CanSelect(f)) ?? 0;
     private bool CanSelect(RunFindingDto f) => !HeadChanged && !string.IsNullOrWhiteSpace(_Details?.ReviewedHeadSha)
         && _Details?.Status.Kind == RunKind.ReviewDraft && _Details.Status.State == RunState.Completed
         && f.PublicationEligible && f.Published == false && !f.PublicationUnknown && f.Decision?.State == FindingDecisionState.Approved && !_Unknown.Contains(f.FindingId);
@@ -60,11 +49,10 @@ public partial class RunDetail
         _History = null;
         _HistoryId = _Message = null;
         _Section = "Findings";
-        _Filter = "actionable";
+        _Workspace = new();
         _Loading = true;
         _Saving = _Posting = _HistoryLoading = _Reconciling = _Stale = _AuthenticationExpired = false;
         _PendingRoute = true;
-        _EditorEpoch++;
     }
     protected override Task OnAfterRenderAsync(bool firstRender)
     {
@@ -93,10 +81,9 @@ public partial class RunDetail
         {
             _Details = value;
             _Stale = false;
-            _Selected.RemoveWhere(key => !value.Findings.Any(f => f.FindingId == key && CanSelect(f)));
+            _Workspace.Reconcile(value.Findings);
             foreach (var finding in value.Findings.Where(f => f.PublicationUnknown)) _Unknown.Add(finding.FindingId);
             _Unknown.RemoveWhere(key => value.Findings.Any(f => f.FindingId == key && f.Published == true));
-            _EditorEpoch++;
         }
         else if (result.Outcome != BrowserOutcome.Cancelled)
         {
@@ -111,12 +98,6 @@ public partial class RunDetail
         if (_Disposed || _AuthenticationExpired) return Task.CompletedTask;
         _RefreshRequested = true;
         return _Refresh?.RequestAsync() ?? Task.CompletedTask;
-    }
-    private void ChangeFilter(ChangeEventArgs args) => _Filter = args.Value?.ToString() ?? "actionable";
-    private void Select(RunFindingDto f, bool selected)
-    {
-        if (Busy || _Stale || _AuthenticationExpired || !CanSelect(f)) return;
-        if (selected) _Selected.Add(f.FindingId); else _Selected.Remove(f.FindingId);
     }
     private void PreparePublication()
     {
@@ -136,7 +117,7 @@ public partial class RunDetail
         var result = await Browser.SetFindingDecisionAsync(id, request, _Route.Token);
         if (!Current(generation)) return;
         _Saving = false;
-        _Selected.Clear();
+        if (result.Outcome == BrowserOutcome.Ok) _Workspace.Drafts.Remove(request.FindingId);
         _History = null;
         _HistoryId = null;
         if (result.Outcome is BrowserOutcome.Ok or BrowserOutcome.Conflict)

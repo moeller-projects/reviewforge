@@ -60,6 +60,24 @@ public sealed class FindingDecisionEditorTests
         Assert.Equal("Awaiting context", component.Find("textarea").GetAttribute("value"));
     }
 
+    [Fact]
+    public async Task Dirty_draft_survives_authoritative_version_change_until_explicitly_acknowledged()
+    {
+        await using var context = new BunitContext();
+        SetFindingDecisionRequest? saved = null;
+        var component = context.Render<FindingDecisionEditor>(p => p.Add(x => x.Finding, Finding())
+            .Add(x => x.HeadSha, "head").Add(x => x.OnSave, request => saved = request));
+        component.Find("textarea").Input("my unsaved reason");
+        component.Render(p => p.Add(x => x.Finding, Finding() with { DecisionVersion = 2 }));
+        Assert.Equal("my unsaved reason", component.Find("textarea").GetAttribute("value"));
+        Assert.Contains("Authoritative decision changed", component.Markup);
+        Assert.True(component.FindAll("button").Last().HasAttribute("disabled"));
+        component.FindAll("button").First().Click();
+        component.Find("button").Click();
+        Assert.Equal(2, saved!.ExpectedVersion);
+        Assert.Equal("my unsaved reason", saved.Reason);
+    }
+
     private static RunFindingDto Finding() => new("finding", null, null, null, false,
         null, 0, false, null, true, true);
 }

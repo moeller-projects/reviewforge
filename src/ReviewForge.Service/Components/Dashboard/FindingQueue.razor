@@ -1,0 +1,105 @@
+@using ReviewForge.Core.Domain
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="queue-workbench" @ref="_Root">
+<div class="queue-filters">
+    <label>Search loaded findings <input type="search" data-queue-search aria-label="Search loaded findings" @bind="State.Search" @bind:event="oninput" /></label>
+    <label>Pipeline <select aria-label="Pipeline filter" @bind="State.Pipeline"><option value="all">All pipeline states</option><option>Pipeline-accepted</option><option>Pipeline-rejected</option><option>Unavailable</option></select></label>
+    <label>Decision <select aria-label="Decision filter" @bind="State.Decision"><option value="all">All decisions</option>@foreach (var state in Enum.GetValues<FindingDecisionState>()) { <option>@state</option> }</select></label>
+    <label>Publication <select aria-label="Publication filter" @bind="State.Publication"><option value="all">All publication states</option><option>Unpublished</option><option>Posted</option><option>Unknown</option><option>Previously known</option></select></label>
+    <label>Severity <select aria-label="Severity filter" @bind="State.Severity"><option value="all">All severities</option>@foreach (var severity in new[] { "critical", "high", "medium", "low", "info" }) { <option>@severity</option> }</select></label>
+    <label>Order <select aria-label="Finding order" @bind="State.Sort"><option value="severity">Severity, then file</option><option value="file">File, then location</option></select></label>
+</div>
+<div class="queue-selection">
+    <button type="button" disabled="@Disabled" @onclick="SelectMatching">Select all matching (@Matching.Count)</button>
+    <button type="button" disabled="@Disabled" @onclick="ClearAsync">Clear selection</button>
+    <span role="status">@State.Selected.Count selected · @State.Selected.Count(id => !Matching.Any(f => f.FindingId == id)) hidden</span>
+    <span>Shift-click to select a range. Selection does not approve or publish.</span>
+</div>
+<label class="pane-size">Queue width <input type="range" min="25" max="65" step="1" value="40" aria-label="Queue pane width" data-pane-size /></label>
+<div class="finding-workspace @(_Inspecting ? "inspecting" : "")">
+    <section class="finding-queue" aria-label="Findings queue">
+        <ul>
+        @foreach (var finding in Matching)
+        {
+            var payload = FindingWorkspaceState.Payload(finding);
+            <li class="finding-row @(State.FocusedId == finding.FindingId ? "focused" : "") @(State.Selected.Contains(finding.FindingId) ? "selected" : "")" @key="finding.FindingId">
+                <input type="checkbox" aria-label="@($"Select {payload?.Title ?? finding.FindingId}")" checked="@State.Selected.Contains(finding.FindingId)" disabled="@Disabled"
+                    @onclick="e => _Shift = e.ShiftKey" @onchange="() => Toggle(finding, _Shift)" />
+                <button type="button" data-finding-id="@finding.FindingId" aria-current="@(State.FocusedId == finding.FindingId ? "true" : null)" @onclick="() => Focus(finding.FindingId)">
+                    <strong>@(payload?.Title ?? "Finding payload unavailable")</strong>
+                    <small>@(payload?.Severity ?? "Severity unavailable") · @(payload?.Anchor?.FilePath ?? "Location unavailable"):@payload?.Anchor?.StartLine · @payload?.RuleId</small>
+                    <small>@FindingWorkspaceState.PipelineLabel(finding) · @(finding.Decision?.State ?? FindingDecisionState.Pending) · @FindingWorkspaceState.PublicationLabel(finding) @(finding.PreviouslyKnown ? "· Previously known" : "")</small>
+                    <small>@(finding.PublicationEligible ? "Technically eligible" : "Not technically eligible") · Approval and current-head checks remain separate.</small>
+                </button>
+            </li>
+        }
+        </ul>
+        @if (Matching.Count == 0) { <p class="empty">No loaded findings match. Clear filters or refresh a queued/running run.</p> }
+    </section>
+    <section class="finding-inspector" aria-label="Focused finding evidence">
+        <h2 tabindex="-1" data-inspector-focus>Finding evidence</h2>
+        <button type="button" class="return-to-queue" @onclick="ReturnAsync">Return to findings</button>
+        @if (Findings.FirstOrDefault(f => f.FindingId == State.FocusedId) is { } focused)
+        {
+            @if (!Matching.Any(f => f.FindingId == focused.FindingId)) { <p class="notice">Focused finding is hidden by the current filters.</p> }
+            <RunFindingCard @key="focused.FindingId" Finding="focused" HeadSha="@HeadSha" Disabled="Disabled" BrowserUrl="@BrowserUrl"
+                PublicationUnknown="Unknown.Contains(focused.FindingId)" Drafts="State.Drafts" OnSave="OnSave" OnHistory="OnHistory" />
+        }
+        else { <p>Select a finding to inspect its evidence.</p> }
+    </section>
+</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public FindingWorkspaceState State { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<RunFindingDto> Findings { get; set; } = [];
+    [Parameter] public string HeadSha { get; set; } = "";
+    [Parameter] public string? BrowserUrl { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public HashSet<string> Unknown { get; set; } = [];
+    [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
+    [Parameter] public EventCallback<string> OnHistory { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private IReadOnlyList<RunFindingDto> Matching => State.Matching(Findings.Select(f => Unknown.Contains(f.FindingId) ? f with { PublicationUnknown = true } : f).ToArray());
+    private ElementReference _Root;
+    private IJSObjectReference? _Module;
+    private bool _Inspecting, _Shift, _Disposed;
+    private string? _PendingFocus;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (firstRender)
+            {
+                var module = await JS.InvokeAsync<IJSObjectReference>("import", "./dashboard-queue.js");
+                if (_Disposed) { await module.DisposeAsync(); return; }
+                _Module = module;
+                await module.InvokeVoidAsync("attach", _Root);
+            }
+            if (_Disposed || _Module is null || _PendingFocus is not { } pending) return;
+            _PendingFocus = null;
+            if (pending == "inspector") await _Module.InvokeVoidAsync("enterInspector", _Root);
+            else await _Module.InvokeVoidAsync("returnToRow", _Root, State.FocusedId);
+        }
+        catch (JSDisconnectedException) { }
+    }
+    private void Focus(string id) { State.FocusedId = id; _Inspecting = true; _PendingFocus = "inspector"; }
+    private async Task Toggle(RunFindingDto finding, bool range) { if (!Disabled) { State.Select(finding.FindingId, !State.Selected.Contains(finding.FindingId), range, Matching); await OnChanged.InvokeAsync(); } }
+    private async Task SelectMatching() { if (!Disabled) { foreach (var f in Matching) State.Selected.Add(f.FindingId); await OnChanged.InvokeAsync(); } }
+    private async Task ClearAsync() { if (!Disabled) { State.Selected.Clear(); await OnChanged.InvokeAsync(); } }
+    private void ReturnAsync()
+    {
+        _Inspecting = false;
+        _PendingFocus = "queue";
+    }
+    public async ValueTask DisposeAsync()
+    {
+        _Disposed = true;
+        if (_Module is null) return;
+        try { await _Module.InvokeVoidAsync("detach", _Root); await _Module.DisposeAsync(); }
+        catch (JSDisconnectedException) { }
+    }
+}

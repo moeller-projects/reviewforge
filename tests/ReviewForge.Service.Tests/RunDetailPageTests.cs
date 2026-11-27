@@ -32,18 +32,99 @@ public sealed class RunDetailPageTests
         return c;
     }
     [Fact]
-    public async Task Deep_link_defaults_to_findings_escapes_payload_and_filters_rejected_and_posted()
+    public async Task Queue_mounts_only_focused_evidence_and_keeps_general_selection_across_filters()
+    {
+        await using var c = Context(Details(Finding("a", FindingDecisionState.Pending), Finding("b", FindingDecisionState.Deferred)));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        Assert.Single(page.FindAll("article.finding-card"));
+        page.FindAll(".finding-row input")[0].Change(true);
+        page.Find("select[aria-label='Decision filter']").Change("Deferred");
+        Assert.Contains("1 selected · 1 hidden", page.Markup);
+        Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
+        page.Find(".finding-row button").Click();
+        Assert.Contains("b", page.Find("article.finding-card").TextContent);
+        page.Find(".return-to-queue").Click();
+        Assert.Contains(c.JSInterop.Invocations, i => i.Identifier == "returnToRow" && Equals(i.Arguments[1], "b"));
+        await page.InvokeAsync(() => page.Instance.DisposeAsync().AsTask());
+    }
+
+    [Fact]
+    public async Task Inspector_and_filtered_return_handoff_focus_after_the_destination_render()
+    {
+        await using var c = Context(Details(Finding("a"), Finding("b", eligible: false)));
+        var module = c.JSInterop.SetupModule("./dashboard-queue.js");
+        module.SetupVoid("attach", _ => true).SetVoidResult();
+        module.SetupVoid("enterInspector", _ => true).SetVoidResult();
+        module.SetupVoid("returnToRow", _ => true).SetVoidResult();
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(2, page.FindAll(".finding-row").Count));
+        Assert.Contains("Technically eligible", page.FindAll(".finding-row")[0].TextContent);
+        Assert.Contains("Not technically eligible", page.FindAll(".finding-row")[1].TextContent);
+        Assert.DoesNotContain(module.Invocations, i => i.Identifier == "enterInspector");
+        page.Find(".finding-row button").Click();
+        page.WaitForAssertion(() => Assert.Single(module.Invocations["enterInspector"]));
+        Assert.Single(page.FindAll(".finding-workspace.inspecting"));
+        Assert.Equal("-1", page.Find("[data-inspector-focus]").GetAttribute("tabindex"));
+        page.Find("input[type=search]").Input("no matching finding");
+        Assert.Empty(page.FindAll(".finding-row"));
+        page.Find(".return-to-queue").Click();
+        page.WaitForAssertion(() => Assert.Single(module.Invocations["returnToRow"]));
+        Assert.Empty(page.FindAll(".finding-workspace.inspecting"));
+        Assert.Single(page.FindAll("[data-queue-search]"));
+    }
+
+    [Fact]
+    public async Task Select_all_matching_is_general_but_publication_snapshots_only_eligible_approved()
+    {
+        await using var c = Context(Details(Finding("approved"), Finding("pending", FindingDecisionState.Pending), Finding("unknown") with { PublicationUnknown = true }));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(3, page.FindAll(".finding-row").Count));
+        page.FindAll(".queue-selection button")[0].Click();
+        Assert.Contains("3 selected · 0 hidden", page.Markup);
+        Assert.Contains("1 eligible approved selected · 2 excluded", page.Markup);
+        page.Find("button.post-selected").Click();
+        var confirmation = page.FindComponent<ReviewForge.Service.Components.Dashboard.RunPublicationConfirmation>();
+        Assert.Equal("approved", Assert.Single(confirmation.Instance.Request.Selections!).FindingId);
+        Assert.DoesNotContain(c.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[1], "POST"));
+    }
+
+    [Fact]
+    public async Task Hundreds_of_rows_keep_one_editor_and_identity_drafts_across_focus_and_refresh()
+    {
+        await using var c = Context(Details(Enumerable.Range(0, 300).Select(i => Finding($"f{i:D3}")).ToArray()));
+        var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
+        page.WaitForAssertion(() => Assert.Equal(300, page.FindAll(".finding-row").Count));
+        Assert.Single(page.FindAll("textarea"));
+        page.Find("textarea").Input("unsaved");
+        page.FindAll(".finding-row button")[1].Click();
+        page.Find("textarea").Input("other draft");
+        page.FindAll(".finding-row button")[0].Click();
+        Assert.Equal("unsaved", page.Find("textarea").GetAttribute("value"));
+        page.Find("header button").Click();
+        page.WaitForAssertion(() => Assert.False(page.Find("header button").HasAttribute("disabled")));
+        Assert.Equal("unsaved", page.Find("textarea").GetAttribute("value"));
+        page.Find("input[type=search]").Input("no match");
+        Assert.Empty(page.FindAll(".finding-row"));
+        Assert.Contains("hidden by the current filters", page.Markup);
+    }
+
+    [Fact]
+    public async Task Deep_link_defaults_to_queue_escapes_payload_and_filters_rejected_and_posted()
     {
         await using var c = Context(Details(Finding(), Finding("rejected", FindingDecisionState.Rejected, eligible: false), Finding("posted", published: true)));
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
         page.WaitForAssertion(() => Assert.Single(page.FindAll("article.finding-card")));
-        Assert.DoesNotContain("<script>", page.Markup);
+        Assert.Empty(page.FindAll("script"));
         Assert.Contains("&lt;script&gt;", page.Markup);
         Assert.Contains("validation reason", page.Markup);
-        page.Find("select[aria-label='Finding filter']").Change("pipeline-rejected");
+        page.Find("select[aria-label='Pipeline filter']").Change("Pipeline-rejected");
+        page.Find(".finding-row button").Click();
         Assert.Contains("human reason", page.Markup);
         Assert.Single(page.FindAll("article.finding-card"));
-        page.Find("select[aria-label='Finding filter']").Change("posted");
+        page.Find("select[aria-label='Pipeline filter']").Change("all");
+        page.Find("select[aria-label='Publication filter']").Change("Posted");
+        page.Find(".finding-row button").Click();
         Assert.Contains("discussionId=12", page.Markup);
         Assert.DoesNotContain(c.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[1], "POST"));
     }
@@ -54,7 +135,7 @@ public sealed class RunDetailPageTests
         c.JSInterop.TryGetModuleJSInterop("import", ["./dashboard-http.js"])!.Setup<DashboardBrowserClient.BrowserHttpResponse>("send", i => Equals(i.Arguments[2], $"/reviews/{Id:D}/publish"))
             .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(true, null, [new("finding", PublishFindingStatus.Unknown)]))));
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
-        page.WaitForAssertion(() => Assert.Single(page.FindAll("input[aria-label='Select finding for publication']")));
+        page.WaitForAssertion(() => Assert.Single(page.FindAll(".finding-row input")));
         Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
         page.Find("input[type=checkbox]").Change(true);
         page.Find("button.post-selected").Click();
@@ -117,12 +198,11 @@ public sealed class RunDetailPageTests
             .SetResult(new(200, JsonSerializer.SerializeToElement(new PublishSelectedDraftResult(true, null, [new("finding", PublishFindingStatus.AlreadyPosted, 12)]))));
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
         page.WaitForAssertion(() => Assert.Single(page.FindAll("input[type=checkbox]")));
-        page.Find("select[aria-label='Finding filter']").Change("all");
         page.Find("input[type=checkbox]").Change(true);
         page.Find("button.post-selected").Click();
         page.Find("button.confirm-publication").Click();
         page.WaitForAssertion(() => Assert.Contains("Publication: Unknown", page.Find("article.finding-card").TextContent));
-        Assert.True(page.Find("input[type=checkbox]").HasAttribute("disabled"));
+        Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
         get.SetResult(new(200, JsonSerializer.SerializeToElement(Details(Finding(published: true)))));
         page.Find("button.reconcile-publication").Click();
         page.WaitForAssertion(() => Assert.Contains("Publication: Posted", page.Find("article.finding-card").TextContent));
@@ -136,7 +216,8 @@ public sealed class RunDetailPageTests
         await using var c = Context(Details(Finding() with { Published = null, PublicationUnknown = true }));
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
         page.WaitForAssertion(() => Assert.Contains("Publication: Unknown", page.Find("article.finding-card").TextContent));
-        Assert.True(page.Find("input[type=checkbox]").HasAttribute("disabled"));
+        Assert.False(page.Find("input[type=checkbox]").HasAttribute("disabled"));
+        Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
         Assert.Single(page.FindAll("button.reconcile-publication"));
         Assert.DoesNotContain(c.JSInterop.Invocations, i => i.Identifier == "send" && Equals(i.Arguments[1], "POST"));
     }
@@ -147,29 +228,30 @@ public sealed class RunDetailPageTests
         await using var c = Context(Details(Finding()) with { Source = new(null, null, "javascript:alert(1)", "changed", null, false, null) });
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
         page.WaitForAssertion(() => Assert.Contains("new draft", page.Markup));
-        Assert.True(page.Find("input[type=checkbox]").HasAttribute("disabled"));
+        Assert.False(page.Find("input[type=checkbox]").HasAttribute("disabled"));
+        Assert.True(page.Find("button.post-selected").HasAttribute("disabled"));
         Assert.DoesNotContain("javascript:", page.Markup);
         await using var legacy = Context(Details() with { ReviewedHeadSha = null, ObservationsAvailable = false, Source = null });
         var old = legacy.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
         old.WaitForAssertion(() => Assert.Contains("unavailable", old.Markup));
     }
     [Fact]
-    public async Task Selection_is_limited_to_approved_technically_eligible_explicitly_unpublished_findings()
+    public async Task General_selection_includes_all_states_while_evidence_stays_focused()
     {
         var rows = new[] { Finding(), Finding("pending", FindingDecisionState.Pending), Finding("deferred", FindingDecisionState.Deferred),
             Finding("rejected", FindingDecisionState.Rejected), Finding("ineligible", eligible: false), Finding("posted", published: true), Finding("unknown") with { Published = null } };
         await using var c = Context(Details(rows));
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
-        page.WaitForAssertion(() => Assert.Single(page.FindAll("select[aria-label='Finding filter']")));
-        page.Find("select[aria-label='Finding filter']").Change("all");
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("select[aria-label='Decision filter']")));
         var checks = page.FindAll("input[type=checkbox]");
         Assert.Equal(7, checks.Count);
         Assert.False(checks[0].HasAttribute("disabled"));
-        Assert.All(checks.Skip(1), box => Assert.True(box.HasAttribute("disabled")));
-        page.Find("select[aria-label='Finding filter']").Change("human-rejected");
+        Assert.All(checks, box => Assert.False(box.HasAttribute("disabled")));
+        page.Find("select[aria-label='Decision filter']").Change("Rejected");
+        Assert.Single(page.FindAll(".finding-row"));
         Assert.Single(page.FindAll("article.finding-card"));
-        page.Find("select[aria-label='Finding filter']").Change("history");
-        Assert.Equal(7, page.FindAll("article.finding-card").Count);
+        page.Find("select[aria-label='Decision filter']").Change("all");
+        Assert.Equal(7, page.FindAll(".finding-row").Count);
     }
     [Theory]
     [InlineData("javascript:alert(1)", false)]
@@ -180,8 +262,8 @@ public sealed class RunDetailPageTests
         var details = Details(Finding(published: true));
         await using var c = Context(details with { Source = details.Source! with { BrowserUrl = url } });
         var page = c.Render<RunDetail>(p => p.Add(x => x.RunId, Id));
-        page.WaitForAssertion(() => Assert.Single(page.FindAll("select[aria-label='Finding filter']")));
-        page.Find("select[aria-label='Finding filter']").Change("posted");
+        page.WaitForAssertion(() => Assert.Single(page.FindAll("select[aria-label='Publication filter']")));
+        page.Find("select[aria-label='Publication filter']").Change("Posted");
         var links = page.FindAll("article a");
         Assert.Equal(linked ? 1 : 0, links.Count);
         if (linked)

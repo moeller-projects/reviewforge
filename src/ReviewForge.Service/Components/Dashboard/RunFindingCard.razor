@@ -1,8 +1,6 @@
 @using ReviewForge.Core.Domain
 <article class="finding-card">
     <header>
-        <label><input type="checkbox" aria-label="Select finding for publication" checked="@Selected"
-            disabled="@(Disabled || !Selectable)" @onchange="args => OnSelect.InvokeAsync(args.Value is true)" /> Select for publication</label>
         <small><code>@Finding.FindingId</code></small>
     </header>
     <FindingEvidence Label="Candidate" Payload="Finding.Candidate" />
@@ -18,20 +16,18 @@
         @if (ThreadUrl is { } link) { <a href="@link" target="_blank" rel="noopener noreferrer">Open thread</a> }
         @if (Finding.PreviouslyKnown) { <span> · Previously known</span> }
     </p>
-    <FindingDecisionEditor @key="EditorEpoch" Finding="Finding" HeadSha="@HeadSha" Disabled="Disabled" OnSave="OnSave" />
+    @if (!Finding.CanDecide || string.IsNullOrWhiteSpace(HeadSha)) { <p>Read-only: decisions require a successful completed draft run and an available reviewed revision.</p> }
+    <FindingDecisionEditor Finding="Finding" HeadSha="@HeadSha" Disabled="Disabled" Drafts="Drafts" OnSave="OnSave" />
     <button type="button" class="compact-action finding-history" disabled="@Disabled" @onclick="() => OnHistory.InvokeAsync(Finding.FindingId)">Decision history</button>
 </article>
 
 @code {
     [Parameter, EditorRequired] public RunFindingDto Finding { get; set; } = default!;
     [Parameter] public string HeadSha { get; set; } = "";
-    [Parameter] public bool Selected { get; set; }
-    [Parameter] public bool Selectable { get; set; }
+    [Parameter] public Dictionary<string, FindingEditorDraft>? Drafts { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public bool PublicationUnknown { get; set; }
-    [Parameter] public long EditorEpoch { get; set; }
     [Parameter] public string? BrowserUrl { get; set; }
-    [Parameter] public EventCallback<bool> OnSelect { get; set; }
     [Parameter] public EventCallback<SetFindingDecisionRequest> OnSave { get; set; }
     [Parameter] public EventCallback<string> OnHistory { get; set; }
     private string? ThreadUrl

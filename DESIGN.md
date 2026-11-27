@@ -104,7 +104,7 @@ One system sans stack carries headings, controls and prose. Code uses `ui-monosp
 
 The shell wraps navigation and theme controls above the route content. Page padding is 24px, reduced to 16px at 760px. Main history/run content is bounded to 1200px; general dashboard content to 1440px. Controls group at 8–12px; sections separate at 20–24px.
 
-At 760px and below, toolbars wrap, search owns a full row, decision forms and metadata stack, and history indentation shrinks. Lists retain labeled expand controls and ordinary links. T01 preserves existing route contents; persistent queue/evidence panes, resizers and phone list/detail continuity belong to subsequent workbench slices.
+At 760px and below, toolbars wrap, decision forms and metadata stack, and history indentation shrinks. Lists retain labeled expand controls and ordinary links. Run findings use a compact queue beside one focused evidence/editor pane. A native Queue width range supports keyboard and touch resizing (25–65%, presentation preference only). On phones, inspecting a row shows detail; Return to findings restores focus/scroll to that run-local identity. Filters do not discard the focused evidence or general selection; hidden selections are counted. The queue renders rows only, not an editor/evidence tree per finding.
 
 ## Elevation & Depth
 
