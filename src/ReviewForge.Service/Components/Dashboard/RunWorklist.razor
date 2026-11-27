@@ -1,0 +1,99 @@
+@using ReviewForge.Core.Domain
+@using static DashboardPresentation
+
+<div class="run-worklist" aria-label="Review runs grouped by pull request and revision">
+    @if (_Groups.Count == 0)
+    {
+        <p class="worklist-empty" role="status">@(AttentionOnly ? "No runs need attention." : "No recent runs.")</p>
+    }
+    @foreach (var group in _Groups)
+    {
+        <section class="worklist-pr" @key="group.Pr">
+            <button type="button" class="worklist-pr-toggle" aria-expanded="@Expanded(group.Pr).ToString().ToLowerInvariant()" @onclick="() => Toggle(group.Pr)">
+                <span aria-hidden="true">@(Expanded(group.Pr) ? "▾" : "▸")</span>
+                <span class="worklist-pr-scope">@group.Pr.Org / @group.Pr.Project / @(group.RepositoryName ?? group.Pr.RepositoryId) · #@group.Pr.PrId</span>
+                <strong>@(group.Title ?? $"PR #{group.Pr.PrId}")</strong>
+                @if (group.NeedsAttention) { <span class="state">Needs attention</span> }
+            </button>
+            @if (Expanded(group.Pr))
+            {
+                @foreach (var revision in group.Revisions)
+                {
+                    <div class="worklist-revision" @key="revision.HeadSha ?? string.Empty">
+                        <button type="button" class="worklist-revision-toggle" aria-expanded="@Expanded(group.Pr, revision.HeadSha).ToString().ToLowerInvariant()" @onclick="() => Toggle(group.Pr, revision.HeadSha)">
+                            <span aria-hidden="true">@(Expanded(group.Pr, revision.HeadSha) ? "▾" : "▸")</span>
+                            <code title="@revision.HeadSha">@(revision.HeadSha is { } head ? head[..Math.Min(8, head.Length)] : "Unknown revision")</code>
+                            @if (revision.IsCurrentHead) { <span class="state">Current head</span> }
+                            <span>@revision.Runs.Count @(revision.Runs.Count == 1 ? "run" : "runs")</span>
+                            <span class="worklist-muted" title="@Time(revision.LastObservedAt)">@Relative(revision.LastObservedAt, Now)</span>
+                        </button>
+                        @if (Expanded(group.Pr, revision.HeadSha))
+                        {
+                            <ul class="worklist-runs">
+                                @foreach (var item in revision.Runs)
+                                {
+                                    <li class="worklist-run" @key="item.Run.RunId">
+                                        <a class="worklist-run-link" href="@($"/dashboard/runs/{item.Run.RunId}")">
+                                            <span class="state state-@item.Run.State">@Outcome(item.Run)</span>
+                                            <span>@KindLabel(item.Run.Kind)</span>
+                                            @if (item.Run.State is RunState.Queued or RunState.Running)
+                                            {
+                                                <span>@Stage(item.Run)@StagePosition(item.Run)</span>
+                                            }
+                                            @if (item.Findings is { } counts)
+                                            {
+                                                <span>@counts.Accepted accepted · @counts.NewlyPosted posted</span>
+                                            }
+                                            else { <span class="worklist-muted">Findings unavailable</span> }
+                                            @if (item.PendingDecisions is > 0) { <span>@item.PendingDecisions pending</span> }
+                                            @if (item.ApprovedUnpublished is > 0) { <span>@item.ApprovedUnpublished approved · posting unconfirmed</span> }
+                                            <span class="worklist-muted" title="@Time(item.ObservedAt)">@Relative(item.ObservedAt, Now)</span>
+                                            <span class="sr-only">Open run @item.Run.RunId</span>
+                                        </a>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            }
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<RunWorklistItem> Items { get; set; } = [];
+    [Parameter] public bool AttentionOnly { get; set; } = true;
+    [Parameter] public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+    private IReadOnlyList<RunWorklistPrGroup> _Groups = [];
+    private readonly Dictionary<PrKey, bool> _PrExpanded = [];
+    private readonly Dictionary<(PrKey Pr, string Head), bool> _RevisionExpanded = [];
+
+    protected override void OnParametersSet()
+    {
+        _Groups = RunWorklistGrouping.Group(Items, AttentionOnly);
+        // The parent bounds loaded identities. Do not discard manual choices when search
+        // temporarily removes an item or the attention/all filter changes.
+    }
+
+    private static string Key(string? head) => string.IsNullOrWhiteSpace(head) ? "" : head.ToUpperInvariant();
+    private bool Expanded(PrKey pr) => _PrExpanded.TryGetValue(pr, out var expanded) ? expanded
+        : _Groups.FirstOrDefault(g => g.Pr == pr)?.NeedsAttention == true;
+    private bool Expanded(PrKey pr, string? head) => _RevisionExpanded.TryGetValue((pr, Key(head)), out var expanded) ? expanded
+        : _Groups.FirstOrDefault(g => g.Pr == pr)?.Revisions.FirstOrDefault(r => Key(r.HeadSha) == Key(head))?.InitiallyExpanded == true;
+    private void Toggle(PrKey pr) => _PrExpanded[pr] = !Expanded(pr);
+    private void Toggle(PrKey pr, string? head) => _RevisionExpanded[(pr, Key(head))] = !Expanded(pr, head);
+    private static string StagePosition(DashboardRun run)
+    {
+        if (run.CurrentStage is null || run.LoadedStages.Count == 0) return "";
+        var index = Array.IndexOf(run.LoadedStages.ToArray(), run.CurrentStage);
+        return index >= 0 ? $" · stage {index + 1}/{run.LoadedStages.Count}" : "";
+    }
+    private static string KindLabel(RunKind? kind) => kind switch
+    {
+        RunKind.ReviewDraft => "Read-only draft",
+        RunKind.Review => "Automatic publication",
+        RunKind.Resolve => "Comment resolution",
+        _ => "Unknown mode",
+    };
+}
